@@ -1,4 +1,5 @@
 # WProton
+Programa hecho con la ayuda de Claude, si estas en contra de usar IA como ayuda a la programación no sigas leyendo.
 
 Lanzador portable de juegos de Windows para Linux, en un solo script.
 
