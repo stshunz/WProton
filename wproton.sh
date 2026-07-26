@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.5"
+WPROTON_VERSION="0.72"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -64,6 +64,8 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 # --- Ajustes globales (settings.conf se crea con valores por defecto) ---
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # ultimo juego lanzado (ruta completa)
+GAMES_VIEW="list"                        # lista | grid (rejilla con caratulas)
+SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
 # ============================================
@@ -73,6 +75,10 @@ save_settings() {
 GAMES_PATH="$GAMES_PATH"
 # Ultimo juego lanzado (para "Jugar al ultimo" del menu):
 LAST_GAME="$LAST_GAME"
+# Vista del selector de juegos: list | grid
+GAMES_VIEW="$GAMES_VIEW"
+# API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
+SGDB_KEY="$SGDB_KEY"
 EOF
 }
 load_settings() {
@@ -356,6 +362,138 @@ pad_bridge_stop() {
 #     al lanzar y se desengancha al salir. Necesita el modulo python 'evdev':
 #     via pip (CachyOS) o dejando tu carpeta evmapy/ en la raiz de WProton.
 # ----------------------------------------------------------------------------
+STEAM_ADD_PY="$RUNTIME_DIR/steam_add.py"
+
+write_steam_add() {
+    grep -q "WPROTON_STEAMADD_V1" "$STEAM_ADD_PY" 2>/dev/null && return 0
+    cat > "$STEAM_ADD_PY" <<'SAEOF'
+#!/usr/bin/env python3
+# WPROTON_STEAMADD_V1 - anade un acceso directo no-Steam a shortcuts.vdf
+# uso: steam_add.py <shortcuts.vdf> <nombre> <exe> <startdir> <launchopts> <icono>
+import sys, os, struct, zlib
+
+VDF, NAME, EXE, STARTDIR, OPTS, ICON = sys.argv[1:7]
+
+def parse(data):
+    # parser minimo del VDF binario de shortcuts
+    pos = [0]
+    def u8():
+        b = data[pos[0]]; pos[0] += 1; return b
+    def cstr():
+        end = data.index(b'\x00', pos[0])
+        sres = data[pos[0]:end].decode('utf-8', 'replace')
+        pos[0] = end + 1
+        return sres
+    def obj():
+        out = {}
+        while True:
+            t = u8()
+            if t == 0x08:
+                return out
+            k = cstr()
+            if t == 0x00:
+                out[k] = obj()
+            elif t == 0x01:
+                out[k] = cstr()
+            elif t == 0x02:
+                out[k] = struct.unpack('<I', data[pos[0]:pos[0]+4])[0]
+                pos[0] += 4
+            else:
+                raise ValueError('tipo %d' % t)
+    t = u8(); root_key = cstr()
+    assert t == 0x00
+    return {root_key: obj()}
+
+def ser_obj(d):
+    out = b''
+    for k, v in d.items():
+        kb = k.encode('utf-8') + b'\x00'
+        if isinstance(v, dict):
+            out += b'\x00' + kb + ser_obj(v) + b'\x08'
+        elif isinstance(v, int):
+            out += b'\x02' + kb + struct.pack('<I', v & 0xFFFFFFFF)
+        else:
+            out += b'\x01' + kb + str(v).encode('utf-8') + b'\x00'
+    return out
+
+def serialize(root):
+    (k, v), = root.items()
+    return b'\x00' + k.encode() + b'\x00' + ser_obj(v) + b'\x08\x08'
+
+if os.path.isfile(VDF) and os.path.getsize(VDF) > 2:
+    root = parse(open(VDF, 'rb').read())
+else:
+    root = {'shortcuts': {}}
+key = 'shortcuts' if 'shortcuts' in root else list(root)[0]
+sc = root[key]
+
+# ya existe uno con el mismo LaunchOptions? -> actualizar en vez de duplicar
+idx = None
+for i, e in sc.items():
+    if isinstance(e, dict) and e.get('LaunchOptions', '') == OPTS:
+        idx = i
+        break
+if idx is None:
+    nums = [int(i) for i in sc.keys() if i.isdigit()]
+    idx = str(max(nums) + 1 if nums else 0)
+
+appid = (zlib.crc32((EXE + NAME).encode()) | 0x80000000) & 0xFFFFFFFF
+sc[idx] = {
+    'appid': appid, 'AppName': NAME, 'Exe': '"%s"' % EXE,
+    'StartDir': '"%s"' % STARTDIR, 'icon': ICON, 'ShortcutPath': '',
+    'LaunchOptions': OPTS, 'IsHidden': 0, 'AllowDesktopConfig': 1,
+    'AllowOverlay': 1, 'OpenVR': 0, 'Devkit': 0, 'DevkitGameID': '',
+    'DevkitOverrideAppID': 0, 'LastPlayTime': 0, 'FlatpakAppID': '',
+    'tags': {'0': 'WProton'},
+}
+open(VDF, 'wb').write(serialize(root))
+print('OK idx=%s appid=%d' % (idx, appid))
+SAEOF
+}
+
+find_steam_userdata_config() {
+    # config/ del usuario de Steam mas reciente
+    local base d best="" bestt=0 t
+    for base in "$HOME/.steam/steam" "$HOME/.local/share/Steam" \
+                "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"; do
+        [ -d "$base/userdata" ] || continue
+        for d in "$base"/userdata/*/config; do
+            [ -d "$d" ] || continue
+            t="$(stat -c %Y "$d" 2>/dev/null || echo 0)"
+            [ "$t" -gt "$bestt" ] && { bestt=$t; best="$d"; }
+        done
+    done
+    [ -n "$best" ] && printf '%s' "$best"
+}
+
+add_game_to_steam() {
+    # $1 = ruta del juego (wsquashfs/exe/carpeta), $2 = gid
+    local game="$1" gid="$2"
+    local cfg; cfg="$(find_steam_userdata_config)"
+    [ -z "$cfg" ] && { ui_error "No se encontro la carpeta userdata de Steam"; return 1; }
+    if pgrep -x steam >/dev/null 2>&1; then
+        ui_ask "Steam esta ABIERTO: sobreescribiria el acceso al cerrarse.
+Cierra Steam primero. Continuar de todos modos?" || return 1
+    fi
+    write_steam_add
+    local SELF; SELF="$(readlink -f "$0")"
+    local vdf="$cfg/shortcuts.vdf"
+    local name; name="$(basename "$game")"; name="${name%.*}"; name="$(printf '%s' "$name" | tr '_' ' ')"
+    local icon=""; icon="$(cover_for "$gid")" || icon=""
+    [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
+    if "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "$name" "$SELF" "$(dirname "$SELF")" \
+        "\"$(readlink -f "$game")\"" "$icon" >> "$LOG_FILE" 2>&1; then
+        ui_info "'$name' anadido a Steam como juego no-Steam.
+Reinicia Steam para verlo (copia previa: shortcuts.vdf.wproton.bak).
+En modo Gaming de la Deck aparecera en NO STEAM."
+    else
+        ui_error "Fallo escribiendo shortcuts.vdf (mira el log).
+Se restauro la copia previa."
+        [ -f "$vdf.wproton.bak" ] && cp -f "$vdf.wproton.bak" "$vdf"
+        return 1
+    fi
+}
+
 MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
@@ -991,17 +1129,18 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V15" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V18" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V15
+# WPROTON_HELPER_V18
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
 # Modos:
 #   list   <titulo> <salida> <fichero_opciones>
 #   check  <titulo> <salida> <fichero_opciones>   ("0|Texto"/"1|Texto")
-#   browse <titulo> <salida> <dir_inicial> <file|dir>
+#   browse <titulo> <salida> <dir_inicial> <file|dir|play|keys>
+#   grid   <titulo> <salida> <manifiesto>   (lineas "titulo|imagen|payload")
 import os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1099,8 +1238,36 @@ def load_dir(path):
                 items.append([K_FILE, n, False])
     apply_filter()
 
+GITEMS = []          # (titulo, ruta_imagen, payload)
+
+def load_manifest():
+    global GITEMS
+    GITEMS = []
+    with open(ARG4, encoding='utf-8') as f:
+        for l in f:
+            l = l.rstrip('\n')
+            if not l.strip():
+                continue
+            parts = l.split('|')
+            while len(parts) < 3:
+                parts.append('')
+            GITEMS.append((parts[0], parts[1], parts[2]))
+
+def grid_apply_filter():
+    global view, sel, scroll
+    if FILTER.strip():
+        f = FILTER.lower()
+        view = [i for i, it in enumerate(GITEMS) if _match(it[0], f)]
+    else:
+        view = list(range(len(GITEMS)))
+    sel = 0
+    scroll = 0
+
 if MODE == 'browse':
     load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
+elif MODE == 'grid':
+    load_manifest()
+    grid_apply_filter()
 else:
     load_options()
 
@@ -1267,8 +1434,44 @@ DIRC = (150, 190, 240)
 KBBG = (34, 37, 46)
 WARN = (230, 180, 90)
 
+def wrap_title(text, font, maxw, maxlines=6):
+    # Respeta los saltos de linea y ajusta al ancho; las rutas largas se
+    # parten por caracteres (antes se cortaba el titulo y se perdia la pregunta)
+    out = []
+    for para in text.split('\n'):
+        para = para.rstrip()
+        if not para:
+            out.append('')
+            continue
+        words, line = para.split(' '), ''
+        for wd in words:
+            probe = (line + ' ' + wd).strip()
+            if font.render(probe, True, FG).get_width() <= maxw:
+                line = probe
+                continue
+            if line:
+                out.append(line)
+                line = ''
+            while font.render(wd, True, FG).get_width() > maxw:
+                cut = len(wd)
+                while cut > 1 and font.render(wd[:cut], True, FG).get_width() > maxw:
+                    cut -= 1
+                out.append(wd[:cut])
+                wd = wd[cut:]
+            line = wd
+        if line:
+            out.append(line)
+    if len(out) > maxlines:
+        out = out[:maxlines - 1] + ['\u2026']
+    return out or ['']
+
+TITLE_LINES = wrap_title(TITLE, f_tit if len(TITLE) < 60 else f_it, 912)
+T_FONT = f_tit if len(TITLE) < 60 else f_it
+T_LH = 34 if T_FONT is f_tit else 30
+HEAD = 22 + len(TITLE_LINES) * T_LH + 14
+
 ROW = 40
-TOP = 116 if MODE == 'browse' else 90
+TOP = (HEAD + 30) if MODE == 'browse' else HEAD
 VIS_FULL = (H - TOP - 60) // ROW
 KB_H = 200
 VIS_KB = (H - TOP - 60 - KB_H) // ROW
@@ -1308,8 +1511,102 @@ def toggle():
         it = items[view[sel]]
         it[2] = not it[2]
 
+GCOLS = 5
+GCW, GCH = 176, 268          # celda (imagen 150x225 + titulo)
+GIMG_W, GIMG_H = 150, 225
+_imgcache = {}
+
+def grid_rows_vis():
+    area = H - TOP - 60 - (KB_H if kb_open else 0)
+    return max(1, area // GCH)
+
+def grid_move(dx, dy):
+    global sel, scroll
+    if not view:
+        return
+    n = len(view)
+    if dy == 0:
+        sel = (sel + dx) % n
+    else:
+        s2 = sel + dy * GCOLS
+        if 0 <= s2 < n:
+            sel = s2
+        elif dy > 0 and (sel // GCOLS) < ((n - 1) // GCOLS):
+            sel = n - 1          # bajar a una fila incompleta: ultimo juego
+        # en los bordes verticales: quieto (el horizontal si envuelve)
+    row = sel // GCOLS
+    first = scroll // GCOLS
+    vis_r = grid_rows_vis()
+    if row < first:
+        scroll = row * GCOLS
+    elif row >= first + vis_r:
+        scroll = (row - vis_r + 1) * GCOLS
+
+_fitcache = {}
+def fit_label(txt, font, maxw):
+    # Recorta midiendo el ancho renderizado (por caracteres se solapaban)
+    k = (txt, maxw)
+    if k in _fitcache:
+        return _fitcache[k]
+    if font.render(txt, True, FG).get_width() <= maxw:
+        _fitcache[k] = txt
+        return txt
+    t = txt
+    while t and font.render(t + '\u2026', True, FG).get_width() > maxw:
+        t = t[:-1]
+    t = (t.rstrip() + '\u2026') if t else '\u2026'
+    _fitcache[k] = t
+    return t
+
+def grid_img(path):
+    if not path or not os.path.isfile(path):
+        return None
+    if path not in _imgcache:
+        try:
+            img = pygame.image.load(path)
+            _imgcache[path] = pygame.transform.smoothscale(img, (GIMG_W, GIMG_H))
+        except Exception:
+            _imgcache[path] = None
+    return _imgcache[path]
+
+def draw_grid():
+    gx0 = (W - GCOLS * GCW) // 2 + (GCW - GIMG_W) // 2
+    vis_r = grid_rows_vis()
+    first = scroll
+    for i in range(first, min(first + vis_r * GCOLS, len(view))):
+        col = (i - first) % GCOLS
+        rowi = (i - first) // GCOLS
+        x = gx0 + col * GCW
+        y = TOP + rowi * GCH
+        if i == sel and not kb_open:
+            pygame.draw.rect(screen, HIBG, (x - 5, y - 5, GIMG_W + 10, GCH - 20), border_radius=8)
+        title, ipath, _pay = GITEMS[view[i]]
+        img = grid_img(ipath)
+        if img:
+            screen.blit(img, (x, y))
+        else:
+            pygame.draw.rect(screen, (44, 48, 60), (x, y, GIMG_W, GIMG_H), border_radius=6)
+            line, yy = '', y + 16
+            for wd in title.split() + ['']:
+                t2 = (line + ' ' + wd).strip()
+                if wd and f_sm.render(t2, True, FG).get_width() < GIMG_W - 12:
+                    line = t2
+                    continue
+                if line and yy < y + GIMG_H - 20:
+                    screen.blit(f_sm.render(fit_label(line, f_sm, GIMG_W - 12), True, FG), (x + 6, yy))
+                    yy += 22
+                line = wd
+        lab = fit_label(title, f_sm, GIMG_W)
+        screen.blit(f_sm.render(lab, True, FG if i == sel else DIM), (x, y + GIMG_H + 6))
+
 def on_enter():
     global running, done
+    if MODE == 'grid':
+        if not view:
+            return
+        write_out(GITEMS[view[sel]][2])
+        running = False; done = True
+        return
     if not view:
         return
     kind, txt, _ = items[view[sel]]
@@ -1334,7 +1631,7 @@ def on_escape():
     global running, FILTER
     if FILTER:
         FILTER = ''
-        apply_filter()
+        _refilter()
         return
     if MODE == 'browse':
         parent = os.path.dirname(cur_path)
@@ -1343,16 +1640,22 @@ def on_escape():
     else:
         running = False
 
+def _refilter():
+    if MODE == 'grid':
+        grid_apply_filter()
+    else:
+        apply_filter()
+
 def filter_add(ch):
     global FILTER
     FILTER += ch
-    apply_filter()
+    _refilter()
 
 def filter_back():
     global FILTER
     if FILTER:
         FILTER = FILTER[:-1]
-        apply_filter()
+        _refilter()
 
 def kb_press():
     global kb_open
@@ -1363,7 +1666,7 @@ def kb_press():
         elif act == 'LIMPIAR':
             global FILTER
             FILTER = ''
-            apply_filter()
+            _refilter()
         else:                       # LISTO
             kb_open = False
     else:
@@ -1416,9 +1719,15 @@ while running:
                 elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     if ready(): on_enter()
                 elif ev.key == pygame.K_UP:
-                    move(-1)
+                    if MODE == 'grid': grid_move(0, -1)
+                    else: move(-1)
                 elif ev.key == pygame.K_DOWN:
-                    move(1)
+                    if MODE == 'grid': grid_move(0, 1)
+                    else: move(1)
+                elif ev.key == pygame.K_LEFT:
+                    if MODE == 'grid': grid_move(-1, 0)
+                elif ev.key == pygame.K_RIGHT:
+                    if MODE == 'grid': grid_move(1, 0)
                 elif ev.key == pygame.K_TAB:
                     # Y del mando (o Tab): abrir teclado de busqueda
                     if ready() and MODE != 'check':
@@ -1441,14 +1750,17 @@ while running:
                             filter_add(ch)
 
     screen.fill(BG)
-    screen.blit(f_tit.render(TITLE[:90], True, FG), (24, 22))
+    for _i, _tl in enumerate(TITLE_LINES):
+        screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
     if MODE == 'browse':
-        screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, 58))
-        pygame.draw.line(screen, (60, 64, 74), (24, 86), (W - 24, 86), 1)
+        screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
+        pygame.draw.line(screen, (60, 64, 74), (24, HEAD + 20), (W - 24, HEAD + 20), 1)
     else:
-        pygame.draw.line(screen, (60, 64, 74), (24, 62), (W - 24, 62), 1)
+        pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
 
-    for i in range(scroll, min(scroll + vis(), len(view))):
+    if MODE == 'grid':
+        draw_grid()
+    for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
         y = TOP + (i - scroll) * ROW
         if i == sel and not kb_open:
             pygame.draw.rect(screen, HIBG, (16, y - 4, W - 32, ROW - 4), border_radius=6)
@@ -1469,10 +1781,10 @@ while running:
 
     if view:
         pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
-        screen.blit(pos, (W - 24 - pos.get_width(), 28))
+        screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
     if FILTER or kb_open:
         ft = f_sm.render('Buscar: %s_' % FILTER, True, WARN)
-        screen.blit(ft, (W - 24 - ft.get_width(), 50 if MODE != 'browse' else 58))
+        screen.blit(ft, (W - 24 - ft.get_width(), max(24, HEAD - 30)))
 
     if kb_open:
         ky0 = H - KB_H - 44
@@ -1500,6 +1812,8 @@ while running:
         hint = 'X/Espacio: marcar   A/Enter: aceptar   B/Esc: cancelar'
     elif MODE == 'browse':
         hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
+    elif MODE == 'grid':
+        hint = 'Dpad: moverse   A: jugar   B: volver   Y: buscar'
     else:
         hint = 'A/Enter: elegir   B/Esc: volver   Y: buscar   (o escribe para filtrar)'
     screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
@@ -2293,7 +2607,8 @@ _fexe() {
         -e 'oalinst'      -e 'physx'       -e 'msvcr'      -e 'msvcp' \
         -e 'modorganizer' -e 'xivlauncher' -e 'openxr'     -e 'fpsmon' \
         -e 'setup\.exe$'  -e 'unins'       -e 'install\.exe$' \
-        -e 'redist\.exe$' -e 'prerequisite' -e 'crashreport' -e 'bugsplat'
+        -e 'redist\.exe$' -e 'prerequisite' -e 'crashreport' -e 'bugsplat' \
+        -e 'scriptinterpreter' -e 'goggame' -e 'galaxycommunication'
 }
 
 scan_exes() {
@@ -3239,9 +3554,9 @@ do_pack_dir() {
     out="$(build_wsquashfs "$dir" "$name")"
     if [ -n "$out" ] && [ -s "$out" ]; then
         say "[OK] Empaquetado: $out"
-        if ui_ask "Empaquetado con exito.
-Borrar la carpeta original?
-$dir"; then
+        if ui_ask "Borrar la carpeta original?
+$(basename "$dir")
+(empaquetado con exito en $(basename "$GAMES_PATH"))"; then
             say "[+] Eliminando carpeta original: $dir"
             rm -rf "$dir"
         else
@@ -3281,6 +3596,376 @@ Empaquetar '$name' a wsquashfs ahora?
     done
 }
 
+
+
+
+INNOEXTRACT_BIN=""
+find_innoextract() {
+    INNOEXTRACT_BIN=""
+    if [ -x "$RUNTIME_DIR/tools/innoextract" ]; then INNOEXTRACT_BIN="$RUNTIME_DIR/tools/innoextract"
+    elif [ -x "$BASE_DIR/innoextract" ]; then INNOEXTRACT_BIN="$BASE_DIR/innoextract"
+    elif command -v innoextract >/dev/null 2>&1; then INNOEXTRACT_BIN="$(command -v innoextract)"
+    else return 1; fi
+}
+
+setup_innoextract() {
+    # innoextract PORTABLE: binario estatico oficial (incluye amd64, i686 y
+    # ARM) en runtime/tools. Nada de depender del paquete del sistema.
+    find_innoextract && [ -n "$INNOEXTRACT_BIN" ] && \
+        case "$INNOEXTRACT_BIN" in "$RUNTIME_DIR"/*|"$BASE_DIR"/innoextract) return 0 ;; esac
+    mkdir -p "$RUNTIME_DIR/tools"
+    local tmp="$RUNTIME_DIR/downloads/innoextract_dl"
+    rm -rf "$tmp"; mkdir -p "$tmp"
+    local urls url tgz=""
+    say "[innoextract] buscando binario estatico..."
+    urls="$(curl -fsSL "https://api.github.com/repos/dscharrer/innoextract/releases/latest" 2>/dev/null \
+        | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i 'linux' | grep -iE '\.tar\.(xz|gz|bz2)$')"
+    urls="$urls
+https://constexpr.org/innoextract/files/innoextract-1.9-linux.tar.xz"
+    while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        say "[innoextract] probando: $(basename "$url")"
+        if dl "$url" "$tmp/$(basename "$url")"; then
+            tgz="$tmp/$(basename "$url")"
+            extract_archive "$tgz" "$tmp" >>"$LOG_FILE" 2>&1 && break
+            tgz=""
+        fi
+    done <<EOF2
+$urls
+EOF2
+    if [ -z "$tgz" ]; then
+        rm -rf "$tmp"
+        ui_error "No se pudo descargar innoextract.
+Puedes bajar innoextract-1.9-linux.tar.xz de constexpr.org/innoextract
+y dejar el binario 'innoextract' junto a wproton.sh"
+        return 1
+    fi
+    # El tarball trae binarios para varias arquitecturas: probamos cual corre
+    local c
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        chmod +x "$c" 2>/dev/null
+        if "$c" --version >/dev/null 2>&1; then
+            cp -f "$c" "$RUNTIME_DIR/tools/innoextract"
+            chmod +x "$RUNTIME_DIR/tools/innoextract"
+            INNOEXTRACT_BIN="$RUNTIME_DIR/tools/innoextract"
+            rm -rf "$tmp"
+            say "[innoextract] listo: $("$INNOEXTRACT_BIN" --version 2>&1 | head -n1)"
+            return 0
+        fi
+    done <<EOF3
+$(find "$tmp" -type f -name 'innoextract*' ! -name '*.txt' ! -name '*.md' 2>/dev/null)
+EOF3
+    rm -rf "$tmp"
+    ui_error "El innoextract descargado no funciona en esta maquina"
+    return 1
+}
+
+INNOUNP_DIR="$RUNTIME_DIR/tools/innounp"
+
+find_innounp() {
+    INNOUNP_EXE="$(find "$INNOUNP_DIR" -maxdepth 2 -type f -iname 'innounp*.exe' 2>/dev/null | head -n1)"
+    [ -n "$INNOUNP_EXE" ]
+}
+
+setup_innounp() {
+    # innounp-2 (jrathlev): unpacker YA COMPILADO que soporta Inno Setup
+    # hasta 6.7 (innoextract se quedo en la 6.1 de su release de 2020).
+    # Es un .exe de Windows, pero tenemos Wine: no hay que compilar nada.
+    find_innounp && return 0
+    mkdir -p "$INNOUNP_DIR"
+    local tmp="$RUNTIME_DIR/downloads/innounp_dl"
+    rm -rf "$tmp"; mkdir -p "$tmp"
+    local urls url ok=1
+    say "[innounp] buscando descarga en GitHub..."
+    # 1) assets de la ultima release
+    urls="$(curl -fsSL "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/releases/latest" 2>/dev/null \
+        | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4)"
+    # 2) ficheros sueltos del repo (carpetas distribution/ e innounp-2/)
+    local d
+    for d in distribution innounp-2; do
+        urls="$urls
+$(curl -fsSL "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/contents/$d" 2>/dev/null \
+            | grep -o '"download_url": *"[^"]*"' | cut -d'"' -f4 | grep -iE '\.(zip|exe)$')"
+    done
+    urls="$(printf '%s\n' "$urls" | grep -iE '\.(zip|exe)$' | grep -viE 'source' | awk 'NF')"
+    [ -z "$urls" ] && { ui_error "No se pudo localizar la descarga de innounp"; rm -rf "$tmp"; return 1; }
+    while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        say "[innounp] probando: $(basename "$url")"
+        dl "$url" "$tmp/$(basename "$url")" || continue
+        case "$url" in
+            *.zip|*.ZIP)
+                extract_archive "$tmp/$(basename "$url")" "$tmp" >/dev/null 2>&1 || true ;;
+        esac
+        if find "$tmp" -type f -iname 'innounp*.exe' | head -n1 | grep -q .; then
+            ok=0; break
+        fi
+    done <<EOF2
+$urls
+EOF2
+    if [ "$ok" != 0 ]; then
+        rm -rf "$tmp"
+        ui_error "No se encontro innounp.exe en las descargas.
+Puedes bajarlo a mano y dejarlo en:
+$INNOUNP_DIR/innounp.exe"
+        return 1
+    fi
+    find "$tmp" -type f -iname 'innounp*.exe' -exec cp -f {} "$INNOUNP_DIR"/ \;
+    rm -rf "$tmp"
+    find_innounp && { say "[innounp] listo: $(basename "$INNOUNP_EXE")"; return 0; }
+    return 1
+}
+
+win_path() {
+    # /ruta/unix -> Z:\ruta\unix (Wine mapea Z: a la raiz del sistema)
+    printf 'Z:%s' "$(readlink -f "$1" | sed 's|/|\\|g')"
+}
+
+extract_with_innounp() {
+    # $1 = instalador, $2 = carpeta destino. Ejecuta innounp.exe con Wine.
+    local inst="$1" dest="$2"
+    setup_innounp || return 1
+    local gid="__wptools__"
+    load_profile "$gid"
+    RUNNER="${RUNNER:-}"
+    local rdir; rdir="$(get_runner_path)"
+    [ -z "$rdir" ] && { ui_error "No hay runner de Wine/Proton para ejecutar innounp"; return 1; }
+    export_game_env "$gid"
+    build_runner_cmd "$rdir"
+    mkdir -p "$dest"
+    say "[innounp] extrayendo con $(basename "$rdir")..."
+    ( cd "$dest" && "${RUN_CMD[@]}" "$(win_path "$INNOUNP_EXE")" -x -y -b "$(win_path "$inst")" ) 2>&1 \
+        | grep -vE '^#[0-9]+ .*extracted' >> "$LOG_FILE"
+    local n; n="$(find "$dest" -type f 2>/dev/null | wc -l)"
+    say "[innounp] ficheros extraidos: $n"
+    [ "$n" -gt 0 ]
+}
+
+
+is_inno_installer() {
+    # $1 = exe. Instalador InnoSetup/GOG? Por nombre o por la firma que
+    # todos los instaladores Inno Setup llevan en su cabecera.
+    case "$(basename "$1")" in
+        setup_*.exe|setup_*.EXE|setup.exe|Setup.exe) return 0 ;;
+    esac
+    head -c 20000000 "$1" 2>/dev/null | grep -qa 'Inno Setup'
+}
+
+install_exe_silent_wine() {
+    # Instalacion DESATENDIDA con Wine: los instaladores Inno/GOG aceptan
+    # /VERYSILENT y /DIR, asi que no hace falta teclado ni raton.
+    local inst="$1" name="$2"
+    local dest="$GAMES_PATH/$name"
+    local gid="__wptools__"
+    load_profile "$gid"
+    local rdir; rdir="$(get_runner_path)"
+    [ -z "$rdir" ] && { ui_error "No hay runner de Wine/Proton para instalar el juego"; return 1; }
+    export_game_env "$gid"
+    build_runner_cmd "$rdir"
+    pad_bridge_stop
+    rm -rf "$dest"; mkdir -p "$dest"
+    local sw
+    for sw in /VERYSILENT /SILENT; do
+        say "[GOG] instalacion desatendida ($sw) en: $dest"
+        run_with_progress "Instalando '$name' sin intervencion (puede tardar varios minutos)..." \
+            "${RUN_CMD[@]}" "$(win_path "$inst")" "$sw" /SUPPRESSMSGBOXES /NORESTART /SP- /NOICONS \
+            "/DIR=$(win_path "$dest")" || true
+        local wsrv i
+        wsrv="$(dirname "$(runner_wine_bin "$rdir")" 2>/dev/null)/wineserver"
+        [ -x "$wsrv" ] && "$wsrv" -w 2>/dev/null
+        for i in 1 2 3; do
+            pgrep -f 'wineserver' >/dev/null 2>&1 || break
+            sleep 1
+        done
+        [ -n "$(find "$dest" -type f -iname '*.exe' 2>/dev/null | head -n1)" ] && break
+        say "[GOG] $sw no dejo ejecutables; probando el siguiente modo"
+    done
+    local n; n="$(find "$dest" -type f 2>/dev/null | wc -l)"
+    say "[GOG] instalacion desatendida: $n ficheros en $dest"
+    if [ "$n" -eq 0 ]; then
+        rm -rf "$dest"
+        return 1
+    fi
+    GOG_ROOT="$dest"
+    GOG_EXE="$(find_game_exe "$dest")"
+    [ -n "$GOG_EXE" ]
+}
+
+install_exe_with_wine() {
+    # Plan B cuando innounp no puede con el instalador: ejecutarlo dentro
+    # de un prefijo y luego importar la carpeta donde se haya instalado.
+    local inst="$1" name="$2" gid pfx
+    gid="$(printf '%s' "instalador_$name" | tr ' /' '__')"
+    ui_info "Se abrira el instalador de Windows.
+Instala el juego con la ruta que te ofrezca por defecto (C:\\...) y, al
+terminar, WProton te dejara elegir la carpeta instalada para importarla."
+    launch_loose_exe "$gid" "$(readlink -f "$inst")"
+    load_profile "$gid"
+    pfx="$(prefix_path "$gid")"
+    local start="$pfx/drive_c"
+    [ -d "$start" ] || start="$HOME"
+    ui_info "Instalacion terminada.
+Elige ahora la CARPETA del juego instalado (dentro de drive_c)."
+    local dir
+    dir="$(browse_for_path "Carpeta del juego instalado" "$start" "dir")" || return 1
+    [ -d "$dir" ] || return 1
+    package_dir "$dir"
+}
+
+gog_find_root() {
+    # $1 = dir extraido -> carpeta REAL del juego.
+    # Los instaladores GOG no siempre usan app/: muchos dejan el juego en la
+    # raiz (bin/juego.exe + assets/) y en app/ solo un icono y webcache.zip.
+    # Estrategia: quedarse con la carpeta del ejecutable MAS GRANDE, ignorando
+    # las carpetas de servicio de GOG (tmp, __redist, commonappdata).
+    local d="$1" cand exe best="" bestsz=0 sz parent
+    GOG_ROOT_EXE=""
+    for cand in $(find "$d" -maxdepth 2 -type d \( -iname 'app' -o -iname '{app}' \) 2>/dev/null); do
+        exe="$(find_game_exe "$cand")"
+        [ -n "$exe" ] && { GOG_ROOT_EXE="$exe"; printf '%s' "$cand"; return 0; }
+    done
+    while IFS= read -r exe; do
+        [ -n "$exe" ] || continue
+        sz="$(stat -c %s "$exe" 2>/dev/null || echo 0)"
+        [ "$sz" -gt "$bestsz" ] && { bestsz=$sz; best="$exe"; }
+    done <<EOF2
+$(find "$d" -type f -iname '*.exe' \
+    ! -ipath '*/tmp/*' ! -ipath '*/{tmp}/*' ! -ipath '*/__redist/*' \
+    ! -ipath '*/commonappdata/*' ! -ipath '*/{commonappdata}/*' \
+    ! -ipath '*/DirectX/*' 2>/dev/null | _fexe)
+EOF2
+    if [ -n "$best" ]; then
+        cand="$(dirname "$best")"
+        case "$(basename "$cand")" in
+            bin|Bin|BIN|bin64|x64|win64|Win64|game|Game)
+                parent="$(dirname "$cand")"
+                [ "$parent" != "$cand" ] && [ "$parent" != "/" ] && cand="$parent" ;;
+        esac
+        say "[GOG] ejecutable principal: ${best#$d/}"
+        GOG_ROOT_EXE="$best"
+        printf '%s' "$cand"
+        return 0
+    fi
+    printf '%s' "$d"
+}
+
+has_galaxy_chunks() {
+    # GOG Galaxy: el juego va troceado en tmp/<xx>/<yy>/<md5>. Solo innoextract
+    # sabe reensamblarlo; si vemos esto sin ejecutable, avisamos.
+    local d="$1" n
+    n="$(find "$d" \( -ipath '*/tmp/*' -o -ipath '*/{tmp}/*' \) -type f \
+         -regextype posix-extended -regex '.*/[0-9a-f]{32}$' 2>/dev/null | head -n 5 | wc -l)"
+    [ "$n" -ge 3 ]
+}
+
+gog_extract_try() {
+    # $1 = herramienta (innoextract|innounp), $2 = instalador, $3 = destino
+    # Deja en GOG_ROOT la carpeta con el juego si lo consigue.
+    GOG_ROOT=""
+    local tool="$1" inst="$2" dest="$3" nfiles root exe
+    rm -rf "$dest"; mkdir -p "$dest"
+    case "$tool" in
+        innoextract)
+            find_innoextract || return 1
+            say "[GOG] probando innoextract: $("$INNOEXTRACT_BIN" --version 2>&1 | head -n1)"
+            local gogflag=""
+            ls "${inst%.exe}"-*.bin >/dev/null 2>&1 && gogflag="--gog"
+            # el listado fichero-a-fichero llenaba el log de megas: solo avisos
+            say "Extrayendo con innoextract: $(basename "$inst") ..."
+            "$INNOEXTRACT_BIN" $gogflag -d "$dest" "$inst" 2>&1 \
+                | grep -v '^ - "' >> "$LOG_FILE" ;;
+        innounp)
+            setup_innounp || return 1
+            say "[GOG] probando innounp (via Wine)"
+            run_with_progress "Extrayendo con innounp: $(basename "$inst") ..." \
+                extract_with_innounp "$inst" "$dest" || return 1 ;;
+    esac
+    nfiles="$(find "$dest" -type f 2>/dev/null | wc -l)"
+    say "[GOG] $tool extrajo $nfiles ficheros"
+    [ "$nfiles" -eq 0 ] && return 1
+    GOG_ROOT_EXE=""
+    root="$(gog_find_root "$dest")"     # imprime la raiz...
+    gog_find_root "$dest" >/dev/null    # ...y esta pasada rellena GOG_ROOT_EXE
+    exe="$GOG_ROOT_EXE"
+    [ -z "$exe" ] && exe="$(find_game_exe "$root")"
+    [ -z "$exe" ] && [ "$root" != "$dest" ] && exe="$(find_game_exe "$dest")"
+    if [ -z "$exe" ]; then
+        if has_galaxy_chunks "$dest"; then
+            say "[GOG] AVISO: formato GOG Galaxy (ficheros troceados por hash) sin reensamblar"
+            GOG_GALAXY_SEEN=1
+        fi
+        say "[GOG] $tool no dejo ningun ejecutable utilizable"
+        return 1
+    fi
+    GOG_ROOT="$root"
+    GOG_EXE="$exe"
+    return 0
+}
+
+import_gog_exe() {
+    # Instalador GOG/InnoSetup -> juego en carpeta -> probar/empaquetar.
+    #
+    # ESTRATEGIA: instalacion DESATENDIDA con Wine (/VERYSILENT /DIR=...).
+    # Es la via mas fiable porque la hace el propio instalador: funciona con
+    # cualquier version de Inno Setup y con el formato GOG Galaxy (los trozos
+    # los reensambla el, no nosotros) y no necesita teclado ni raton.
+    # Si el instalador ignorase el modo silencioso, se prueba a extraerlo con
+    # innoextract / innounp (si estan disponibles) y, en ultimo caso, el
+    # instalador interactivo.
+    local inst="$1" name root exe
+    name="$(basename "$inst")"; name="${name%.*}"
+    name="$(printf '%s' "$name" | sed -E 's/^setup_//; s/_\([^)]*\)//g; s/_[0-9]+(\.[0-9]+)+.*$//; s/_/ /g')"
+    name="$(clean_game_name "$name")"
+    [ -z "$name" ] && name="juego_gog"
+    GOG_ROOT=""; GOG_EXE=""; GOG_GALAXY_SEEN=0
+    local extract_dir="$GAMES_PATH/.gog_extract_$$"
+
+    say "[GOG] '$name': instalacion desatendida con Wine"
+    if ! install_exe_silent_wine "$inst" "$name"; then
+        say "[GOG] el modo silencioso no dejo el juego; probando extractores"
+        if ! gog_extract_try innoextract "$inst" "$extract_dir" \
+           && ! gog_extract_try innounp "$inst" "$extract_dir"; then
+            rm -rf "$extract_dir"
+            local extra=""
+            [ "${GOG_GALAXY_SEEN:-0}" = 1 ] && extra="
+(El instalador usa el formato GOG Galaxy: los ficheros van troceados
+ y solo el propio instalador o innoextract saben recomponerlos.)"
+            if ui_ask "No se pudo obtener el juego de este instalador.$extra
+
+Quieres abrir el instalador para hacerlo A MANO (necesita teclado/raton)?"; then
+                install_exe_with_wine "$inst" "$name"
+                return $?
+            fi
+            return 1
+        fi
+        # extraido: mover a su carpeta definitiva
+        root="$GOG_ROOT"; exe="$GOG_EXE"
+        local dest="$GAMES_PATH/$name"
+        rm -rf "$dest"
+        mv "$root" "$dest" 2>/dev/null || { mkdir -p "$dest"; mv "$root"/* "$dest"/ 2>/dev/null; }
+        exe="$dest/${exe#"$root/"}"
+        [ -f "$exe" ] || exe="$(find_game_exe "$dest")"
+        rm -rf "$extract_dir"
+        GOG_ROOT="$dest"; GOG_EXE="$exe"
+    fi
+    root="$GOG_ROOT"; exe="$GOG_EXE"
+    [ -n "$exe" ] || { ui_error "No se encontro ejecutable en: $root"; return 1; }
+    say "[+] Juego en: $root"
+    say "[+] Ejecutable: $(basename "$exe")"
+    write_autorun "$root" "$exe"
+    if ui_ask "Borrar el instalador original?
+$(basename "$inst")
+(el juego ha quedado en: $(basename "$root"))"; then
+        rm -f "$inst"
+        rm -f "${inst%.*}"-*.bin 2>/dev/null
+    fi
+    if offer_test_then_pack "$root" "$exe" "$name"; then
+        ui_ask "Lanzar '$name' desde el wsquashfs ahora?" \
+            && launch_game "$PACKED_OUT" "auto"
+    fi
+}
+
 pick_game_root() {
     # $1 = exe absoluto -> el usuario CONFIRMA la carpeta raiz (los datos del
     # juego pueden estar por encima de la carpeta del exe)
@@ -3316,6 +4001,14 @@ package_exe() {
     # .exe suelto -> confirmar raiz del juego, autorun, empaquetar, lanzar
     local exe_abs exe_dir game_root name out
     exe_abs="$(realpath "$1")"
+    if is_inno_installer "$exe_abs"; then
+        if ui_ask "Parece un instalador GOG/InnoSetup:
+$(basename "$exe_abs")
+Instalarlo (sin intervencion) y convertirlo a wsquashfs?"; then
+            import_gog_exe "$exe_abs"
+            return $?
+        fi
+    fi
     exe_dir="$(dirname "$exe_abs")"
     game_root="$(pick_game_root "$exe_dir")" || { say "Importacion cancelada"; return 1; }
     name="$(basename "$game_root")"
@@ -3558,6 +4251,64 @@ import_input() {
 # ----------------------------------------------------------------------------
 onoff() { [ "$1" = 1 ] && printf 'ON' || printf 'OFF'; }
 
+COVERS_DIR="$BASE_DIR/covers"
+
+cover_for() {
+    # $1 = gid -> ruta de la caratula si existe
+    local e
+    for e in png jpg jpeg webp; do
+        [ -f "$COVERS_DIR/$1.$e" ] && { printf '%s' "$COVERS_DIR/$1.$e"; return 0; }
+    done
+    return 1
+}
+
+urlencode_py() {
+    "$PY_BIN" -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null
+}
+
+sgdb_download_covers() {
+    # Descarga caratulas 600x900 de SteamGridDB para los juegos sin caratula
+    if [ -z "$SGDB_KEY" ]; then
+        local k
+        k="$(ask_text "Pega tu API key de SteamGridDB
+(gratis en steamgriddb.com -> Profile -> Preferences -> API)" "")"
+        [ -z "$k" ] && return 1
+        SGDB_KEY="$k"; save_settings
+    fi
+    mkdir -p "$COVERS_DIR"
+    local list total=0 got=0
+    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null | sort)"
+    [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
+    local f gid title q gjson gameid ujson url ext
+    while IFS= read -r f; do
+        gid="$(game_id "$f")"
+        cover_for "$gid" >/dev/null && continue
+        total=$((total+1))
+        title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
+        say "[SGDB] Buscando caratula: $title"
+        q="$(urlencode_py "$title")"
+        gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+            "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
+        if printf '%s' "$gjson" | grep -q '"success": *false'; then
+            ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
+        fi
+        gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
+        [ -z "$gameid" ] && { say "[SGDB]   sin resultados para: $title"; continue; }
+        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=600x900&types=static" 2>>"$LOG_FILE")"
+        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+        [ -z "$url" ] && { say "[SGDB]   sin grids 600x900 para: $title"; continue; }
+        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+        if curl -fsSL "$url" -o "$COVERS_DIR/$gid.$ext" 2>>"$LOG_FILE"; then
+            got=$((got+1)); say "[SGDB]   OK -> covers/$gid.$ext"
+        fi
+    done <<EOF2
+$list
+EOF2
+    ui_info "Caratulas: $got descargadas de $total pendientes.
+(Las que falten: pon un png/jpg a mano en covers/<juego>.png)"
+}
+
 browse_for_path() {
     # Navegador con el mando. Con pygame: UNA sola ventana persistente para
     # toda la navegacion (antes se relanzaba python+SDL por cada carpeta y en
@@ -3619,6 +4370,33 @@ pick_squash() {
     local list loose="(juego suelto: elegir carpeta o exe...)"
     list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) -printf '%P\n' 2>/dev/null | sort)"
     local sel
+    if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
+        pad_bridge_stop
+        write_menu_pygame
+        local man tmpsel rel gid2 t2 cov
+        man="$(mktemp)"; tmpsel="$(mktemp)"
+        printf '%s\n' "(juego suelto: carpeta o exe)||__LOOSE__" >> "$man"
+        while IFS= read -r rel; do
+            gid2="$(game_id "$GAMES_PATH/$rel")"
+            t2="$(basename "$rel")"; t2="${t2%.*}"
+            cov="$(cover_for "$gid2")" || cov=""
+            printf '%s|%s|%s\n' "$t2" "$cov" "$rel" >> "$man"
+        done <<EOF2
+$list
+EOF2
+        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+            "$PY_BIN" "$MENU_PYGAME_PY" grid "Elige un juego  [$GAMES_PATH]" \
+            "$tmpsel" "$man" >> "$LOG_FILE" 2>&1
+        sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$man"
+        [ -z "$sel" ] && { log "GRID -> cancelado"; return 1; }
+        log "GRID -> [$sel]"
+        if [ "$sel" = "__LOOSE__" ]; then
+            browse_for_path "Juego suelto (carpeta o exe)" "$HOME" "play"
+            return $?
+        fi
+        printf '%s' "$GAMES_PATH/$sel"
+        return 0
+    fi
     # shellcheck disable=SC2046
     sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)" || return 1
     if [ "$sel" = "$loose" ]; then
@@ -3704,6 +4482,7 @@ game_config_menu() {
             "Abrir winecfg" \
             "Abrir winetricks" \
             "Mapeador .keys: $kstat" \
+            "Anadir este juego a Steam" \
             "Repetir asistente de primera ejecucion" \
             "Borrar prefijo (reinstala DLLs)" \
             "Borrar saves del overlay (upper/)" \
@@ -3777,6 +4556,8 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
             "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
             "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
             "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
+            "Anadir este juego a Steam")
+                add_game_to_steam "$squash" "$gid" ;;
             "Mapeador .keys"*)
                 local kmenu
                 kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
@@ -3840,8 +4621,11 @@ main_menu() {
                "Actualizar GE-Proton a la ultima" \
                "Actualizar umu-launcher" \
                "Instalar/actualizar Python portable + pygame" \
+               "Descargar extractores GOG (innoextract + innounp)" \
                "Borrar un runner" \
                "Carpeta de juegos: $GAMES_PATH" \
+               "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
+               "Descargar caratulas (SteamGridDB)" \
                "Detener Wine y desmontar todo" \
                "Ver ultimo log" \
                "Buscar actualizaciones [v$WPROTON_VERSION]" \
@@ -3877,6 +4661,13 @@ main_menu() {
             "Actualizar GE-Proton"*) setup_proton ;;
             "Actualizar umu-launcher") setup_umu ;;
             "Instalar/actualizar Python portable + pygame") setup_python ;;
+            "Descargar extractores GOG"*)
+                local ok1="NO" ok2="NO"
+                setup_innoextract && ok1="OK"
+                setup_innounp && ok2="OK"
+                ui_info "Extractores portables en runtime/tools:
+  innoextract (principal, reensambla GOG Galaxy): $ok1
+  innounp (respaldo via Wine, Inno Setup hasta 6.7): $ok2" ;;
             "Borrar un runner")
                 local vers v
                 vers="$(local_runner_names)"
@@ -3885,6 +4676,11 @@ main_menu() {
                 if v="$(IFS=$'\n'; set -f; menu "Borrar runner" $vers)"; then
                     ui_ask "Borrar $v?" && rm -rf "${RUNNERS_DIR:?}/$v"
                 fi ;;
+            "Vista de juegos:"*)
+                [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
+                save_settings ;;
+            "Descargar caratulas"*)
+                sgdb_download_covers ;;
             "Carpeta de juegos:"*)
                 local nd=""
                 if pygame_available; then
@@ -3951,7 +4747,23 @@ case "${1:-}" in
     --version) printf 'WProton v%s\n' "$WPROTON_VERSION"; exit 0 ;;
 esac
 
+rotate_logs() {
+    # Conservar solo los logs de los ultimos 2 dias (y 40 como maximo)
+    [ -d "$LOG_DIR" ] || return 0
+    find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' -mtime +2 -delete 2>/dev/null
+    local n old
+    n="$(find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' 2>/dev/null | wc -l)"
+    if [ "$n" -gt 40 ]; then
+        find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' -printf '%T@ %p\n' 2>/dev/null \
+            | sort -n | head -n $((n - 40)) | cut -d' ' -f2- | while IFS= read -r old; do
+                rm -f "$old"
+            done
+    fi
+    return 0
+}
+
 check_deps
+rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
 pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
 
