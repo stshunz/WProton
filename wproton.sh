@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.74"
+WPROTON_VERSION="0.75"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1129,10 +1129,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V18" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V19" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V18
+# WPROTON_HELPER_V19
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1141,6 +1141,7 @@ write_menu_pygame() {
 #   check  <titulo> <salida> <fichero_opciones>   ("0|Texto"/"1|Texto")
 #   browse <titulo> <salida> <dir_inicial> <file|dir|play|keys>
 #   grid   <titulo> <salida> <manifiesto>   (lineas "titulo|imagen|payload")
+#   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
 import os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1156,7 +1157,9 @@ if os.environ.get('DISPLAY'):
     os.environ.setdefault('SDL_VIDEODRIVER', 'x11')
 import pygame
 
-MODE, TITLE, OUTFILE, ARG4 = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+MODE, TITLE, OUTFILE = sys.argv[1], sys.argv[2], sys.argv[3]
+# en modo 'progress' el 3er argumento ya es el fichero de estado
+ARG4 = sys.argv[4] if len(sys.argv) > 4 else OUTFILE
 BROWSE_KIND = sys.argv[5] if len(sys.argv) > 5 else 'file'
 BROWSE_EXTS = ('.wsquashfs', '.squashfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.wtgz')
@@ -1263,7 +1266,9 @@ def grid_apply_filter():
     sel = 0
     scroll = 0
 
-if MODE == 'browse':
+if MODE == 'progress':
+    pass
+elif MODE == 'browse':
     load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
 elif MODE == 'grid':
     load_manifest()
@@ -1672,6 +1677,45 @@ def kb_press():
     else:
         filter_add(KB_ROWS[kb_r][kb_c].lower())
 
+if MODE == 'progress':
+    # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
+    bar_pct, bar_txt = 0, 'Preparando...'
+    clock2 = pygame.time.Clock()
+    while True:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                pygame.quit(); sys.exit(0)
+        try:
+            with open(ARG4, encoding='utf-8') as fh:
+                raw = fh.readline().rstrip('\n')
+            if raw.startswith('DONE'):
+                break
+            p, _, t = raw.partition('|')
+            bar_pct = max(0, min(100, int(p or 0)))
+            bar_txt = t or bar_txt
+        except Exception:
+            pass
+        screen.fill(BG)
+        for _i, _tl in enumerate(TITLE_LINES):
+            screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+        pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
+        screen.blit(f_it.render(fit_label(bar_txt, f_it, W - 60), True, FG), (30, HEAD + 24))
+        bx, by, bw, bh = 30, HEAD + 74, W - 60, 26
+        pygame.draw.rect(screen, (44, 48, 60), (bx, by, bw, bh), border_radius=8)
+        if bar_pct > 0:
+            pygame.draw.rect(screen, HIBG, (bx, by, int(bw * bar_pct / 100.0), bh), border_radius=8)
+        else:
+            t0 = (time.time() * 220) % (bw * 2)
+            xx = t0 if t0 < bw else (bw * 2 - t0)
+            pygame.draw.rect(screen, HIBG, (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=8)
+        if bar_pct:
+            screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
+        screen.blit(f_sm.render('Espera, esto puede tardar...', True, DIM), (24, H - 40))
+        pygame.display.flip()
+        clock2.tick(30)
+    pygame.quit()
+    sys.exit(0)
+
 running, done = True, False
 GRACE = 0.35
 t_open = time.time()
@@ -1779,6 +1823,17 @@ while running:
         screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
                     (30, TOP + 6))
 
+    # Barra lateral: avisa de que hay mas opciones de las que caben en pantalla
+    _total = len(view)
+    _vis = (grid_rows_vis() * GCOLS) if MODE == 'grid' else vis()
+    if _total > _vis:
+        _tr_x, _tr_y = W - 14, TOP - 6
+        _tr_h = (H - 60) - _tr_y
+        pygame.draw.rect(screen, (44, 48, 60), (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
+        _kh = max(28, int(_tr_h * _vis / float(_total)))
+        _maxoff = max(1, _total - _vis)
+        _ky = _tr_y + int((_tr_h - _kh) * min(1.0, scroll / float(_maxoff)))
+        pygame.draw.rect(screen, (120, 130, 150), (_tr_x, _ky, 6, _kh), border_radius=3)
     if view:
         pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
         screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
@@ -2773,6 +2828,7 @@ profile_defaults() {
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     PAD_SDL=1                # mandos no-XInput (DualSense/DS4...) como Xbox
+    NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
     FSR=0                    # 1 = escalado AMD FSR en pantalla completa
@@ -2807,6 +2863,7 @@ ARGS_OVERRIDE="$ARGS_OVERRIDE"
 PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
+NTSYNC=$NTSYNC
 USE_BATOCERA=$USE_BATOCERA
 GAMEMODE=$GAMEMODE
 FSYNC=$FSYNC
@@ -2937,18 +2994,20 @@ wizard_toggles() {
 1|Fsync (sincronizacion rapida)
 1|DXVK Async + GPL (menos stutter en AMD)
 1|Mando via SDL (DualSense/DS4 como Xbox)
+0|NTsync (sincronizacion por kernel, 6.14+)
 0|Wayland nativo (experimental)
 EOF
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
             "$PY_BIN" "$MENU_PYGAME_PY" check "Paso 3/3 - Configuracion basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
         local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
         [ $rc -ne 0 ] && return 1
-        MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0; PAD_SDL=0
+        MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0; PAD_SDL=0; NTSYNC=0
         case "$sel" in *MangoHud*)  MANGOHUD=1 ;; esac
         case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
         case "$sel" in *Fsync*)     FSYNC=1 ;; esac
         case "$sel" in *DXVK*)      DXVK_ASYNC=1 ;; esac
         case "$sel" in *"Mando via SDL"*) PAD_SDL=1 ;; esac
+        case "$sel" in *NTsync*)    NTSYNC=1 ;; esac
         case "$sel" in *Wayland*)   WAYLAND=1 ;; esac
         return 0
     fi
@@ -3063,6 +3122,19 @@ export_game_env() {
     # Mandos Sony/Switch fuera de Steam: sin esto Proton los pasa por hidraw
     # y los juegos solo-XInput no los ven (el caso The Mummy Demastered)
     [ "$PAD_SDL" = 1 ]    && export PROTON_PREFER_SDL=1 PROTON_DISABLE_HIDRAW=1
+    # NTsync: primitivas de sincronizacion NT dentro del kernel (6.14+).
+    # Sustituye a esync/fsync; los runners parcheados la activan con
+    # PROTON_USE_NTSYNC=1 (GE-Proton 10-9+, Proton/Wine-CachyOS, DWProton).
+    if [ "${NTSYNC:-0}" = 1 ]; then
+        if [ -e /dev/ntsync ]; then
+            export PROTON_USE_NTSYNC=1 WINENTSYNC=1
+            export WINEESYNC=0 WINEFSYNC=0
+            say "[+] NTsync activado (/dev/ntsync presente)"
+        else
+            say "AVISO: NTsync pedido pero no existe /dev/ntsync (kernel <6.14 o"
+            say "       modulo sin cargar: sudo modprobe ntsync). Se usara fsync/esync."
+        fi
+    fi
     # Parametros del autorun.cmd estilo Batocera (ENV= y LANG=)
     if [ -n "${AUTORUN_LANG:-}" ]; then
         export LANG="$AUTORUN_LANG" LC_ALL="$AUTORUN_LANG"
@@ -4354,6 +4426,44 @@ import_input() {
 onoff() { [ "$1" = 1 ] && printf 'ON' || printf 'OFF'; }
 
 COVERS_DIR="$BASE_DIR/covers"
+PROGRESS_PID=""
+PROGRESS_FILE=""
+
+progress_start() {
+    # Ventana de progreso con pygame. $1 = titulo
+    PROGRESS_PID=""; PROGRESS_FILE=""
+    pygame_available || return 0
+    pad_bridge_stop
+    write_menu_pygame
+    PROGRESS_FILE="$(mktemp)"
+    printf '0|Preparando...\n' > "$PROGRESS_FILE"
+    PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+        "$PY_BIN" "$MENU_PYGAME_PY" progress "$1" "$PROGRESS_FILE" >> "$LOG_FILE" 2>&1 &
+    PROGRESS_PID=$!
+    return 0
+}
+
+progress_set() {
+    # $1 = porcentaje (0 = barra indeterminada), $2 = texto
+    [ -n "$PROGRESS_FILE" ] || return 0
+    printf '%s|%s\n' "$1" "$2" > "$PROGRESS_FILE" 2>/dev/null
+    return 0
+}
+
+progress_stop() {
+    [ -n "$PROGRESS_FILE" ] && printf 'DONE|\n' > "$PROGRESS_FILE" 2>/dev/null
+    if [ -n "$PROGRESS_PID" ]; then
+        local i
+        for i in 1 2 3; do
+            kill -0 "$PROGRESS_PID" 2>/dev/null || break
+            sleep 0.2
+        done
+        kill "$PROGRESS_PID" 2>/dev/null
+    fi
+    [ -n "$PROGRESS_FILE" ] && rm -f "$PROGRESS_FILE"
+    PROGRESS_PID=""; PROGRESS_FILE=""
+    return 0
+}
 
 cover_for() {
     # $1 = gid -> ruta de la caratula si existe
@@ -4378,20 +4488,30 @@ sgdb_download_covers() {
         SGDB_KEY="$k"; save_settings
     fi
     mkdir -p "$COVERS_DIR"
-    local list total=0 got=0
+    local list total=0 got=0 pend=0 idx=0
     list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
     local f gid title q gjson gameid ujson url ext
     while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        cover_for "$(game_id "$f")" >/dev/null || pend=$((pend+1))
+    done <<EOF0
+$list
+EOF0
+    [ "$pend" -eq 0 ] && { ui_info "Todos los juegos ya tienen caratula en covers/"; return 0; }
+    progress_start "Descargando caratulas de SteamGridDB"
+    while IFS= read -r f; do
         gid="$(game_id "$f")"
         cover_for "$gid" >/dev/null && continue
-        total=$((total+1))
+        total=$((total+1)); idx=$((idx+1))
         title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
+        progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $title"
         say "[SGDB] Buscando caratula: $title"
         q="$(urlencode_py "$title")"
         gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
             "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
         if printf '%s' "$gjson" | grep -q '"success": *false'; then
+            progress_stop
             ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
         fi
         gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
@@ -4407,6 +4527,7 @@ sgdb_download_covers() {
     done <<EOF2
 $list
 EOF2
+    progress_stop
     ui_info "Caratulas: $got descargadas de $total pendientes.
 (Las que falten: pon un png/jpg a mano en covers/<juego>.png)"
 }
@@ -4565,6 +4686,7 @@ game_config_menu() {
             "GAMEID (protonfixes): $GAMEID" \
             "MangoHud: $(onoff "$MANGOHUD")" \
             "Mando via SDL (DualSense como Xbox): $(onoff "$PAD_SDL")" \
+            "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
             "$bat_row" \
             "GameMode: $(onoff "$GAMEMODE")" \
             "Fsync: $(onoff "$FSYNC")" \
@@ -4631,6 +4753,8 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
             "MangoHud:"*)     MANGOHUD=$((1-MANGOHUD));     write_full_profile "$gid" ;;
             "Lanzar via batocera-wine"*)
                 USE_BATOCERA=$((1-${USE_BATOCERA:-1})); write_full_profile "$gid" ;;
+            "NTsync"*)
+                NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
             "Mando via SDL"*)
                 PAD_SDL=$((1-PAD_SDL)); write_full_profile "$gid"
                 # el registro del prefijo debe reevaluarse
