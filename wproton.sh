@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.72"
+WPROTON_VERSION="0.74"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -2536,7 +2536,18 @@ mount_game() {
 
     say "Montando $squash..."
     "$SQUASHFUSE_BIN" "$squash" "$MOUNT_RO" >>"$LOG_FILE" 2>&1 || die "squashfuse fallo montando $squash"
-    if "$OVERLAYFS_BIN" -o "lowerdir=$MOUNT_RO,upperdir=$upper,workdir=$work" "$MOUNT_RW" >>"$LOG_FILE" 2>&1; then
+    # squash_to_uid/gid: los wsquashfs hechos en Batocera llevan los ficheros
+    # como root; sin esto, cuando fuse-overlayfs copia uno a la capa superior
+    # intenta conservar el propietario y falla con "Operation not permitted"
+    # (era lo que impedia a Wine escribir el registro del prefix incluido).
+    local ovl_opts="lowerdir=$MOUNT_RO,upperdir=$upper,workdir=$work"
+    local ovl_squash="$ovl_opts,squash_to_uid=$(id -u),squash_to_gid=$(id -g)"
+    if "$OVERLAYFS_BIN" -o "$ovl_squash" "$MOUNT_RW" >>"$LOG_FILE" 2>&1; then
+        MOUNT_OK=1
+        MOUNT_POINT="$MOUNT_RW"
+    elif "$OVERLAYFS_BIN" -o "$ovl_opts" "$MOUNT_RW" >>"$LOG_FILE" 2>&1; then
+        say "AVISO: fuse-overlayfs sin squash_to_uid (version antigua): si el"
+        say "       juego trae prefix incluido puede que no pueda escribirlo"
         MOUNT_OK=1
         MOUNT_POINT="$MOUNT_RW"
     else
@@ -3168,6 +3179,7 @@ launch_game() {
     export_game_env "$gid"
     build_runner_cmd "$rdir"
     pad_sdl_prefix_setup "$rdir"
+    bundled_prefix_prepare "$rdir"
 
     pad_bridge_stop   # el mando vuelve a ser del juego, no de los menus
     local keys_file=""
@@ -3369,6 +3381,96 @@ run_in_prefix() {
         "${RUN_CMD[@]}" "$@" >> "$LOG_FILE" 2>&1
     fi
     [ "$mounted_here" = 1 ] && release_game_root
+    return 0
+}
+
+bundled_prefix_prepare() {
+    # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
+    # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
+    # Batocera (/usr/wine/..., /userdata/...). En otra maquina esos enlaces
+    # apuntan a la nada: Wine ve que el fichero "existe" (wineboot falla con
+    # error=80, ERROR_FILE_EXISTS) pero no puede cargarlo y el juego muere con
+    # "Library dxgi.dll not found". Batocera los reinstala al lanzar; nosotros
+    # los borramos y dejamos que wineboot recree las DLLs del propio runner.
+    [ "$PREFIX_MODE" = "bundled" ] || return 0
+    [ -n "${BUNDLED_PREFIX_DIR:-}" ] || return 0
+    local rdir="$1"
+    local probe="$WINEPREFIX/.wp_write_test"
+    if ! ( : > "$probe" ) 2>/dev/null; then
+        say "AVISO: el prefix incluido NO es escribible; el juego puede fallar."
+        say "       Cambia el prefijo a 'propio' o 'compartido' en Configurar."
+        return 0
+    fi
+    rm -f "$probe"
+
+    # 1) Enlaces rotos en system32/syswow64 (y en la raiz del prefijo)
+    local dirs d broken n=0 first=""
+    dirs="$WINEPREFIX/drive_c/windows/system32 $WINEPREFIX/drive_c/windows/syswow64"
+    for d in $dirs; do
+        [ -d "$d" ] || continue
+        while IFS= read -r broken; do
+            [ -n "$broken" ] || continue
+            [ -z "$first" ] && first="$(readlink "$broken" 2>/dev/null)"
+            rm -f "$broken" 2>/dev/null && n=$((n+1))
+        done <<EOF2
+$(find "$d" -maxdepth 1 -xtype l 2>/dev/null)
+EOF2
+    done
+    if [ "$n" -gt 0 ]; then
+        say "[+] Prefix incluido: $n enlaces rotos eliminados (DXVK de Batocera)"
+        [ -n "$first" ] && say "    apuntaban a: $first"
+        rm -f "$WINEPREFIX/.wp_bundled_ready"
+    fi
+
+    [ -f "$WINEPREFIX/.wp_bundled_ready" ] && return 0
+
+    # 2) wineboot para que Wine reponga sus propias DLLs (d3d9/d3d11/dxgi...)
+    local wbin; wbin="$(runner_wine_bin "$rdir" 2>/dev/null)"
+    if [ -n "$wbin" ] && [ -x "$wbin" ]; then
+        say "[+] Actualizando el prefix incluido (wineboot)..."
+        "$wbin" wineboot -u >> "$LOG_FILE" 2>&1
+        local wsrv="$(dirname "$wbin")/wineserver"
+        [ -x "$wsrv" ] && "$wsrv" -w 2>/dev/null
+    fi
+
+    # 2b) Reinstalar DXVK desde el propio runner (es lo que hace Batocera al
+    #     lanzar). Si el runner no lo trae, Wine tirara de WineD3D.
+    local cand dxvk64="" dxvk32=""
+    for cand in "$rdir/lib/wine/dxvk" "$rdir/lib64/wine/dxvk" \
+                "$rdir/files/lib/wine/dxvk" "$rdir/dist/lib/wine/dxvk" \
+                "$rdir/lib/wine/x86_64-windows" "$rdir/files/lib/wine/x86_64-windows"; do
+        [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { dxvk64="$cand"; break; }
+    done
+    for cand in "$rdir/lib32/wine/dxvk" "$rdir/lib/wine/i386-windows" \
+                "$rdir/files/lib/wine/i386-windows"; do
+        [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { dxvk32="$cand"; break; }
+    done
+    if [ -n "$dxvk64" ]; then
+        local lib
+        for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll d3d12.dll; do
+            [ -f "$dxvk64/$lib" ] && cp -f "$dxvk64/$lib" \
+                "$WINEPREFIX/drive_c/windows/system32/$lib" 2>/dev/null
+        done
+        [ -n "$dxvk32" ] && [ -d "$WINEPREFIX/drive_c/windows/syswow64" ] && \
+            for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll; do
+                [ -f "$dxvk32/$lib" ] && cp -f "$dxvk32/$lib" \
+                    "$WINEPREFIX/drive_c/windows/syswow64/$lib" 2>/dev/null
+            done
+        say "[+] DLLs de Direct3D repuestas desde el runner"
+    fi
+
+    # 3) Comprobacion: si aun faltan las DLLs de Direct3D, avisar con salida
+    local miss="" lib
+    for lib in dxgi.dll d3d9.dll d3d11.dll; do
+        [ -e "$WINEPREFIX/drive_c/windows/system32/$lib" ] || miss="$miss $lib"
+    done
+    if [ -n "$miss" ]; then
+        say "AVISO: el prefix incluido sigue sin:$miss"
+        say "       Prueba con prefijo 'propio' o instala DXVK desde el menu"
+        say "       'Instalar librerias' del menu principal."
+    else
+        touch "$WINEPREFIX/.wp_bundled_ready" 2>/dev/null
+    fi
     return 0
 }
 
