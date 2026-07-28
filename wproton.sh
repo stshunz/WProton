@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.75"
+WPROTON_VERSION="0.76"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -65,6 +65,7 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # ultimo juego lanzado (ruta completa)
 GAMES_VIEW="list"                        # lista | grid (rejilla con caratulas)
+LAST_BROWSE=""                           # ultima carpeta visitada en el navegador
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -77,6 +78,8 @@ GAMES_PATH="$GAMES_PATH"
 LAST_GAME="$LAST_GAME"
 # Vista del selector de juegos: list | grid
 GAMES_VIEW="$GAMES_VIEW"
+# Ultima carpeta usada en el navegador de ficheros:
+LAST_BROWSE="$LAST_BROWSE"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
 EOF
@@ -1129,10 +1132,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V19" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V20" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V19
+# WPROTON_HELPER_V20
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1152,7 +1155,10 @@ if os.path.isdir(LIBS):
 os.environ.setdefault('SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS', '1')
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 os.environ.setdefault('SDL_VIDEO_CENTERED', '1')
-FULLSCREEN = os.environ.get('WP_MENU_FS') == '1'   # Batocera/handhelds
+# Pantalla completa: forzada en Batocera, o recordada entre menus con un
+# marcador (cada menu es un proceso nuevo, asi que la preferencia va a fichero)
+FS_MARK = os.path.join(BASE, '.menu_fullscreen')
+FULLSCREEN = os.environ.get('WP_MENU_FS') == '1' or os.path.isfile(FS_MARK)
 if os.environ.get('DISPLAY'):
     os.environ.setdefault('SDL_VIDEODRIVER', 'x11')
 import pygame
@@ -1293,6 +1299,7 @@ IE_SZ = struct.calcsize(IE_FMT)
 RAW_BTN = {304: pygame.K_RETURN, 315: pygame.K_RETURN,
            305: pygame.K_ESCAPE, 307: pygame.K_SPACE,
            308: pygame.K_TAB}
+SELECT_BTN = 314          # BTN_SELECT: con A pulsa pantalla completa
 # Crucetas que reportan BOTONES (Anbernic/Decktroid...) en vez de hat:
 DPAD_BTN = {544: pygame.K_UP, 545: pygame.K_DOWN,
             546: pygame.K_LEFT, 547: pygame.K_RIGHT}
@@ -1342,6 +1349,7 @@ AXIS_KEYS = {17: (pygame.K_UP, pygame.K_DOWN),      # dpad vertical
 
 def evdev_thread():
     fds, held, ax = {}, {}, {}
+    sel_held = [False]
     last_scan = 0.0
     REP_FIRST, REP_NEXT = 0.40, 0.15
     TH_ON, TH_OFF = 18000, 12000
@@ -1378,8 +1386,13 @@ def evdev_thread():
                         post_key(k); held[k] = time.time() + REP_FIRST
                     else:
                         held.pop(k, None)
+                elif t == EV_KEY_RAW and c == SELECT_BTN:
+                    sel_held[0] = (v != 0)
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
-                    post_key(RAW_BTN[c])
+                    if c == 304 and sel_held[0]:
+                        post_key(pygame.K_F11)      # Select + A
+                    else:
+                        post_key(RAW_BTN[c])
                 elif t == EV_ABS_RAW and c in (16, 17):
                     neg, pos = AXIS_KEYS[c]
                     for n in (neg, pos):
@@ -1424,6 +1437,32 @@ if FULLSCREEN:
     W, H = screen.get_size()
 pygame.display.set_caption('WProton')
 sys.stderr.write('menu_pygame: video driver = %s\n' % pygame.display.get_driver())
+
+def apply_layout():
+    global W, H, VIS_FULL, VIS_KB, GCOLS
+    W, H = screen.get_size()
+    VIS_FULL = max(1, (H - TOP - 60) // ROW)
+    VIS_KB = max(1, (H - TOP - 60 - KB_H) // ROW)
+    GCOLS = max(3, (W - 40) // GCW)
+
+def toggle_fullscreen():
+    global screen, FULLSCREEN, scroll
+    FULLSCREEN = not FULLSCREEN
+    try:
+        screen = _open_window()
+    except Exception:
+        FULLSCREEN = not FULLSCREEN
+        screen = _open_window()
+    try:
+        if FULLSCREEN:
+            open(FS_MARK, 'w').close()
+        elif os.path.isfile(FS_MARK):
+            os.remove(FS_MARK)
+    except Exception:
+        pass
+    apply_layout()
+    scroll = 0
+    sys.stderr.write('menu_pygame: pantalla completa = %s\n' % FULLSCREEN)
 clock = pygame.time.Clock()
 f_tit = pygame.font.Font(None, 34)
 f_it  = pygame.font.Font(None, 30)
@@ -1546,6 +1585,8 @@ def grid_move(dx, dy):
         scroll = row * GCOLS
     elif row >= first + vis_r:
         scroll = (row - vis_r + 1) * GCOLS
+
+apply_layout()
 
 _fitcache = {}
 def fit_label(txt, font, maxw):
@@ -1733,6 +1774,9 @@ while running:
             if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
                 continue
             _last_key[0], _last_key[1] = ev.key, t_now
+            if ev.key == pygame.K_F11:
+                toggle_fullscreen()
+                continue
             if kb_open:
                 # --- navegacion del teclado virtual ---
                 if ev.key == pygame.K_UP:
@@ -1868,9 +1912,9 @@ while running:
     elif MODE == 'browse':
         hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
     elif MODE == 'grid':
-        hint = 'Dpad: moverse   A: jugar   B: volver   Y: buscar'
+        hint = 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla'
     else:
-        hint = 'A/Enter: elegir   B/Esc: volver   Y: buscar   (o escribe para filtrar)'
+        hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
     screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
     pygame.display.flip()
     clock.tick(60)
@@ -4532,6 +4576,28 @@ EOF2
 (Las que falten: pon un png/jpg a mano en covers/<juego>.png)"
 }
 
+browse_start() {
+    # Carpeta inicial del navegador: la ultima visitada si sigue existiendo
+    if [ -n "${LAST_BROWSE:-}" ] && [ -d "$LAST_BROWSE" ]; then
+        printf '%s' "$LAST_BROWSE"
+    else
+        printf '%s' "${1:-$HOME}"
+    fi
+}
+
+remember_browse() {
+    # $1 = ruta elegida (fichero o carpeta) -> recordar su carpeta
+    local d="$1"
+    [ -n "$d" ] || return 0
+    [ -d "$d" ] || d="$(dirname "$d")"
+    [ -d "$d" ] || return 0
+    if [ "$d" != "${LAST_BROWSE:-}" ]; then
+        LAST_BROWSE="$d"
+        save_settings
+    fi
+    return 0
+}
+
 browse_for_path() {
     # Navegador con el mando. Con pygame: UNA sola ventana persistente para
     # toda la navegacion (antes se relanzaba python+SDL por cada carpeta y en
@@ -4551,6 +4617,7 @@ browse_for_path() {
             return 1
         fi
         log "BROWSE [$title] -> [$sel]"
+        remember_browse "$sel"
         printf '%s' "$sel"
         return 0
     fi
@@ -4577,13 +4644,13 @@ browse_for_path() {
         sel="$(IFS=$'\n'; set -f; menu "$title  [$cur]" $header $dirs $files)" || return 1
         case "$sel" in
             ">> IMPORTAR ESTA CARPETA <<"|">> USAR ESTA CARPETA <<"|">> JUGAR ESTA CARPETA <<")
-                printf '%s' "$cur"; return 0 ;;
+                remember_browse "$cur"; printf '%s' "$cur"; return 0 ;;
             ".. (subir)")
                 cur="$(dirname "$cur")" ;;
             */)
                 cur="$cur/${sel%/}" ;;
             *)
-                printf '%s' "$cur/$sel"; return 0 ;;
+                remember_browse "$cur"; printf '%s' "$cur/$sel"; return 0 ;;
         esac
     done
 }
@@ -4614,7 +4681,7 @@ EOF2
         [ -z "$sel" ] && { log "GRID -> cancelado"; return 1; }
         log "GRID -> [$sel]"
         if [ "$sel" = "__LOOSE__" ]; then
-            browse_for_path "Juego suelto (carpeta o exe)" "$HOME" "play"
+            browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
             return $?
         fi
         printf '%s' "$GAMES_PATH/$sel"
@@ -4623,7 +4690,7 @@ EOF2
     # shellcheck disable=SC2046
     sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)" || return 1
     if [ "$sel" = "$loose" ]; then
-        browse_for_path "Juego suelto (carpeta o exe)" "$HOME" "play"
+        browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
         return $?
     fi
     printf '%s' "$GAMES_PATH/$sel"
@@ -4793,7 +4860,7 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
                 case "$kmenu" in
                     "Asignar"*)
                         local kfsel
-                        kfsel="$(browse_for_path "Elige el fichero .keys" "$HOME" "keys")" || kfsel=""
+                        kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
                         if [ -n "$kfsel" ] && [ -f "$kfsel" ]; then
                             cp -f "$kfsel" "$PROFILE_DIR/$gid.keys"
                             ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys
@@ -4867,7 +4934,7 @@ main_menu() {
             "Importar juego"*)
                 local imp=""
                 if pygame_available; then
-                    imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$HOME" "file")" || imp=""
+                    imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "file")" || imp=""
                 elif [ "$HAS_ZENITY" = 1 ]; then
                     pad_bridge_start
                     imp="$(zenity --file-selection --title="Elige zip/7z/rar/exe o entra en la carpeta" 2>/dev/null)"
