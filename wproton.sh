@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.76"
+WPROTON_VERSION="0.83"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -66,6 +66,7 @@ GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # ultimo juego lanzado (ruta completa)
 GAMES_VIEW="list"                        # lista | grid (rejilla con caratulas)
 LAST_BROWSE=""                           # ultima carpeta visitada en el navegador
+THEME="clasico"                          # aspecto de los menus: clasico | moderno
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -80,6 +81,8 @@ LAST_GAME="$LAST_GAME"
 GAMES_VIEW="$GAMES_VIEW"
 # Ultima carpeta usada en el navegador de ficheros:
 LAST_BROWSE="$LAST_BROWSE"
+# Aspecto de los menus: clasico | moderno
+THEME="$THEME"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
 EOF
@@ -1132,10 +1135,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V20" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V26" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V20
+# WPROTON_HELPER_V26
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1439,11 +1442,28 @@ pygame.display.set_caption('WProton')
 sys.stderr.write('menu_pygame: video driver = %s\n' % pygame.display.get_driver())
 
 def apply_layout():
-    global W, H, VIS_FULL, VIS_KB, GCOLS
+    global W, H, VIS_FULL, VIS_KB, GCOLS, LIST_X, LIST_Y, LIST_W, LIST_H, SIDE_X, SIDE_W
     W, H = screen.get_size()
-    VIS_FULL = max(1, (H - TOP - 60) // ROW)
-    VIS_KB = max(1, (H - TOP - 60 - KB_H) // ROW)
-    GCOLS = max(3, (W - 40) // GCW)
+    make_bg()
+    make_scan()
+    if PANEL_UI:
+        # Interfaz de dos paneles: lista a la izquierda, detalles a la derecha
+        foot = 62
+        LIST_X, LIST_Y = 20, HEAD + 16
+        LIST_H = H - LIST_Y - foot - 14
+        if MODE in ('list', 'check', 'browse'):
+            SIDE_W = max(240, int(W * 0.34))
+            SIDE_X = W - SIDE_W - 20
+            LIST_W = SIDE_X - LIST_X - 16
+        else:
+            SIDE_W, SIDE_X = 0, 0
+            LIST_W = W - 40
+    else:
+        LIST_X, LIST_Y = 16, TOP
+        LIST_W, LIST_H = W - 32, H - TOP - 60
+    VIS_FULL = max(1, LIST_H // ROW)
+    VIS_KB = max(1, (LIST_H - KB_H) // ROW)
+    GCOLS = max(3, (LIST_W if PANEL_UI else (W - 40)) // GCW)
 
 def toggle_fullscreen():
     global screen, FULLSCREEN, scroll
@@ -1469,14 +1489,295 @@ f_it  = pygame.font.Font(None, 30)
 f_sm  = pygame.font.Font(None, 24)
 f_kb  = pygame.font.Font(None, 28)
 
-BG   = (24, 26, 32)
-FG   = (225, 228, 235)
-HIBG = (38, 92, 170)
-DIM  = (140, 145, 155)
-ACC  = (120, 200, 130)
-DIRC = (150, 190, 240)
-KBBG = (34, 37, 46)
-WARN = (230, 180, 90)
+# ---------------------------------------------------------------------------
+# TEMAS: "clasico" (el de siempre, sobrio) y "moderno" (paneles y acento neon).
+# Se elige con WP_THEME; para anadir uno nuevo basta con copiar un bloque y
+# cambiar los colores: el resto del helper se adapta solo.
+# ---------------------------------------------------------------------------
+THEMES = {
+    'clasico': {
+        'bg': (24, 26, 32), 'bg2': (24, 26, 32),
+        'fg': (225, 228, 235), 'dim': (140, 145, 155),
+        'sel_bg': (38, 92, 170), 'sel_fg': (255, 255, 255),
+        'acc': (120, 200, 130), 'dir': (150, 190, 240),
+        'warn': (230, 180, 90), 'kb_bg': (34, 37, 46),
+        'panel': None, 'border': (60, 64, 74), 'card': (44, 48, 60),
+        'radius': 6, 'pill': False, 'rule': True, 'glow': False,
+        'layout': 'simple', 'row': 40,
+    },
+    'moderno': {
+        'bg': (14, 17, 26), 'bg2': (24, 30, 46),
+        'fg': (232, 240, 252), 'dim': (128, 142, 168),
+        'sel_bg': (26, 60, 82), 'sel_fg': (150, 240, 255),
+        'acc': (56, 214, 224), 'dir': (124, 200, 255),
+        'warn': (250, 196, 106), 'kb_bg': (20, 26, 40),
+        'panel': (22, 28, 42), 'border': (44, 60, 88), 'card': (26, 33, 50),
+        'radius': 12, 'pill': True, 'rule': False, 'glow': True,
+        'layout': 'panel', 'row': 48,
+        'acc2': (168, 120, 255), 'ok': (86, 226, 160),
+        'btn': True, 'labelcolor': True, 'shape': 'notch',
+    },
+    # Arcade synthwave: rejilla en perspectiva, escaneado CRT, marcador de
+    # seleccion y esquinas de HUD. Nada minimalista, a proposito.
+    'arcade': {
+        'bg': (12, 4, 30), 'bg2': (58, 12, 74),
+        'fg': (255, 244, 252), 'dim': (170, 130, 200),
+        'sel_bg': (92, 12, 96), 'sel_fg': (255, 255, 255),
+        'acc': (255, 46, 147), 'dir': (94, 234, 255),
+        'warn': (255, 214, 84), 'kb_bg': (24, 8, 44),
+        'panel': (26, 8, 48), 'border': (120, 40, 140), 'card': (36, 12, 60),
+        'radius': 0, 'pill': True, 'rule': False, 'glow': True,
+        'layout': 'arcade', 'row': 48,
+        'acc2': (94, 234, 255), 'ok': (120, 255, 170),
+        'scan': True, 'gridbg': True, 'brackets': True,
+        'marker': True, 'numbered': True, 'shadow': True,
+        'btn': True, 'labelcolor': True, 'shape': 'rect',
+    },
+}
+THEME_NAME = os.environ.get('WP_THEME', 'clasico')
+if THEME_NAME not in THEMES:
+    THEME_NAME = 'clasico'
+TH = THEMES[THEME_NAME]
+
+BG   = TH['bg']
+FG   = TH['fg']
+HIBG = TH['sel_bg']
+DIM  = TH['dim']
+ACC  = TH['acc']
+DIRC = TH['dir']
+KBBG = TH['kb_bg']
+WARN = TH['warn']
+RAD  = TH['radius']
+
+BGSURF = None
+SCANSURF = None
+def make_scan():
+    # Velo de lineas de escaneo (CRT): se dibuja una vez y se superpone
+    global SCANSURF
+    if not TH.get('scan'):
+        SCANSURF = None
+        return
+    try:
+        surf = pygame.Surface((W, H), pygame.SRCALPHA)
+    except Exception:
+        SCANSURF = None
+        return
+    for y in range(0, H, 3):
+        pygame.draw.rect(surf, (0, 0, 0, 46), (0, y, W, 1))
+    SCANSURF = surf
+
+def make_bg():
+    # Fondo: liso en clasico, degradado vertical suave en moderno
+    global BGSURF
+    surf = pygame.Surface((W, H))
+    if TH.get('gridbg'):
+        # Cielo degradado + horizonte con rejilla en fuga (synthwave)
+        c1, c2 = TH['bg2'], TH['bg']
+        hz = int(H * 0.42)
+        for i in range(hz):
+            f = i / float(max(1, hz - 1))
+            col = tuple(int(c1[k] + (c2[k] - c1[k]) * f) for k in range(3))
+            pygame.draw.rect(surf, col, (0, i, W, 1))
+        pygame.draw.rect(surf, TH['bg'], (0, hz, W, H - hz))
+        pygame.draw.rect(surf, TH['acc'], (0, hz - 2, W, 2))
+        gcol = (TH['border'][0], TH['border'][1], TH['border'][2])
+        vp = W // 2
+        for k in range(-14, 15):          # verticales que convergen
+            pygame.draw.line(surf, gcol, (vp + k * 46, hz), (vp + k * 300, H), 1)
+        yy, step = hz + 6, 6              # horizontales cada vez mas separadas
+        while yy < H:
+            pygame.draw.line(surf, gcol, (0, yy), (W, yy), 1)
+            step = int(step * 1.42) + 1
+            yy += step
+    elif TH['bg'] == TH['bg2']:
+        surf.fill(TH['bg'])
+    else:
+        c1, c2 = TH['bg'], TH['bg2']
+        steps = 48
+        bh = H // steps + 1
+        for i in range(steps):
+            f = i / float(steps - 1)
+            col = tuple(int(c1[k] + (c2[k] - c1[k]) * f) for k in range(3))
+            pygame.draw.rect(surf, col, (0, i * bh, W, bh))
+    BGSURF = surf
+
+def draw_panel(rect):
+    if TH['panel'] is None:
+        return
+    x, y, w, h = rect
+    pygame.draw.rect(screen, TH['panel'], rect, border_radius=RAD)
+    if TH.get('brackets'):
+        # Marco de HUD: solo las esquinas, en color de acento
+        c, L, t = ACC, 26, 3
+        for (cx, cy, dx, dy) in ((x, y, 1, 1), (x + w, y, -1, 1),
+                                 (x, y + h, 1, -1), (x + w, y + h, -1, -1)):
+            pygame.draw.rect(screen, c, (min(cx, cx + dx * L), cy - (t if dy < 0 else 0), L, t))
+            pygame.draw.rect(screen, c, (cx - (t if dx < 0 else 0), min(cy, cy + dy * L), t, L))
+        pygame.draw.rect(screen, TH['border'], rect, 1)
+    else:
+        pygame.draw.rect(screen, TH['border'], rect, 1, border_radius=RAD)
+
+def hbar(rect, c1, c2):
+    # Barra con degradado horizontal (cabecera y seleccion del tema moderno)
+    x, y, w, h = rect
+    if w <= 0:
+        return
+    steps = 26
+    sw = max(1, w // steps + 1)
+    for i in range(steps):
+        f = i / float(steps - 1)
+        col = tuple(int(c1[k] + (c2[k] - c1[k]) * f) for k in range(3))
+        pygame.draw.rect(screen, col, (x + i * sw, y, sw, h))
+
+def vbar(rect, c1, c2):
+    # Degradado vertical: da relieve de boton a las filas
+    x, y, w, h = rect
+    if h <= 0 or w <= 0:
+        return
+    steps = 12
+    sh = max(1, h // steps + 1)
+    for i in range(steps):
+        f = i / float(steps - 1)
+        col = tuple(int(c1[k] + (c2[k] - c1[k]) * f) for k in range(3))
+        pygame.draw.rect(screen, col, (x, y + i * sh, w, sh))
+
+def notch_points(x, y, w, h, n=15):
+    # Cantos cortados en diagonal (arriba-derecha y abajo-izquierda)
+    return [(x, y), (x + w - n, y), (x + w, y + n),
+            (x + w, y + h), (x + n, y + h), (x, y + h - n)]
+
+def draw_button_notch(rect, active):
+    # Moderno: cápsula achaflanada, relleno plano y pestana de acento
+    x, y, w, h = rect
+    pts = notch_points(x, y, w, h)
+    fill = TH['card'] if not active else tuple(min(255, int(c * 0.34) + 18) for c in ACC)
+    try:
+        pygame.draw.polygon(screen, fill, pts)
+        pygame.draw.polygon(screen, ACC if active else TH['border'], pts, 2 if active else 1)
+    except Exception:
+        pygame.draw.rect(screen, fill, rect)
+    # pestana lateral: fina si esta en reposo, gruesa y luminosa al elegir
+    pygame.draw.rect(screen, ACC if active else TH['border'],
+                     (x, y + (0 if active else 8), 6 if active else 3,
+                      h - (0 if active else 16)))
+    if active:
+        pygame.draw.rect(screen, TH.get('acc2', ACC), (x + w - 15, y, 15, 3))
+
+def draw_button(rect, active):
+    # Fila con aspecto de boton: relieve, borde y brillo superior
+    if TH.get('shape') == 'notch':
+        draw_button_notch(rect, active)
+        return
+    x, y, w, h = rect
+    if active:
+        base = tuple(min(255, int(c * 0.42)) for c in ACC)
+        vbar((x, y, w, h), base, TH['panel'])
+        pygame.draw.rect(screen, ACC, (x, y, w, h), 2, border_radius=RAD)
+        pygame.draw.rect(screen, ACC, (x + 2, y + 4, 5, h - 8), border_radius=2)
+    else:
+        c1 = tuple(min(255, c + 14) for c in TH['card'])
+        vbar((x, y, w, h), c1, TH['card'])
+        pygame.draw.rect(screen, TH['border'], (x, y, w, h), 1, border_radius=RAD)
+    # brillo sutil en el borde superior
+    hl = tuple(min(255, c + (46 if active else 22)) for c in TH['card'])
+    pygame.draw.rect(screen, hl, (x + 3, y + 1, w - 6, 1))
+
+def draw_chip(x, y, key, text, font):
+    # "Pastilla" de ayuda: [A] elegir
+    kw = font.render(key, True, TH['bg'])
+    tw = font.render(text, True, TH['dim'])
+    bw = kw.get_width() + 16
+    pygame.draw.rect(screen, ACC, (x, y, bw, 24), border_radius=(0 if ARCADE else 8))
+    if ARCADE:
+        pygame.draw.rect(screen, TH['acc2'], (x, y, bw, 24), 1)
+    screen.blit(kw, (x + 8, y + 3))
+    screen.blit(tw, (x + bw + 8, y + 3))
+    return x + bw + 16 + tw.get_width()
+
+def draw_header():
+    # Cabecera de marca a todo lo ancho, con acento y contador
+    hh = HEAD - 6
+    pygame.draw.rect(screen, TH['panel'], (0, 0, W, hh))
+    hbar((0, hh - 3, W, 3), ACC, TH.get('acc2', ACC))
+    if ARCADE:
+        for _o, _c in (((3, 3), TH['acc2']), ((0, 0), ACC)):
+            screen.blit(f_tit.render('WPROTON', True, _c), (24 + _o[0], 16 + _o[1]))
+        brand = f_tit.render('WPROTON', True, ACC)
+    else:
+        brand = f_tit.render('WPROTON', True, ACC)
+        screen.blit(brand, (24, 16))
+    bx = 24 + brand.get_width() + 16
+    pygame.draw.rect(screen, TH['border'], (bx - 8, 14, 2, hh - 34))
+    for i, tl in enumerate(TITLE_LINES):
+        screen.blit(f_it.render(fit_label(tl, f_it, W - bx - 150), True, FG),
+                    (bx, 16 + i * 26))
+    if view:
+        badge = f_sm.render('%d/%d' % (sel + 1, len(view)), True, TH['bg'])
+        bwd = badge.get_width() + 18
+        pygame.draw.rect(screen, ACC, (W - bwd - 20, 18, bwd, 24), border_radius=12)
+        screen.blit(badge, (W - bwd - 11, 21))
+
+def draw_side_panel():
+    # Panel derecho: detalle de lo seleccionado
+    if SIDE_W <= 0:
+        return
+    rect = (SIDE_X, LIST_Y, SIDE_W, LIST_H)
+    draw_panel(rect)
+    px, py = SIDE_X + 16, LIST_Y + 14
+    screen.blit(f_sm.render('SELECCION', True, TH.get('acc2', ACC)), (px, py))
+    py += 26
+    pygame.draw.rect(screen, TH['border'], (px, py, SIDE_W - 32, 1))
+    py += 14
+    if view:
+        txt = items[view[sel]][1] if MODE != 'grid' else GITEMS[view[sel]][0]
+        for ln in wrap_title(txt, f_it, SIDE_W - 34, 6):
+            screen.blit(f_it.render(ln, True, FG), (px, py))
+            py += 28
+    else:
+        screen.blit(f_it.render('(vacio)', True, DIM), (px, py))
+        py += 28
+    if MODE == 'browse':
+        py += 8
+        screen.blit(f_sm.render('CARPETA', True, TH.get('acc2', ACC)), (px, py))
+        py += 22
+        for ln in wrap_title(cur_path, f_sm, SIDE_W - 34, 4):
+            screen.blit(f_sm.render(ln, True, DIM), (px, py))
+            py += 20
+    if FILTER:
+        py += 10
+        screen.blit(f_sm.render('BUSCANDO: %s' % FILTER, True, WARN), (px, py))
+
+def draw_footer(chips):
+    fy = H - 46
+    pygame.draw.rect(screen, TH['panel'], (0, fy - 8, W, 54))
+    hbar((0, fy - 10, W, 2), TH.get('acc2', ACC), ACC)
+    x = 24
+    for k, t in chips:
+        x = draw_chip(x, fy + 6, k, t, f_sm)
+        if x > W - 160:
+            break
+
+def draw_selection(rect):
+    # clasico: barra plana | moderno: tarjeta | arcade: barra con marcador
+    x, y, w, h = rect
+    if TH.get('marker'):
+        hbar((x, y, w, h), TH['sel_bg'], TH['bg'])
+        pulse = 0.55 + 0.45 * abs(((time.time() * 1.6) % 2.0) - 1.0)
+        col = tuple(int(c * pulse) for c in ACC)
+        pygame.draw.rect(screen, col, (x, y, w, h), 2)
+        pygame.draw.rect(screen, ACC, (x, y, 6, h))
+        tri = [(x + 14, y + h // 2), (x + 4, y + 8), (x + 4, y + h - 8)]
+        try:
+            pygame.draw.polygon(screen, ACC, tri)
+        except Exception:
+            pass
+        return
+    if TH['pill']:
+        hbar((x, y, w, h), TH['sel_bg'], TH['panel'])
+        pygame.draw.rect(screen, ACC, (x, y, w, h), 1, border_radius=RAD)
+        pygame.draw.rect(screen, ACC, (x + 2, y + 5, 5, h - 10), border_radius=3)
+    else:
+        pygame.draw.rect(screen, TH['sel_bg'], (x, y, w, h), border_radius=RAD)
 
 def wrap_title(text, font, maxw, maxlines=6):
     # Respeta los saltos de linea y ajusta al ancho; las rutas largas se
@@ -1514,8 +1815,12 @@ T_FONT = f_tit if len(TITLE) < 60 else f_it
 T_LH = 34 if T_FONT is f_tit else 30
 HEAD = 22 + len(TITLE_LINES) * T_LH + 14
 
-ROW = 40
+ROW = TH['row']
+PANEL_UI = TH.get('layout') in ('panel', 'arcade')
+ARCADE = TH.get('layout') == 'arcade'
 TOP = (HEAD + 30) if MODE == 'browse' else HEAD
+LIST_X, LIST_Y, LIST_W, LIST_H = 16, TOP, 900, 480
+SIDE_X, SIDE_W = 0, 0
 VIS_FULL = (H - TOP - 60) // ROW
 KB_H = 200
 VIS_KB = (H - TOP - 60 - KB_H) // ROW
@@ -1588,6 +1893,96 @@ def grid_move(dx, dy):
 
 apply_layout()
 
+def row_segments(label, base_color):
+    # "Prefijo: compartido" -> etiqueta en color de acento, valor en blanco.
+    # "MangoHud: ON" -> ON en verde, OFF apagado.
+    if not TH.get('labelcolor') or ':' not in label:
+        return [(label, base_color)]
+    k, _, v = label.partition(':')
+    # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
+    if ' - ' in k or len(k) > 36:
+        return [(label, base_color)]
+    segs = [(k + ':', TH.get('acc2', ACC))]
+    v = v.strip()
+    if v:
+        low = v.lower()
+        if low in ('on', 'si'):
+            segs.append((' ' + v, TH.get('ok', ACC)))
+        elif low in ('off', 'no'):
+            segs.append((' ' + v, DIM))
+        else:
+            segs.append((' ' + v, base_color))
+    return segs
+
+def draw_segments(segs, font, x, y, maxw, active):
+    # Pinta varios trozos de texto con colores distintos, con marquesina si
+    # el conjunto no cabe (solo en la fila seleccionada) y recorte estricto.
+    surfs = [(font.render(t, True, c), t, c) for t, c in segs if t]
+    total = sum(sf.get_width() for sf, _, _ in surfs)
+    if total <= maxw:
+        cx = x
+        for sf, _, _ in surfs:
+            screen.blit(sf, (cx, y))
+            cx += sf.get_width()
+        return
+    if not active:
+        cx, rest = x, maxw
+        for sf, t, c in surfs:
+            wsf = sf.get_width()
+            if wsf <= rest:
+                screen.blit(sf, (cx, y)); cx += wsf; rest -= wsf
+            else:
+                screen.blit(font.render(fit_label(t, font, rest), True, c), (cx, y))
+                break
+        return
+    over = total - maxw
+    period = 2.2 + over / 70.0
+    tt = (time.time() % (period * 2)) / period
+    f = tt if tt <= 1.0 else 2.0 - tt
+    f = max(0.0, min(1.0, (f - 0.14) / 0.72))
+    old = None
+    try:
+        old = screen.get_clip()
+        screen.set_clip((x, y - 2, maxw, ROW))
+    except Exception:
+        pass
+    cx = x - int(over * f)
+    for sf, _, _ in surfs:
+        screen.blit(sf, (cx, y))
+        cx += sf.get_width()
+    try:
+        screen.set_clip(old)
+    except Exception:
+        pass
+
+def draw_row_text(text, font, color, x, y, maxw, active):
+    # Si el texto no cabe: en la fila seleccionada se desplaza (marquesina),
+    # en las demas se recorta. Antes se salia de la tarjeta e invadia el panel.
+    surf = font.render(text, True, color)
+    w = surf.get_width()
+    if w <= maxw:
+        screen.blit(surf, (x, y))
+        return
+    if not active:
+        screen.blit(font.render(fit_label(text, font, maxw), True, color), (x, y))
+        return
+    over = w - maxw
+    period = 2.2 + over / 70.0          # cuanto mas larga, mas despacio
+    tt = (time.time() % (period * 2)) / period
+    f = tt if tt <= 1.0 else 2.0 - tt   # ida y vuelta
+    f = max(0.0, min(1.0, (f - 0.14) / 0.72))   # pausa en los extremos
+    old = None
+    try:
+        old = screen.get_clip()
+        screen.set_clip((x, y - 2, maxw, ROW))
+    except Exception:
+        pass
+    screen.blit(surf, (x - int(over * f), y))
+    try:
+        screen.set_clip(old)
+    except Exception:
+        pass
+
 _fitcache = {}
 def fit_label(txt, font, maxw):
     # Recorta midiendo el ancho renderizado (por caracteres se solapaban)
@@ -1616,22 +2011,26 @@ def grid_img(path):
     return _imgcache[path]
 
 def draw_grid():
-    gx0 = (W - GCOLS * GCW) // 2 + (GCW - GIMG_W) // 2
+    gx0 = LIST_X + max(0, (LIST_W - GCOLS * GCW) // 2) + (GCW - GIMG_W) // 2
     vis_r = grid_rows_vis()
     first = scroll
     for i in range(first, min(first + vis_r * GCOLS, len(view))):
         col = (i - first) % GCOLS
         rowi = (i - first) // GCOLS
         x = gx0 + col * GCW
-        y = TOP + rowi * GCH
+        y = LIST_Y + 8 + rowi * GCH
+        _cell = (x - 6, y - 6, GIMG_W + 12, GCH - 18)
+        if TH['panel'] is not None:
+            pygame.draw.rect(screen, TH['card'], _cell, border_radius=RAD)
         if i == sel and not kb_open:
-            pygame.draw.rect(screen, HIBG, (x - 5, y - 5, GIMG_W + 10, GCH - 20), border_radius=8)
+            draw_selection(_cell)
         title, ipath, _pay = GITEMS[view[i]]
         img = grid_img(ipath)
         if img:
             screen.blit(img, (x, y))
         else:
-            pygame.draw.rect(screen, (44, 48, 60), (x, y, GIMG_W, GIMG_H), border_radius=6)
+            pygame.draw.rect(screen, TH['card'], (x, y, GIMG_W, GIMG_H), border_radius=RAD)
+            pygame.draw.rect(screen, TH['border'], (x, y, GIMG_W, GIMG_H), 1, border_radius=RAD)
             line, yy = '', y + 16
             for wd in title.split() + ['']:
                 t2 = (line + ' ' + wd).strip()
@@ -1736,22 +2135,28 @@ if MODE == 'progress':
             bar_txt = t or bar_txt
         except Exception:
             pass
-        screen.fill(BG)
+        screen.blit(BGSURF, (0, 0))
         for _i, _tl in enumerate(TITLE_LINES):
             screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
         pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
         screen.blit(f_it.render(fit_label(bar_txt, f_it, W - 60), True, FG), (30, HEAD + 24))
         bx, by, bw, bh = 30, HEAD + 74, W - 60, 26
-        pygame.draw.rect(screen, (44, 48, 60), (bx, by, bw, bh), border_radius=8)
+        pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
+        if TH['panel'] is not None:
+            pygame.draw.rect(screen, TH['border'], (bx, by, bw, bh), 1, border_radius=RAD)
         if bar_pct > 0:
-            pygame.draw.rect(screen, HIBG, (bx, by, int(bw * bar_pct / 100.0), bh), border_radius=8)
+            pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
+                             (bx, by, int(bw * bar_pct / 100.0), bh), border_radius=RAD)
         else:
             t0 = (time.time() * 220) % (bw * 2)
             xx = t0 if t0 < bw else (bw * 2 - t0)
-            pygame.draw.rect(screen, HIBG, (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=8)
+            pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
+                             (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
         if bar_pct:
             screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
         screen.blit(f_sm.render('Espera, esto puede tardar...', True, DIM), (24, H - 40))
+        if SCANSURF is not None:
+            screen.blit(SCANSURF, (0, 0))
         pygame.display.flip()
         clock2.tick(30)
     pygame.quit()
@@ -1837,64 +2242,99 @@ while running:
                         if ch and ch.isprintable():
                             filter_add(ch)
 
-    screen.fill(BG)
-    for _i, _tl in enumerate(TITLE_LINES):
-        screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
-    if MODE == 'browse':
-        screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
-        pygame.draw.line(screen, (60, 64, 74), (24, HEAD + 20), (W - 24, HEAD + 20), 1)
+    screen.blit(BGSURF, (0, 0))
+    if PANEL_UI:
+        draw_header()
+        draw_panel((LIST_X - 6, LIST_Y, LIST_W + 12, LIST_H))
+        draw_side_panel()
     else:
-        pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
+        for _i, _tl in enumerate(TITLE_LINES):
+            screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+        if MODE == 'browse':
+            screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
+            _ry = HEAD + 20
+        else:
+            _ry = HEAD - 8
+        pygame.draw.line(screen, TH['border'], (24, _ry), (W - 24, _ry), 1)
 
     if MODE == 'grid':
         draw_grid()
     for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
-        y = TOP + (i - scroll) * ROW
-        if i == sel and not kb_open:
-            pygame.draw.rect(screen, HIBG, (16, y - 4, W - 32, ROW - 4), border_radius=6)
+        y = LIST_Y + 8 + (i - scroll) * ROW
+        _rect = (LIST_X, y - 4, LIST_W, ROW - 6)
+        if TH.get('btn'):
+            draw_button(_rect, i == sel and not kb_open)
+            if i == sel and not kb_open and TH.get('marker'):
+                try:
+                    pygame.draw.polygon(screen, ACC,
+                        [(LIST_X + 20, y + ROW // 2 - 4), (LIST_X + 10, y + 2),
+                         (LIST_X + 10, y + ROW - 14)])
+                except Exception:
+                    pass
+        else:
+            if PANEL_UI and i != sel:
+                pygame.draw.rect(screen, TH['card'], _rect, border_radius=RAD)
+            if i == sel and not kb_open:
+                draw_selection(_rect)
         kind, txt, on = items[view[i]]
         if MODE == 'check':
-            mark = '[x] ' if on else '[  ] '
-            surf = f_it.render(mark + txt, True, ACC if on else FG)
+            label = ('[x] ' if on else '[  ] ') + txt
+            color = ACC if on else FG
         elif kind == K_DIR:
-            surf = f_it.render(txt, True, DIRC)
+            label, color = txt, DIRC
         elif kind in HEADER_KINDS:
-            surf = f_it.render(txt, True, ACC if kind == K_HDR else DIM)
+            label, color = txt, (ACC if kind == K_HDR else DIM)
         else:
-            surf = f_it.render(txt, True, FG)
-        screen.blit(surf, (30, y))
+            label, color = txt, FG
+        _tx = LIST_X + (18 if PANEL_UI else 14)
+        if TH.get('numbered'):
+            _tx += 46
+            screen.blit(f_sm.render('%02d' % (i + 1), True, ACC if i == sel else TH['border']),
+                        (LIST_X + 28, y + 12))
+        _ty = y + (6 if PANEL_UI else 0)
+        _tw = LIST_X + LIST_W - _tx - 18     # ancho util hasta el borde
+        if TH.get('shadow'):
+            draw_row_text(label, f_it, (0, 0, 0), _tx + 2, _ty + 2, _tw, i == sel)
+        if kind in HEADER_KINDS or MODE == 'check':
+            draw_row_text(label, f_it, color, _tx, _ty, _tw, i == sel)
+        else:
+            draw_segments(row_segments(label, color), f_it, _tx, _ty, _tw, i == sel)
     if not view and FILTER:
         screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
-                    (30, TOP + 6))
+                    (LIST_X + 14, LIST_Y + 14))
 
     # Barra lateral: avisa de que hay mas opciones de las que caben en pantalla
     _total = len(view)
     _vis = (grid_rows_vis() * GCOLS) if MODE == 'grid' else vis()
     if _total > _vis:
-        _tr_x, _tr_y = W - 14, TOP - 6
-        _tr_h = (H - 60) - _tr_y
-        pygame.draw.rect(screen, (44, 48, 60), (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
+        _tr_x = (LIST_X + LIST_W + 2) if PANEL_UI else (W - 14)
+        _tr_y = LIST_Y + 8
+        _tr_h = LIST_H - 16
+        pygame.draw.rect(screen, TH['card'], (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
         _kh = max(28, int(_tr_h * _vis / float(_total)))
         _maxoff = max(1, _total - _vis)
         _ky = _tr_y + int((_tr_h - _kh) * min(1.0, scroll / float(_maxoff)))
-        pygame.draw.rect(screen, (120, 130, 150), (_tr_x, _ky, 6, _kh), border_radius=3)
-    if view:
+        pygame.draw.rect(screen, ACC if TH['glow'] else (120, 130, 150),
+                         (_tr_x, _ky, 6, _kh), border_radius=3)
+    if view and not PANEL_UI:
         pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
         screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
-    if FILTER or kb_open:
+    if (FILTER or kb_open) and not PANEL_UI:
         ft = f_sm.render('Buscar: %s_' % FILTER, True, WARN)
         screen.blit(ft, (W - 24 - ft.get_width(), max(24, HEAD - 30)))
 
     if kb_open:
         ky0 = H - KB_H - 44
-        pygame.draw.rect(screen, KBBG, (12, ky0 - 8, W - 24, KB_H + 8), border_radius=10)
+        pygame.draw.rect(screen, KBBG, (12, ky0 - 8, W - 24, KB_H + 8), border_radius=RAD)
+        if TH['panel'] is not None:
+            pygame.draw.rect(screen, TH['border'], (12, ky0 - 8, W - 24, KB_H + 8), 1, border_radius=RAD)
         cw = (W - 60) // 10
         for r, row in enumerate(KB_ROWS):
             for c, ch in enumerate(row):
                 x = 30 + c * cw
                 y = ky0 + r * 36
                 if r == kb_r and c == kb_c:
-                    pygame.draw.rect(screen, HIBG, (x - 6, y - 4, cw - 6, 32), border_radius=6)
+                    draw_selection((x - 6, y - 4, cw - 6, 32))
                 lab = 'ESP' if ch == ' ' else ch
                 screen.blit(f_kb.render(lab, True, FG), (x, y))
         aw = (W - 60) // len(KB_ACTIONS)
@@ -1902,7 +2342,7 @@ while running:
             x = 30 + c * aw
             y = ky0 + len(KB_ROWS) * 36
             if kb_r == len(KB_ROWS) and c == kb_c:
-                pygame.draw.rect(screen, HIBG, (x - 6, y - 4, aw - 12, 32), border_radius=6)
+                draw_selection((x - 6, y - 4, aw - 12, 32))
             screen.blit(f_kb.render(act, True, ACC if act == 'LISTO' else FG), (x, y))
 
     if kb_open:
@@ -1915,7 +2355,22 @@ while running:
         hint = 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla'
     else:
         hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
-    screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
+    if PANEL_UI:
+        if kb_open:
+            _chips = [('Dpad', 'moverse'), ('A', 'pulsar'), ('X', 'borrar'), ('B/Y', 'cerrar')]
+        elif MODE == 'check':
+            _chips = [('X', 'marcar'), ('A', 'aceptar'), ('B', 'cancelar')]
+        elif MODE == 'browse':
+            _chips = [('A', 'entrar'), ('B', 'subir'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
+        elif MODE == 'grid':
+            _chips = [('Dpad', 'moverse'), ('A', 'jugar'), ('B', 'volver'), ('Y', 'buscar')]
+        else:
+            _chips = [('A', 'elegir'), ('B', 'volver'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
+        draw_footer(_chips)
+    else:
+        screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
+    if SCANSURF is not None:
+        screen.blit(SCANSURF, (0, 0))
     pygame.display.flip()
     clock.tick(60)
 
@@ -4918,6 +5373,7 @@ main_menu() {
                "Borrar un runner" \
                "Carpeta de juegos: $GAMES_PATH" \
                "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
+               "Tema de los menus: $THEME" \
                "Descargar caratulas (SteamGridDB)" \
                "Detener Wine y desmontar todo" \
                "Ver ultimo log" \
@@ -4969,6 +5425,20 @@ main_menu() {
                 if v="$(IFS=$'\n'; set -f; menu "Borrar runner" $vers)"; then
                     ui_ask "Borrar $v?" && rm -rf "${RUNNERS_DIR:?}/$v"
                 fi ;;
+            "Tema de los menus:"*)
+                local th
+                th="$(menu "Elige el aspecto de los menus" \
+                    "clasico - el original" \
+                    "moderno - paneles y acento neon" \
+                    "arcade - synthwave con efecto CRT" \
+                    "<< Volver")" || th=""
+                case "$th" in
+                    clasico*|moderno*|arcade*)
+                        THEME="${th%% *}"
+                        export WP_THEME="$THEME"
+                        save_settings
+                        ui_info "Tema activado: $THEME" ;;
+                esac ;;
             "Vista de juegos:"*)
                 [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
                 save_settings ;;
@@ -5054,6 +5524,8 @@ rotate_logs() {
     fi
     return 0
 }
+
+export WP_THEME="${THEME:-clasico}"
 
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
