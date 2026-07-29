@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.83"
+WPROTON_VERSION="0.84"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -66,7 +66,8 @@ GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # ultimo juego lanzado (ruta completa)
 GAMES_VIEW="list"                        # lista | grid (rejilla con caratulas)
 LAST_BROWSE=""                           # ultima carpeta visitada en el navegador
-THEME="clasico"                          # aspecto de los menus: clasico | moderno
+THEME="clasico"                          # aspecto de los menus: clasico | moderno | arcade
+DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -85,12 +86,36 @@ LAST_BROWSE="$LAST_BROWSE"
 THEME="$THEME"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
+# --------------------------------------------------------------------------
+# MODO "SOLO JUGAR" (no aparece en los menus: se activa aqui a mano)
+#   1 = al abrir WProton se va DIRECTO a la lista de juegos, y al salir de
+#       esa lista se cierra el programa. Para quien solo quiere jugar.
+#   Volver al menu completo: pon 0 aqui, o ejecuta  wproton.sh --menu
+# --------------------------------------------------------------------------
+DIRECT_PLAY=$DIRECT_PLAY
+# Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
+# de wproton.sh, no al directorio actual). Ej.: GAMES_PATH="ROMs/windows"
 EOF
 }
+abs_path() {
+    # Rutas relativas -> relativas a la CARPETA DE WPROTON (no al directorio
+    # actual): asi funcionan aunque lance el script un frontend desde otro
+    # sitio, y se puede mover la carpeta entera (o el pendrive) sin tocar nada.
+    case "$1" in
+        "")     printf '' ;;
+        /*)     printf '%s' "$1" ;;
+        "~/"*)  printf '%s/%s' "$HOME" "${1#*/}" ;;
+        *)      printf '%s/%s' "$BASE_DIR" "$1" ;;
+    esac
+}
+
 load_settings() {
     # shellcheck disable=SC1090
     [ -f "$SETTINGS_FILE" ] && . "$SETTINGS_FILE"
     [ -f "$SETTINGS_FILE" ] || save_settings   # crear el fichero la primera vez
+    GAMES_PATH="$(abs_path "$GAMES_PATH")"
+    LAST_GAME="$(abs_path "${LAST_GAME:-}")"
+    LAST_BROWSE="$(abs_path "${LAST_BROWSE:-}")"
     mkdir -p "$GAMES_PATH" 2>/dev/null
 }
 load_settings
@@ -5354,6 +5379,18 @@ Los saves viven en la propia carpeta o en el prefijo."
     done
 }
 
+direct_play_loop() {
+    # Modo solo-jugar: lista de juegos en bucle; al cancelar, se cierra.
+    local g
+    while true; do
+        g="$(pick_squash)" || break
+        [ -n "$g" ] || break
+        play_any "$g"
+    done
+    cleanup_all
+    exit 0
+}
+
 main_menu() {
     while true; do
         local nrunners; nrunners="$(list_runners | grep -c . || true)"
@@ -5563,9 +5600,20 @@ Mas runners: menu principal -> Descargar runners" ;;
             *.exe|*.EXE) package_exe "$2" ;;
             *) if [ -d "$2" ]; then package_dir "$2"; else import_input "$2"; fi ;;
         esac ;;
-    "")
+    --menu)
+        # Salida de emergencia del modo solo-jugar: menu completo siempre
         bootstrap_if_needed
         main_menu ;;
+    --play|--games)
+        bootstrap_if_needed
+        direct_play_loop ;;
+    "")
+        bootstrap_if_needed
+        if [ "${DIRECT_PLAY:-0}" = 1 ]; then
+            direct_play_loop
+        else
+            main_menu
+        fi ;;
     *)
         # === LANZAMIENTO CLI (frontends): wsquashfs, zip/7z/rar, exe, carpeta, sh ===
         bootstrap_if_needed
