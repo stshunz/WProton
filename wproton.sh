@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.86"
+WPROTON_VERSION="0.89"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1235,10 +1235,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V26" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V27" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V26
+# WPROTON_HELPER_V27
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1634,6 +1634,9 @@ THEMES = {
         'btn': True, 'labelcolor': True, 'shape': 'rect',
     },
 }
+# Accion secundaria: con WP_ACTION_X=1, la X devuelve la seleccion marcada
+# para que quien llame abra la configuracion en vez de jugar.
+ACTION_X = os.environ.get('WP_ACTION_X') == '1'
 THEME_NAME = os.environ.get('WP_THEME', 'clasico')
 if THEME_NAME not in THEMES:
     THEME_NAME = 'clasico'
@@ -2144,6 +2147,18 @@ def draw_grid():
         lab = fit_label(title, f_sm, GIMG_W)
         screen.blit(f_sm.render(lab, True, FG if i == sel else DIM), (x, y + GIMG_H + 6))
 
+def action_x():
+    # X sobre un juego -> devolver "WPACT:CONFIG|<lo elegido>"
+    global running, done
+    if not view:
+        return
+    if MODE == 'grid':
+        payload = GITEMS[view[sel]][2]
+    else:
+        payload = items[view[sel]][1]
+    write_out('WPACT:CONFIG|' + payload)
+    running = False; done = True
+
 def on_enter():
     global running, done
     if MODE == 'grid':
@@ -2333,6 +2348,8 @@ while running:
                     if ready():
                         if MODE == 'check':
                             toggle()
+                        elif ACTION_X and MODE in ('list', 'grid'):
+                            action_x()
                         else:
                             on_enter()
                 else:
@@ -2452,7 +2469,8 @@ while running:
     elif MODE == 'browse':
         hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
     elif MODE == 'grid':
-        hint = 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla'
+        hint = ('A: jugar   X: configurar   B: volver   Y: buscar' if ACTION_X
+                else 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla')
     else:
         hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
     if PANEL_UI:
@@ -2463,9 +2481,11 @@ while running:
         elif MODE == 'browse':
             _chips = [('A', 'entrar'), ('B', 'subir'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
         elif MODE == 'grid':
-            _chips = [('Dpad', 'moverse'), ('A', 'jugar'), ('B', 'volver'), ('Y', 'buscar')]
+            _chips = [('A', 'jugar'), ('X', 'configurar'), ('B', 'volver'), ('Y', 'buscar')] \
+                if ACTION_X else [('Dpad', 'moverse'), ('A', 'jugar'), ('B', 'volver'), ('Y', 'buscar')]
         else:
-            _chips = [('A', 'elegir'), ('B', 'volver'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
+            _chips = [('A', 'jugar'), ('X', 'configurar'), ('B', 'volver'), ('Y', 'buscar')] \
+                if ACTION_X else [('A', 'elegir'), ('B', 'volver'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
         draw_footer(_chips)
     else:
         screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
@@ -3426,8 +3446,9 @@ profile_defaults() {
     EXE_OVERRIDE=""; ARGS_OVERRIDE=""
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
-    PAD_SDL=1                # mandos no-XInput (DualSense/DS4...) como Xbox
+    PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
+    PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
     FSR=0                    # 1 = escalado AMD FSR en pantalla completa
@@ -3462,6 +3483,7 @@ ARGS_OVERRIDE="$ARGS_OVERRIDE"
 PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
+PAD_STEAMFIX=$PAD_STEAMFIX
 NTSYNC=$NTSYNC
 USE_BATOCERA=$USE_BATOCERA
 GAMEMODE=$GAMEMODE
@@ -3592,7 +3614,7 @@ wizard_toggles() {
 1|GameMode (prioridad CPU)
 1|Fsync (sincronizacion rapida)
 1|DXVK Async + GPL (menos stutter en AMD)
-1|Mando via SDL (DualSense/DS4 como Xbox)
+1|Mando via SDL automatico (DualSense/DS4 como Xbox)
 0|NTsync (sincronizacion por kernel, 6.14+)
 0|Wayland nativo (experimental)
 EOF
@@ -3605,7 +3627,7 @@ EOF
         case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
         case "$sel" in *Fsync*)     FSYNC=1 ;; esac
         case "$sel" in *DXVK*)      DXVK_ASYNC=1 ;; esac
-        case "$sel" in *"Mando via SDL"*) PAD_SDL=1 ;; esac
+        case "$sel" in *"Mando via SDL"*) PAD_SDL=auto ;; esac
         case "$sel" in *NTsync*)    NTSYNC=1 ;; esac
         case "$sel" in *Wayland*)   WAYLAND=1 ;; esac
         return 0
@@ -3619,7 +3641,7 @@ EOF
 1|GameMode (prioridad CPU)
 1|Fsync (sincronizacion rapida)
 1|DXVK Async + GPL (menos stutter en AMD)
-1|Mando via SDL (DualSense/DS4 como Xbox)
+1|Mando via SDL automatico (DualSense/DS4 como Xbox)
 0|Wayland nativo (experimental)
 EOF
         "$SYS_PY" "$MENU_GTK_PY" check "Paso 3/3 - Configuracion basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
@@ -3720,7 +3742,43 @@ export_game_env() {
     [ "$MANGOHUD" = 1 ]   && export MANGOHUD=1
     # Mandos Sony/Switch fuera de Steam: sin esto Proton los pasa por hidraw
     # y los juegos solo-XInput no los ven (el caso The Mummy Demastered)
-    [ "$PAD_SDL" = 1 ]    && export PROTON_PREFER_SDL=1 PROTON_DISABLE_HIDRAW=1
+    local pad_auto pad_eff pad_why
+    if [ "${PAD_SDL:-auto}" = auto ]; then
+        pad_auto="$(pad_sdl_auto)"
+        pad_eff="${pad_auto%%|*}"; pad_why="auto: ${pad_auto#*|}"
+    else
+        pad_eff="$PAD_SDL"; pad_why="fijado en el perfil"
+    fi
+    if [ "$pad_eff" = 1 ]; then
+        export PROTON_PREFER_SDL=1 PROTON_DISABLE_HIDRAW=1
+        say "[+] Mando via SDL: ACTIVADO ($pad_why)"
+    else
+        say "[+] Mando via SDL: desactivado ($pad_why)"
+    fi
+    # --- SteamOS / Steam Input -------------------------------------------
+    # Steam oculta el mando FISICO a los procesos que lanza (para que usen su
+    # mando virtual) con SDL_GAMECONTROLLER_IGNORE_DEVICES*. Si WProton se
+    # abre desde Steam, el juego hereda esa ocultacion pero no siempre el
+    # mando virtual: SDL no ve ninguno y el mando "no funciona" aunque los
+    # menus si lo lean (nosotros leemos /dev/input en crudo).
+    if [ "${PAD_STEAMFIX:-1}" = 1 ]; then
+        local v val cleared=""
+        for v in SDL_GAMECONTROLLER_IGNORE_DEVICES \
+                 SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
+                 SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES \
+                 SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES_EXCEPT; do
+            eval "val=\${$v:-}"
+            if [ -n "$val" ]; then
+                unset "$v"
+                cleared="$cleared $v"
+            fi
+        done
+        if [ -n "$cleared" ]; then
+            say "[+] Mando: quitada la ocultacion de Steam Input ->$cleared"
+        fi
+        # que SDL busque tambien por evdev clasico, no solo hidapi
+        export SDL_JOYSTICK_DISABLE_UDEV="${SDL_JOYSTICK_DISABLE_UDEV:-0}"
+    fi
     # NTsync: primitivas de sincronizacion NT dentro del kernel (6.14+).
     # Sustituye a esync/fsync; los runners parcheados la activan con
     # PROTON_USE_NTSYNC=1 (GE-Proton 10-9+, Proton/Wine-CachyOS, DWProton).
@@ -3853,6 +3911,7 @@ launch_game() {
     bundled_prefix_prepare "$rdir"
 
     pad_bridge_stop   # el mando vuelve a ser del juego, no de los menus
+    log_input_devices
     local keys_file=""
     if keys_file="$(find_keys_file "$abs_squash" "$gid")"; then
         mapeador_start "$keys_file"
@@ -3957,6 +4016,7 @@ redist_target_menu() {
         "Prefijo de un juego"*)
             local g gid2
             g="$(pick_squash)" || return
+            g="${g#WPACT:CONFIG|}"
             gid2="$(game_id "$g")"
             load_profile "$gid2"
             redist_menu "$g" "$gid2" ;;
@@ -4145,11 +4205,45 @@ EOF2
     return 0
 }
 
+pad_sdl_auto() {
+    # Decide si conviene el backend SDL de Proton segun el mando conectado:
+    #  - Sony/Nintendo (DualSense, DS4, Pro Controller...): SI, porque fuera
+    #    de Steam llegan por hidraw y los juegos solo-XInput no los ven.
+    #  - XInput integrados (Steam Deck, Legion Go, ROG Ally, Xbox...): NO,
+    #    ya son XInput nativo y forzar SDL les estorba.
+    # Imprime "valor|motivo": el motivo NO puede ir en una variable global
+    # porque esta funcion se llama dentro de $( ) y ahi todo es un subshell.
+    local names sony=0 xin=0
+    if [ ! -r /proc/bus/input/devices ]; then
+        printf '0|sin informacion de dispositivos'; return
+    fi
+    names="$(awk '/^N: Name=/{n=tolower($0)} /^H: Handlers=.*js/{print n}' \
+             /proc/bus/input/devices 2>/dev/null)"
+    printf '%s\n' "$names" | grep -qE 'dualsense|dualshock|wireless controller|sony|playstation|nintendo|pro controller|joy-?con|switch' && sony=1
+    printf '%s\n' "$names" | grep -qE 'x-?box|steam deck|steam virtual|legion|rog ally|claw|ayaneo|gpd|onexplayer|xinput' && xin=1
+    if [ "$sony" = 1 ]; then
+        printf '1|mando Sony/Nintendo detectado'
+    elif [ "$xin" = 1 ]; then
+        printf '0|mando XInput nativo'
+    else
+        printf '0|sin mandos Sony detectados'
+    fi
+}
+
+pad_sdl_effective() {
+    # solo el valor (0/1)
+    case "${PAD_SDL:-auto}" in
+        1) printf '1' ;;
+        0) printf '0' ;;
+        *) local r; r="$(pad_sdl_auto)"; printf '%s' "${r%%|*}" ;;
+    esac
+}
+
 pad_sdl_prefix_setup() {
     # Para runners Wine puro: activar el backend SDL de winebus en el registro
     # (equivalente a lo que hace PortProton; en Proton basta la variable)
     # $1 = dir del runner
-    [ "$PAD_SDL" = 1 ] || return 0
+    [ "$(pad_sdl_effective)" = 1 ] || return 0
     [ "$RUNNER_KIND" = "wine" ] || return 0
     [ -f "$WINEPREFIX/.wp_pad_sdl" ] && return 0
     local wbin; wbin="$(runner_wine_bin "$1")"
@@ -4964,6 +5058,18 @@ play_folder() {
     launch_loose_exe "$name" "$exe"
 }
 
+play_or_config() {
+    # $1 = lo devuelto por pick_squash: jugar, o abrir su configuracion si el
+    # usuario pulso X sobre el juego resaltado.
+    case "$1" in
+        "WPACT:CONFIG|"*)
+            local g="${1#WPACT:CONFIG|}"
+            [ -e "$g" ] || { ui_error "No existe: $g"; return 1; }
+            game_config_menu "$g" ;;
+        *) play_any "$1" ;;
+    esac
+}
+
 play_any() {
     # Despachador de "jugar": wsquashfs -> montar | exe -> directo | carpeta -> directo
     local p="$1"
@@ -4983,6 +5089,35 @@ play_any() {
                 die "No existe: $p"
             fi ;;
     esac
+}
+
+log_input_devices() {
+    # Deja en el log que mandos ve el sistema justo antes de lanzar
+    local blocks name handlers n=0
+    [ -r /proc/bus/input/devices ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            N:*) name="${line#N: Name=}" ;;
+            H:*) handlers="$line"
+                 case "$handlers" in
+                     *js*) n=$((n+1))
+                           say "    mando $n: $name" ;;
+                 esac ;;
+        esac
+    done < /proc/bus/input/devices
+    if [ "$n" -eq 0 ]; then
+        say "[!] El sistema no expone ningun joystick (/dev/input/js*)"
+    else
+        say "[+] Mandos detectados por el sistema: $n"
+    fi
+    # permisos: si no podemos leerlos, el juego tampoco
+    local ev bad=0
+    for ev in /dev/input/event*; do
+        [ -e "$ev" ] || continue
+        [ -r "$ev" ] || bad=$((bad+1))
+    done
+    [ "$bad" -gt 0 ] && say "[!] $bad dispositivos /dev/input sin permiso de lectura (grupo 'input'?)"
+    return 0
 }
 
 gamepad_retrigger() {
@@ -5028,6 +5163,15 @@ import_input() {
 # 15. MENUS DE CONFIGURACION (estilo PortProton)
 # ----------------------------------------------------------------------------
 onoff() { [ "$1" = 1 ] && printf 'ON' || printf 'OFF'; }
+
+pad_sdl_label() {
+    case "${PAD_SDL:-auto}" in
+        1) printf 'ON (forzado)' ;;
+        0) printf 'OFF (forzado)' ;;
+        *) local r; r="$(pad_sdl_auto)"
+           printf 'AUTO -> %s (%s)' "$(onoff "${r%%|*}")" "${r#*|}" ;;
+    esac
+}
 
 COVERS_DIR="$BASE_DIR/covers"
 PROGRESS_PID=""
@@ -5225,6 +5369,7 @@ pick_squash() {
     local list loose="(juego suelto: elegir carpeta o exe...)"
     list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) -printf '%P\n' 2>/dev/null | sort)"
     local sel
+    export WP_ACTION_X=1                 # X = configurar el juego resaltado
     if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
         pad_bridge_stop
         write_menu_pygame
@@ -5243,8 +5388,15 @@ EOF2
             "$PY_BIN" "$MENU_PYGAME_PY" grid "Elige un juego  [$GAMES_PATH]" \
             "$tmpsel" "$man" >> "$LOG_FILE" 2>&1
         sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$man"
+        unset WP_ACTION_X
         [ -z "$sel" ] && { log "GRID -> cancelado"; return 1; }
         log "GRID -> [$sel]"
+        if [ "${sel#WPACT:CONFIG|}" != "$sel" ]; then
+            local rel="${sel#WPACT:CONFIG|}"
+            [ "$rel" = "__LOOSE__" ] && return 1
+            printf 'WPACT:CONFIG|%s' "$GAMES_PATH/$rel"
+            return 0
+        fi
         if [ "$sel" = "__LOOSE__" ]; then
             browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
             return $?
@@ -5253,7 +5405,14 @@ EOF2
         return 0
     fi
     # shellcheck disable=SC2046
-    sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)" || return 1
+    sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)" || { unset WP_ACTION_X; return 1; }
+    unset WP_ACTION_X
+    if [ "${sel#WPACT:CONFIG|}" != "$sel" ]; then
+        local rel2="${sel#WPACT:CONFIG|}"
+        [ "$rel2" = "$loose" ] && return 1
+        printf 'WPACT:CONFIG|%s' "$GAMES_PATH/$rel2"
+        return 0
+    fi
     if [ "$sel" = "$loose" ]; then
         browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
         return $?
@@ -5321,8 +5480,9 @@ game_config_menu() {
             "Prefijo: $(prefix_label)" \
             "GAMEID (protonfixes): $GAMEID" \
             "MangoHud: $(onoff "$MANGOHUD")" \
-            "Mando via SDL (DualSense como Xbox): $(onoff "$PAD_SDL")" \
+            "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
+            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-1}")" \
             "$bat_row" \
             "GameMode: $(onoff "$GAMEMODE")" \
             "Fsync: $(onoff "$FSYNC")" \
@@ -5392,8 +5552,15 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
                 USE_BATOCERA=$((1-${USE_BATOCERA:-1})); write_full_profile "$gid" ;;
             "NTsync"*)
                 NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
+            "Arreglo mando SteamOS"*)
+                PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
             "Mando via SDL"*)
-                PAD_SDL=$((1-PAD_SDL)); write_full_profile "$gid"
+                case "${PAD_SDL:-auto}" in
+                    auto) PAD_SDL=1 ;;
+                    1)    PAD_SDL=0 ;;
+                    *)    PAD_SDL=auto ;;
+                esac
+                write_full_profile "$gid"
                 # el registro del prefijo debe reevaluarse
                 rm -f "$(prefix_path "$gid")/.wp_pad_sdl" 2>/dev/null ;;
             "GameMode:"*)     GAMEMODE=$((1-GAMEMODE));     write_full_profile "$gid" ;;
@@ -5485,7 +5652,7 @@ direct_play_loop() {
     while true; do
         g="$(pick_squash)" || break
         [ -n "$g" ] || break
-        play_any "$g"
+        play_or_config "$g"
     done
     cleanup_all
     exit 0
@@ -5524,7 +5691,7 @@ main_menu() {
             "Jugar al ultimo:"*)
                 play_any "$LAST_GAME" ;;
             "Jugar"*)
-                local g; g="$(pick_squash)" && play_any "$g" ;;
+                local g; g="$(pick_squash)" && play_or_config "$g" ;;
             "Importar juego"*)
                 local imp=""
                 if pygame_available; then
@@ -5542,8 +5709,11 @@ main_menu() {
                     esac
                 fi ;;
             "Instalar librerias"*) redist_target_menu ;;
-            "Configurar un juego")
-                local g2; g2="$(pick_squash)" && game_config_menu "$g2" ;;
+            "Configurar un juego"*)
+                local g2
+                if g2="$(pick_squash)"; then
+                    game_config_menu "${g2#WPACT:CONFIG|}"
+                fi ;;
             "Descargar runners"*)    download_runner_menu ;;
             "Actualizar GE-Proton"*) setup_proton ;;
             "Actualizar umu-launcher") setup_umu ;;
