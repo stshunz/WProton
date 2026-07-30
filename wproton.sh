@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.84"
+WPROTON_VERSION="0.86"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -213,9 +213,9 @@ ui_ask()   { # pregunta si/no -> rc 0 = si
 # 3. HERRAMIENTAS FUSE: primero las de la carpeta de WProton, luego el sistema
 # ----------------------------------------------------------------------------
 resolve_tool() {
-    # $1 = nombre -> imprime ruta (local primero: raiz o bin/)
+    # $1 = nombre -> imprime ruta (los nuestros primero, luego el sistema)
     local p
-    for p in "$BASE_DIR/$1" "$BASE_DIR/bin/$1"; do
+    for p in "$RUNTIME_DIR/tools/$1" "$BASE_DIR/$1" "$BASE_DIR/bin/$1"; do
         if [ -f "$p" ]; then
             chmod +x "$p" 2>/dev/null
             printf '%s' "$p"; return 0
@@ -227,17 +227,92 @@ SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
 OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
 FUSERMOUNT_BIN="$(command -v fusermount3 2>/dev/null || command -v fusermount 2>/dev/null)"
 
+arch_tag() {
+    case "$(uname -m)" in
+        x86_64|amd64)   printf 'x86_64' ;;
+        aarch64|arm64)  printf 'aarch64' ;;
+        armv7*|armhf)   printf 'armv7l' ;;
+        *)              uname -m ;;
+    esac
+}
+
+try_static_tool() {
+    # $1 = nombre del binario, resto = URLs candidatas. Descarga la primera
+    # que EJECUTE de verdad en esta maquina (arquitectura correcta).
+    local name="$1"; shift
+    local tmp url rc
+    mkdir -p "$RUNTIME_DIR/tools"
+    tmp="$(mktemp -d)"
+    for url in "$@"; do
+        [ -n "$url" ] || continue
+        say "[$name] probando $(basename "$url")..."
+        dl "$url" "$tmp/$name" >/dev/null 2>&1 || continue
+        chmod +x "$tmp/$name" 2>/dev/null
+        "$tmp/$name" --help >/dev/null 2>&1
+        rc=$?
+        if [ "$rc" -lt 126 ]; then          # 126/127 = no ejecutable aqui
+            cp -f "$tmp/$name" "$RUNTIME_DIR/tools/$name"
+            chmod +x "$RUNTIME_DIR/tools/$name"
+            rm -rf "$tmp"
+            say "[$name] listo (portable en runtime/tools)"
+            return 0
+        fi
+        say "[$name] ese binario no funciona aqui, probando otro"
+    done
+    rm -rf "$tmp"
+    return 1
+}
+
+setup_fuse_tools() {
+    # Descarga versiones PORTABLES de fuse-overlayfs y squashfuse. Solo
+    # fusermount3 (paquete fuse3) sigue siendo del sistema: lo necesita el
+    # kernel para montar como usuario y no puede ser portable.
+    local a; a="$(arch_tag)"
+    local ok=0
+    if [ -z "$OVERLAYFS_BIN" ]; then
+        # fuse-overlayfs publica binarios ESTATICOS oficiales por arquitectura
+        local ovl_urls
+        ovl_urls="$(curl -fsSL "https://api.github.com/repos/containers/fuse-overlayfs/releases/latest" 2>/dev/null \
+            | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i "$a")"
+        # shellcheck disable=SC2086
+        try_static_tool fuse-overlayfs $ovl_urls && ok=1
+    fi
+    if [ -z "$SQUASHFUSE_BIN" ]; then
+        # squashfuse no publica binarios: probamos fuentes de builds estaticos
+        local sq_urls="https://bin.pkgforge.dev/$a/squashfuse"
+        sq_urls="$sq_urls
+$(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i 'squashfuse' | grep -i "$a")"
+        sq_urls="$sq_urls
+$(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -iv 'tar\.\|zip\|sig' | grep -i "$a")"
+        # shellcheck disable=SC2086
+        try_static_tool squashfuse $(printf '%s\n' "$sq_urls" | awk 'NF') && ok=1
+    fi
+    SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
+    OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
+    [ "$ok" = 1 ]
+}
+
 check_deps() {
     local missing=""
     for c in curl tar; do
         command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
     done
+    # squashfuse/fuse-overlayfs: si faltan, se descargan portables solos
+    if [ -z "$SQUASHFUSE_BIN" ] || [ -z "$OVERLAYFS_BIN" ]; then
+        if command -v curl >/dev/null 2>&1; then
+            say "Faltan herramientas FUSE: descargando versiones portables..."
+            setup_fuse_tools || true
+        fi
+    fi
     [ -z "$SQUASHFUSE_BIN" ]  && missing="$missing squashfuse"
     [ -z "$OVERLAYFS_BIN" ]   && missing="$missing fuse-overlayfs"
     [ -z "$FUSERMOUNT_BIN" ]  && missing="$missing fusermount3(fuse3)"
     [ -n "$missing" ] && die "Faltan dependencias:$missing
-squashfuse y fuse-overlayfs pueden ir en la raiz de WProton (portable).
-fusermount3 (paquete fuse3) debe estar en el sistema."
+No se pudieron descargar automaticamente. Puedes dejar los binarios
+squashfuse y fuse-overlayfs junto a wproton.sh (o en runtime/tools/).
+fusermount3 (paquete fuse3) SI debe estar en el sistema: lo exige el kernel."
     log "Herramientas: squashfuse=$SQUASHFUSE_BIN | overlayfs=$OVERLAYFS_BIN | fusermount=$FUSERMOUNT_BIN"
 }
 
@@ -4273,16 +4348,21 @@ offer_test_then_pack() {
     while true; do
         sel="$(menu "Juego en carpeta: $name" \
             "Probar el juego (sin empaquetar)" \
+            "Configurar (runner, prefijo, opciones)" \
             "Empaquetar a wsquashfs" \
             "<< Cancelar")" || return 1
         case "$sel" in
+            "Configurar"*)
+                # Cambiar runner/prefijo/opciones y volver aqui para reprobar
+                game_config_menu "$root" "$(printf '%s' "$name" | tr ' /' '__')"
+                continue ;;
             "Probar"*)
                 say "[+] Probando '$name' desde la carpeta (sin empaquetar)..."
                 launch_loose_exe "$name" "$exe"
                 say "[+] Prueba terminada (rc=$?)"
                 if ui_ask "Prueba terminada.
 Empaquetar '$name' a wsquashfs ahora?
-(No = volver al menu para seguir probando/modeando)"; then
+(No = volver al menu para cambiar el runner o seguir probando)"; then
                     do_pack_dir "$root" "$name" || return 1
                     return 0
                 fi ;;
@@ -5057,19 +5137,24 @@ EOF2
 }
 
 browse_start() {
-    # Carpeta inicial del navegador: la ultima visitada si sigue existiendo
-    if [ -n "${LAST_BROWSE:-}" ] && [ -d "$LAST_BROWSE" ]; then
-        printf '%s' "$LAST_BROWSE"
-    else
-        printf '%s' "${1:-$HOME}"
-    fi
+    # Carpeta inicial del navegador: la ultima visitada. Si ya no existe
+    # (p.ej. la carpeta del juego se borro al empaquetar), sube por sus
+    # padres hasta encontrar una que siga estando.
+    local d="${LAST_BROWSE:-}"
+    while [ -n "$d" ] && [ "$d" != "/" ]; do
+        [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+        d="$(dirname "$d")"
+    done
+    printf '%s' "${1:-$HOME}"
 }
 
 remember_browse() {
-    # $1 = ruta elegida (fichero o carpeta) -> recordar su carpeta
+    # $1 = ruta elegida -> recordar la carpeta CONTENEDORA, no el juego:
+    # si eliges ROMs/Windows/Constance se recuerda ROMs/Windows, que sigue
+    # existiendo aunque luego se borre la carpeta del juego al empaquetar.
     local d="$1"
     [ -n "$d" ] || return 0
-    [ -d "$d" ] || d="$(dirname "$d")"
+    d="$(dirname "$d")"
     [ -d "$d" ] || return 0
     if [ "$d" != "${LAST_BROWSE:-}" ]; then
         LAST_BROWSE="$d"
@@ -5205,8 +5290,10 @@ config_gamescope() {
 }
 
 game_config_menu() {
+    # $1 = juego (wsquashfs o carpeta), $2 = gid explicito (opcional: al venir
+    # del flujo de importacion, el perfil es el del nombre limpio del juego)
     local squash="$1"
-    local gid; gid="$(game_id "$squash")"
+    local gid; gid="${2:-$(game_id "$squash")}"
 
     # Si nunca se configuro, pasar por el asistente primero
     if ! profile_exists "$gid"; then
@@ -5220,6 +5307,8 @@ game_config_menu() {
     while true; do
         local bat_row=" "
         [ "$IS_BATOCERA" = 1 ] && bat_row="Lanzar via batocera-wine: $(onoff "${USE_BATOCERA:-1}")"
+        local pack_row=""
+        [ -d "$squash" ] && pack_row=">> EMPAQUETAR A WSQUASHFS <<"
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
         [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
@@ -5253,6 +5342,7 @@ game_config_menu() {
             "Abrir winecfg" \
             "Abrir winetricks" \
             "Mapeador .keys: $kstat" \
+            "$pack_row" \
             "Anadir este juego a Steam" \
             "Repetir asistente de primera ejecucion" \
             "Borrar prefijo (reinstala DLLs)" \
@@ -5329,6 +5419,16 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
             "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
             "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
             "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
+            ">> EMPAQUETAR A WSQUASHFS <<")
+                # El juego es una carpeta: comprimirlo conservando su perfil
+                if do_pack_dir "$squash" "$gid"; then
+                    ui_info "Empaquetado: $(basename "$PACKED_OUT")
+La configuracion de '$gid' se conserva para el wsquashfs."
+                    if ui_ask "Jugar ahora desde el wsquashfs?"; then
+                        launch_game "$PACKED_OUT" "auto"
+                    fi
+                    [ -d "$squash" ] || return 0   # la carpeta ya no existe
+                fi ;;
             "Anadir este juego a Steam")
                 add_game_to_steam "$squash" "$gid" ;;
             "Mapeador .keys"*)
@@ -5407,6 +5507,7 @@ main_menu() {
                "Actualizar umu-launcher" \
                "Instalar/actualizar Python portable + pygame" \
                "Descargar extractores GOG (innoextract + innounp)" \
+               "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
                "Borrar un runner" \
                "Carpeta de juegos: $GAMES_PATH" \
                "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
@@ -5447,6 +5548,11 @@ main_menu() {
             "Actualizar GE-Proton"*) setup_proton ;;
             "Actualizar umu-launcher") setup_umu ;;
             "Instalar/actualizar Python portable + pygame") setup_python ;;
+            "Descargar herramientas FUSE"*)
+                SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
+                setup_fuse_tools
+                ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
+fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
             "Descargar extractores GOG"*)
                 local ok1="NO" ok2="NO"
                 setup_innoextract && ok1="OK"
