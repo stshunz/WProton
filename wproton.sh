@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.89"
+WPROTON_VERSION="0.92"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -68,6 +68,8 @@ GAMES_VIEW="list"                        # lista | grid (rejilla con caratulas)
 LAST_BROWSE=""                           # ultima carpeta visitada en el navegador
 THEME="clasico"                          # aspecto de los menus: clasico | moderno | arcade
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
+GRID_COLS=0                              # columnas de la rejilla (0 = automatico)
+LANGUAGE=es                              # idioma de los menus: es | en
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -93,6 +95,12 @@ SGDB_KEY="$SGDB_KEY"
 #   Volver al menu completo: pon 0 aqui, o ejecuta  wproton.sh --menu
 # --------------------------------------------------------------------------
 DIRECT_PLAY=$DIRECT_PLAY
+# Columnas de la rejilla de caratulas: 0 = automatico segun la pantalla
+# (4 en portatiles tipo Steam Deck, 5 en Full HD, 6 en pantallas grandes).
+# Ponlo a mano si prefieres caratulas mas pequenas y ver mas juegos a la vez.
+GRID_COLS=$GRID_COLS
+# Idioma de los menus: es (castellano) | en (english)
+LANGUAGE="$LANGUAGE"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
 # de wproton.sh, no al directorio actual). Ej.: GAMES_PATH="ROMs/windows"
 EOF
@@ -109,6 +117,132 @@ abs_path() {
     esac
 }
 
+declare -A WP_TR
+tr_init() {
+    [ "${LANGUAGE:-es}" = "en" ] || return 0
+    # Tabla castellano -> ingles. Lo que no este aqui sale en castellano,
+    # asi que se puede ir completando sin romper nada.
+    while IFS='|' read -r k v; do
+        [ -n "$k" ] && WP_TR["$k"]="$v"
+    done <<'TREOF'
+Jugar (elegir juego)|Play (choose game)
+Importar juego (zip/7z/rar/exe/carpeta)|Import game (zip/7z/rar/exe/folder)
+Configurar un juego|Configure a game
+Instalar librerias en un prefijo (vcredist, PhysX...)|Install libraries into a prefix (vcredist, PhysX...)
+Actualizar GE-Proton a la ultima|Update GE-Proton to the latest
+Actualizar umu-launcher|Update umu-launcher
+Instalar/actualizar Python portable + pygame|Install/update portable Python + pygame
+Descargar extractores GOG (innoextract + innounp)|Download GOG extractors (innoextract + innounp)
+Descargar herramientas FUSE portables (squashfuse, overlayfs)|Download portable FUSE tools (squashfuse, overlayfs)
+Borrar un runner|Delete a runner
+Detener Wine y desmontar todo|Stop Wine and unmount everything
+Ver ultimo log|View last log
+Salir|Exit
+Carpeta de juegos|Games folder
+Vista de juegos|Games view
+Tema de los menus|Menu theme
+Buscar actualizaciones|Check for updates
+lista|list
+rejilla (caratulas)|grid (covers)
+Elige un juego|Choose a game
+Elige el aspecto de los menus|Choose the menu look
+clasico - el original|classic - the original
+moderno - paneles y acento neon|modern - panels and neon accent
+arcade - synthwave con efecto CRT|arcade - synthwave with CRT effect
+<< Volver|<< Back
+<< Cancelar|<< Cancel
+Si|Yes
+No|No
+Runner (Proton/Wine)|Runner (Proton/Wine)
+Ejecutable|Executable
+Argumentos|Arguments
+Prefijo|Prefix
+MangoHud|MangoHud
+GameMode|GameMode
+Fsync|Fsync
+Esync|Esync
+DXVK Async|DXVK Async
+WineD3D (sin Vulkan)|WineD3D (no Vulkan)
+FSR (escalado)|FSR (upscaling)
+LAA (Large Address Aware)|LAA (Large Address Aware)
+Wayland nativo|Native Wayland
+Gamescope|Gamescope
+DLL overrides|DLL overrides
+Idioma del juego|Game language
+Variables extra|Extra variables
+Mando via SDL (DualSense como Xbox)|Controller via SDL (DualSense as Xbox)
+NTsync (sincronizacion por kernel)|NTsync (kernel synchronization)
+Arreglo mando SteamOS (Steam Input)|SteamOS controller fix (Steam Input)
+Lanzar via batocera-wine|Launch via batocera-wine
+Mapeador .keys|.keys mapper
+Anadir este juego a Steam|Add this game to Steam
+Abrir winecfg|Open winecfg
+Abrir winetricks|Open winetricks
+Instalar dgVoodoo2 (DX1-9/Glide)|Install dgVoodoo2 (DX1-9/Glide)
+Configurar dgVoodoo (Cpl)|Configure dgVoodoo (Cpl)
+Instalar OptiScaler (FSR/DLSS/XeSS)|Install OptiScaler (FSR/DLSS/XeSS)
+Repetir asistente|Run the wizard again
+Borrar prefijo|Delete prefix
+Borrar saves del overlay (upper/)|Delete overlay saves (upper/)
+Elegir ejecutable|Choose executable
+>> JUGAR AHORA <<|>> PLAY NOW <<
+>> EMPAQUETAR A WSQUASHFS <<|>> PACK TO WSQUASHFS <<
+>> IMPORTAR ESTA CARPETA <<|>> IMPORT THIS FOLDER <<
+>> USAR ESTA CARPETA <<|>> USE THIS FOLDER <<
+>> JUGAR ESTA CARPETA <<|>> PLAY THIS FOLDER <<
+.. (subir)|.. (up)
+(juego suelto: elegir carpeta o exe...)|(loose game: choose folder or exe...)
+Probar el juego (sin empaquetar)|Test the game (without packing)
+Configurar (runner, prefijo, opciones)|Configure (runner, prefix, options)
+Empaquetar a wsquashfs|Pack to wsquashfs
+Juego en carpeta|Game in folder
+Configuracion de|Settings for
+Descargar runners (Proton / Wine)|Download runners (Proton / Wine)
+Descargar caratulas (SteamGridDB)|Download covers (SteamGridDB)
+Descargando caratulas de SteamGridDB|Downloading covers from SteamGridDB
+Instalar redistribuibles (vcredist, DirectX, .NET...)|Install redistributables (vcredist, DirectX, .NET...)
+compartido (default)|shared (default)
+propio del juego|per-game
+incluido en el wsquashfs|bundled in the wsquashfs
+ninguno (auto si existe <juego>.keys)|none (auto if <game>.keys exists)
+Borrar el instalador original?|Delete the original installer?
+Borrar la carpeta original?|Delete the original folder?
+Jugar ahora desde el wsquashfs?|Play now from the wsquashfs?
+Lanzar el juego ahora?|Launch the game now?
+Prueba terminada.|Test finished.
+Empaquetado con exito.|Packed successfully.
+SELECCION|SELECTION
+TREOF
+    return 0
+}
+
+tr() {
+    # Traduce si hay traduccion; si no, devuelve el original. Para lineas
+    # tipo "Etiqueta: valor" traduce solo la etiqueta.
+    local txt="$1"
+    [ "${LANGUAGE:-es}" = "en" ] || { printf '%s' "$txt"; return 0; }
+    if [ -n "${WP_TR[$txt]:-}" ]; then
+        printf '%s' "${WP_TR[$txt]}"; return 0
+    fi
+    case "$txt" in
+        *": "*)
+            local k="${txt%%: *}" v="${txt#*: }"
+            if [ -n "${WP_TR[$k]:-}" ]; then
+                printf '%s: %s' "${WP_TR[$k]}" "$(tr "$v")"
+                return 0
+            fi ;;
+    esac
+    printf '%s' "$txt"
+}
+
+tr_args() {
+    # Traduce cada argumento y los imprime uno por linea
+    local a
+    for a in "$@"; do
+        printf '%s\n' "$(tr "$a")"
+    done
+}
+
 load_settings() {
     # shellcheck disable=SC1090
     [ -f "$SETTINGS_FILE" ] && . "$SETTINGS_FILE"
@@ -117,6 +251,7 @@ load_settings() {
     LAST_GAME="$(abs_path "${LAST_GAME:-}")"
     LAST_BROWSE="$(abs_path "${LAST_BROWSE:-}")"
     mkdir -p "$GAMES_PATH" 2>/dev/null
+    tr_init
 }
 load_settings
 
@@ -151,6 +286,15 @@ die() { say "ERROR: $1"; ui_error "$1"; cleanup_mount; exit 1; }
 HAS_ZENITY=0
 command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && HAS_ZENITY=1
 
+# Modo Juego de SteamOS (o cualquier sesion gamescope): los menus deben ir a
+# pantalla completa y hay que dar respiro al compositor al cerrar un juego.
+IS_GAMESCOPE=0
+if [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ] || [ "${XDG_CURRENT_DESKTOP:-}" = "gamescope" ] \
+   || [ -n "${STEAM_GAMESCOPE_VIRTUAL_WHITELIST:-}" ]; then
+    IS_GAMESCOPE=1
+    export WP_MENU_FS=1
+fi
+
 # Batocera/Knulli: menus a pantalla completa y wines del sistema disponibles
 IS_BATOCERA=0
 BATOCERA_WINE_BIN=""
@@ -179,6 +323,7 @@ $(tail -n 8 "$LOG_FILE")"
 
 ui_error() {
     log "ERROR-UI: $1"
+    set -- "$(tr "$1")"
     if [ "$HAS_ZENITY" = 1 ]; then
         zenity --error --title="WProton" --text="$1" 2>/dev/null
     elif pygame_available; then
@@ -187,6 +332,7 @@ ui_error() {
     fi
 }
 ui_info()  {
+    set -- "$(tr "$1")"
     if [ "$HAS_ZENITY" = 1 ]; then
         pad_bridge_start
         zenity --info --title="WProton" --text="$1" 2>/dev/null
@@ -1235,10 +1381,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V27" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V32" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V27
+# WPROTON_HELPER_V32
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1258,12 +1404,24 @@ if os.path.isdir(LIBS):
 os.environ.setdefault('SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS', '1')
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 os.environ.setdefault('SDL_VIDEO_CENTERED', '1')
+os.environ.setdefault('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS', '0')
 # Pantalla completa: forzada en Batocera, o recordada entre menus con un
 # marcador (cada menu es un proceso nuevo, asi que la preferencia va a fichero)
 FS_MARK = os.path.join(BASE, '.menu_fullscreen')
 FULLSCREEN = os.environ.get('WP_MENU_FS') == '1' or os.path.isfile(FS_MARK)
-if os.environ.get('DISPLAY'):
-    os.environ.setdefault('SDL_VIDEODRIVER', 'x11')
+# Orden de drivers de video a probar. En sesion gamescope (modo Juego de
+# SteamOS) va primero Wayland: forzar x11/XWayland deja la ventana detras y
+# se ve la pantalla en negro. En escritorio, al reves.
+IS_GAMESCOPE_SESS = bool(os.environ.get('GAMESCOPE_WAYLAND_DISPLAY')) or \
+    os.environ.get('XDG_CURRENT_DESKTOP') == 'gamescope'
+if os.environ.get('SDL_VIDEODRIVER'):
+    DRIVER_ORDER = [os.environ['SDL_VIDEODRIVER'], None]
+elif IS_GAMESCOPE_SESS:
+    DRIVER_ORDER = ['wayland', 'x11', None]
+elif os.environ.get('DISPLAY'):
+    DRIVER_ORDER = ['x11', 'wayland', None]
+else:
+    DRIVER_ORDER = ['wayland', None]
 import pygame
 
 MODE, TITLE, OUTFILE = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -1385,11 +1543,32 @@ elif MODE == 'grid':
 else:
     load_options()
 
-try:
-    pygame.init()
-except Exception:
-    os.environ.pop('SDL_VIDEODRIVER', None)
-    pygame.init()
+def init_video():
+    # pygame.init() NO lanza excepcion si solo falla el video: devuelve el
+    # numero de subsistemas fallidos y sigue, y luego revienta el primer uso
+    # ("video system not initialized"). Hay que inicializar el video aparte
+    # y probar los drivers uno a uno.
+    for drv in DRIVER_ORDER:
+        if drv:
+            os.environ['SDL_VIDEODRIVER'] = drv
+        else:
+            os.environ.pop('SDL_VIDEODRIVER', None)
+        try:
+            pygame.display.quit()
+        except Exception:
+            pass
+        try:
+            pygame.display.init()
+            sys.stderr.write('menu_pygame: video OK con driver %s\n' % (drv or 'auto'))
+            return True
+        except Exception as e:
+            sys.stderr.write('menu_pygame: driver %s no vale (%s)\n' % (drv or 'auto', e))
+    return False
+
+pygame.init()          # el resto de subsistemas (no falla aunque el video si)
+if not init_video():
+    sys.stderr.write('menu_pygame: sin video utilizable; se usaran menus de texto\n')
+    sys.exit(2)
 pygame.key.set_repeat(400, 120)
 
 # --- hilo evdev: unico camino del mando (funciona sin foco de ventana) ---
@@ -1530,12 +1709,13 @@ def _open_window():
     return pygame.display.set_mode((W, H))
 try:
     screen = _open_window()
-except Exception:
-    sys.stderr.write('menu_pygame: driver x11 fallo, reintentando con el nativo\n')
-    os.environ.pop('SDL_VIDEODRIVER', None)
-    pygame.display.quit()
-    pygame.display.init()
-    screen = _open_window()
+except Exception as e:
+    sys.stderr.write('menu_pygame: no se pudo abrir la ventana (%s)\n' % e)
+    if FULLSCREEN:                      # reintentar en ventana
+        FULLSCREEN = False
+        screen = _open_window()
+    else:
+        raise
 if FULLSCREEN:
     W, H = screen.get_size()
 pygame.display.set_caption('WProton')
@@ -1546,7 +1726,13 @@ def apply_layout():
     W, H = screen.get_size()
     make_bg()
     make_scan()
-    if PANEL_UI:
+    if PANEL_UI and MODE == 'grid':
+        # en rejilla no hay panel lateral: todo el ancho para las caratulas
+        LIST_X, LIST_Y = 20, HEAD + 16
+        LIST_H = H - LIST_Y - 76
+        LIST_W = W - 40
+        SIDE_W, SIDE_X = 0, 0
+    elif PANEL_UI:
         # Interfaz de dos paneles: lista a la izquierda, detalles a la derecha
         foot = 62
         LIST_X, LIST_Y = 20, HEAD + 16
@@ -1563,7 +1749,7 @@ def apply_layout():
         LIST_W, LIST_H = W - 32, H - TOP - 60
     VIS_FULL = max(1, LIST_H // ROW)
     VIS_KB = max(1, (LIST_H - KB_H) // ROW)
-    GCOLS = max(3, (LIST_W if PANEL_UI else (W - 40)) // GCW)
+    grid_metrics()
 
 def toggle_fullscreen():
     global screen, FULLSCREEN, scroll
@@ -1637,6 +1823,9 @@ THEMES = {
 # Accion secundaria: con WP_ACTION_X=1, la X devuelve la seleccion marcada
 # para que quien llame abra la configuracion en vez de jugar.
 ACTION_X = os.environ.get('WP_ACTION_X') == '1'
+LANG = os.environ.get('WP_LANG', 'es')
+def L(es, en):
+    return en if LANG == 'en' else es
 THEME_NAME = os.environ.get('WP_THEME', 'clasico')
 if THEME_NAME not in THEMES:
     THEME_NAME = 'clasico'
@@ -1827,7 +2016,7 @@ def draw_side_panel():
     rect = (SIDE_X, LIST_Y, SIDE_W, LIST_H)
     draw_panel(rect)
     px, py = SIDE_X + 16, LIST_Y + 14
-    screen.blit(f_sm.render('SELECCION', True, TH.get('acc2', ACC)), (px, py))
+    screen.blit(f_sm.render(L('SELECCION', 'SELECTION'), True, TH.get('acc2', ACC)), (px, py))
     py += 26
     pygame.draw.rect(screen, TH['border'], (px, py, SIDE_W - 32, 1))
     py += 14
@@ -1837,11 +2026,11 @@ def draw_side_panel():
             screen.blit(f_it.render(ln, True, FG), (px, py))
             py += 28
     else:
-        screen.blit(f_it.render('(vacio)', True, DIM), (px, py))
+        screen.blit(f_it.render(L('(vacio)', '(empty)'), True, DIM), (px, py))
         py += 28
     if MODE == 'browse':
         py += 8
-        screen.blit(f_sm.render('CARPETA', True, TH.get('acc2', ACC)), (px, py))
+        screen.blit(f_sm.render(L('CARPETA', 'FOLDER'), True, TH.get('acc2', ACC)), (px, py))
         py += 22
         for ln in wrap_title(cur_path, f_sm, SIDE_W - 34, 4):
             screen.blit(f_sm.render(ln, True, DIM), (px, py))
@@ -1933,7 +2122,7 @@ KB_ROWS = ['ABCDEFGHIJ',
            'KLMNOPQRST',
            'UVWXYZ0123',
            '456789 .-_']
-KB_ACTIONS = ['BORRAR', 'LIMPIAR', 'LISTO']
+KB_ACTIONS = ['BORRAR', 'LIMPIAR', 'LISTO'] if LANG != 'en' else ['DELETE', 'CLEAR', 'DONE']
 
 def kb_cols(r):
     return len(KB_ACTIONS) if r == len(KB_ROWS) else len(KB_ROWS[r])
@@ -1963,10 +2152,48 @@ def toggle():
         it = items[view[sel]]
         it[2] = not it[2]
 
+# Rejilla adaptativa: en pantallas de portatil/consola (Steam Deck, Legion Go)
+# menos columnas y caratulas MAS GRANDES; en monitores grandes, mas columnas.
+# WP_GRID_COLS fuerza un numero concreto de columnas (0 = automatico).
 GCOLS = 5
-GCW, GCH = 176, 268          # celda (imagen 150x225 + titulo)
+GCW, GCH = 176, 268
 GIMG_W, GIMG_H = 150, 225
 _imgcache = {}
+
+def grid_metrics():
+    # Tamano de caratula segun la pantalla. La regla que manda es la ALTURA:
+    # la caratura debe caber en su fila con holgura (2 filas en monitores,
+    # 1 fila grande en consolas portatiles). Antes solo se repartia el ancho
+    # y en un monitor de sobremesa salian gigantes.
+    global GCOLS, GCW, GCH, GIMG_W, GIMG_H
+    avail_w = (LIST_W if PANEL_UI else (W - 40))
+    avail_h = max(120, LIST_H - 16)
+    forced = 0
+    try:
+        forced = int(os.environ.get('WP_GRID_COLS', '0'))
+    except ValueError:
+        forced = 0
+    if forced > 0:
+        rows = 1 if avail_h < 620 else 2
+    elif avail_h < 620:          # Steam Deck, Legion Go, ventana baja
+        rows = 1
+    else:                        # monitor: dos filas de caratulas
+        rows = 2
+    # altura por fila (incluye el hueco del titulo): asi las filas CABEN
+    h_max = int(avail_h / rows) - 48
+    w_from_h = int(h_max / 1.5)
+    # ancho maximo razonable por caratula segun el tamano de pantalla
+    w_cap = 190 if W <= 1400 else (210 if W <= 1920 else 240)
+    GIMG_W = max(120, min(w_from_h, w_cap))
+    GIMG_H = int(GIMG_W * 1.5)
+    GCW = GIMG_W + 26
+    GCH = GIMG_H + 48
+    if forced > 0:
+        GCOLS = forced
+        GCW = max(GIMG_W + 12, avail_w // max(1, forced))
+    else:
+        GCOLS = max(3, min(9, avail_w // GCW))
+    _imgcache.clear()          # las imagenes se reescalan al nuevo tamano
 
 def grid_rows_vis():
     area = H - TOP - 60 - (KB_H if kb_open else 0)
@@ -2144,8 +2371,8 @@ def draw_grid():
                     screen.blit(f_sm.render(fit_label(line, f_sm, GIMG_W - 12), True, FG), (x + 6, yy))
                     yy += 22
                 line = wd
-        lab = fit_label(title, f_sm, GIMG_W)
-        screen.blit(f_sm.render(lab, True, FG if i == sel else DIM), (x, y + GIMG_H + 6))
+        draw_row_text(title, f_sm, FG if i == sel else DIM,
+                      x, y + GIMG_H + 8, GIMG_W, i == sel)
 
 def action_x():
     # X sobre un juego -> devolver "WPACT:CONFIG|<lo elegido>"
@@ -2221,9 +2448,9 @@ def kb_press():
     global kb_open
     if kb_r == len(KB_ROWS):
         act = KB_ACTIONS[kb_c]
-        if act == 'BORRAR':
+        if act in ('BORRAR', 'DELETE'):
             filter_back()
-        elif act == 'LIMPIAR':
+        elif act in ('LIMPIAR', 'CLEAR'):
             global FILTER
             FILTER = ''
             _refilter()
@@ -2234,7 +2461,7 @@ def kb_press():
 
 if MODE == 'progress':
     # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
-    bar_pct, bar_txt = 0, 'Preparando...'
+    bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
     clock2 = pygame.time.Clock()
     while True:
         for ev in pygame.event.get():
@@ -2269,7 +2496,7 @@ if MODE == 'progress':
                              (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
         if bar_pct:
             screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
-        screen.blit(f_sm.render('Espera, esto puede tardar...', True, DIM), (24, H - 40))
+        screen.blit(f_sm.render(L('Espera, esto puede tardar...', 'Please wait, this may take a while...'), True, DIM), (24, H - 40))
         if SCANSURF is not None:
             screen.blit(SCANSURF, (0, 0))
         pygame.display.flip()
@@ -2475,17 +2702,24 @@ while running:
         hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
     if PANEL_UI:
         if kb_open:
-            _chips = [('Dpad', 'moverse'), ('A', 'pulsar'), ('X', 'borrar'), ('B/Y', 'cerrar')]
+            _chips = [('Dpad', L('moverse', 'move')), ('A', L('pulsar', 'press')),
+                      ('X', L('borrar', 'delete')), ('B/Y', L('cerrar', 'close'))]
         elif MODE == 'check':
-            _chips = [('X', 'marcar'), ('A', 'aceptar'), ('B', 'cancelar')]
+            _chips = [('X', L('marcar', 'toggle')), ('A', L('aceptar', 'accept')),
+                      ('B', L('cancelar', 'cancel'))]
         elif MODE == 'browse':
-            _chips = [('A', 'entrar'), ('B', 'subir'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
+            _chips = [('A', L('entrar', 'enter')), ('B', L('subir', 'up')),
+                      ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
         elif MODE == 'grid':
-            _chips = [('A', 'jugar'), ('X', 'configurar'), ('B', 'volver'), ('Y', 'buscar')] \
-                if ACTION_X else [('Dpad', 'moverse'), ('A', 'jugar'), ('B', 'volver'), ('Y', 'buscar')]
+            _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
+                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                     [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
+                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
         else:
-            _chips = [('A', 'jugar'), ('X', 'configurar'), ('B', 'volver'), ('Y', 'buscar')] \
-                if ACTION_X else [('A', 'elegir'), ('B', 'volver'), ('Y', 'buscar'), ('Sel+A', 'pantalla')]
+            _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
+                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                     [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
+                      ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
         draw_footer(_chips)
     else:
         screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
@@ -2631,8 +2865,20 @@ GTKEOF
 # ----------------------------------------------------------------------------
 menu() {
     # $1 = titulo; resto = opciones (una por argumento). Imprime la elegida.
+    # IMPORTANTE: se traduce solo para MOSTRAR; lo que se devuelve es siempre
+    # la cadena original en castellano, para que los case de los llamadores
+    # sigan funcionando igual en cualquier idioma.
     local title="$1"; shift
     [ $# -eq 0 ] && return 1
+    local WP_ORIG=() WP_SHOW=() _o
+    if [ "${LANGUAGE:-es}" = "en" ]; then
+        for _o in "$@"; do
+            WP_ORIG+=("$_o")
+            WP_SHOW+=("$(tr "$_o")")
+        done
+        title="$(tr "$title")"
+        set -- "${WP_SHOW[@]}"
+    fi
     local tmpsel; tmpsel="$(mktemp)"
     if pygame_available; then
         # pygame lee el mando NATIVAMENTE: el puente uinput debe estar PARADO
@@ -2642,7 +2888,7 @@ menu() {
         local tmpopt; tmpopt="$(mktemp)"
         printf '%s\n' "$@" > "$tmpopt"
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-            "$PY_BIN" "$MENU_PYGAME_PY" list "$title" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" list "$title" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
         rm -f "$tmpopt"
     elif gtk_available; then
         pad_bridge_start
@@ -2666,6 +2912,15 @@ menu() {
     if [ -z "$sel" ]; then
         log "MENU [$title] -> cancelado"
         return 1
+    fi
+    if [ "${LANGUAGE:-es}" = "en" ] && [ "${#WP_ORIG[@]}" -gt 0 ]; then
+        local _i
+        for _i in "${!WP_SHOW[@]}"; do
+            if [ "${WP_SHOW[$_i]}" = "$sel" ]; then
+                sel="${WP_ORIG[$_i]}"
+                break
+            fi
+        done
     fi
     log "MENU [$title] -> [$sel]"
     printf '%s' "$sel"
@@ -3411,12 +3666,12 @@ find_exe() {
                     [ -z "$hit" ] && hit=$(find "$root" -maxdepth 2 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                     [ -z "$hit" ] && hit=$(find "$root" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                 fi
-                [ -n "$hit" ] && { EXE_PATH="$hit"; EXE_ARGS=""; say "[+] Ejecutable por autorun.cmd: $hit"; return 0; }
+                [ -n "$hit" ] && { EXE_PATH="$hit"; EXE_ARGS="${ARGS_OVERRIDE:-}"; say "[+] Ejecutable por autorun.cmd: $hit"; return 0; }
             fi
         fi
         # Paso 2: heuristica completa
         local guess; guess="$(find_game_exe "$root")"
-        [ -n "$guess" ] && { EXE_PATH="$guess"; EXE_ARGS=""; say "[+] Ejecutable por heuristica: $guess"; return 0; }
+        [ -n "$guess" ] && { EXE_PATH="$guess"; EXE_ARGS="${ARGS_OVERRIDE:-}"; say "[+] Ejecutable por heuristica: $guess"; return 0; }
     fi
 
     # Paso 3: seleccion manual (menu)
@@ -3426,7 +3681,7 @@ find_exe() {
     rels="$(printf '%s\n' "$list" | sed "s|^$root/||")"
     # shellcheck disable=SC2046
     sel="$(IFS=$'\n'; set -f; menu "Elige el ejecutable" $rels)" || return 1
-    EXE_PATH="$root/$sel"; EXE_ARGS=""
+    EXE_PATH="$root/$sel"; EXE_ARGS="${ARGS_OVERRIDE:-}"
     return 0
 }
 
@@ -3619,7 +3874,7 @@ wizard_toggles() {
 0|Wayland nativo (experimental)
 EOF
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-            "$PY_BIN" "$MENU_PYGAME_PY" check "Paso 3/3 - Configuracion basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check "Paso 3/3 - Configuracion basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
         local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
         [ $rc -ne 0 ] && return 1
         MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0; PAD_SDL=0; NTSYNC=0
@@ -3859,6 +4114,7 @@ launch_game() {
             batocera_play "$abs_squash"
             local brc=$?
             mapeador_stop
+            post_game_resettle
             return $brc
         fi
     fi
@@ -3900,6 +4156,7 @@ launch_game() {
         [ -n "$ARGS_OVERRIDE" ] && EXE_ARGS="$ARGS_OVERRIDE"
     fi
     say "Ejecutable: $EXE_PATH"
+    [ -n "$EXE_ARGS" ] && say "Argumentos: $EXE_ARGS"
 
     ensure_runner
     local rdir; rdir="$(get_runner_path)"
@@ -3936,6 +4193,7 @@ $(tail -n 8 "$LOG_FILE")"
     fi
     kill "$trig" 2>/dev/null
     mapeador_stop
+    post_game_resettle
     # Esperar a que el wineserver del prefijo termine ANTES de desmontar:
     # si no, el overlay sigue "ocupado" y tmp_mount no queda vacio
     if [ "$RUNNER_KIND" = "wine" ]; then
@@ -4050,7 +4308,7 @@ redist_menu() {
 0|dotnet48 (.NET 4.8 - instalacion LENTA)
 EOF
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-        "$PY_BIN" "$MENU_PYGAME_PY" check "Redistribuibles para $gid (X marca, A instala)" \
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check "Redistribuibles para $gid (X marca, A instala)" \
         "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
     local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
     [ $rc -ne 0 ] && return 1
@@ -5027,10 +5285,14 @@ launch_loose_exe() {
     gamepad_retrigger &
     local trig=$!
     say "Lanzando exe suelto con $(basename "$rdir") [$RUNNER_KIND]"
-    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "$exe" >> "$LOG_FILE" 2>&1 )
+    local loose_args="${ARGS_OVERRIDE:-}"
+    [ -n "$loose_args" ] && say "Argumentos: $loose_args"
+    # shellcheck disable=SC2086
+    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "$exe" $loose_args >> "$LOG_FILE" 2>&1 )
     local rc=$?
     kill "$trig" 2>/dev/null
     mapeador_stop
+    post_game_resettle
     return $rc
 }
 
@@ -5120,6 +5382,27 @@ log_input_devices() {
     return 0
 }
 
+post_game_resettle() {
+    # Al salir de un juego, gamescope se queda sin ninguna superficie y la
+    # pantalla se ve NEGRA hasta que aparece otra ventana; si el juego aun
+    # esta muriendo, la ventana nueva puede quedarse detras. Esperamos a que
+    # no quede nada del juego y le damos tiempo al compositor.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        pgrep -x wineserver >/dev/null 2>&1 || break
+        sleep 0.5
+    done
+    if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
+        say "[+] Sesion gamescope: reasentando la pantalla tras el juego..."
+        sleep 1.5
+        export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
+        export WP_MENU_FS=1
+    else
+        sleep 0.3
+    fi
+    return 0
+}
+
 gamepad_retrigger() {
     # Re-deteccion diferida del mando (del script antiguo): dispara un evento
     # udev "add" para que SDL2/Wine reinicialice botones y ejes del pad
@@ -5186,7 +5469,7 @@ progress_start() {
     PROGRESS_FILE="$(mktemp)"
     printf '0|Preparando...\n' > "$PROGRESS_FILE"
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-        "$PY_BIN" "$MENU_PYGAME_PY" progress "$1" "$PROGRESS_FILE" >> "$LOG_FILE" 2>&1 &
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" progress "$1" "$PROGRESS_FILE" >> "$LOG_FILE" 2>&1 &
     PROGRESS_PID=$!
     return 0
 }
@@ -5319,7 +5602,7 @@ browse_for_path() {
         write_menu_pygame
         local tmpsel; tmpsel="$(mktemp)"
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-            "$PY_BIN" "$MENU_PYGAME_PY" browse "$title" "$tmpsel" "$cur" "$mode" >> "$LOG_FILE" 2>&1
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" browse "$title" "$tmpsel" "$cur" "$mode" >> "$LOG_FILE" 2>&1
         sel="$(cat "$tmpsel")"; rm -f "$tmpsel"
         if [ -z "$sel" ]; then
             log "BROWSE [$title] -> cancelado"
@@ -5385,7 +5668,7 @@ pick_squash() {
 $list
 EOF2
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-            "$PY_BIN" "$MENU_PYGAME_PY" grid "Elige un juego  [$GAMES_PATH]" \
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" grid "Elige un juego  [$GAMES_PATH]" \
             "$tmpsel" "$man" >> "$LOG_FILE" 2>&1
         sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$man"
         unset WP_ACTION_X
@@ -5839,6 +6122,8 @@ rotate_logs() {
 }
 
 export WP_THEME="${THEME:-clasico}"
+export WP_GRID_COLS="${GRID_COLS:-0}"
+export WP_LANG="${LANGUAGE:-es}"
 
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
