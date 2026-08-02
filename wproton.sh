@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.92"
+WPROTON_VERSION="0.94"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -70,6 +70,7 @@ THEME="clasico"                          # aspecto de los menus: clasico | moder
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
 GRID_COLS=0                              # columnas de la rejilla (0 = automatico)
 LANGUAGE=es                              # idioma de los menus: es | en
+GAMES_SORT=nombre                        # nombre | recientes | jugados
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -101,6 +102,9 @@ DIRECT_PLAY=$DIRECT_PLAY
 GRID_COLS=$GRID_COLS
 # Idioma de los menus: es (castellano) | en (english)
 LANGUAGE="$LANGUAGE"
+# Orden de la lista de juegos: nombre | recientes | jugados
+# (los marcados como favoritos van siempre primero)
+GAMES_SORT="$GAMES_SORT"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
 # de wproton.sh, no al directorio actual). Ej.: GAMES_PATH="ROMs/windows"
 EOF
@@ -118,109 +122,71 @@ abs_path() {
 }
 
 declare -A WP_TR
+LANG_DIR="$BASE_DIR/lang"
+
+lang_available() {
+    # Idiomas disponibles: es (interno) + cada lang/<codigo>.json
+    local f c
+    printf 'es\n'
+    for f in "$LANG_DIR"/*.json; do
+        [ -f "$f" ] || continue
+        c="$(basename "$f" .json)"
+        [ "$c" = "es" ] || printf '%s\n' "$c"
+    done 2>/dev/null
+}
+
 tr_init() {
-    [ "${LANGUAGE:-es}" = "en" ] || return 0
-    # Tabla castellano -> ingles. Lo que no este aqui sale en castellano,
-    # asi que se puede ir completando sin romper nada.
-    while IFS='|' read -r k v; do
-        [ -n "$k" ] && WP_TR["$k"]="$v"
-    done <<'TREOF'
-Jugar (elegir juego)|Play (choose game)
-Importar juego (zip/7z/rar/exe/carpeta)|Import game (zip/7z/rar/exe/folder)
-Configurar un juego|Configure a game
-Instalar librerias en un prefijo (vcredist, PhysX...)|Install libraries into a prefix (vcredist, PhysX...)
-Actualizar GE-Proton a la ultima|Update GE-Proton to the latest
-Actualizar umu-launcher|Update umu-launcher
-Instalar/actualizar Python portable + pygame|Install/update portable Python + pygame
-Descargar extractores GOG (innoextract + innounp)|Download GOG extractors (innoextract + innounp)
-Descargar herramientas FUSE portables (squashfuse, overlayfs)|Download portable FUSE tools (squashfuse, overlayfs)
-Borrar un runner|Delete a runner
-Detener Wine y desmontar todo|Stop Wine and unmount everything
-Ver ultimo log|View last log
-Salir|Exit
-Carpeta de juegos|Games folder
-Vista de juegos|Games view
-Tema de los menus|Menu theme
-Buscar actualizaciones|Check for updates
-lista|list
-rejilla (caratulas)|grid (covers)
-Elige un juego|Choose a game
-Elige el aspecto de los menus|Choose the menu look
-clasico - el original|classic - the original
-moderno - paneles y acento neon|modern - panels and neon accent
-arcade - synthwave con efecto CRT|arcade - synthwave with CRT effect
-<< Volver|<< Back
-<< Cancelar|<< Cancel
-Si|Yes
-No|No
-Runner (Proton/Wine)|Runner (Proton/Wine)
-Ejecutable|Executable
-Argumentos|Arguments
-Prefijo|Prefix
-MangoHud|MangoHud
-GameMode|GameMode
-Fsync|Fsync
-Esync|Esync
-DXVK Async|DXVK Async
-WineD3D (sin Vulkan)|WineD3D (no Vulkan)
-FSR (escalado)|FSR (upscaling)
-LAA (Large Address Aware)|LAA (Large Address Aware)
-Wayland nativo|Native Wayland
-Gamescope|Gamescope
-DLL overrides|DLL overrides
-Idioma del juego|Game language
-Variables extra|Extra variables
-Mando via SDL (DualSense como Xbox)|Controller via SDL (DualSense as Xbox)
-NTsync (sincronizacion por kernel)|NTsync (kernel synchronization)
-Arreglo mando SteamOS (Steam Input)|SteamOS controller fix (Steam Input)
-Lanzar via batocera-wine|Launch via batocera-wine
-Mapeador .keys|.keys mapper
-Anadir este juego a Steam|Add this game to Steam
-Abrir winecfg|Open winecfg
-Abrir winetricks|Open winetricks
-Instalar dgVoodoo2 (DX1-9/Glide)|Install dgVoodoo2 (DX1-9/Glide)
-Configurar dgVoodoo (Cpl)|Configure dgVoodoo (Cpl)
-Instalar OptiScaler (FSR/DLSS/XeSS)|Install OptiScaler (FSR/DLSS/XeSS)
-Repetir asistente|Run the wizard again
-Borrar prefijo|Delete prefix
-Borrar saves del overlay (upper/)|Delete overlay saves (upper/)
-Elegir ejecutable|Choose executable
->> JUGAR AHORA <<|>> PLAY NOW <<
->> EMPAQUETAR A WSQUASHFS <<|>> PACK TO WSQUASHFS <<
->> IMPORTAR ESTA CARPETA <<|>> IMPORT THIS FOLDER <<
->> USAR ESTA CARPETA <<|>> USE THIS FOLDER <<
->> JUGAR ESTA CARPETA <<|>> PLAY THIS FOLDER <<
-.. (subir)|.. (up)
-(juego suelto: elegir carpeta o exe...)|(loose game: choose folder or exe...)
-Probar el juego (sin empaquetar)|Test the game (without packing)
-Configurar (runner, prefijo, opciones)|Configure (runner, prefix, options)
-Empaquetar a wsquashfs|Pack to wsquashfs
-Juego en carpeta|Game in folder
-Configuracion de|Settings for
-Descargar runners (Proton / Wine)|Download runners (Proton / Wine)
-Descargar caratulas (SteamGridDB)|Download covers (SteamGridDB)
-Descargando caratulas de SteamGridDB|Downloading covers from SteamGridDB
-Instalar redistribuibles (vcredist, DirectX, .NET...)|Install redistributables (vcredist, DirectX, .NET...)
-compartido (default)|shared (default)
-propio del juego|per-game
-incluido en el wsquashfs|bundled in the wsquashfs
-ninguno (auto si existe <juego>.keys)|none (auto if <game>.keys exists)
-Borrar el instalador original?|Delete the original installer?
-Borrar la carpeta original?|Delete the original folder?
-Jugar ahora desde el wsquashfs?|Play now from the wsquashfs?
-Lanzar el juego ahora?|Launch the game now?
-Prueba terminada.|Test finished.
-Empaquetado con exito.|Packed successfully.
-SELECCION|SELECTION
-TREOF
+    WP_TR=()
+    local code="${LANGUAGE:-es}"
+    [ "$code" = "es" ] && return 0        # castellano = cadenas del script
+    local f="$LANG_DIR/$code.json"
+    if [ ! -f "$f" ]; then
+        say "AVISO: no existe lang/$code.json; se usara el castellano"
+        LANGUAGE=es
+        return 0
+    fi
+    # El JSON se lee con Python (el portable o el del sistema). Si no hay
+    # ninguno, seguimos en castellano en vez de fallar.
+    local py="${PY_BIN:-}"
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null)"
+    if [ -z "$py" ]; then
+        say "AVISO: sin Python para leer lang/$code.json; se usara el castellano"
+        LANGUAGE=es
+        return 0
+    fi
+    local pairs
+    pairs="$("$py" -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception as e:
+    sys.stderr.write("json: %s\n" % e); sys.exit(1)
+for k, v in d.items():
+    if isinstance(v, str) and v:
+        print("%s\t%s" % (k.replace("\t", " "), v.replace("\t", " ")))
+' "$f" 2>>"$LOG_FILE")" || {
+        say "AVISO: lang/$code.json no es JSON valido; se usara el castellano"
+        LANGUAGE=es
+        return 0
+    }
+    local k v n=0
+    while IFS=$'\t' read -r k v; do
+        [ -n "$k" ] && { WP_TR["$k"]="$v"; n=$((n+1)); }
+    done <<EOFLANG
+$pairs
+EOFLANG
+    say "[i] Idioma $code: $n cadenas cargadas de lang/$code.json"
     return 0
 }
 
-tr() {
+wp_tr() {
+    # OJO: esta funcion NO puede llamarse "tr": machacaria el comando tr de
+    # Unix, que el script usa para game_id, ordenaciones, etc. (fallo real
+    # de la 0.92: dejaron de encontrarse perfiles y caratulas).
     # Traduce si hay traduccion; si no, devuelve el original. Para lineas
     # tipo "Etiqueta: valor" traduce solo la etiqueta.
     local txt="$1"
-    [ "${LANGUAGE:-es}" = "en" ] || { printf '%s' "$txt"; return 0; }
+    [ "${LANGUAGE:-es}" != "es" ] || { printf '%s' "$txt"; return 0; }
     if [ -n "${WP_TR[$txt]:-}" ]; then
         printf '%s' "${WP_TR[$txt]}"; return 0
     fi
@@ -228,7 +194,7 @@ tr() {
         *": "*)
             local k="${txt%%: *}" v="${txt#*: }"
             if [ -n "${WP_TR[$k]:-}" ]; then
-                printf '%s: %s' "${WP_TR[$k]}" "$(tr "$v")"
+                printf '%s: %s' "${WP_TR[$k]}" "$(wp_tr "$v")"
                 return 0
             fi ;;
     esac
@@ -239,7 +205,7 @@ tr_args() {
     # Traduce cada argumento y los imprime uno por linea
     local a
     for a in "$@"; do
-        printf '%s\n' "$(tr "$a")"
+        printf '%s\n' "$(wp_tr "$a")"
     done
 }
 
@@ -323,7 +289,7 @@ $(tail -n 8 "$LOG_FILE")"
 
 ui_error() {
     log "ERROR-UI: $1"
-    set -- "$(tr "$1")"
+    set -- "$(wp_tr "$1")"
     if [ "$HAS_ZENITY" = 1 ]; then
         zenity --error --title="WProton" --text="$1" 2>/dev/null
     elif pygame_available; then
@@ -332,7 +298,7 @@ ui_error() {
     fi
 }
 ui_info()  {
-    set -- "$(tr "$1")"
+    set -- "$(wp_tr "$1")"
     if [ "$HAS_ZENITY" = 1 ]; then
         pad_bridge_start
         zenity --info --title="WProton" --text="$1" 2>/dev/null
@@ -1381,10 +1347,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V32" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V34" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V32
+# WPROTON_HELPER_V34
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1394,6 +1360,7 @@ write_menu_pygame() {
 #   browse <titulo> <salida> <dir_inicial> <file|dir|play|keys>
 #   grid   <titulo> <salida> <manifiesto>   (lineas "titulo|imagen|payload")
 #   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
+#   text   <titulo> <salida> <valor_inicial>  (teclado en pantalla)
 import os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1533,7 +1500,7 @@ def grid_apply_filter():
     sel = 0
     scroll = 0
 
-if MODE == 'progress':
+if MODE in ('progress', 'text'):
     pass
 elif MODE == 'browse':
     load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
@@ -1824,8 +1791,26 @@ THEMES = {
 # para que quien llame abra la configuracion en vez de jugar.
 ACTION_X = os.environ.get('WP_ACTION_X') == '1'
 LANG = os.environ.get('WP_LANG', 'es')
-def L(es, en):
-    return en if LANG == 'en' else es
+# El helper lee el MISMO lang/<codigo>.json que el script: asi los textos
+# propios (SELECCION, chips, teclado) se traducen a cualquier idioma nuevo
+# sin tocar el codigo.
+_LANGMAP = {}
+if LANG != 'es':
+    try:
+        import json as _json
+        with open(os.path.join(os.path.dirname(BASE), 'lang', LANG + '.json'),
+                  encoding='utf-8') as _fh:
+            _LANGMAP = {k: v for k, v in _json.load(_fh).items() if isinstance(v, str) and v}
+    except Exception:
+        _LANGMAP = {}
+
+def L(es, en=None):
+    # busca en el json; si no esta, usa el ingles de respaldo (si se paso)
+    if LANG == 'es':
+        return es
+    if es in _LANGMAP:
+        return _LANGMAP[es]
+    return en if en is not None else es
 THEME_NAME = os.environ.get('WP_THEME', 'clasico')
 if THEME_NAME not in THEMES:
     THEME_NAME = 'clasico'
@@ -2133,6 +2118,15 @@ def shorten(p, n=82):
 def write_out(text):
     with open(OUTFILE, 'w', encoding='utf-8') as f:
         f.write(text)
+
+def safe_quit(code):
+    # el texto ya esta escrito: pase lo que pase al cerrar, salimos con el
+    # codigo correcto para que el llamador reciba el valor
+    try:
+        pygame.quit()
+    except Exception:
+        pass
+    sys.exit(code)
 
 def vis():
     return VIS_KB if kb_open else VIS_FULL
@@ -2504,6 +2498,128 @@ if MODE == 'progress':
     pygame.quit()
     sys.exit(0)
 
+if MODE == 'text':
+    # Editor de una linea con teclado en pantalla: para argumentos, DLL
+    # overrides, notas... Se maneja con el mando (o el teclado real).
+    TXT = ARG4 if len(sys.argv) > 4 else ''
+    TROWS = ['1234567890-=',
+             'qwertyuiop[]',
+             'asdfghjkl;\'',
+             'zxcvbnm,./\\',
+             ' _:"|+*@#$%&']
+    TACT = [L('MAYUS', 'SHIFT'), L('BORRAR', 'DELETE'),
+            L('LIMPIAR', 'CLEAR'), L('ACEPTAR', 'ACCEPT'), L('CANCELAR', 'CANCEL')]
+    tr_r, tr_c, shift = 0, 0, False
+    clockT = pygame.time.Clock()
+    t_open2 = time.time()
+
+    def tcols(r):
+        return len(TACT) if r == len(TROWS) else len(TROWS[r])
+
+    def t_press():
+        global TXT, shift, tr_r, tr_c
+        if tr_r == len(TROWS):
+            act = TACT[tr_c]
+            if act in ('MAYUS', 'SHIFT'):
+                shift = not shift
+            elif act in ('BORRAR', 'DELETE'):
+                TXT = TXT[:-1]
+            elif act in ('LIMPIAR', 'CLEAR'):
+                TXT = ''
+            elif act in ('ACEPTAR', 'ACCEPT'):
+                return 'ok'
+            else:
+                return 'cancel'
+        else:
+            ch = TROWS[tr_r][tr_c]
+            TXT += ch.upper() if shift else ch
+        return None
+
+    while True:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                safe_quit(1)
+            if ev.type != pygame.KEYDOWN:
+                continue
+            if time.time() - t_open2 < 0.35:
+                continue
+            if ev.key == pygame.K_UP:
+                tr_r = (tr_r - 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+            elif ev.key == pygame.K_DOWN:
+                tr_r = (tr_r + 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+            elif ev.key == pygame.K_LEFT:
+                tr_c = (tr_c - 1) % tcols(tr_r)
+            elif ev.key == pygame.K_RIGHT:
+                tr_c = (tr_c + 1) % tcols(tr_r)
+            elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                r = t_press()
+                if r == 'ok':
+                    write_out(TXT); safe_quit(0)
+                if r == 'cancel':
+                    safe_quit(1)
+            elif ev.key == pygame.K_SPACE:      # X del mando: borrar
+                TXT = TXT[:-1]
+            elif ev.key == pygame.K_BACKSPACE:
+                TXT = TXT[:-1]
+            elif ev.key == pygame.K_TAB:        # Y: aceptar rapido
+                write_out(TXT); safe_quit(0)
+            elif ev.key == pygame.K_ESCAPE:
+                safe_quit(1)
+            else:
+                ch = getattr(ev, 'unicode', '')
+                if ch and ch.isprintable():
+                    TXT += ch
+
+        screen.blit(BGSURF, (0, 0))
+        if PANEL_UI:
+            draw_header()
+        else:
+            for _i, _tl in enumerate(TITLE_LINES):
+                screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+            pygame.draw.line(screen, TH['border'], (24, HEAD - 8), (W - 24, HEAD - 8), 1)
+        # caja de texto
+        bx, by, bw, bh = 30, HEAD + 20, W - 60, 54
+        pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
+        pygame.draw.rect(screen, ACC, (bx, by, bw, bh), 2, border_radius=RAD)
+        cursor = '_' if int(time.time() * 2) % 2 == 0 else ' '
+        shown = TXT
+        while f_it.render(shown + cursor, True, FG).get_width() > bw - 24 and shown:
+            shown = shown[1:]
+        screen.blit(f_it.render(shown + cursor, True, FG), (bx + 12, by + 14))
+        # teclado
+        ky0 = by + bh + 26
+        cw = (W - 80) // 12
+        for r, row in enumerate(TROWS):
+            for c, ch in enumerate(row):
+                x = 40 + c * cw
+                y = ky0 + r * 44
+                if r == tr_r and c == tr_c:
+                    draw_selection((x - 8, y - 6, cw - 6, 38))
+                lab = ch.upper() if shift else ch
+                if ch == ' ':
+                    lab = L('ESP', 'SPC')
+                screen.blit(f_it.render(lab, True, FG), (x, y))
+        aw = (W - 80) // len(TACT)
+        for c, act in enumerate(TACT):
+            x = 40 + c * aw
+            y = ky0 + len(TROWS) * 44
+            if tr_r == len(TROWS) and c == tr_c:
+                draw_selection((x - 8, y - 6, aw - 14, 38))
+            col = ACC if act in ('ACEPTAR', 'ACCEPT') else (
+                  WARN if act in ('MAYUS', 'SHIFT') and shift else FG)
+            screen.blit(f_it.render(act, True, col), (x, y))
+        hint2 = L('Dpad: moverse   A: pulsar   X: borrar   Y: aceptar   B: cancelar',
+                  'Dpad: move   A: press   X: delete   Y: accept   B: cancel')
+        if PANEL_UI:
+            draw_footer([('A', L('pulsar', 'press')), ('X', L('borrar', 'delete')),
+                         ('Y', L('aceptar', 'accept')), ('B', L('cancelar', 'cancel'))])
+        else:
+            screen.blit(f_sm.render(hint2, True, DIM), (24, H - 40))
+        if SCANSURF is not None:
+            screen.blit(SCANSURF, (0, 0))
+        pygame.display.flip()
+        clockT.tick(30)
+
 running, done = True, False
 GRACE = 0.35
 t_open = time.time()
@@ -2871,12 +2987,12 @@ menu() {
     local title="$1"; shift
     [ $# -eq 0 ] && return 1
     local WP_ORIG=() WP_SHOW=() _o
-    if [ "${LANGUAGE:-es}" = "en" ]; then
+    if [ "${LANGUAGE:-es}" != "es" ]; then
         for _o in "$@"; do
             WP_ORIG+=("$_o")
-            WP_SHOW+=("$(tr "$_o")")
+            WP_SHOW+=("$(wp_tr "$_o")")
         done
-        title="$(tr "$title")"
+        title="$(wp_tr "$title")"
         set -- "${WP_SHOW[@]}"
     fi
     local tmpsel; tmpsel="$(mktemp)"
@@ -2913,7 +3029,7 @@ menu() {
         log "MENU [$title] -> cancelado"
         return 1
     fi
-    if [ "${LANGUAGE:-es}" = "en" ] && [ "${#WP_ORIG[@]}" -gt 0 ]; then
+    if [ "${LANGUAGE:-es}" != "es" ] && [ "${#WP_ORIG[@]}" -gt 0 ]; then
         local _i
         for _i in "${!WP_SHOW[@]}"; do
             if [ "${WP_SHOW[$_i]}" = "$sel" ]; then
@@ -2928,7 +3044,27 @@ menu() {
 
 ask_text() {
     # $1 = pregunta, $2 = valor actual. Imprime el nuevo valor.
+    # Con pygame se usa un TECLADO EN PANTALLA: asi se pueden escribir
+    # argumentos, DLL overrides o notas con el mando, sin teclado fisico.
     local title="$1" default="${2:-}"
+    if pygame_available; then
+        pad_bridge_stop
+        write_menu_pygame
+        local tmpsel; tmpsel="$(mktemp)"
+        printf '%s' "$default" > "$tmpsel"
+        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" text "$title" \
+            "$tmpsel" "$default" >> "$LOG_FILE" 2>&1
+        local rc=$? val; val="$(cat "$tmpsel")"; rm -f "$tmpsel"
+        if [ $rc -ne 0 ]; then
+            log "TEXTO [$title] -> cancelado"
+            printf '%s' "$default"
+            return 0
+        fi
+        log "TEXTO [$title] -> [$val]"
+        printf '%s' "$val"
+        return 0
+    fi
     pad_bridge_start
     if [ "$HAS_ZENITY" = 1 ]; then
         zenity --entry --title="WProton" --text="$title" \
@@ -3703,6 +3839,11 @@ profile_defaults() {
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
+    FAVORITO=0               # 1 = aparece primero en la lista
+    NOTAS=""                 # apunte libre ("necesita -novr", "usar GE 9-27"...)
+    PLAY_COUNT=0             # veces jugado
+    PLAY_SECONDS=0           # tiempo total jugado (segundos)
+    LAST_PLAYED=""           # fecha de la ultima partida (YYYY-MM-DD HH:MM)
     PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
@@ -3740,6 +3881,11 @@ MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_STEAMFIX=$PAD_STEAMFIX
 NTSYNC=$NTSYNC
+FAVORITO=$FAVORITO
+NOTAS="$NOTAS"
+PLAY_COUNT=$PLAY_COUNT
+PLAY_SECONDS=$PLAY_SECONDS
+LAST_PLAYED="$LAST_PLAYED"
 USE_BATOCERA=$USE_BATOCERA
 GAMEMODE=$GAMEMODE
 FSYNC=$FSYNC
@@ -4179,6 +4325,7 @@ launch_game() {
     local trig=$!
     say "Lanzando con $(basename "$rdir") [$RUNNER_KIND] | prefix=$(basename "$WINEPREFIX")"
     local t0; t0=$(date +%s)
+    STATS_T0="$t0"
     (
         cd "$(dirname "$EXE_PATH")" || exit 1
         # shellcheck disable=SC2086
@@ -4193,6 +4340,7 @@ $(tail -n 8 "$LOG_FILE")"
     fi
     kill "$trig" 2>/dev/null
     mapeador_stop
+    stats_record "$gid" "$(( $(date +%s) - ${STATS_T0:-$(date +%s)} ))"
     post_game_resettle
     # Esperar a que el wineserver del prefijo termine ANTES de desmontar:
     # si no, el overlay sigue "ocupado" y tmp_mount no queda vacio
@@ -5285,6 +5433,7 @@ launch_loose_exe() {
     gamepad_retrigger &
     local trig=$!
     say "Lanzando exe suelto con $(basename "$rdir") [$RUNNER_KIND]"
+    local st0; st0=$(date +%s)
     local loose_args="${ARGS_OVERRIDE:-}"
     [ -n "$loose_args" ] && say "Argumentos: $loose_args"
     # shellcheck disable=SC2086
@@ -5292,6 +5441,7 @@ launch_loose_exe() {
     local rc=$?
     kill "$trig" 2>/dev/null
     mapeador_stop
+    stats_record "$gid" "$(( $(date +%s) - st0 ))"
     post_game_resettle
     return $rc
 }
@@ -5403,6 +5553,32 @@ post_game_resettle() {
     return 0
 }
 
+fmt_playtime() {
+    # segundos -> "3 h 12 min" / "45 min" / "2 min"
+    local t="${1:-0}" h m
+    h=$(( t / 3600 )); m=$(( (t % 3600) / 60 ))
+    if [ "$h" -gt 0 ]; then printf '%d h %d min' "$h" "$m"
+    elif [ "$m" -gt 0 ]; then printf '%d min' "$m"
+    else printf '<1 min'; fi
+}
+
+stats_record() {
+    # $1 = gid, $2 = segundos de la sesion. Suma al perfil del juego.
+    local gid="$1" secs="${2:-0}"
+    [ -n "$gid" ] || return 0
+    [ "$secs" -lt 20 ] && return 0        # arranques fallidos no cuentan
+    local f="$PROFILE_DIR/$gid.conf"
+    [ -f "$f" ] || return 0
+    local pc ps
+    pc=$(( ${PLAY_COUNT:-0} + 1 ))
+    ps=$(( ${PLAY_SECONDS:-0} + secs ))
+    PLAY_COUNT="$pc"; PLAY_SECONDS="$ps"
+    LAST_PLAYED="$(date '+%Y-%m-%d %H:%M')"
+    write_full_profile "$gid"
+    say "[+] Sesion: $(fmt_playtime "$secs") | total: $(fmt_playtime "$ps") en $pc partidas"
+    return 0
+}
+
 gamepad_retrigger() {
     # Re-deteccion diferida del mando (del script antiguo): dispara un evento
     # udev "add" para que SDL2/Wine reinicialice botones y ejes del pad
@@ -5446,6 +5622,14 @@ import_input() {
 # 15. MENUS DE CONFIGURACION (estilo PortProton)
 # ----------------------------------------------------------------------------
 onoff() { [ "$1" = 1 ] && printf 'ON' || printf 'OFF'; }
+
+stats_line() {
+    if [ "${PLAY_COUNT:-0}" -gt 0 ]; then
+        printf '%s en %s partidas' "$(fmt_playtime "${PLAY_SECONDS:-0}")" "${PLAY_COUNT}"
+    else
+        printf 'sin partidas todavia'
+    fi
+}
 
 pad_sdl_label() {
     case "${PAD_SDL:-auto}" in
@@ -5647,10 +5831,48 @@ browse_for_path() {
     done
 }
 
+game_meta() {
+    # $1 = ruta del juego -> "fav|last_played|play_seconds" leidos de su perfil
+    local gid f fav=0 last="" secs=0
+    gid="$(game_id "$1")"
+    f="$PROFILE_DIR/$gid.conf"
+    if [ -f "$f" ]; then
+        fav="$(grep -m1 '^FAVORITO=' "$f" | cut -d= -f2 | tr -d '"')"
+        last="$(grep -m1 '^LAST_PLAYED=' "$f" | cut -d= -f2- | tr -d '"')"
+        secs="$(grep -m1 '^PLAY_SECONDS=' "$f" | cut -d= -f2 | tr -d '"')"
+    fi
+    printf '%s|%s|%s' "${fav:-0}" "${last:-}" "${secs:-0}"
+}
+
+sort_games() {
+    # Ordena la lista (rutas relativas, una por linea) segun GAMES_SORT.
+    # Los favoritos van SIEMPRE primero. Para los criterios descendentes
+    # (recientes / mas jugados) se INVIERTE la clave numerica en vez de usar
+    # "sort -r", que tambien invertiria la prioridad de los favoritos.
+    local rel meta fav last secs n
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        meta="$(game_meta "$GAMES_PATH/$rel")"
+        fav="${meta%%|*}"; meta="${meta#*|}"
+        last="${meta%%|*}"; secs="${meta#*|}"
+        case "${GAMES_SORT:-nombre}" in
+            recientes)
+                n="$(printf '%s' "${last:-}" | tr -cd '0-9')"
+                [ -z "$n" ] && n=0
+                n="$(printf '%012d' "${n:0:12}")"
+                printf '%d %012d\t%s\n' "$((1-fav))" "$(( 999999999999 - 10#$n ))" "$rel" ;;
+            jugados)
+                printf '%d %012d\t%s\n' "$((1-fav))" "$(( 999999999 - ${secs:-0} ))" "$rel" ;;
+            *)
+                printf '%d %s\t%s\n' "$((1-fav))" "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" "$rel" ;;
+        esac
+    done | sort | cut -f2-
+}
+
 pick_squash() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
     local list loose="(juego suelto: elegir carpeta o exe...)"
-    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) -printf '%P\n' 2>/dev/null | sort)"
+    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) -printf '%P\n' 2>/dev/null | sort | sort_games)"
     local sel
     export WP_ACTION_X=1                 # X = configurar el juego resaltado
     if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
@@ -5663,7 +5885,13 @@ pick_squash() {
             gid2="$(game_id "$GAMES_PATH/$rel")"
             t2="$(basename "$rel")"; t2="${t2%.*}"
             cov="$(cover_for "$gid2")" || cov=""
-            printf '%s|%s|%s\n' "$t2" "$cov" "$rel" >> "$man"
+            local mt fv sc lp info=""
+            mt="$(game_meta "$GAMES_PATH/$rel")"
+            fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
+            [ "${fv:-0}" = 1 ] && info="* "
+            [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
+            [ -n "$lp" ] && info="$info | $lp"
+            printf '%s|%s|%s\n' "$t2$([ -n "$info" ] && printf '   [%s]' "$info")" "$cov" "$rel" >> "$man"
         done <<EOF2
 $list
 EOF2
@@ -5785,6 +6013,9 @@ game_config_menu() {
             "Abrir winecfg" \
             "Abrir winetricks" \
             "Mapeador .keys: $kstat" \
+            "Favorito: $(onoff "${FAVORITO:-0}")" \
+            "Notas: ${NOTAS:-(ninguna)}" \
+            "Estadisticas: $(stats_line)" \
             "$pack_row" \
             "Anadir este juego a Steam" \
             "Repetir asistente de primera ejecucion" \
@@ -5881,6 +6112,24 @@ La configuracion de '$gid' se conserva para el wsquashfs."
                 fi ;;
             "Anadir este juego a Steam")
                 add_game_to_steam "$squash" "$gid" ;;
+            "Favorito:"*)
+                FAVORITO=$((1-${FAVORITO:-0})); write_full_profile "$gid" ;;
+            "Notas:"*)
+                NOTAS="$(ask_text "Notas de este juego (argumentos que necesita, runner recomendado...)" "${NOTAS:-}")"
+                write_full_profile "$gid" ;;
+            "Estadisticas:"*)
+                if [ "${PLAY_COUNT:-0}" -gt 0 ]; then
+                    ui_ask "Partidas: ${PLAY_COUNT:-0}
+Tiempo total: $(fmt_playtime "${PLAY_SECONDS:-0}")
+Ultima vez: ${LAST_PLAYED:-nunca}
+
+Poner el contador a cero?" && {
+                        PLAY_COUNT=0; PLAY_SECONDS=0; LAST_PLAYED=""
+                        write_full_profile "$gid"
+                    }
+                else
+                    ui_info "Todavia no hay partidas registradas de este juego."
+                fi ;;
             "Mapeador .keys"*)
                 local kmenu
                 kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
@@ -5961,7 +6210,9 @@ main_menu() {
                "Borrar un runner" \
                "Carpeta de juegos: $GAMES_PATH" \
                "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
+               "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
                "Tema de los menus: $THEME" \
+               "Idioma: ${LANGUAGE:-es}" \
                "Descargar caratulas (SteamGridDB)" \
                "Detener Wine y desmontar todo" \
                "Ver ultimo log" \
@@ -6021,6 +6272,18 @@ fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
                 if v="$(IFS=$'\n'; set -f; menu "Borrar runner" $vers)"; then
                     ui_ask "Borrar $v?" && rm -rf "${RUNNERS_DIR:?}/$v"
                 fi ;;
+            "Idioma:"*)
+                local langs li
+                langs="$(lang_available)"
+                # shellcheck disable=SC2046
+                li="$(IFS=$'\n'; set -f; menu "Idioma de los menus / Menu language" $langs "<< Volver")" || li=""
+                case "$li" in
+                    "<< Volver"|"") ;;
+                    *)  LANGUAGE="$li"; save_settings
+                        export WP_LANG="$LANGUAGE"
+                        tr_init
+                        ui_info "Idioma: $LANGUAGE" ;;
+                esac ;;
             "Tema de los menus:"*)
                 local th
                 th="$(menu "Elige el aspecto de los menus" \
@@ -6034,6 +6297,18 @@ fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
                         export WP_THEME="$THEME"
                         save_settings
                         ui_info "Tema activado: $THEME" ;;
+                esac ;;
+            "Ordenar juegos por:"*)
+                local so
+                so="$(menu "Como ordenar la lista de juegos" \
+                    "nombre - alfabetico" \
+                    "recientes - los ultimos jugados primero" \
+                    "jugados - los de mas tiempo primero" \
+                    "<< Volver")" || so=""
+                case "$so" in
+                    nombre*|recientes*|jugados*)
+                        GAMES_SORT="${so%% *}"; save_settings
+                        ui_info "Orden: $GAMES_SORT (los favoritos van siempre primero)" ;;
                 esac ;;
             "Vista de juegos:"*)
                 [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
