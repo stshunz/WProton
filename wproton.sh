@@ -1350,10 +1350,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V35" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V36" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V35
+# WPROTON_HELPER_V36
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1964,8 +1964,8 @@ def draw_button(rect, active):
 
 def draw_chip(x, y, key, text, font):
     # "Pastilla" de ayuda: [A] elegir
-    kw = font.render(key, True, TH['bg'])
-    tw = font.render(text, True, TH['dim'])
+    kw = rtext(font, key, TH['bg'])
+    tw = rtext(font, text, TH['dim'])
     bw = kw.get_width() + 16
     pygame.draw.rect(screen, ACC, (x, y, bw, 24), border_radius=(0 if ARCADE else 8))
     if ARCADE:
@@ -2011,7 +2011,7 @@ def draw_side_panel():
     if view:
         txt = items[view[sel]][1] if MODE != 'grid' else GITEMS[view[sel]][0]
         for ln in wrap_title(txt, f_it, SIDE_W - 34, 6):
-            screen.blit(f_it.render(ln, True, FG), (px, py))
+            screen.blit(rtext(f_it, ln, FG), (px, py))
             py += 28
     else:
         screen.blit(f_it.render(L('(vacio)', '(empty)'), True, DIM), (px, py))
@@ -2021,7 +2021,7 @@ def draw_side_panel():
         screen.blit(f_sm.render(L('CARPETA', 'FOLDER'), True, TH.get('acc2', ACC)), (px, py))
         py += 22
         for ln in wrap_title(cur_path, f_sm, SIDE_W - 34, 4):
-            screen.blit(f_sm.render(ln, True, DIM), (px, py))
+            screen.blit(rtext(f_sm, ln, DIM), (px, py))
             py += 20
     if FILTER:
         py += 10
@@ -2059,6 +2059,18 @@ def draw_selection(rect):
     else:
         pygame.draw.rect(screen, TH['sel_bg'], (x, y, w, h), border_radius=RAD)
 
+_rcache = {}
+def rtext(font, txt, color):
+    # font.render cacheado: mismo texto+color+fuente -> misma superficie
+    k = (id(font), txt, color)
+    surf = _rcache.get(k)
+    if surf is None:
+        surf = font.render(txt, True, color)
+        if len(_rcache) > 900:
+            _rcache.clear()
+        _rcache[k] = surf
+    return surf
+
 def wrap_title(text, font, maxw, maxlines=6):
     # Respeta los saltos de linea y ajusta al ancho; las rutas largas se
     # parten por caracteres (antes se cortaba el titulo y se perdia la pregunta)
@@ -2071,15 +2083,15 @@ def wrap_title(text, font, maxw, maxlines=6):
         words, line = para.split(' '), ''
         for wd in words:
             probe = (line + ' ' + wd).strip()
-            if font.render(probe, True, FG).get_width() <= maxw:
+            if rtext(font, probe, FG).get_width() <= maxw:
                 line = probe
                 continue
             if line:
                 out.append(line)
                 line = ''
-            while font.render(wd, True, FG).get_width() > maxw:
+            while rtext(font, wd, FG).get_width() > maxw:
                 cut = len(wd)
-                while cut > 1 and font.render(wd[:cut], True, FG).get_width() > maxw:
+                while cut > 1 and rtext(font, wd[:cut], FG).get_width() > maxw:
                     cut -= 1
                 out.append(wd[:cut])
                 wd = wd[cut:]
@@ -2244,7 +2256,7 @@ def row_segments(label, base_color):
 def draw_segments(segs, font, x, y, maxw, active):
     # Pinta varios trozos de texto con colores distintos, con marquesina si
     # el conjunto no cabe (solo en la fila seleccionada) y recorte estricto.
-    surfs = [(font.render(t, True, c), t, c) for t, c in segs if t]
+    surfs = [(rtext(font, t, c), t, c) for t, c in segs if t]
     total = sum(sf.get_width() for sf, _, _ in surfs)
     if total <= maxw:
         cx = x
@@ -2259,7 +2271,7 @@ def draw_segments(segs, font, x, y, maxw, active):
             if wsf <= rest:
                 screen.blit(sf, (cx, y)); cx += wsf; rest -= wsf
             else:
-                screen.blit(font.render(fit_label(t, font, rest), True, c), (cx, y))
+                screen.blit(rtext(font, fit_label(t, font, rest), c), (cx, y))
                 break
         return
     over = total - maxw
@@ -2285,13 +2297,13 @@ def draw_segments(segs, font, x, y, maxw, active):
 def draw_row_text(text, font, color, x, y, maxw, active):
     # Si el texto no cabe: en la fila seleccionada se desplaza (marquesina),
     # en las demas se recorta. Antes se salia de la tarjeta e invadia el panel.
-    surf = font.render(text, True, color)
+    surf = rtext(font, text, color)
     w = surf.get_width()
     if w <= maxw:
         screen.blit(surf, (x, y))
         return
     if not active:
-        screen.blit(font.render(fit_label(text, font, maxw), True, color), (x, y))
+        screen.blit(rtext(font, fit_label(text, font, maxw), color), (x, y))
         return
     over = w - maxw
     period = 2.2 + over / 70.0          # cuanto mas larga, mas despacio
@@ -2316,11 +2328,11 @@ def fit_label(txt, font, maxw):
     k = (txt, maxw)
     if k in _fitcache:
         return _fitcache[k]
-    if font.render(txt, True, FG).get_width() <= maxw:
+    if rtext(font, txt, FG).get_width() <= maxw:
         _fitcache[k] = txt
         return txt
     t = txt
-    while t and font.render(t + '\u2026', True, FG).get_width() > maxw:
+    while t and rtext(font, t + '\u2026', FG).get_width() > maxw:
         t = t[:-1]
     t = (t.rstrip() + '\u2026') if t else '\u2026'
     _fitcache[k] = t
@@ -2489,7 +2501,7 @@ if MODE == 'progress':
             pass
         screen.blit(BGSURF, (0, 0))
         for _i, _tl in enumerate(TITLE_LINES):
-            screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+            screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
         pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
         screen.blit(f_it.render(fit_label(bar_txt, f_it, W - 60), True, FG), (30, HEAD + 24))
         bx, by, bw, bh = 30, HEAD + 74, W - 60, 26
@@ -2591,7 +2603,7 @@ if MODE == 'text':
             draw_header()
         else:
             for _i, _tl in enumerate(TITLE_LINES):
-                screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+                screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
             pygame.draw.line(screen, TH['border'], (24, HEAD - 8), (W - 24, HEAD - 8), 1)
         # caja de texto
         bx, by, bw, bh = 30, HEAD + 20, W - 60, 54
@@ -2725,7 +2737,7 @@ while running:
         draw_side_panel()
     else:
         for _i, _tl in enumerate(TITLE_LINES):
-            screen.blit(T_FONT.render(_tl, True, FG), (24, 22 + _i * T_LH))
+            screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
         if MODE == 'browse':
             screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
             _ry = HEAD + 20
@@ -5709,14 +5721,23 @@ saves_detect_end() {
         case "$root" in */upper) continue ;; esac      # el overlay ya va entero
         while IFS= read -r f; do
             [ -n "$f" ] || continue
+            # Fuera todo lo que NO es una partida: caches de shaders (DXVK,
+            # VKD3D, NVIDIA, AMD, Unity/UE), temporales, volcados y logs.
             case "$f" in
                 *"/Microsoft/"*|*"/Temp/"*|*"/Crashpad/"*|*"/GStreamer"*|\
-                *"/cache/"*|*"/Cache/"*|*.log|*.tmp|*.dmp) continue ;;
+                *"/cache/"*|*"/Cache/"*|*"/CachedData/"*|*"/NVIDIA/"*|*"/AMD/"*|\
+                *"/D3DSCache/"*|*"/DXCache/"*|*"/shadercache/"*|*"/ShaderCache/"*|\
+                *"/GPUCache/"*|*"/Intel/"*|*"/Unity/"*|*"/CrashReportClient/"*|\
+                *.log|*.tmp|*.dmp|*.dxvk-cache|*.dxvk-cache-tmp|*.vkd3d-cache|\
+                *.nvcache|*.bin.cache|*.shader*|*.pipeline_cache|*.ubulk) continue ;;
             esac
             rel="${f#"$root"/}"
             case "$rel" in */*) ;; *) continue ;; esac
             dir="$(printf '%s' "$rel" | awk -F/ 'NF>2{print $1"/"$2; next} {print $1}')"
             [ -n "$dir" ] || continue
+            case "$(printf '%s' "$dir" | tr 'A-Z' 'a-z')" in
+                *cache*|*shader*|*temp*|*crash*|*log*) continue ;;
+            esac
             cand="$cand$root/$dir
 "
         done <<EOFF
@@ -6271,8 +6292,13 @@ pick_squash() {
             mt="$(game_meta "$GAMES_PATH/$rel")"
             fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
             [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
-            [ -n "$lp" ] && info="$info | $lp"
-            printf '%s|%s|%s|%s\n' "$t2$([ -n "$info" ] && printf '   [%s]' "$info")" "$cov" "$rel" "${fv:-0}" >> "$man"
+            # OJO: nada de "|" aqui. El manifiesto usa | como separador de
+            # columnas: al jugar aparecia la fecha y partia la linea, con lo
+            # que la ruta de la caratula se perdia y el juego salia sin ella.
+            [ -n "$lp" ] && info="${info:+$info - }${lp%% *}"
+            local t3="$t2$([ -n "$info" ] && printf '   [%s]' "$info")"
+            t3="$(printf '%s' "$t3" | tr '|' '/')"     # el separador es sagrado
+            printf '%s|%s|%s|%s\n' "$t3" "$cov" "$rel" "${fv:-0}" >> "$man"
         done <<EOF2
 $list
 EOF2
