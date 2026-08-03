@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.94"
+WPROTON_VERSION="0.95"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -71,6 +71,7 @@ DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de j
 GRID_COLS=0                              # columnas de la rejilla (0 = automatico)
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
+BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
     cat > "$SETTINGS_FILE" <<EOF
@@ -105,6 +106,8 @@ LANGUAGE="$LANGUAGE"
 # Orden de la lista de juegos: nombre | recientes | jugados
 # (los marcados como favoritos van siempre primero)
 GAMES_SORT="$GAMES_SORT"
+# Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
+BACKUP_SYNC_DEST="$BACKUP_SYNC_DEST"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
 # de wproton.sh, no al directorio actual). Ej.: GAMES_PATH="ROMs/windows"
 EOF
@@ -1347,10 +1350,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V34" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V35" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V34
+# WPROTON_HELPER_V35
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1486,9 +1489,9 @@ def load_manifest():
             if not l.strip():
                 continue
             parts = l.split('|')
-            while len(parts) < 3:
+            while len(parts) < 4:
                 parts.append('')
-            GITEMS.append((parts[0], parts[1], parts[2]))
+            GITEMS.append((parts[0], parts[1], parts[2], parts[3]))
 
 def grid_apply_filter():
     global view, sel, scroll
@@ -2348,7 +2351,8 @@ def draw_grid():
             pygame.draw.rect(screen, TH['card'], _cell, border_radius=RAD)
         if i == sel and not kb_open:
             draw_selection(_cell)
-        title, ipath, _pay = GITEMS[view[i]]
+        title, ipath, _pay = GITEMS[view[i]][:3]
+        is_fav = len(GITEMS[view[i]]) > 3 and GITEMS[view[i]][3] == '1' 
         img = grid_img(ipath)
         if img:
             screen.blit(img, (x, y))
@@ -2365,6 +2369,18 @@ def draw_grid():
                     screen.blit(f_sm.render(fit_label(line, f_sm, GIMG_W - 12), True, FG), (x + 6, yy))
                     yy += 22
                 line = wd
+        if is_fav:
+            # cinta diagonal en la esquina superior derecha de la caratula
+            rb = max(26, GIMG_W // 5)
+            try:
+                pygame.draw.polygon(screen, TH.get('acc2', ACC),
+                                    [(x + GIMG_W - rb, y), (x + GIMG_W, y),
+                                     (x + GIMG_W, y + rb)])
+                pygame.draw.line(screen, FG, (x + GIMG_W - rb, y),
+                                 (x + GIMG_W, y + rb), 2)
+            except Exception:
+                pygame.draw.rect(screen, TH.get('acc2', ACC),
+                                 (x + GIMG_W - rb, y, rb, 8))
         draw_row_text(title, f_sm, FG if i == sel else DIM,
                       x, y + GIMG_H + 8, GIMG_W, i == sel)
 
@@ -3844,6 +3860,7 @@ profile_defaults() {
     PLAY_COUNT=0             # veces jugado
     PLAY_SECONDS=0           # tiempo total jugado (segundos)
     LAST_PLAYED=""           # fecha de la ultima partida (YYYY-MM-DD HH:MM)
+    SAVE_PATHS=""            # carpetas de partidas detectadas al jugar (: separadas)
     PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
@@ -3886,6 +3903,7 @@ NOTAS="$NOTAS"
 PLAY_COUNT=$PLAY_COUNT
 PLAY_SECONDS=$PLAY_SECONDS
 LAST_PLAYED="$LAST_PLAYED"
+SAVE_PATHS="$SAVE_PATHS"
 USE_BATOCERA=$USE_BATOCERA
 GAMEMODE=$GAMEMODE
 FSYNC=$FSYNC
@@ -4326,6 +4344,7 @@ launch_game() {
     say "Lanzando con $(basename "$rdir") [$RUNNER_KIND] | prefix=$(basename "$WINEPREFIX")"
     local t0; t0=$(date +%s)
     STATS_T0="$t0"
+    saves_detect_start
     (
         cd "$(dirname "$EXE_PATH")" || exit 1
         # shellcheck disable=SC2086
@@ -4341,6 +4360,7 @@ $(tail -n 8 "$LOG_FILE")"
     kill "$trig" 2>/dev/null
     mapeador_stop
     stats_record "$gid" "$(( $(date +%s) - ${STATS_T0:-$(date +%s)} ))"
+    saves_detect_end "$gid"
     post_game_resettle
     # Esperar a que el wineserver del prefijo termine ANTES de desmontar:
     # si no, el overlay sigue "ocupado" y tmp_mount no queda vacio
@@ -4406,6 +4426,94 @@ Reiniciar WProton ahora?"; then
         cleanup_all
         exec "$SELF"
     fi
+}
+
+# ----------------------------------------------------------------------------
+# 4g. PERFILES DE LA COMUNIDAD
+#     Carpeta profiles/ del repositorio: configuraciones ya probadas para
+#     juegos problematicos (argumentos raros, runner concreto, prefix
+#     incluido...). Se descargan al profiles/ local sin pisar nada sin avisar.
+# ----------------------------------------------------------------------------
+community_list() {
+    # Lista los .conf de la carpeta profiles/ del repo (API de GitHub)
+    curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/contents/profiles" 2>/dev/null \
+        | grep -o '"name": *"[^"]*\.conf"' | cut -d'"' -f4 | sort
+}
+
+community_fetch() {
+    # $1 = nombre del .conf -> lo trae a profiles/ (preguntando si ya existe)
+    local name="$1" dest="$PROFILE_DIR/$name" tmp
+    tmp="$(mktemp)"
+    local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
+    if ! dl "$url" "$tmp"; then
+        rm -f "$tmp"; ui_error "No se pudo descargar $name"; return 1
+    fi
+    # seguridad: un perfil es solo CLAVE=valor, nada de ordenes
+    if grep -qE '^[[:space:]]*(#|[A-Z_]+=)' "$tmp" && \
+       ! grep -qE '`|\$\(|;[[:space:]]*[a-z]+ |^[[:space:]]*(rm|curl|wget|bash|sh|eval) ' "$tmp"; then
+        :
+    else
+        rm -f "$tmp"
+        ui_error "El perfil descargado tiene contenido raro y se ha descartado."
+        return 1
+    fi
+    if [ -f "$dest" ]; then
+        ui_ask "Ya tienes un perfil para este juego:
+$name
+
+Sustituirlo por el de la comunidad?
+(se guardara el tuyo como $name.bak)" || { rm -f "$tmp"; return 1; }
+        cp -f "$dest" "$dest.bak"
+    fi
+    mkdir -p "$PROFILE_DIR"
+    cat "$tmp" > "$dest"
+    rm -f "$tmp"
+    local notas; notas="$(grep -m1 '^NOTAS=' "$dest" | cut -d= -f2- | tr -d '"')"
+    ui_info "Perfil instalado: $name
+${notas:+
+Notas del autor: $notas}"
+    return 0
+}
+
+community_share() {
+    # $1 = gid: prepara el perfil para enviarlo al repositorio
+    local gid="$1" src="$PROFILE_DIR/$gid.conf" out
+    [ -f "$src" ] || { ui_error "Este juego no tiene perfil todavia"; return 1; }
+    mkdir -p "$BASE_DIR/compartir"
+    out="$BASE_DIR/compartir/$gid.conf"
+    # se quitan rutas y datos locales: solo lo que sirve a otros
+    grep -vE '^(LAST_PLAYED|PLAY_COUNT|PLAY_SECONDS|FAVORITO|EXE_OVERRIDE)=' "$src" > "$out"
+    ui_info "Perfil listo para compartir:
+
+compartir/$gid.conf
+
+Subelo a la carpeta profiles/ del repositorio (pull request).
+Se han quitado tus estadisticas y rutas locales."
+    return 0
+}
+
+community_menu() {
+    local list sel
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        ui_info "No hay repositorio configurado (WPROTON_REPO)."
+        return 1
+    fi
+    say "Consultando perfiles de la comunidad..."
+    list="$(community_list)"
+    if [ -z "$list" ]; then
+        ui_info "No se pudieron leer los perfiles del repositorio.
+Comprueba la conexion o que exista la carpeta profiles/ en:
+$WPROTON_REPO"
+        return 1
+    fi
+    while true; do
+        # shellcheck disable=SC2046
+        sel="$(IFS=$'\n'; set -f; menu "Perfiles de la comunidad ($(printf '%s\n' "$list" | grep -c .) disponibles)" $list "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            *) community_fetch "$sel" ;;
+        esac
+    done
 }
 
 redist_target_menu() {
@@ -5434,6 +5542,7 @@ launch_loose_exe() {
     local trig=$!
     say "Lanzando exe suelto con $(basename "$rdir") [$RUNNER_KIND]"
     local st0; st0=$(date +%s)
+    saves_detect_start
     local loose_args="${ARGS_OVERRIDE:-}"
     [ -n "$loose_args" ] && say "Argumentos: $loose_args"
     # shellcheck disable=SC2086
@@ -5442,6 +5551,7 @@ launch_loose_exe() {
     kill "$trig" 2>/dev/null
     mapeador_stop
     stats_record "$gid" "$(( $(date +%s) - st0 ))"
+    saves_detect_end "$gid"
     post_game_resettle
     return $rc
 }
@@ -5551,6 +5661,278 @@ post_game_resettle() {
         sleep 0.3
     fi
     return 0
+}
+
+# ----------------------------------------------------------------------------
+# 4f. COPIAS DE SEGURIDAD DE PARTIDAS GUARDADAS
+#     Las partidas pueden estar en tres sitios segun el juego:
+#       - overlay del wsquashfs (wsquashfs/overlays/<gid>/upper)
+#       - prefijo: drive_c/users/<user>/AppData/{Roaming,Local,LocalLow}
+#       - prefijo: drive_c/users/<user>/Documents  (y Mis documentos)
+#     Se empaqueta todo lo encontrado en un zip con fecha en backups/.
+# ----------------------------------------------------------------------------
+BACKUP_DIR="$BASE_DIR/backups"
+
+SAVE_ROOTS() {
+    # Raices donde suelen vivir las partidas (dentro del prefijo del juego
+    # y en el overlay del wsquashfs)
+    local gid="$1" pfx u d
+    printf '%s\n' "$OVERLAY_BASE/$gid/upper"
+    pfx="$(prefix_path "$gid")"
+    for u in "$pfx"/drive_c/users/*/; do
+        [ -d "$u" ] || continue
+        case "$(basename "$u")" in Public|public) continue ;; esac
+        for d in "AppData/Roaming" "AppData/Local" "AppData/LocalLow" \
+                 "Documents" "Mis documentos" "My Documents" "Saved Games"; do
+            [ -d "$u$d" ] && printf '%s\n' "$u$d"
+        done
+    done
+    return 0
+}
+
+saves_detect_start() {
+    # Antes de jugar: marca de tiempo para saber que se escribe DESPUES
+    SAVES_MARK="$(mktemp)"
+    touch "$SAVES_MARK"
+    return 0
+}
+
+saves_detect_end() {
+    # Tras jugar: busca los ficheros escritos DURANTE la partida y deduce la
+    # carpeta concreta del juego (p.ej. AppData/Roaming/Yacht Club Games/Mina
+    # the Hollower) en vez de guardar AppData entero. Lo aprendido se anota en
+    # el perfil (SAVE_PATHS) y se usa en las copias siguientes.
+    local gid="$1" root f rel dir cand="" p old="${SAVE_PATHS:-}" cambio=0
+    [ -n "${SAVES_MARK:-}" ] && [ -f "$SAVES_MARK" ] || return 0
+    while IFS= read -r root; do
+        [ -d "$root" ] || continue
+        case "$root" in */upper) continue ;; esac      # el overlay ya va entero
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+                *"/Microsoft/"*|*"/Temp/"*|*"/Crashpad/"*|*"/GStreamer"*|\
+                *"/cache/"*|*"/Cache/"*|*.log|*.tmp|*.dmp) continue ;;
+            esac
+            rel="${f#"$root"/}"
+            case "$rel" in */*) ;; *) continue ;; esac
+            dir="$(printf '%s' "$rel" | awk -F/ 'NF>2{print $1"/"$2; next} {print $1}')"
+            [ -n "$dir" ] || continue
+            cand="$cand$root/$dir
+"
+        done <<EOFF
+$(find "$root" -type f -newer "$SAVES_MARK" 2>/dev/null | head -n 400)
+EOFF
+    done <<EOFR
+$(SAVE_ROOTS "$gid")
+EOFR
+    rm -f "$SAVES_MARK"; SAVES_MARK=""
+    [ -z "$cand" ] && return 0
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case ":$old:" in *":$p:"*) continue ;; esac
+        old="${old:+$old:}$p"
+        cambio=1
+        say "[saves] carpeta de partidas detectada: $p"
+    done <<EOFP
+$(printf '%s' "$cand" | awk 'NF' | sort -u)
+EOFP
+    if [ "$cambio" = 1 ]; then
+        SAVE_PATHS="$old"
+        write_full_profile "$gid"
+    fi
+    return 0
+}
+
+save_locations() {
+    # $1 = gid -> "etiqueta|ruta" de cada sitio con partidas de ESTE juego.
+    # 1) lo aprendido observando la partida (SAVE_PATHS del perfil)
+    # 2) si no hay nada, carpetas cuyo nombre se parezca al del juego
+    # 3) el overlay del wsquashfs, que siempre es del juego
+    local gid="$1" p root up base
+    if [ -n "${SAVE_PATHS:-}" ]; then
+        while IFS= read -r p; do
+            [ -n "$p" ] && [ -d "$p" ] && printf '%s|%s\n' "$(basename "$p")" "$p"
+        done <<EOFSP
+$(printf '%s' "$SAVE_PATHS" | tr ':' '\n')
+EOFSP
+    else
+        base="$(printf '%s' "$gid" | tr '_.' '  ' | tr 'A-Z' 'a-z')"
+        while IFS= read -r root; do
+            [ -d "$root" ] || continue
+            case "$root" in */upper) continue ;; esac
+            while IFS= read -r p; do
+                [ -n "$p" ] && printf '%s|%s\n' "$(basename "$p")" "$p"
+            done <<EOFN
+$(find "$root" -mindepth 1 -maxdepth 2 -type d 2>/dev/null | while IFS= read -r d; do
+    n="$(basename "$d" | tr 'A-Z' 'a-z')"
+    case "$base" in *"$n"*) printf '%s\n' "$d" ;; esac
+    case "$n" in *"${base%% *}"*) printf '%s\n' "$d" ;; esac
+done | sort -u | head -n 6)
+EOFN
+        done <<EOFR2
+$(SAVE_ROOTS "$gid")
+EOFR2
+    fi
+    up="$OVERLAY_BASE/$gid/upper"
+    [ -d "$up" ] && [ -n "$(find "$up" -maxdepth 3 -type f 2>/dev/null | head -n1)" ] \
+        && printf 'overlay|%s\n' "$up"
+    return 0
+}
+
+backup_create() {
+    # $1 = gid. Crea backups/<gid>_YYYYmmdd_HHMM.zip con todo lo localizado
+    local gid="$1" locs n zip tmp label path rel
+    locs="$(save_locations "$gid")"
+    if [ -z "$locs" ]; then
+        ui_info "No se han encontrado partidas guardadas de '$gid'.
+Se busca en el overlay del juego y en AppData/Documents del prefijo."
+        return 1
+    fi
+    mkdir -p "$BACKUP_DIR"
+    zip="$BACKUP_DIR/${gid}_$(date '+%Y%m%d_%H%M').zip"
+    tmp="$(mktemp -d)"
+    n=0
+    while IFS='|' read -r label path; do
+        [ -n "$path" ] || continue
+        mkdir -p "$tmp/$label"
+        cp -a "$path/." "$tmp/$label/" 2>/dev/null && n=$((n+1))
+        say "[backup] $label: $path"
+    done <<EOFLOC
+$locs
+EOFLOC
+    [ "$n" -eq 0 ] && { rm -rf "$tmp"; ui_error "No se pudo copiar ninguna carpeta"; return 1; }
+    # ficha con el origen de cada carpeta (para restaurar en otra maquina)
+    {
+        printf 'juego=%s\nfecha=%s\nprefijo=%s\n' "$gid" "$(date '+%Y-%m-%d %H:%M')" "$(prefix_path "$gid")"
+        printf '%s\n' "$locs"
+    } > "$tmp/wproton_backup.txt"
+    if run_with_progress "Creando copia de seguridad de '$gid'..." \
+            sh -c "cd '$tmp' && zip -qr '$zip' ."; then
+        rm -rf "$tmp"
+        ui_info "Copia creada:
+$(basename "$zip")   ($(du -h "$zip" 2>/dev/null | cut -f1))
+Carpetas guardadas: $n"
+        return 0
+    fi
+    rm -rf "$tmp" "$zip"
+    ui_error "Fallo creando el zip (falta el comando 'zip'?)"
+    return 1
+}
+
+backup_restore() {
+    # $1 = gid. Elige un zip de backups/ y devuelve las carpetas a su sitio.
+    local gid="$1" list sel zip tmp label path
+    list="$(find "$BACKUP_DIR" -maxdepth 1 -name "${gid}_*.zip" -printf '%f\n' 2>/dev/null | sort -r)"
+    [ -z "$list" ] && { ui_info "No hay copias de '$gid' en backups/"; return 1; }
+    # shellcheck disable=SC2046
+    sel="$(IFS=$'\n'; set -f; menu "Copias de $gid (la mas reciente arriba)" $list "<< Cancelar")" || return 1
+    case "$sel" in "<< Cancelar"|"") return 1 ;; esac
+    zip="$BACKUP_DIR/$sel"
+    ui_ask "Restaurar '$sel'?
+Se SOBRESCRIBIRAN las partidas actuales de este juego." || return 1
+    tmp="$(mktemp -d)"
+    if ! run_with_progress "Restaurando '$sel'..." unzip -qo "$zip" -d "$tmp"; then
+        rm -rf "$tmp"; ui_error "No se pudo descomprimir (falta 'unzip'?)"; return 1
+    fi
+    local n=0
+    while IFS='|' read -r label path; do
+        [ -n "$path" ] || continue
+        [ -d "$tmp/$label" ] || continue
+        mkdir -p "$path"
+        cp -a "$tmp/$label/." "$path/" 2>/dev/null && n=$((n+1))
+        say "[restaurar] $label -> $path"
+    done <<EOFR
+$(grep '|' "$tmp/wproton_backup.txt" 2>/dev/null)
+EOFR
+    rm -rf "$tmp"
+    ui_info "Restauradas $n carpeta(s) desde $sel"
+    return 0
+}
+
+backup_menu() {
+    # $1 = gid
+    local gid="$1" sel locs nb
+    while true; do
+        locs="$(save_locations "$gid" | wc -l)"
+        nb="$(find "$BACKUP_DIR" -maxdepth 1 -name "${gid}_*.zip" 2>/dev/null | wc -l)"
+        sel="$(menu "Partidas guardadas de $gid" \
+            "Crear copia de seguridad ahora ($locs carpeta(s) detectada(s))" \
+            "Restaurar una copia ($nb disponibles)" \
+            "Ver donde guarda las partidas" \
+            "Olvidar carpetas detectadas (volver a detectar al jugar)" \
+            "Sincronizar la carpeta backups (rsync / Syncthing)" \
+            "<< Volver")" || return
+        case "$sel" in
+            "Crear copia"*)   backup_create "$gid" ;;
+            "Restaurar"*)     backup_restore "$gid" ;;
+            "Olvidar carpetas"*)
+                SAVE_PATHS=""; write_full_profile "$gid"
+                ui_info "Olvidado. La proxima partida volvera a detectar
+donde guarda este juego." ;;
+            "Ver donde"*)
+                local det; det="$(save_locations "$gid")"
+                if [ -z "$det" ]; then
+                    ui_info "Todavia no se sabe donde guarda este juego.
+Juega una partida: WProton observa que ficheros escribe y
+aprende la carpeta exacta (no copia AppData entero)."
+                else
+                    ui_info "Partidas de $gid:
+
+$(printf '%s\n' "$det" | sed 's/|/  ->  /')"
+                fi ;;
+            "Sincronizar"*)   backup_sync_menu ;;
+            *) return ;;
+        esac
+    done
+}
+
+BACKUP_SYNC_DEST=""      # destino rsync (se guarda en settings)
+
+backup_sync_menu() {
+    # Sincroniza backups/ con otra maquina o carpeta usando herramientas
+    # externas. WProton no reinventa la sincronizacion: solo la lanza.
+    local sel
+    while true; do
+        sel="$(menu "Sincronizar backups/ con otro sitio" \
+            "Destino rsync: ${BACKUP_SYNC_DEST:-sin configurar}" \
+            "Sincronizar AHORA con rsync" \
+            "Preparar carpeta para Syncthing" \
+            "<< Volver")" || return
+        case "$sel" in
+            "Destino rsync:"*)
+                BACKUP_SYNC_DEST="$(ask_text "Destino rsync (carpeta local, disco USB o usuario@equipo:/ruta)" "${BACKUP_SYNC_DEST:-}")"
+                save_settings ;;
+            "Sincronizar AHORA"*)
+                if ! command -v rsync >/dev/null 2>&1; then
+                    ui_error "rsync no esta instalado en el sistema.
+En SteamOS/Batocera puedes usar Syncthing en su lugar."
+                    continue
+                fi
+                if [ -z "${BACKUP_SYNC_DEST:-}" ]; then
+                    ui_info "Configura primero el destino rsync."
+                    continue
+                fi
+                mkdir -p "$BACKUP_DIR"
+                if run_with_progress "Sincronizando backups con $BACKUP_SYNC_DEST ..." \
+                        rsync -a --delete-after --info=stats1 "$BACKUP_DIR/" "$BACKUP_SYNC_DEST/"; then
+                    ui_info "Backups sincronizados con:
+$BACKUP_SYNC_DEST"
+                else
+                    ui_error "rsync fallo. Ultimas lineas:
+$(tail -n 6 "$LOG_FILE")"
+                fi ;;
+            "Preparar carpeta"*)
+                mkdir -p "$BACKUP_DIR"
+                ui_info "Carpeta a compartir en Syncthing:
+
+$BACKUP_DIR
+
+Anadela como carpeta en Syncthing (en cada equipo) y las copias
+viajaran solas. Consejo: usa 'Enviar y recibir' en el equipo
+principal y 'Solo recibir' en los demas para evitar conflictos." ;;
+            *) return ;;
+        esac
+    done
 }
 
 fmt_playtime() {
@@ -5888,10 +6270,9 @@ pick_squash() {
             local mt fv sc lp info=""
             mt="$(game_meta "$GAMES_PATH/$rel")"
             fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
-            [ "${fv:-0}" = 1 ] && info="* "
             [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
             [ -n "$lp" ] && info="$info | $lp"
-            printf '%s|%s|%s\n' "$t2$([ -n "$info" ] && printf '   [%s]' "$info")" "$cov" "$rel" >> "$man"
+            printf '%s|%s|%s|%s\n' "$t2$([ -n "$info" ] && printf '   [%s]' "$info")" "$cov" "$rel" "${fv:-0}" >> "$man"
         done <<EOF2
 $list
 EOF2
@@ -6016,6 +6397,7 @@ game_config_menu() {
             "Favorito: $(onoff "${FAVORITO:-0}")" \
             "Notas: ${NOTAS:-(ninguna)}" \
             "Estadisticas: $(stats_line)" \
+            "Partidas guardadas (copias de seguridad)" \
             "$pack_row" \
             "Anadir este juego a Steam" \
             "Repetir asistente de primera ejecucion" \
@@ -6117,6 +6499,13 @@ La configuracion de '$gid' se conserva para el wsquashfs."
             "Notas:"*)
                 NOTAS="$(ask_text "Notas de este juego (argumentos que necesita, runner recomendado...)" "${NOTAS:-}")"
                 write_full_profile "$gid" ;;
+            "Partidas guardadas"*) backup_menu "$gid" ;;
+            # "Compartir este perfil": DESACTIVADO de momento. El envio por
+            # pull request no es practico para la mayoria de usuarios; queda
+            # pendiente decidir como se recogeran los perfiles. La funcion
+            # community_share() sigue en el script, lista para reactivarla
+            # anadiendo de nuevo su fila al menu de arriba.
+            "Compartir este perfil"*) community_share "$gid" ;;
             "Estadisticas:"*)
                 if [ "${PLAY_COUNT:-0}" -gt 0 ]; then
                     ui_ask "Partidas: ${PLAY_COUNT:-0}
@@ -6214,6 +6603,7 @@ main_menu() {
                "Tema de los menus: $THEME" \
                "Idioma: ${LANGUAGE:-es}" \
                "Descargar caratulas (SteamGridDB)" \
+               "Perfiles de la comunidad (juegos problematicos)" \
                "Detener Wine y desmontar todo" \
                "Ver ultimo log" \
                "Buscar actualizaciones [v$WPROTON_VERSION]" \
@@ -6313,6 +6703,7 @@ fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
             "Vista de juegos:"*)
                 [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
                 save_settings ;;
+            "Perfiles de la comunidad"*) community_menu ;;
             "Descargar caratulas"*)
                 sgdb_download_covers ;;
             "Carpeta de juegos:"*)
