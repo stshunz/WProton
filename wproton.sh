@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.95"
+WPROTON_VERSION="0.96"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1350,10 +1350,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V36" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V37" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V36
+# WPROTON_HELPER_V37
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1690,6 +1690,20 @@ if FULLSCREEN:
     W, H = screen.get_size()
 pygame.display.set_caption('WProton')
 sys.stderr.write('menu_pygame: video driver = %s\n' % pygame.display.get_driver())
+
+if IS_GAMESCOPE_SESS:
+    # En modo Juego la ventana puede nacer sin foco (el compositor aun se lo
+    # esta quitando al juego que acaba de cerrarse): lo pedimos explicitamente.
+    try:
+        pygame.event.set_grab(False)
+    except Exception:
+        pass
+    for _i in range(3):
+        try:
+            pygame.display.flip()
+        except Exception:
+            break
+        time.sleep(0.15)
 
 def apply_layout():
     global W, H, VIS_FULL, VIS_KB, GCOLS, LIST_X, LIST_Y, LIST_W, LIST_H, SIDE_X, SIDE_W
@@ -3033,6 +3047,23 @@ menu() {
         printf '%s\n' "$@" > "$tmpopt"
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
             env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" list "$title" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
+        local hrc=$?
+        # rc>=2 = el helper no pudo abrirse (video ocupado justo despues de
+        # cerrar un juego, por ejemplo). NO es una cancelacion del usuario:
+        # se reintenta y, si insiste, se cae a los menus de respaldo.
+        if [ "$hrc" -ge 2 ]; then
+            say "AVISO: el menu grafico no arranco (rc=$hrc); reintentando..."
+            sleep 1.5
+            PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+                env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" list "$title" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
+            hrc=$?
+            if [ "$hrc" -ge 2 ]; then
+                say "AVISO: sigue sin arrancar; se usaran menus de respaldo"
+                rm -f "$PYGAME_OK_MARK"          # que no se reintente en bucle
+                HAS_PYGAME=0
+                MENU_HELPER_FAILED=1
+            fi
+        fi
         rm -f "$tmpopt"
     elif gtk_available; then
         pad_bridge_start
@@ -3054,6 +3085,11 @@ menu() {
     fi
     local sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel"
     if [ -z "$sel" ]; then
+        if [ "${MENU_HELPER_FAILED:-0}" = 1 ]; then
+            MENU_HELPER_FAILED=0
+            log "MENU [$title] -> FALLO del helper (no es cancelacion)"
+            return 2
+        fi
         log "MENU [$title] -> cancelado"
         return 1
     fi
@@ -3874,6 +3910,7 @@ profile_defaults() {
     LAST_PLAYED=""           # fecha de la ultima partida (YYYY-MM-DD HH:MM)
     SAVE_PATHS=""            # carpetas de partidas detectadas al jugar (: separadas)
     PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
+    NESTED_GAMESCOPE=1       # modo Juego: lanzar dentro de gamescope propio
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
     FSR=0                    # 1 = escalado AMD FSR en pantalla completa
@@ -3909,6 +3946,7 @@ PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_STEAMFIX=$PAD_STEAMFIX
+NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
 FAVORITO=$FAVORITO
 NOTAS="$NOTAS"
@@ -4249,9 +4287,18 @@ build_runner_cmd() {
     local rdir="$1" kind
     kind="$(runner_kind "$rdir")" || die "Runner invalido: $rdir"
     RUN_CMD=()
-    if [ -n "$GAMESCOPE" ] && command -v gamescope >/dev/null 2>&1; then
+    local gs_args="$GAMESCOPE"
+    if [ -z "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ "${NESTED_GAMESCOPE:-1}" = 1 ]; then
+        # Modo Juego: el juego va dentro de su propio gamescope. Asi, al
+        # cerrarse, el compositor anidado desaparece y el foco vuelve a los
+        # menus (sin esto la sesion se queda sin ventana enfocada y parece
+        # que WProton no vuelve).
+        gs_args="-f"
+        say "[+] Modo Juego: el juego se lanza en gamescope anidado"
+    fi
+    if [ -n "$gs_args" ] && command -v gamescope >/dev/null 2>&1; then
         # shellcheck disable=SC2206
-        RUN_CMD+=(gamescope $GAMESCOPE --)
+        RUN_CMD+=(gamescope $gs_args --)
     fi
     [ "$GAMEMODE" = 1 ] && command -v gamemoderun >/dev/null 2>&1 && RUN_CMD+=(gamemoderun)
     if [ "$kind" = "proton" ]; then
@@ -4277,6 +4324,17 @@ launch_game() {
     if [ "$abs_squash" != "$LAST_GAME" ]; then
         LAST_GAME="$abs_squash"
         save_settings
+    fi
+
+    # Comprobacion rapida de integridad antes de montar (cabecera squashfs)
+    if [ -f "$abs_squash" ]; then
+        local mg; mg="$(head -c 4 "$abs_squash" 2>/dev/null)"
+        case "$mg" in
+            hsqs|sqsh) ;;
+            *) ui_error "'$(basename "$abs_squash")' no parece un wsquashfs valido.
+Comprueba el archivo desde: Configurar juego -> Comprobar integridad"
+               return 1 ;;
+        esac
     fi
 
     # En Batocera, la via robusta es su propio lanzador (perfil: USE_BATOCERA)
@@ -4930,6 +4988,12 @@ build_wsquashfs() {
     need_mksquashfs
     local src="$1" name="$2"
     local out="$GAMES_PATH/${name}.wsquashfs"
+    # El zstd deja el wsquashfs en ~55-70% del original; pedimos el 70% y,
+    # en juegos enormes, no exigimos mas de lo razonable.
+    local need; need="$(dir_bytes "$src")"
+    if [ -n "$need" ] && ! check_space "$(( need * 7 / 10 ))" "$GAMES_PATH" "empaquetar '$name'"; then
+        return 1
+    fi
     run_with_progress "Empaquetando '$name' a wsquashfs (zstd, puede tardar)..." \
         mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
         || { rm -f "$out"; die "mksquashfs fallo"; }
@@ -5463,6 +5527,22 @@ CachyOS: sudo pacman -S p7zip"
 
     extract_dir="$BUILD_BASE/${game_name}_extract"
     rm -rf "$extract_dir"; mkdir -p "$extract_dir"
+    # Espacio para extraer: los instaladores de juegos ya vienen con los
+    # datos comprimidos (texturas, audio, video), asi que el factor real
+    # ronda 1,6x, no 3x. Con archivos grandes se pide un extra fijo en vez
+    # de multiplicar, para no exigir cifras disparatadas.
+    local insz need
+    insz="$(du -b "$input" 2>/dev/null | awk '{print $1}')"
+    if [ -n "$insz" ]; then
+        if [ "$insz" -gt 21474836480 ]; then       # > 20 GB
+            need=$(( insz + insz / 4 ))            # +25%
+        else
+            need=$(( insz * 8 / 5 ))               # 1,6x
+        fi
+        if ! check_space "$need" "$GAMES_PATH" "extraer $(basename "$input")"; then
+            return 1
+        fi
+    fi
     local ext_ok=1
     case "$input" in
         *.wtgz)
@@ -5655,20 +5735,33 @@ log_input_devices() {
 }
 
 post_game_resettle() {
-    # Al salir de un juego, gamescope se queda sin ninguna superficie y la
-    # pantalla se ve NEGRA hasta que aparece otra ventana; si el juego aun
-    # esta muriendo, la ventana nueva puede quedarse detras. Esperamos a que
-    # no quede nada del juego y le damos tiempo al compositor.
+    # En el MODO JUEGO (sesion gamescope) el compositor le da el foco al juego
+    # y, al cerrarse este, no siempre se lo devuelve a la ventana siguiente:
+    # el menu se abre pero queda detras/sin foco y parece que WProton no
+    # vuelve. Aqui esperamos a que el juego muera del todo y forzamos que la
+    # proxima ventana nazca en primer plano.
     local i
     for i in 1 2 3 4 5 6 7 8 9 10; do
         pgrep -x wineserver >/dev/null 2>&1 || break
         sleep 0.5
     done
+    # tambien los procesos del propio juego (a veces sobreviven al wineserver)
+    for i in 1 2 3 4 5 6; do
+        pgrep -f '\.exe' >/dev/null 2>&1 || break
+        sleep 0.5
+    done
     if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
-        say "[+] Sesion gamescope: reasentando la pantalla tras el juego..."
-        sleep 1.5
+        say "[+] Sesion gamescope: devolviendo el foco a los menus..."
+        # ventana nueva SIEMPRE en primer plano y a pantalla completa
         export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
         export WP_MENU_FS=1
+        export SDL_VIDEO_FORCE_FOCUS=1
+        # si el juego dejo alguna instancia de gamescope anidada, fuera:
+        # es la que retiene el foco del compositor
+        pkill -f 'gamescope .*--' 2>/dev/null
+        sleep 2
+        # y que el helper se dibuje aunque nazca sin foco
+        export SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
     else
         sleep 0.3
     fi
@@ -5951,6 +6044,252 @@ $BACKUP_DIR
 Anadela como carpeta en Syncthing (en cada equipo) y las copias
 viajaran solas. Consejo: usa 'Enviar y recibir' en el equipo
 principal y 'Solo recibir' en los demas para evitar conflictos." ;;
+            *) return ;;
+        esac
+    done
+}
+
+# ----------------------------------------------------------------------------
+# 4h. INTEGRIDAD Y ESPACIO EN DISCO
+# ----------------------------------------------------------------------------
+human_size() {
+    # $1 = bytes -> "1,2 GB" / "340 MB"
+    local b="${1:-0}"
+    awk -v b="$b" 'BEGIN{
+        if (b >= 1073741824) printf "%.1f GB", b/1073741824;
+        else if (b >= 1048576) printf "%.0f MB", b/1048576;
+        else if (b >= 1024) printf "%.0f KB", b/1024;
+        else printf "%d B", b;
+    }'
+}
+
+free_bytes() {
+    # $1 = ruta -> bytes libres en su sistema de ficheros
+    local d="$1"
+    while [ -n "$d" ] && [ ! -d "$d" ]; do d="$(dirname "$d")"; done
+    df -PB1 "${d:-/}" 2>/dev/null | awk 'NR==2{print $4}'
+}
+
+dir_bytes() {
+    du -sb "$1" 2>/dev/null | awk '{print $1}'
+}
+
+check_space() {
+    # $1 = bytes necesarios, $2 = ruta destino, $3 = descripcion
+    # Devuelve 1 si el usuario decide no continuar.
+    local need="${1:-0}" dest="$2" what="${3:-la operacion}" free
+    free="$(free_bytes "$dest")"
+    [ -z "$free" ] && return 0
+    say "[espacio] necesario ~$(human_size "$need") | libre $(human_size "$free") en $dest"
+    if [ "$free" -lt "$need" ]; then
+        ui_error "No hay espacio suficiente para $what.
+
+Necesario:  ~$(human_size "$need")
+Disponible:  $(human_size "$free")
+En: $dest
+
+Libera espacio (menu principal -> Espacio en disco) o elige otra carpeta."
+        return 1
+    fi
+    # margen de seguridad: 2 GB fijos (un 10% de un juego enorme serian
+    # varios GB de mas y bloquearia importaciones que si caben)
+    if [ "$free" -lt "$(( need + 2147483648 ))" ]; then
+        ui_ask "El espacio esta muy justo para $what.
+
+Necesario:  ~$(human_size "$need")
+Disponible:  $(human_size "$free")
+
+Continuar de todos modos?" || return 1
+    fi
+    return 0
+}
+
+verify_squashfs() {
+    # $1 = fichero. Comprueba que es un squashfs valido y que se puede leer.
+    local f="$1" magic
+    [ -f "$f" ] || { ui_error "No existe: $f"; return 1; }
+    if [ ! -s "$f" ]; then
+        ui_error "El fichero esta vacio: $(basename "$f")"
+        return 1
+    fi
+    # cabecera: los squashfs empiezan por "hsqs" (o "sqsh" en big endian)
+    magic="$(head -c 4 "$f" 2>/dev/null)"
+    case "$magic" in
+        hsqs|sqsh) ;;
+        *) ui_error "'$(basename "$f")' no parece un squashfs valido.
+Puede que la descarga o la copia se cortara a medias."
+           return 1 ;;
+    esac
+    # prueba de lectura real: listar el contenido con unsquashfs si esta
+    if command -v unsquashfs >/dev/null 2>&1; then
+        if ! run_with_progress "Comprobando '$(basename "$f")'..." \
+                sh -c "unsquashfs -s '$f' >/dev/null 2>&1"; then
+            ui_error "El archivo esta danado (no se puede leer su indice):
+$(basename "$f")"
+            return 1
+        fi
+    else
+        # sin unsquashfs: montarlo y leer un fichero
+        local t; t="$(mktemp -d)"
+        if ! "$SQUASHFUSE_BIN" "$f" "$t" >>"$LOG_FILE" 2>&1; then
+            rmdir "$t" 2>/dev/null
+            ui_error "El archivo no se puede montar (posible corrupcion):
+$(basename "$f")"
+            return 1
+        fi
+        find "$t" -maxdepth 2 -type f 2>/dev/null | head -n1 >/dev/null
+        "$FUSERMOUNT_BIN" -u "$t" 2>/dev/null
+        rmdir "$t" 2>/dev/null
+    fi
+    return 0
+}
+
+disk_report() {
+    # Inventario de lo que ocupa WProton, por partes
+    local games ov pfx cache runtime bkp cov total
+    games="$(dir_bytes "$GAMES_PATH")"
+    ov="$(dir_bytes "$OVERLAY_BASE")"
+    pfx="$(dir_bytes "$PREFIX_DIR")"
+    cache="$(dir_bytes "$CACHE_DIR")"
+    runtime="$(dir_bytes "$RUNTIME_DIR")"
+    bkp="$(dir_bytes "$BACKUP_DIR")"
+    cov="$(dir_bytes "$COVERS_DIR")"
+    total=$(( ${games:-0} + ${ov:-0} + ${pfx:-0} + ${cache:-0} + ${runtime:-0} + ${bkp:-0} + ${cov:-0} ))
+    printf 'Juegos:            %s\n' "$(human_size "${games:-0}")"
+    printf 'Saves (overlays):  %s\n' "$(human_size "${ov:-0}")"
+    printf 'Prefijos:          %s\n' "$(human_size "${pfx:-0}")"
+    printf 'Cache de shaders:  %s\n' "$(human_size "${cache:-0}")"
+    printf 'Runners y runtime: %s\n' "$(human_size "${runtime:-0}")"
+    printf 'Copias de saves:   %s\n' "$(human_size "${bkp:-0}")"
+    printf 'Caratulas:         %s\n' "$(human_size "${cov:-0}")"
+    printf -- '-------------------------------\n'
+    printf 'TOTAL:             %s\n' "$(human_size "$total")"
+    printf 'Libre en el disco: %s\n' "$(human_size "$(free_bytes "$BASE_DIR")")"
+}
+
+disk_games_list() {
+    # Tamano por juego (archivo + su overlay + su prefijo propio), de mayor a menor
+    local f gid a o p t
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        gid="$(game_id "$f")"
+        a="$(dir_bytes "$f")"; a="${a:-0}"
+        o="$(dir_bytes "$OVERLAY_BASE/$gid")"; o="${o:-0}"
+        p=0
+        [ -d "$PREFIX_DIR/$gid" ] && { p="$(dir_bytes "$PREFIX_DIR/$gid")"; p="${p:-0}"; }
+        t=$(( a + o + p ))
+        printf '%015d\t%s (%s)\n' "$t" "$(basename "$f")" "$(human_size "$t")"
+    done <<EOFG
+$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null)
+EOFG
+}
+
+orphan_scan() {
+    # Prefijos y overlays de juegos que ya no estan. Imprime "tipo|ruta|tamano"
+    local d gid found
+    for d in "$OVERLAY_BASE"/*/ "$PREFIX_DIR"/*/; do
+        [ -d "$d" ] || continue
+        gid="$(basename "$d")"
+        case "$gid" in default|__wptools__|.*) continue ;; esac
+        found=0
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            [ "$(game_id "$f")" = "$gid" ] && { found=1; break; }
+        done <<EOFO
+$(find "$GAMES_PATH" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null)
+EOFO
+        [ "$found" = 1 ] && continue
+        # tampoco es un juego en carpeta ni un perfil vivo
+        [ -e "$GAMES_PATH/$gid" ] && continue
+        [ -f "$PROFILE_DIR/$gid.conf" ] && continue
+        case "$d" in
+            "$OVERLAY_BASE"/*) printf 'overlay|%s|%s\n' "$d" "$(dir_bytes "$d")" ;;
+            *)                 printf 'prefijo|%s|%s\n' "$d" "$(dir_bytes "$d")" ;;
+        esac
+    done 2>/dev/null
+}
+
+disk_menu() {
+    local sel
+    while true; do
+        sel="$(menu "Espacio en disco" \
+            "Mostrar el tamano de WProton" \
+            "Tamano por juego" \
+            "Limpiar cache de shaders" \
+            "Buscar prefijos y saves huerfanos" \
+            "Borrar copias de saves antiguas" \
+            "<< Volver")" || return
+        case "$sel" in
+            "Mostrar el tamano"*)
+                ui_info "$(disk_report)" ;;
+            "Tamano por juego")
+                local lst
+                lst="$(disk_games_list | sort -r | cut -f2- | head -n 40)"
+                if [ -z "$lst" ]; then
+                    ui_info "No hay juegos en $GAMES_PATH"
+                else
+                    # shellcheck disable=SC2046
+                    (IFS=$'\n'; set -f; menu "Tamano por juego (juego + saves + prefijo)" $lst "<< Volver") >/dev/null || true
+                fi ;;
+            "Limpiar cache de shaders")
+                local csz; csz="$(dir_bytes "$CACHE_DIR")"
+                if [ "${csz:-0}" -lt 1048576 ]; then
+                    ui_info "La cache de shaders apenas ocupa ($(human_size "${csz:-0}"))."
+                elif ui_ask "Borrar la cache de shaders ($(human_size "${csz:-0}"))?
+
+No se pierde nada del juego: se vuelve a generar sola,
+aunque los primeros minutos pueden tener algun tiron."; then
+                    rm -rf "${CACHE_DIR:?}"/* 2>/dev/null
+                    mkdir -p "$CACHE_DIR"
+                    ui_info "Cache de shaders vaciada."
+                fi ;;
+            "Buscar prefijos"*)
+                local orph tot=0 lines=""
+                orph="$(orphan_scan)"
+                if [ -z "$orph" ]; then
+                    ui_info "No hay prefijos ni saves huerfanos: todo corresponde
+a juegos que sigues teniendo."
+                    continue
+                fi
+                local tipo ruta tam
+                while IFS='|' read -r tipo ruta tam; do
+                    [ -n "$ruta" ] || continue
+                    tot=$(( tot + ${tam:-0} ))
+                    lines="$lines$tipo: $(basename "$ruta") ($(human_size "${tam:-0}"))
+"
+                done <<EOFL
+$orph
+EOFL
+                if ui_ask "Elementos de juegos que ya no tienes:
+
+$lines
+Total: $(human_size "$tot")
+
+Borrarlos? (los saves de esos juegos se perderan)"; then
+                    while IFS='|' read -r tipo ruta tam; do
+                        [ -n "$ruta" ] && rm -rf "$ruta" && say "[limpieza] borrado $ruta"
+                    done <<EOFD
+$orph
+EOFD
+                    ui_info "Liberados $(human_size "$tot")."
+                fi ;;
+            "Borrar copias de saves antiguas")
+                local n; n="$(find "$BACKUP_DIR" -maxdepth 1 -name '*.zip' 2>/dev/null | wc -l)"
+                if [ "${n:-0}" -eq 0 ]; then
+                    ui_info "No hay copias de partidas guardadas."
+                elif ui_ask "Hay $n copias ($(human_size "$(dir_bytes "$BACKUP_DIR")")).
+
+Conservar solo las 3 mas recientes de cada juego?"; then
+                    local base
+                    for base in $(find "$BACKUP_DIR" -maxdepth 1 -name '*.zip' -printf '%f\n' 2>/dev/null \
+                                  | sed 's/_[0-9]\{8\}_[0-9]\{4\}\.zip$//' | sort -u); do
+                        find "$BACKUP_DIR" -maxdepth 1 -name "${base}_*.zip" -printf '%T@ %p\n' 2>/dev/null \
+                            | sort -rn | tail -n +4 | cut -d' ' -f2- | while IFS= read -r old; do
+                                rm -f "$old"; say "[limpieza] borrada copia $old"
+                            done
+                    done
+                    ui_info "Copias antiguas eliminadas."
+                fi ;;
             *) return ;;
         esac
     done
@@ -6323,7 +6662,9 @@ EOF2
         return 0
     fi
     # shellcheck disable=SC2046
-    sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)" || { unset WP_ACTION_X; return 1; }
+    sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)"
+    local src=$?
+    if [ "$src" != 0 ]; then unset WP_ACTION_X; return "$src"; fi
     unset WP_ACTION_X
     if [ "${sel#WPACT:CONFIG|}" != "$sel" ]; then
         local rel2="${sel#WPACT:CONFIG|}"
@@ -6384,6 +6725,8 @@ game_config_menu() {
     while true; do
         local bat_row=" "
         [ "$IS_BATOCERA" = 1 ] && bat_row="Lanzar via batocera-wine: $(onoff "${USE_BATOCERA:-1}")"
+        local gs_row=" "
+        [ "${IS_GAMESCOPE:-0}" = 1 ] && gs_row="Gamescope anidado (modo Juego): $(onoff "${NESTED_GAMESCOPE:-1}")"
         local pack_row=""
         [ -d "$squash" ] && pack_row=">> EMPAQUETAR A WSQUASHFS <<"
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
@@ -6401,6 +6744,7 @@ game_config_menu() {
             "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
             "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-1}")" \
+            "$gs_row" \
             "$bat_row" \
             "GameMode: $(onoff "$GAMEMODE")" \
             "Fsync: $(onoff "$FSYNC")" \
@@ -6424,6 +6768,7 @@ game_config_menu() {
             "Notas: ${NOTAS:-(ninguna)}" \
             "Estadisticas: $(stats_line)" \
             "Partidas guardadas (copias de seguridad)" \
+            "Comprobar integridad y ver tamano" \
             "$pack_row" \
             "Anadir este juego a Steam" \
             "Repetir asistente de primera ejecucion" \
@@ -6476,6 +6821,8 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
                 NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
             "Arreglo mando SteamOS"*)
                 PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
+            "Gamescope anidado"*)
+                NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-1})); write_full_profile "$gid" ;;
             "Mando via SDL"*)
                 case "${PAD_SDL:-auto}" in
                     auto) PAD_SDL=1 ;;
@@ -6526,6 +6873,25 @@ La configuracion de '$gid' se conserva para el wsquashfs."
                 NOTAS="$(ask_text "Notas de este juego (argumentos que necesita, runner recomendado...)" "${NOTAS:-}")"
                 write_full_profile "$gid" ;;
             "Partidas guardadas"*) backup_menu "$gid" ;;
+            "Comprobar integridad"*)
+                local gsz osz psz
+                gsz="$(dir_bytes "$squash")"
+                osz="$(dir_bytes "$OVERLAY_BASE/$gid" 2>/dev/null)"
+                psz="$(dir_bytes "$(prefix_path "$gid")" 2>/dev/null)"
+                if [ -f "$squash" ] && verify_squashfs "$squash"; then
+                    ui_info "Archivo correcto: $(basename "$squash")
+
+Juego:            $(human_size "${gsz:-0}")
+Saves (overlay):  $(human_size "${osz:-0}")
+Prefijo:          $(human_size "${psz:-0}")
+Libre en disco:   $(human_size "$(free_bytes "$squash")")"
+                elif [ -d "$squash" ]; then
+                    ui_info "Juego en carpeta (no hay archivo que comprobar)
+
+Carpeta:          $(human_size "${gsz:-0}")
+Prefijo:          $(human_size "${psz:-0}")
+Libre en disco:   $(human_size "$(free_bytes "$squash")")"
+                fi ;;
             # "Compartir este perfil": DESACTIVADO de momento. El envio por
             # pull request no es practico para la mayoria de usuarios; queda
             # pendiente decidir como se recogeran los perfiles. La funcion
@@ -6597,12 +6963,204 @@ direct_play_loop() {
     # Modo solo-jugar: lista de juegos en bucle; al cancelar, se cierra.
     local g
     while true; do
-        g="$(pick_squash)" || break
+        g="$(pick_squash)"
+        local prc=$?
+        if [ "$prc" = 2 ]; then
+            say "Reintentando abrir la lista de juegos..."
+            sleep 1
+            continue
+        fi
+        [ "$prc" != 0 ] && break
         [ -n "$g" ] || break
         play_or_config "$g"
     done
     cleanup_all
     exit 0
+}
+
+main_dispatch() {
+    local sel="$1"
+    case "$sel" in
+        "Jugar al ultimo:"*)
+            play_any "$LAST_GAME" ;;
+        "Jugar"*)
+            local g; g="$(pick_squash)" && play_or_config "$g" ;;
+        "Importar juego"*)
+            local imp=""
+            if pygame_available; then
+                imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "file")" || imp=""
+            elif [ "$HAS_ZENITY" = 1 ]; then
+                pad_bridge_start
+                imp="$(zenity --file-selection --title="Elige zip/7z/rar/exe o entra en la carpeta" 2>/dev/null)"
+            else
+                imp="$(ask_text "Ruta del archivo/carpeta a importar" "")"
+            fi
+            if [ -n "$imp" ]; then
+                case "$imp" in
+                    *.exe|*.EXE) package_exe "$imp" ;;
+                    *) if [ -d "$imp" ]; then package_dir "$imp"; else import_input "$imp"; fi ;;
+                esac
+            fi ;;
+        "Instalar librerias"*) redist_target_menu ;;
+        "Configurar un juego"*)
+            local g2
+            if g2="$(pick_squash)"; then
+                game_config_menu "${g2#WPACT:CONFIG|}"
+            fi ;;
+        "Descargar runners"*)    download_runner_menu ;;
+        "Actualizar GE-Proton"*) setup_proton ;;
+        "Actualizar umu-launcher") setup_umu ;;
+        "Instalar/actualizar Python portable + pygame") setup_python ;;
+        "Descargar herramientas FUSE"*)
+            SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
+            setup_fuse_tools
+            ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
+fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
+        "Descargar extractores GOG"*)
+            local ok1="NO" ok2="NO"
+            setup_innoextract && ok1="OK"
+            setup_innounp && ok2="OK"
+            ui_info "Extractores portables en runtime/tools:
+  innoextract (principal, reensambla GOG Galaxy): $ok1
+  innounp (respaldo via Wine, Inno Setup hasta 6.7): $ok2" ;;
+        "Borrar un runner")
+            local vers v
+            vers="$(local_runner_names)"
+            [ -z "$vers" ] && { ui_info "No hay runners instalados."; continue; }
+            # shellcheck disable=SC2046
+            if v="$(IFS=$'\n'; set -f; menu "Borrar runner" $vers)"; then
+                ui_ask "Borrar $v?" && rm -rf "${RUNNERS_DIR:?}/$v"
+            fi ;;
+        "Idioma:"*)
+            local langs li
+            langs="$(lang_available)"
+            # shellcheck disable=SC2046
+            li="$(IFS=$'\n'; set -f; menu "Idioma de los menus / Menu language" $langs "<< Volver")" || li=""
+            case "$li" in
+                "<< Volver"|"") ;;
+                *)  LANGUAGE="$li"; save_settings
+                    export WP_LANG="$LANGUAGE"
+                    tr_init
+                    ui_info "Idioma: $LANGUAGE" ;;
+            esac ;;
+        "Tema de los menus:"*)
+            local th
+            th="$(menu "Elige el aspecto de los menus" \
+                "clasico - el original" \
+                "moderno - paneles y acento neon" \
+                "arcade - synthwave con efecto CRT" \
+                "<< Volver")" || th=""
+            case "$th" in
+                clasico*|moderno*|arcade*)
+                    THEME="${th%% *}"
+                    export WP_THEME="$THEME"
+                    save_settings
+                    ui_info "Tema activado: $THEME" ;;
+            esac ;;
+        "Espacio en disco") disk_menu ;;
+        "Biblioteca y aspecto") library_menu ;;
+        "Runners y herramientas"*) tools_menu ;;
+        "Caratulas y perfiles"*) media_menu ;;
+        "Ordenar juegos por:"*)
+            local so
+            so="$(menu "Como ordenar la lista de juegos" \
+                "nombre - alfabetico" \
+                "recientes - los ultimos jugados primero" \
+                "jugados - los de mas tiempo primero" \
+                "<< Volver")" || so=""
+            case "$so" in
+                nombre*|recientes*|jugados*)
+                    GAMES_SORT="${so%% *}"; save_settings
+                    ui_info "Orden: $GAMES_SORT (los favoritos van siempre primero)" ;;
+            esac ;;
+        "Vista de juegos:"*)
+            [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
+            save_settings ;;
+        "Perfiles de la comunidad"*) community_menu ;;
+        "Descargar caratulas"*)
+            sgdb_download_covers ;;
+        "Carpeta de juegos:"*)
+            local nd=""
+            if pygame_available; then
+                nd="$(browse_for_path "Elige la carpeta de juegos" "$GAMES_PATH" "dir")" || nd=""
+            else
+                nd="$(pick_dir "Elige la carpeta donde estan tus juegos" "$GAMES_PATH")"
+            fi
+            if [ -n "$nd" ] && [ -d "$nd" ]; then
+                GAMES_PATH="$nd"; save_settings
+                ui_info "Carpeta de juegos: $GAMES_PATH"
+            fi ;;
+        "Detener Wine y desmontar todo") kill_all ;;
+        "Buscar actualizaciones"*) self_update ;;
+        "Ver ultimo log")
+            if [ "$HAS_ZENITY" = 1 ]; then
+                zenity --text-info --title="WProton log" --filename="$LOG_FILE" \
+                       --width=820 --height=620 2>/dev/null
+            elif pygame_available; then
+                local loglines
+                loglines="$(tail -n 60 "$LOG_FILE" | grep -v '^$')"
+                # shellcheck disable=SC2046
+                (IFS=$'\n'; set -f; menu "Ultimo log (B para volver)" $loglines) >/dev/null 2>&1 || true
+            else
+                tail -n 50 "$LOG_FILE" >&2
+            fi ;;
+        "Salir") exit 0 ;;
+    esac
+    return 0
+}
+
+library_menu() {
+    # Todo lo que afecta a como se ve y se ordena la biblioteca
+    local sel
+    while true; do
+        sel="$(menu "Biblioteca y aspecto" \
+            "Carpeta de juegos: $GAMES_PATH" \
+            "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
+            "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
+            "Tema de los menus: $THEME" \
+            "Idioma: ${LANGUAGE:-es}" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            *) main_dispatch "$sel" ;;
+        esac
+    done
+}
+
+tools_menu() {
+    # Instalacion y actualizacion de todo lo que WProton usa por debajo
+    local sel nrunners
+    while true; do
+        nrunners="$(list_runners | grep -c . || true)"
+        sel="$(menu "Runners y herramientas" \
+            "Descargar runners (Proton / Wine) [$nrunners instalados]" \
+            "Actualizar GE-Proton a la ultima" \
+            "Borrar un runner" \
+            "Instalar librerias en un prefijo (vcredist, PhysX...)" \
+            "Actualizar umu-launcher" \
+            "Instalar/actualizar Python portable + pygame" \
+            "Descargar extractores GOG (innoextract + innounp)" \
+            "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            *) main_dispatch "$sel" ;;
+        esac
+    done
+}
+
+media_menu() {
+    local sel
+    while true; do
+        sel="$(menu "Caratulas y perfiles de la comunidad" \
+            "Descargar caratulas (SteamGridDB)" \
+            "Perfiles de la comunidad (juegos problematicos)" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            *) main_dispatch "$sel" ;;
+        esac
+    done
 }
 
 main_menu() {
@@ -6615,150 +7173,26 @@ main_menu() {
         fi
         opts+=("Importar juego (zip/7z/rar/exe/carpeta)" \
                "Configurar un juego" \
-               "Instalar librerias en un prefijo (vcredist, PhysX...)" \
-               "Descargar runners (Proton / Wine) [$nrunners instalados]" \
-               "Actualizar GE-Proton a la ultima" \
-               "Actualizar umu-launcher" \
-               "Instalar/actualizar Python portable + pygame" \
-               "Descargar extractores GOG (innoextract + innounp)" \
-               "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
-               "Borrar un runner" \
-               "Carpeta de juegos: $GAMES_PATH" \
-               "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
-               "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
-               "Tema de los menus: $THEME" \
-               "Idioma: ${LANGUAGE:-es}" \
-               "Descargar caratulas (SteamGridDB)" \
-               "Perfiles de la comunidad (juegos problematicos)" \
+               "Biblioteca y aspecto" \
+               "Runners y herramientas [$nrunners runners]" \
+               "Caratulas y perfiles de la comunidad" \
+               "Espacio en disco" \
                "Detener Wine y desmontar todo" \
                "Ver ultimo log" \
                "Buscar actualizaciones [v$WPROTON_VERSION]" \
                "Salir")
         local sel
-        sel="$(menu "WProton v$WPROTON_VERSION - Menu principal" "${opts[@]}")" || exit 0
+        sel="$(menu "WProton v$WPROTON_VERSION - Menu principal" "${opts[@]}")"
+        local mrc=$?
+        if [ "$mrc" = 2 ]; then
+            # el menu no se pudo dibujar: reintentar el bucle, no cerrar
+            say "Reintentando abrir el menu principal..."
+            sleep 1
+            continue
+        fi
+        [ "$mrc" != 0 ] && exit 0
 
-        case "$sel" in
-            "Jugar al ultimo:"*)
-                play_any "$LAST_GAME" ;;
-            "Jugar"*)
-                local g; g="$(pick_squash)" && play_or_config "$g" ;;
-            "Importar juego"*)
-                local imp=""
-                if pygame_available; then
-                    imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "file")" || imp=""
-                elif [ "$HAS_ZENITY" = 1 ]; then
-                    pad_bridge_start
-                    imp="$(zenity --file-selection --title="Elige zip/7z/rar/exe o entra en la carpeta" 2>/dev/null)"
-                else
-                    imp="$(ask_text "Ruta del archivo/carpeta a importar" "")"
-                fi
-                if [ -n "$imp" ]; then
-                    case "$imp" in
-                        *.exe|*.EXE) package_exe "$imp" ;;
-                        *) if [ -d "$imp" ]; then package_dir "$imp"; else import_input "$imp"; fi ;;
-                    esac
-                fi ;;
-            "Instalar librerias"*) redist_target_menu ;;
-            "Configurar un juego"*)
-                local g2
-                if g2="$(pick_squash)"; then
-                    game_config_menu "${g2#WPACT:CONFIG|}"
-                fi ;;
-            "Descargar runners"*)    download_runner_menu ;;
-            "Actualizar GE-Proton"*) setup_proton ;;
-            "Actualizar umu-launcher") setup_umu ;;
-            "Instalar/actualizar Python portable + pygame") setup_python ;;
-            "Descargar herramientas FUSE"*)
-                SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
-                setup_fuse_tools
-                ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
-fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
-            "Descargar extractores GOG"*)
-                local ok1="NO" ok2="NO"
-                setup_innoextract && ok1="OK"
-                setup_innounp && ok2="OK"
-                ui_info "Extractores portables en runtime/tools:
-  innoextract (principal, reensambla GOG Galaxy): $ok1
-  innounp (respaldo via Wine, Inno Setup hasta 6.7): $ok2" ;;
-            "Borrar un runner")
-                local vers v
-                vers="$(local_runner_names)"
-                [ -z "$vers" ] && { ui_info "No hay runners instalados."; continue; }
-                # shellcheck disable=SC2046
-                if v="$(IFS=$'\n'; set -f; menu "Borrar runner" $vers)"; then
-                    ui_ask "Borrar $v?" && rm -rf "${RUNNERS_DIR:?}/$v"
-                fi ;;
-            "Idioma:"*)
-                local langs li
-                langs="$(lang_available)"
-                # shellcheck disable=SC2046
-                li="$(IFS=$'\n'; set -f; menu "Idioma de los menus / Menu language" $langs "<< Volver")" || li=""
-                case "$li" in
-                    "<< Volver"|"") ;;
-                    *)  LANGUAGE="$li"; save_settings
-                        export WP_LANG="$LANGUAGE"
-                        tr_init
-                        ui_info "Idioma: $LANGUAGE" ;;
-                esac ;;
-            "Tema de los menus:"*)
-                local th
-                th="$(menu "Elige el aspecto de los menus" \
-                    "clasico - el original" \
-                    "moderno - paneles y acento neon" \
-                    "arcade - synthwave con efecto CRT" \
-                    "<< Volver")" || th=""
-                case "$th" in
-                    clasico*|moderno*|arcade*)
-                        THEME="${th%% *}"
-                        export WP_THEME="$THEME"
-                        save_settings
-                        ui_info "Tema activado: $THEME" ;;
-                esac ;;
-            "Ordenar juegos por:"*)
-                local so
-                so="$(menu "Como ordenar la lista de juegos" \
-                    "nombre - alfabetico" \
-                    "recientes - los ultimos jugados primero" \
-                    "jugados - los de mas tiempo primero" \
-                    "<< Volver")" || so=""
-                case "$so" in
-                    nombre*|recientes*|jugados*)
-                        GAMES_SORT="${so%% *}"; save_settings
-                        ui_info "Orden: $GAMES_SORT (los favoritos van siempre primero)" ;;
-                esac ;;
-            "Vista de juegos:"*)
-                [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
-                save_settings ;;
-            "Perfiles de la comunidad"*) community_menu ;;
-            "Descargar caratulas"*)
-                sgdb_download_covers ;;
-            "Carpeta de juegos:"*)
-                local nd=""
-                if pygame_available; then
-                    nd="$(browse_for_path "Elige la carpeta de juegos" "$GAMES_PATH" "dir")" || nd=""
-                else
-                    nd="$(pick_dir "Elige la carpeta donde estan tus juegos" "$GAMES_PATH")"
-                fi
-                if [ -n "$nd" ] && [ -d "$nd" ]; then
-                    GAMES_PATH="$nd"; save_settings
-                    ui_info "Carpeta de juegos: $GAMES_PATH"
-                fi ;;
-            "Detener Wine y desmontar todo") kill_all ;;
-            "Buscar actualizaciones"*) self_update ;;
-            "Ver ultimo log")
-                if [ "$HAS_ZENITY" = 1 ]; then
-                    zenity --text-info --title="WProton log" --filename="$LOG_FILE" \
-                           --width=820 --height=620 2>/dev/null
-                elif pygame_available; then
-                    local loglines
-                    loglines="$(tail -n 60 "$LOG_FILE" | grep -v '^$')"
-                    # shellcheck disable=SC2046
-                    (IFS=$'\n'; set -f; menu "Ultimo log (B para volver)" $loglines) >/dev/null 2>&1 || true
-                else
-                    tail -n 50 "$LOG_FILE" >&2
-                fi ;;
-            "Salir") exit 0 ;;
-        esac
+        main_dispatch "$sel"
     done
 }
 
