@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.96"
+WPROTON_VERSION="0.97"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<version>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -71,6 +71,7 @@ DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de j
 GRID_COLS=0                              # columnas de la rejilla (0 = automatico)
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
+PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (mas compresion)
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (caratulas)
 save_settings() {
@@ -106,6 +107,9 @@ LANGUAGE="$LANGUAGE"
 # Orden de la lista de juegos: nombre | recientes | jugados
 # (los marcados como favoritos van siempre primero)
 GAMES_SORT="$GAMES_SORT"
+# Formato al empaquetar juegos: wsquashfs (compatible con Batocera) o
+# dwarfs (comprime bastante mas y monta igual de rapido)
+PACK_FORMAT="$PACK_FORMAT"
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
 BACKUP_SYNC_DEST="$BACKUP_SYNC_DEST"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
@@ -375,6 +379,66 @@ try_static_tool() {
         say "[$name] ese binario no funciona aqui, probando otro"
     done
     rm -rf "$tmp"
+    return 1
+}
+
+DWARFS_BIN=""
+MKDWARFS_BIN=""
+
+find_dwarfs_tools() {
+    # Binarios propios primero (portables), luego los del sistema
+    DWARFS_BIN=""; MKDWARFS_BIN=""
+    local d="$RUNTIME_DIR/tools"
+    [ -x "$d/dwarfs" ]    && DWARFS_BIN="$d/dwarfs"
+    [ -x "$d/mkdwarfs" ]  && MKDWARFS_BIN="$d/mkdwarfs"
+    [ -z "$DWARFS_BIN" ]   && DWARFS_BIN="$(command -v dwarfs 2>/dev/null)"
+    [ -z "$MKDWARFS_BIN" ] && MKDWARFS_BIN="$(command -v mkdwarfs 2>/dev/null)"
+    [ -n "$DWARFS_BIN" ] || [ -n "$MKDWARFS_BIN" ]
+}
+
+setup_dwarfs_tools() {
+    # DwarFS publica un BINARIO UNIVERSAL estatico que contiene mkdwarfs,
+    # dwarfs (driver FUSE), dwarfsck y dwarfsextract. Se elige la herramienta
+    # con enlaces simbolicos con su nombre. Nada que compilar.
+    find_dwarfs_tools && [ -x "$RUNTIME_DIR/tools/dwarfs" ] && return 0
+    local a; a="$(arch_tag)"
+    mkdir -p "$RUNTIME_DIR/tools"
+    local urls url tmp
+    say "[dwarfs] buscando el binario universal..."
+    urls="$(curl -fsSL "https://api.github.com/repos/mhx/dwarfs/releases/latest" 2>/dev/null \
+        | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+        | grep -i 'universal' | grep -i "linux" | grep -i "$a")"
+    [ -z "$urls" ] && {
+        ui_error "No se pudo localizar la descarga de DwarFS para $a.
+Puedes instalarlo desde tu distribucion (paquete 'dwarfs') o dejar
+los binarios mkdwarfs y dwarfs en runtime/tools/."
+        return 1
+    }
+    tmp="$(mktemp -d)"
+    while IFS= read -r url; do
+        [ -n "$url" ] || continue
+        say "[dwarfs] probando $(basename "$url")"
+        dl "$url" "$tmp/dwarfs-universal" || continue
+        chmod +x "$tmp/dwarfs-universal" 2>/dev/null
+        if "$tmp/dwarfs-universal" --tool=mkdwarfs --help >/dev/null 2>&1; then
+            cp -f "$tmp/dwarfs-universal" "$RUNTIME_DIR/tools/dwarfs-universal"
+            chmod +x "$RUNTIME_DIR/tools/dwarfs-universal"
+            # el binario universal elige herramienta segun el nombre del enlace
+            local t
+            for t in mkdwarfs dwarfs dwarfsck dwarfsextract; do
+                ln -sf dwarfs-universal "$RUNTIME_DIR/tools/$t"
+            done
+            rm -rf "$tmp"
+            find_dwarfs_tools
+            say "[dwarfs] listo: $("$MKDWARFS_BIN" --help 2>&1 | head -n1)"
+            return 0
+        fi
+        say "[dwarfs] ese binario no funciona aqui"
+    done <<EOFDW
+$urls
+EOFDW
+    rm -rf "$tmp"
+    ui_error "El binario de DwarFS descargado no funciona en esta maquina."
     return 1
 }
 
@@ -1399,7 +1463,7 @@ MODE, TITLE, OUTFILE = sys.argv[1], sys.argv[2], sys.argv[3]
 # en modo 'progress' el 3er argumento ya es el fichero de estado
 ARG4 = sys.argv[4] if len(sys.argv) > 4 else OUTFILE
 BROWSE_KIND = sys.argv[5] if len(sys.argv) > 5 else 'file'
-BROWSE_EXTS = ('.wsquashfs', '.squashfs', '.zip', '.7z', '.rar',
+BROWSE_EXTS = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.wtgz')
 if BROWSE_KIND == 'keys':
     BROWSE_EXTS = ('.keys',)
@@ -3641,6 +3705,40 @@ MOUNT_RW=""
 MOUNT_POINT=""
 MOUNT_OK=0
 
+image_format() {
+    # Formato REAL del archivo por su cabecera (no por la extension):
+    # squashfs -> "hsqs"/"sqsh" | dwarfs -> "DWARFS"
+    local f="$1" m
+    m="$(head -c 6 "$f" 2>/dev/null)"
+    case "$m" in
+        DWARFS*) printf 'dwarfs' ;;
+        hsqs*|sqsh*) printf 'squashfs' ;;
+        *) case "$f" in
+               *.dwarfs|*.dwfs) printf 'dwarfs' ;;
+               *) printf 'squashfs' ;;
+           esac ;;
+    esac
+}
+
+mount_image_ro() {
+    # $1 = imagen, $2 = punto de montaje. Elige squashfuse o el driver dwarfs.
+    local img="$1" mp="$2" fmt
+    fmt="$(image_format "$img")"
+    if [ "$fmt" = "dwarfs" ]; then
+        find_dwarfs_tools
+        if [ -z "$DWARFS_BIN" ]; then
+            say "Falta el driver de DwarFS: descargandolo..."
+            setup_dwarfs_tools || { ui_error "No hay driver de DwarFS para montar:
+$(basename "$img")"; return 1; }
+        fi
+        say "[+] Montando imagen DwarFS con $(basename "$DWARFS_BIN")"
+        "$DWARFS_BIN" "$img" "$mp" -o ro >>"$LOG_FILE" 2>&1 || return 1
+    else
+        "$SQUASHFUSE_BIN" "$img" "$mp" >>"$LOG_FILE" 2>&1 || return 1
+    fi
+    return 0
+}
+
 is_mounted() {
     if command -v mountpoint >/dev/null 2>&1; then
         mountpoint -q "$1" 2>/dev/null
@@ -3715,7 +3813,7 @@ mount_game() {
     rm -rf "$work"; mkdir -p "$upper" "$work" "$MOUNT_RO" "$MOUNT_RW"
 
     say "Montando $squash..."
-    "$SQUASHFUSE_BIN" "$squash" "$MOUNT_RO" >>"$LOG_FILE" 2>&1 || die "squashfuse fallo montando $squash"
+    mount_image_ro "$squash" "$MOUNT_RO" || die "no se pudo montar $squash"
     # squash_to_uid/gid: los wsquashfs hechos en Batocera llevan los ficheros
     # como root; sin esto, cuando fuse-overlayfs copia uno a la capa superior
     # intenta conservar el propietario y falla con "Operation not permitted"
@@ -3747,7 +3845,7 @@ mount_ro_only() {
     fi
     umount_dir "$MOUNT_RO"
     mkdir -p "$MOUNT_RO"
-    "$SQUASHFUSE_BIN" "$squash" "$MOUNT_RO" >>"$LOG_FILE" 2>&1 || die "squashfuse fallo montando $squash"
+    mount_image_ro "$squash" "$MOUNT_RO" || die "no se pudo montar $squash"
     MOUNT_OK=1
     MOUNT_POINT="$MOUNT_RO"
 }
@@ -4388,11 +4486,12 @@ launch_game() {
 
     # Comprobacion rapida de integridad antes de montar (cabecera squashfs)
     if [ -f "$abs_squash" ]; then
-        local mg; mg="$(head -c 4 "$abs_squash" 2>/dev/null)"
+        local mg; mg="$(head -c 6 "$abs_squash" 2>/dev/null)"
         case "$mg" in
-            hsqs|sqsh) ;;
-            *) ui_error "'$(basename "$abs_squash")' no parece un wsquashfs valido.
-Comprueba el archivo desde: Configurar juego -> Comprobar integridad"
+            hsqs*|sqsh*|DWARFS*) ;;
+            *) ui_error "'$(basename "$abs_squash")' no parece una imagen valida
+(ni squashfs ni DwarFS). Comprueba el archivo desde:
+Configurar juego -> Comprobar integridad"
                return 1 ;;
         esac
     fi
@@ -5045,20 +5144,37 @@ clean_game_name() {
 }
 
 build_wsquashfs() {
-    # $1 = carpeta origen, $2 = nombre -> imprime ruta del wsquashfs final
-    need_mksquashfs
+    # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
+    #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
+    #   dwarfs    -> mkdwarfs   (comprime bastante mas, monta igual de rapido)
     local src="$1" name="$2"
-    local out="$GAMES_PATH/${name}.wsquashfs"
-    # El zstd deja el wsquashfs en ~55-70% del original; pedimos el 70% y,
-    # en juegos enormes, no exigimos mas de lo razonable.
+    local fmt="${PACK_FORMAT:-wsquashfs}" out
+    if [ "$fmt" = "dwarfs" ]; then
+        find_dwarfs_tools
+        if [ -z "$MKDWARFS_BIN" ]; then
+            say "Falta mkdwarfs: descargando las herramientas DwarFS..."
+            setup_dwarfs_tools || {
+                say "AVISO: sin DwarFS; se empaqueta en wsquashfs"
+                fmt="wsquashfs"
+            }
+        fi
+    fi
+    [ "$fmt" = "dwarfs" ] && out="$GAMES_PATH/${name}.dwarfs" || out="$GAMES_PATH/${name}.wsquashfs"
     local need; need="$(dir_bytes "$src")"
     if [ -n "$need" ] && ! check_space "$(( need * 7 / 10 ))" "$GAMES_PATH" "empaquetar '$name'"; then
         return 1
     fi
-    run_with_progress "Empaquetando '$name' a wsquashfs (zstd, puede tardar)..." \
-        mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
-        || { rm -f "$out"; die "mksquashfs fallo"; }
-    # overlay viejo de un juego homonimo fuera (evita mezclar saves de otro build)
+    if [ "$fmt" = "dwarfs" ]; then
+        # -l7: buen equilibrio; zstd por defecto = montaje y lectura rapidos
+        run_with_progress "Empaquetando '$name' a DwarFS (puede tardar)..." \
+            "$MKDWARFS_BIN" -i "$src" -o "$out" -l7 --log-level=warn \
+            || { rm -f "$out"; die "mkdwarfs fallo"; }
+    else
+        need_mksquashfs
+        run_with_progress "Empaquetando '$name' a wsquashfs (zstd, puede tardar)..." \
+            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
+            || { rm -f "$out"; die "mksquashfs fallo"; }
+    fi
     rm -rf "${OVERLAY_BASE:?}/${name}"
     printf '%s' "$out"
 }
@@ -5632,7 +5748,7 @@ CachyOS: sudo pacman -S p7zip"
 
     # Contiene ya un wsquashfs? -> moverlo tal cual a la carpeta de juegos
     local inner
-    inner=$(find "$extract_dir" -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) | head -n1)
+    inner=$(find "$extract_dir" -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) | head -n1)
     local out
     if [ -n "$inner" ]; then
         out="$GAMES_PATH/$(basename "$inner")"
@@ -5749,7 +5865,7 @@ play_any() {
     # Despachador de "jugar": wsquashfs -> montar | exe -> directo | carpeta -> directo
     local p="$1"
     case "$p" in
-        *.wsquashfs|*.squashfs|*.WSQUASHFS|*.SQUASHFS)
+        *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
             launch_game "$p" "auto" ;;
         *.exe|*.EXE)
             [ -f "$p" ] || die "No existe: $p"
@@ -6232,13 +6348,26 @@ verify_squashfs() {
         return 1
     fi
     # cabecera: los squashfs empiezan por "hsqs" (o "sqsh" en big endian)
-    magic="$(head -c 4 "$f" 2>/dev/null)"
+    magic="$(head -c 6 "$f" 2>/dev/null)"
     case "$magic" in
-        hsqs|sqsh) ;;
-        *) ui_error "'$(basename "$f")' no parece un squashfs valido.
+        hsqs*|sqsh*|DWARFS*) ;;
+        *) ui_error "'$(basename "$f")' no parece una imagen valida.
 Puede que la descarga o la copia se cortara a medias."
            return 1 ;;
     esac
+    # DwarFS trae su propia comprobacion de integridad
+    if [ "$(image_format "$f")" = "dwarfs" ]; then
+        find_dwarfs_tools
+        local ck="$RUNTIME_DIR/tools/dwarfsck"
+        if [ -x "$ck" ]; then
+            if ! run_with_progress "Comprobando '$(basename "$f")' (DwarFS)..." \
+                    sh -c "'$ck' '$f' >/dev/null 2>&1"; then
+                ui_error "La imagen DwarFS esta danada: $(basename "$f")"
+                return 1
+            fi
+        fi
+        return 0
+    fi
     # prueba de lectura real: listar el contenido con unsquashfs si esta
     if command -v unsquashfs >/dev/null 2>&1; then
         if ! run_with_progress "Comprobando '$(basename "$f")'..." \
@@ -6299,7 +6428,7 @@ disk_games_list() {
         t=$(( a + o + p ))
         printf '%015d\t%s (%s)\n' "$t" "$(basename "$f")" "$(human_size "$t")"
     done <<EOFG
-$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null)
+$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null)
 EOFG
 }
 
@@ -6315,7 +6444,7 @@ orphan_scan() {
             [ -n "$f" ] || continue
             [ "$(game_id "$f")" = "$gid" ] && { found=1; break; }
         done <<EOFO
-$(find "$GAMES_PATH" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null)
+$(find "$GAMES_PATH" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null)
 EOFO
         [ "$found" = 1 ] && continue
         # tampoco es un juego en carpeta ni un perfil vivo
@@ -6456,7 +6585,7 @@ import_input() {
     # Dispatcher de entrada estilo PortProton antiguo
     local input="$1"
     case "$input" in
-        *.wsquashfs|*.squashfs|*.WSQUASHFS|*.SQUASHFS)
+        *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
             launch_game "$input" "auto" ;;
         *.sh)
             pad_bridge_stop
@@ -6565,7 +6694,7 @@ sgdb_download_covers() {
     fi
     mkdir -p "$COVERS_DIR"
     local list total=0 got=0 pend=0 idx=0
-    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) 2>/dev/null | sort)"
+    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
     local f gid title q gjson gameid ujson url ext
     while IFS= read -r f; do
@@ -6666,7 +6795,7 @@ browse_for_path() {
             header=".. (subir)"
         elif [ "$mode" = "file" ] || [ "$mode" = "play" ]; then
             files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f \( \
-                -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.zip' \
+                -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' -o -iname '*.zip' \
                 -o -iname '*.7z' -o -iname '*.rar' -o -iname '*.001' \
                 -o -iname '*.z01' -o -iname '*.exe' -o -iname '*.wtgz' \) ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
             header=">> IMPORTAR ESTA CARPETA <<
@@ -6733,7 +6862,7 @@ sort_games() {
 pick_squash() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
     local list loose="(juego suelto: elegir carpeta o exe...)"
-    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \) -printf '%P\n' 2>/dev/null | sort | sort_games)"
+    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) -printf '%P\n' 2>/dev/null | sort | sort_games)"
     local sel
     export WP_ACTION_X=1                 # X = configurar el juego resaltado
     if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
@@ -7135,6 +7264,12 @@ main_dispatch() {
         "Actualizar GE-Proton"*) setup_proton ;;
         "Actualizar umu-launcher") setup_umu ;;
         "Instalar/actualizar Python portable + pygame") setup_python ;;
+        "Descargar herramientas DwarFS"*)
+            if setup_dwarfs_tools; then
+                find_dwarfs_tools
+                ui_info "DwarFS listo en runtime/tools:
+mkdwarfs para empaquetar y dwarfs para montar."
+            fi ;;
         "Descargar herramientas FUSE"*)
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
             setup_fuse_tools
@@ -7185,6 +7320,27 @@ fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
         "Biblioteca y aspecto") library_menu ;;
         "Runners y herramientas"*) tools_menu ;;
         "Caratulas y perfiles"*) media_menu ;;
+        "Formato al empaquetar:"*)
+            local pf
+            pf="$(menu "Formato para los juegos que empaquetes" \
+                "wsquashfs - compatible con Batocera y PortProton" \
+                "dwarfs - comprime bastante mas, monta igual de rapido" \
+                "<< Volver")" || pf=""
+            case "$pf" in
+                wsquashfs*)
+                    PACK_FORMAT=wsquashfs; save_settings
+                    ui_info "Los juegos nuevos se empaquetaran en wsquashfs." ;;
+                dwarfs*)
+                    find_dwarfs_tools || setup_dwarfs_tools || true
+                    find_dwarfs_tools
+                    if [ -n "$MKDWARFS_BIN" ]; then
+                        PACK_FORMAT=dwarfs; save_settings
+                        ui_info "Los juegos nuevos se empaquetaran en DwarFS.
+Los wsquashfs que ya tienes se siguen usando igual."
+                    else
+                        ui_error "No se pudieron preparar las herramientas de DwarFS."
+                    fi ;;
+            esac ;;
         "Ordenar juegos por:"*)
             local so
             so="$(menu "Como ordenar la lista de juegos" \
@@ -7241,6 +7397,7 @@ library_menu() {
             "Carpeta de juegos: $GAMES_PATH" \
             "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (caratulas)' || printf 'lista')" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
+            "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Tema de los menus: $THEME" \
             "Idioma: ${LANGUAGE:-es}" \
             "<< Volver")" || return
@@ -7265,6 +7422,7 @@ tools_menu() {
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
+            "Descargar herramientas DwarFS (mkdwarfs + driver)" \
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
