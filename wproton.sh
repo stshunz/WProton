@@ -1350,10 +1350,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra version (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V37" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V38" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V37
+# WPROTON_HELPER_V38
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1364,6 +1364,7 @@ write_menu_pygame() {
 #   grid   <titulo> <salida> <manifiesto>   (lineas "titulo|imagen|payload")
 #   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
 #   text   <titulo> <salida> <valor_inicial>  (teclado en pantalla)
+#   canvas <titulo> <fichero_estado>       (fondo persistente del modo Juego)
 import os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -1503,7 +1504,7 @@ def grid_apply_filter():
     sel = 0
     scroll = 0
 
-if MODE in ('progress', 'text'):
+if MODE in ('progress', 'text', 'canvas'):
     pass
 elif MODE == 'browse':
     load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
@@ -1670,7 +1671,10 @@ def evdev_thread():
             if now >= t_:
                 post_key(k); held[k] = now + REP_NEXT
 
-threading.Thread(target=evdev_thread, daemon=True).start()
+if MODE != 'canvas':
+    # el lienzo solo pinta: si leyera el mando competiria con el menu que
+    # tiene delante (dos lectores del mismo /dev/input)
+    threading.Thread(target=evdev_thread, daemon=True).start()
 
 W, H = 960, 680
 def _open_window():
@@ -2494,6 +2498,53 @@ def kb_press():
             kb_open = False
     else:
         filter_add(KB_ROWS[kb_r][kb_c].lower())
+
+if MODE == 'canvas':
+    # Fondo persistente para el MODO JUEGO de SteamOS.
+    #
+    # El problema: cada menu abria y cerraba su ventana. Al salir de un juego,
+    # gamescope se quedaba sin ninguna superficie nuestra y no sabia a quien
+    # devolver el foco: el menu siguiente nacia detras y parecia que WProton
+    # no volvia. Con esta ventana SIEMPRE viva, el compositor siempre tiene a
+    # donde volver, y los menus se dibujan encima de ella.
+    #
+    # Se cierra sola cuando el fichero de estado dice STOP (o desaparece).
+    clockC = pygame.time.Clock()
+    status = ''
+    misses = 0
+    while True:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                safe_quit(0)
+        try:
+            with open(ARG4, encoding='utf-8') as fh:
+                status = fh.readline().strip()
+            misses = 0
+        except Exception:
+            misses += 1
+            if misses > 40:            # el fichero ya no esta: nos vamos
+                safe_quit(0)
+        if status.startswith('STOP'):
+            safe_quit(0)
+        screen.blit(BGSURF, (0, 0))
+        if PANEL_UI:
+            draw_header()
+        # marca centrada
+        big = pygame.font.Font(None, max(48, W // 14))
+        brand = big.render('WPROTON', True, ACC)
+        screen.blit(brand, ((W - brand.get_width()) // 2, H // 2 - 60))
+        if status:
+            for _i, _ln in enumerate(wrap_title(status, f_it, W - 120, 3)):
+                sf = rtext(f_it, _ln, FG)
+                screen.blit(sf, ((W - sf.get_width()) // 2, H // 2 + 10 + _i * 30))
+        # punto animado, para que se vea que sigue vivo
+        _p = int(time.time() * 2) % 4
+        dots = rtext(f_sm, '.' * _p, DIM)
+        screen.blit(dots, ((W - dots.get_width()) // 2, H // 2 + 110))
+        if SCANSURF is not None:
+            screen.blit(SCANSURF, (0, 0))
+        pygame.display.flip()
+        clockC.tick(15)          # muy poco consumo: no compite con el juego
 
 if MODE == 'progress':
     # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
@@ -3721,7 +3772,7 @@ cleanup_mount() {
     MOUNT_OK=0
 }
 
-cleanup_all() { cleanup_mount; pad_bridge_stop; mapeador_stop; }
+cleanup_all() { cleanup_mount; pad_bridge_stop; mapeador_stop; canvas_stop; }
 trap cleanup_all EXIT INT TERM
 
 
@@ -3910,7 +3961,9 @@ profile_defaults() {
     LAST_PLAYED=""           # fecha de la ultima partida (YYYY-MM-DD HH:MM)
     SAVE_PATHS=""            # carpetas de partidas detectadas al jugar (: separadas)
     PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
-    NESTED_GAMESCOPE=1       # modo Juego: lanzar dentro de gamescope propio
+    NESTED_GAMESCOPE=0       # modo Juego: lanzar dentro de gamescope propio
+                             # (OFF por defecto: gamescope dentro de gamescope
+                             #  rompe su capa Vulkan -> "Hooking has failed")
     USE_BATOCERA="$IS_BATOCERA"   # en Batocera: lanzar via batocera-wine
     WINED3D=0                # 1 = OpenGL (PROTON_USE_WINED3D) para juegos viejos
     FSR=0                    # 1 = escalado AMD FSR en pantalla completa
@@ -4288,13 +4341,20 @@ build_runner_cmd() {
     kind="$(runner_kind "$rdir")" || die "Runner invalido: $rdir"
     RUN_CMD=()
     local gs_args="$GAMESCOPE"
-    if [ -z "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ "${NESTED_GAMESCOPE:-1}" = 1 ]; then
-        # Modo Juego: el juego va dentro de su propio gamescope. Asi, al
-        # cerrarse, el compositor anidado desaparece y el foco vuelve a los
-        # menus (sin esto la sesion se queda sin ventana enfocada y parece
-        # que WProton no vuelve).
+    if [ -z "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ "${NESTED_GAMESCOPE:-0}" = 1 ]; then
+        # Modo Juego con gamescope anidado (opcional, OFF por defecto).
+        # Ayuda a que el foco vuelva a los menus al salir del juego, PERO la
+        # capa Vulkan del gamescope exterior intenta enganchar un swapchain
+        # que ya no controla y el juego avisa de "Hooking has failed
+        # somewhere!" con la imagen a tirones. Por eso se desactiva aqui esa
+        # capa: es el arreglo documentado para gamescope dentro de gamescope.
         gs_args="-f"
-        say "[+] Modo Juego: el juego se lanza en gamescope anidado"
+        export ENABLE_GAMESCOPE_WSI=0
+        say "[+] Modo Juego: gamescope anidado (capa WSI exterior desactivada)"
+    fi
+    if [ -n "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ -n "$GAMESCOPE" ]; then
+        # gamescope manual dentro del modo Juego: mismo problema de capas
+        export ENABLE_GAMESCOPE_WSI=0
     fi
     if [ -n "$gs_args" ] && command -v gamescope >/dev/null 2>&1; then
         # shellcheck disable=SC2206
@@ -4402,6 +4462,7 @@ Comprueba el archivo desde: Configurar juego -> Comprobar integridad"
     bundled_prefix_prepare "$rdir"
 
     pad_bridge_stop   # el mando vuelve a ser del juego, no de los menus
+    canvas_say "Jugando: $gid"
     log_input_devices
     local keys_file=""
     if keys_file="$(find_keys_file "$abs_squash" "$gid")"; then
@@ -5734,6 +5795,56 @@ log_input_devices() {
     return 0
 }
 
+CANVAS_PID=""
+CANVAS_FILE=""
+
+canvas_start() {
+    # Fondo persistente: SOLO en modo Juego (sesion gamescope), donde el
+    # compositor necesita que siempre exista una ventana nuestra.
+    [ "${IS_GAMESCOPE:-0}" = 1 ] || return 0
+    [ -n "$CANVAS_PID" ] && kill -0 "$CANVAS_PID" 2>/dev/null && return 0
+    pygame_available || return 0
+    write_menu_pygame
+    CANVAS_FILE="$RUNTIME_DIR/.canvas_status"
+    printf 'Cargando...
+' > "$CANVAS_FILE"
+    PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 WP_MENU_FS=1 \
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" canvas "WProton" \
+        "$CANVAS_FILE" >> "$LOG_FILE" 2>&1 &
+    CANVAS_PID=$!
+    sleep 0.6
+    if kill -0 "$CANVAS_PID" 2>/dev/null; then
+        say "[+] Modo Juego: fondo persistente activo (pid $CANVAS_PID)"
+    else
+        say "AVISO: no se pudo abrir el fondo persistente"
+        CANVAS_PID=""
+    fi
+    return 0
+}
+
+canvas_say() {
+    # Mensaje que se ve en el fondo mientras no hay menu delante
+    [ -n "$CANVAS_FILE" ] && printf '%s
+' "$1" > "$CANVAS_FILE" 2>/dev/null
+    return 0
+}
+
+canvas_stop() {
+    [ -n "$CANVAS_FILE" ] && printf 'STOP
+' > "$CANVAS_FILE" 2>/dev/null
+    if [ -n "$CANVAS_PID" ]; then
+        local i
+        for i in 1 2 3 4 5; do
+            kill -0 "$CANVAS_PID" 2>/dev/null || break
+            sleep 0.2
+        done
+        kill "$CANVAS_PID" 2>/dev/null
+    fi
+    [ -n "$CANVAS_FILE" ] && rm -f "$CANVAS_FILE"
+    CANVAS_PID=""; CANVAS_FILE=""
+    return 0
+}
+
 post_game_resettle() {
     # En el MODO JUEGO (sesion gamescope) el compositor le da el foco al juego
     # y, al cerrarse este, no siempre se lo devuelve a la ventana siguiente:
@@ -5750,6 +5861,7 @@ post_game_resettle() {
         pgrep -f '\.exe' >/dev/null 2>&1 || break
         sleep 0.5
     done
+    canvas_say "Volviendo al menu..."
     if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
         say "[+] Sesion gamescope: devolviendo el foco a los menus..."
         # ventana nueva SIEMPRE en primer plano y a pantalla completa
@@ -5762,6 +5874,13 @@ post_game_resettle() {
         sleep 2
         # y que el helper se dibuje aunque nazca sin foco
         export SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
+        # si el fondo murio durante el juego, lo levantamos otra vez: es la
+        # ventana a la que gamescope devuelve el foco
+        if [ -n "$CANVAS_PID" ] && ! kill -0 "$CANVAS_PID" 2>/dev/null; then
+            say "[+] El fondo persistente se cerro: reabriendolo"
+            CANVAS_PID=""
+            canvas_start
+        fi
     else
         sleep 0.3
     fi
@@ -6726,7 +6845,7 @@ game_config_menu() {
         local bat_row=" "
         [ "$IS_BATOCERA" = 1 ] && bat_row="Lanzar via batocera-wine: $(onoff "${USE_BATOCERA:-1}")"
         local gs_row=" "
-        [ "${IS_GAMESCOPE:-0}" = 1 ] && gs_row="Gamescope anidado (modo Juego): $(onoff "${NESTED_GAMESCOPE:-1}")"
+        [ "${IS_GAMESCOPE:-0}" = 1 ] && gs_row="Gamescope anidado (solo si no vuelve al menu): $(onoff "${NESTED_GAMESCOPE:-0}")"
         local pack_row=""
         [ -d "$squash" ] && pack_row=">> EMPAQUETAR A WSQUASHFS <<"
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
@@ -6822,7 +6941,12 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
             "Arreglo mando SteamOS"*)
                 PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
             "Gamescope anidado"*)
-                NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-1})); write_full_profile "$gid" ;;
+                NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-0}))
+                write_full_profile "$gid"
+                [ "${NESTED_GAMESCOPE}" = 1 ] && ui_info "Gamescope anidado activado para este juego.
+Ayuda a volver al menu en modo Juego, pero algunos juegos
+avisan de 'Hooking has failed' o van a tirones. Si pasa,
+desactivalo aqui mismo." ;;
             "Mando via SDL"*)
                 case "${PAD_SDL:-auto}" in
                     auto) PAD_SDL=1 ;;
@@ -7290,12 +7414,15 @@ Mas runners: menu principal -> Descargar runners" ;;
     --menu)
         # Salida de emergencia del modo solo-jugar: menu completo siempre
         bootstrap_if_needed
+        canvas_start
         main_menu ;;
     --play|--games)
         bootstrap_if_needed
+        canvas_start
         direct_play_loop ;;
     "")
         bootstrap_if_needed
+        canvas_start
         if [ "${DIRECT_PLAY:-0}" = 1 ]; then
             direct_play_loop
         else
