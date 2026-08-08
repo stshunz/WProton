@@ -24,16 +24,32 @@ La primera vez tarda unos minutos. Después, arranca con:
 ./wproton.sh
 ```
 
+Al abrirlo por primera vez te preguntará **dónde tienes los juegos**, con dos opciones: usar la carpeta `games/` de WProton, o buscar otra (se abre el navegador y la eliges con el mando). Se puede cambiar después en *Biblioteca y preferencias → Carpeta de juegos*.
+
+Los menús se abren **a pantalla completa**. Si prefieres verlos en ventana, pulsa **Select + A** (o **F11**) y quedará recordado.
+
 ### Añadir tu primer juego
 
-Menú principal → **Añadir un juego**. Se abre un navegador de archivos donde puedes elegir:
+**Si ya tienes un juego empaquetado** (`.wsquashfs`, `.squashfs` o `.dwarfs`), no hay nada que preparar: **cópialo a tu carpeta de juegos —`games/` por defecto— y ya aparece en *Jugar***. También puedes abrirlo directamente desde el navegador de archivos o desde la línea de comandos:
+
+```bash
+./wproton.sh "Mi juego.wsquashfs"
+```
+
+Esos archivos son la forma en que WProton guarda los juegos: **un solo fichero comprimido** que se monta al vuelo, se juega en modo solo lectura y **guarda las partidas aparte**, sin modificarse nunca. Si te pasan uno hecho por otra persona, funciona igual.
+
+**Si tienes otro formato**, WProton lo convierte por ti: menú principal → **Añadir un juego**, y se abre un navegador de archivos donde puedes elegir:
 
 | Lo que tienes | Qué hace WProton |
 |---|---|
+| Un `.wsquashfs`, `.squashfs` o `.dwarfs` | Nada: se juega tal cual (basta con copiarlo a `games/`) |
 | Un `.zip`, `.rar` o `.7z` | Lo descomprime y lo convierte en un archivo de juego |
 | Un instalador de GOG (`setup_*.exe`) | Lo instala solo, sin ventanas, y lo empaqueta |
 | Una carpeta con el juego ya instalado | Te deja probarlo y luego empaquetarlo |
 | Un `.exe` suelto | Igual, tomando su carpeta como raíz |
+| Un `.bat` o `.cmd` | Igual: algunos juegos arrancan con un script en vez de un ejecutable |
+
+> Empaquetar no es obligatorio: una carpeta o un `.exe` se pueden jugar tal cual, sin convertir nada. Empaquetar solo sirve para tenerlo todo en un fichero, que ocupa menos y es más cómodo de mover.
 
 Cuando el juego esté en una carpeta, aparece este menú:
 
@@ -45,7 +61,9 @@ Puedes probar y ajustar tantas veces como quieras antes de empaquetar. **La conf
 
 ### Jugar
 
-Menú principal → **Jugar**. Elige el juego con el mando y pulsa **A**.
+Menú principal → **Jugar**. Ahí salen todos los juegos de tu carpeta de juegos, ya sean archivos empaquetados o carpetas. Elige uno con el mando y pulsa **A**.
+
+> ¿Dónde está esa carpeta? La primera vez que abres WProton te pregunta dónde tienes los juegos. Si no eliges ninguna, usa `games/`, dentro de la propia carpeta de WProton. Puedes cambiarla cuando quieras en *Biblioteca y preferencias → Carpeta de juegos*.
 
 La primera vez que lances un juego, un asistente te preguntará tres cosas: qué Proton usar, cuál es el ejecutable y unas opciones básicas. Si no sabes qué contestar, acepta lo que viene marcado: funciona en la mayoría de casos.
 
@@ -60,7 +78,7 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | **B** | Volver atrás |
 | **X** | Configurar el juego resaltado (en la lista de juegos) |
 | **Y** | Buscar |
-| **Select + A** | Pantalla completa |
+| **Select + A** | Pantalla completa / ventana |
 
 **Buscar entre muchos juegos**: pulsa **Y** y aparece un teclado en pantalla; o, si tienes teclado, empieza a escribir directamente. Se filtran los juegos cuyo nombre *empiece* por lo que escribas.
 
@@ -71,6 +89,8 @@ Ese mismo teclado en pantalla se usa para escribir argumentos, notas o cualquier
 ## 3. Ajustes de un juego
 
 Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes de un juego*). Lo más útil:
+
+**Ejecutable** — qué se lanza. Si el juego arranca con un `.bat` en vez de un `.exe` (habitual en ports y juegos antiguos), elígelo aquí: aparece en la lista junto a los ejecutables y WProton lo lanza con el intérprete de comandos de Windows.
 
 **Runner (Proton/Wine)** — con qué se ejecuta. Si un juego no arranca, esto es lo primero que conviene cambiar: prueba otro GE-Proton o una versión más antigua.
 
@@ -127,8 +147,9 @@ En *Ajustes de un juego → Partidas guardadas*:
 En *Biblioteca y preferencias*:
 
 - **Vista de juegos**: lista o **rejilla de carátulas**.
+- **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
 - **Descargar carátulas**: necesita una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API). Se pide una sola vez.
-- **Tema**: *clásico* (sobrio), *moderno* (paneles y acento neón) o *arcade* (synthwave con efecto CRT).
+- **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
 - **Tamaño de la letra**: normal, grande o muy grande. En consolas portátiles se agradece "grande".
 - **Ordenar juegos por**: nombre, últimos jugados o más jugados. Los favoritos van siempre primero.
 - **Idioma**: castellano o inglés.
@@ -192,8 +213,8 @@ Apunta el lanzador a `wproton.sh %ROM%`.
 **El mando funciona en los menús pero no dentro del juego.**
 Mira el ajuste *Mando vía SDL* del juego. En automático debería acertar, pero puedes forzarlo a ON (mandos de PlayStation) u OFF (mandos XInput).
 
-**Se me llena el disco de registros.**
-No: WProton borra solos los registros de más de dos días.
+**¿Se llenará la carpeta `logs/` de ficheros?**
+No: WProton borra los registros que tengan más de dos días.
 
 **¿Cómo actualizo?**
 *Buscar actualizaciones* en el menú principal, o `./wproton.sh --update`. Descarga la versión nueva, la valida y guarda la anterior como `.bak`.

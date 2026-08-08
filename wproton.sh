@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="0.98"
+WPROTON_VERSION="1.0"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -66,7 +66,7 @@ GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
 GAMES_VIEW="list"                        # lista | grid (rejilla con carátulas)
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
-THEME="clasico"                          # aspecto de los menus: clasico | moderno | arcade
+THEME="moderno"                          # aspecto de los menus: clasico | moderno | arcade
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
 GRID_COLS=0                              # columnas de la rejilla (0 = automático)
 LANGUAGE=es                              # idioma de los menus: es | en
@@ -168,6 +168,8 @@ write_lang_en() {
  "1280x720": "1280x720",
  "1280x800 (Steam Deck)": "1280x800 (Steam Deck)",
  "1920x1080": "1920x1080",
+ "4 - carátulas grandes": "4 - large covers",
+ "8 - carátulas pequeñas, más juegos a la vista": "8 - small covers, more games on screen",
  "<< Aceptar": "<< OK",
  "<< Cancelar": "<< Cancel",
  "<< Volver": "<< Back",
@@ -185,6 +187,7 @@ write_lang_en() {
  "Argumentos": "Arguments",
  "Arreglo mando SteamOS (Steam Input)": "SteamOS controller fix (Steam Input)",
  "Asignar fichero .keys (se copia a profiles/$gid.keys)": "Assign a .keys file (copied to profiles/$gid.keys)",
+ "Automático (según el tamaño de la pantalla)": "Automatic (based on screen size)",
  "Añadir este juego a Steam": "Add this game to Steam",
  "Añadir lo que falte (conserva lo tuyo)": "Add what's missing (keeps yours)",
  "Añadir un juego (zip, rar, exe o carpeta)": "Add a game (zip, rar, exe or folder)",
@@ -202,6 +205,7 @@ write_lang_en() {
  "CARPETA": "FOLDER",
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
+ "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
@@ -212,10 +216,12 @@ write_lang_en() {
  "Copia de tu configuración (exportar / importar)": "Back up your setup (export / import)",
  "Copia de tu configuración (perfiles, ajustes y carátulas)": "Back up your setup (profiles, settings and covers)",
  "Crear copia de seguridad ahora": "Create a backup now",
+ "Cuántas carátulas por fila en la rejilla": "How many covers per row in the grid",
  "DLL overrides": "DLL overrides",
  "DWProton [proton] - Dawn Winery, fixes anime/gacha": "DWProton [proton] - Dawn Winery, anime/gacha fixes",
  "DXVK Async": "DXVK Async",
  "Desactivado": "Disabled",
+ "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
  "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
  "Descargar carátulas (SteamGridDB)": "Download covers (SteamGridDB)",
  "Descargar extractores GOG (innoextract + innounp)": "Download GOG extractors (innoextract + innounp)",
@@ -225,13 +231,16 @@ write_lang_en() {
  "Descargar runners (Proton / Wine)": "Download runners (Proton / Wine)",
  "Destino rsync": "rsync destination",
  "Detener Wine y liberar los juegos montados": "Stop Wine and release mounted games",
+ "Donde tienes tus juegos?": "Where are your games?",
  "Dpad: moverse   A: pulsar   X: borrar   Y: aceptar   B: cancelar": "Dpad: move   A: press   X: delete   Y: accept   B: cancel",
  "ERROR": "ERROR",
  "ESP": "SPC",
  "Ejecutable": "Executable",
  "Elegir ejecutable": "Choose executable",
+ "Elegir otra carpeta...": "Choose another folder...",
  "Elige el aspecto de los menus": "Choose the menu style",
  "Elige el ejecutable": "Choose the executable",
+ "Elige la carpeta con tus juegos": "Choose the folder with your games",
  "Elige un juego": "Choose a game",
  "Empaquetar a wsquashfs": "Pack to wsquashfs",
  "Espacio en disco": "Disk space",
@@ -250,6 +259,7 @@ write_lang_en() {
  "Gamescope": "Gamescope",
  "Gamescope anidado (modo Juego)": "Nested gamescope (Game Mode)",
  "Grande (recomendado en consolas portatiles)": "Large (recommended on handhelds)",
+ "Herramientas de montaje...": "Mount tools...",
  "INFO": "INFO",
  "Idioma": "Language",
  "Idioma de los menus / Menu language": "Menu language / Idioma de los menus",
@@ -268,8 +278,10 @@ write_lang_en() {
  "LAA (Large Address Aware)": "LAA (Large Address Aware)",
  "LIMPIAR": "CLEAR",
  "LISTO": "DONE",
+ "La comunidad tiene una configuracion ya probada para:": "The community has a tested setup for:",
  "Lanzar via batocera-wine": "Launch via batocera-wine",
  "Limpiar cache de shaders": "Clear shader cache",
+ "Listo": "Done",
  "MAYUS": "SHIFT",
  "Mando via SDL (DualSense como Xbox)": "Controller via SDL (DualSense as Xbox)",
  "MangoHud": "MangoHud",
@@ -288,13 +300,16 @@ write_lang_en() {
  "Paso 1/3 - Elige Proton/Wine para este juego": "Step 1/3 - Choose Proton/Wine for this game",
  "Paso 2/3 - Ejecutable del juego": "Step 2/3 - Game executable",
  "Paso 3/3 - Configuración basica": "Step 3/3 - Basic settings",
+ "Perfiles de la comunidad": "Community profiles",
  "Perfiles de la comunidad (juegos que necesitan ajustes)": "Community profiles (games needing tweaks)",
  "Personalizado (escribir argumentos)": "Custom (type arguments)",
  "Prefijo": "Prefix",
  "Prefijo compartido (default) - lo usan todos los juegos en modo compartido": "Shared prefix (default) - used by all games in shared mode",
  "Prefijo de un juego concreto (elegir juego)": "Prefix of a specific game (choose game)",
+ "Preparando umu-launcher...": "Preparing umu-launcher...",
  "Preparando...": "Preparing...",
  "Preparar carpeta para Syncthing": "Prepare folder for Syncthing",
+ "Primera puesta en marcha de WProton": "Setting up WProton for the first time",
  "Probar el juego (sin empaquetar)": "Test the game (without packing)",
  "Propio del juego (prefixes/$gid)": "Per-game (prefixes/$gid)",
  "Proton-CachyOS [proton] - optimizado x86-64-v3": "Proton-CachyOS [proton] - optimized x86-64-v3",
@@ -316,6 +331,7 @@ write_lang_en() {
  "Tamaño por juego": "Size per game",
  "Tamaño por juego (juego + saves + prefijo)": "Size per game (game + saves + prefix)",
  "Tema de los menus": "Menu theme",
+ "Usar la carpeta games/ de WProton": "Use WProton's games/ folder",
  "Variables extra": "Extra variables",
  "Ver donde guarda las partidas": "Show where saves are stored",
  "Ver el registro de la última sesión": "View the last session log",
@@ -329,6 +345,7 @@ write_lang_en() {
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
  "auto (autorun.cmd / escaneo)": "auto (autorun.cmd / scan)",
+ "automático": "automatic",
  "borrar": "delete",
  "buscar": "search",
  "cancelar": "cancel",
@@ -611,27 +628,46 @@ arch_tag() {
 }
 
 try_static_tool() {
-    # $1 = nombre del binario, resto = URLs candidatas. Descarga la primera
-    # que EJECUTE de verdad en esta máquina (arquitectura correcta).
+    # $1 = nombre del binario, resto = URLs candidatas.
+    # Descarga la primera que sirva de verdad en esta maquina y DEJA DICHO EN
+    # EL REGISTRO por que descarta las demas: si un binario no arranca hay que
+    # poder saber si es por arquitectura, por una libreria que falta o porque
+    # lo descargado no era un binario.
     local name="$1"; shift
-    local tmp url rc
+    local tmp url rc err magic
     mkdir -p "$RUNTIME_DIR/tools"
     tmp="$(mktemp -d)"
     for url in "$@"; do
         [ -n "$url" ] || continue
         say "[$name] probando $(basename "$url")..."
-        dl "$url" "$tmp/$name" >/dev/null 2>&1 || continue
-        chmod +x "$tmp/$name" 2>/dev/null
-        "$tmp/$name" --help >/dev/null 2>&1
-        rc=$?
-        if [ "$rc" -lt 126 ]; then          # 126/127 = no ejecutable aquí
-            cp -f "$tmp/$name" "$RUNTIME_DIR/tools/$name"
-            chmod +x "$RUNTIME_DIR/tools/$name"
-            rm -rf "$tmp"
-            say "[$name] listo (portable en runtime/tools)"
-            return 0
+        if ! dl "$url" "$tmp/$name" >/dev/null 2>&1; then
+            say "[$name] no se pudo descargar (404 o sin red)"
+            continue
         fi
-        say "[$name] ese binario no funciona aquí, probando otro"
+        [ -s "$tmp/$name" ] || { say "[$name] la descarga vino vacia"; continue; }
+        # ¿es de verdad un binario? (a veces llega una pagina de error)
+        magic="$(head -c 4 "$tmp/$name" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')"
+        if [ "$magic" != "7f454c46" ]; then
+            say "[$name] lo descargado no es un binario ELF (es $(head -c 40 "$tmp/$name" | tr -d '\n' | cut -c1-40))"
+            continue
+        fi
+        chmod 755 "$tmp/$name" 2>/dev/null
+        err="$("$tmp/$name" --help 2>&1)"
+        rc=$?
+        # Solo 126 y 127 significan "no se puede ejecutar" (arquitectura
+        # equivocada o libreria ausente). Cualquier otro codigo quiere decir
+        # que el programa ARRANCO: squashfuse, por ejemplo, responde a --help
+        # con su version y sale con 254, y es perfectamente valido.
+        case "$rc" in
+            126|127)
+                say "[$name] no arranca aqui (rc=$rc): $(printf '%s' "$err" | head -n1)" ;;
+            *)
+                cp -f "$tmp/$name" "$RUNTIME_DIR/tools/$name"
+                chmod 755 "$RUNTIME_DIR/tools/$name"
+                rm -rf "$tmp"
+                say "[$name] listo (portable en runtime/tools): $(printf '%s' "$err" | head -n1)"
+                return 0 ;;
+        esac
     done
     rm -rf "$tmp"
     return 1
@@ -697,21 +733,167 @@ EOFDW
     return 1
 }
 
+try_wproton_repo_tool() {
+    # $1 = nombre del binario. Lo busca en el PROPIO repositorio de WProton,
+    # que es la via mas fiable porque la controlamos nosotros:
+    #   1) carpeta tools/ del repositorio (basta con subir el fichero)
+    #      - tools/<arquitectura>/<binario>  (p.ej. tools/x86_64/squashfuse)
+    #      - tools/<binario>
+    #   2) ficheros adjuntos a las releases
+    # Se valida igual que cualquier otra descarga: si no arranca aqui, se
+    # descarta y se prueba la siguiente fuente.
+    local name="$1" a urls
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    a="$(arch_tag)"
+    urls="https://raw.githubusercontent.com/$WPROTON_REPO/main/tools/$a/$name
+https://raw.githubusercontent.com/$WPROTON_REPO/main/tools/$name"
+    urls="$urls
+$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+    | grep -i "/$name" | head -n 4)"
+    # shellcheck disable=SC2086
+    try_static_tool "$name" $(printf '%s\n' "$urls" | awk 'NF')
+}
+
+try_arch_package() {
+    # $1 = nombre del paquete y del binario (p.ej. squashfuse)
+    # Los paquetes de Arch son tarballs comprimidos con zstd: dentro esta
+    # usr/bin/<binario>. Sirve en Arch, CachyOS y SteamOS (que es Arch); en
+    # otras distros puede no arrancar por las librerias, pero eso se
+    # comprueba ejecutandolo antes de darlo por bueno.
+    local name="$1" tmp url
+    command -v tar >/dev/null 2>&1 || return 1
+    tmp="$(mktemp -d)"
+    url="https://archlinux.org/packages/extra/x86_64/$name/download/"
+    say "[$name] probando el paquete de Arch Linux..."
+    if ! dl "$url" "$tmp/pkg.tar.zst"; then
+        rm -rf "$tmp"; return 1
+    fi
+    # tar con soporte zstd, o el zstd suelto si el tar no lo trae
+    if ! ( cd "$tmp" && tar --zstd -xf pkg.tar.zst usr/bin/"$name" ) >>"$LOG_FILE" 2>&1; then
+        if command -v zstd >/dev/null 2>&1; then
+            ( cd "$tmp" && zstd -d -q pkg.tar.zst -o pkg.tar \
+              && tar -xf pkg.tar usr/bin/"$name" ) >>"$LOG_FILE" 2>&1 || {
+                say "[$name] no se pudo abrir el paquete de Arch"; rm -rf "$tmp"; return 1; }
+        else
+            say "[$name] el paquete de Arch necesita zstd para abrirse"
+            rm -rf "$tmp"; return 1
+        fi
+    fi
+    local bin="$tmp/usr/bin/$name"
+    [ -f "$bin" ] || { rm -rf "$tmp"; return 1; }
+    chmod +x "$bin" 2>/dev/null
+    # comprobar que ARRANCA aqui: en distros no-Arch puede faltarle alguna
+    # libreria. Solo 126/127 son "no ejecutable"; otros codigos son validos.
+    "$bin" --help >/dev/null 2>&1
+    local arc=$?
+    if [ "$arc" != 126 ] && [ "$arc" != 127 ]; then
+        mkdir -p "$RUNTIME_DIR/tools"
+        cp -f "$bin" "$RUNTIME_DIR/tools/$name"
+        chmod +x "$RUNTIME_DIR/tools/$name"
+        rm -rf "$tmp"
+        say "[$name] listo (del paquete de Arch, en runtime/tools)"
+        return 0
+    fi
+    say "[$name] el binario de Arch no funciona en este sistema"
+    rm -rf "$tmp"
+    return 1
+}
+
+build_squashfuse_src() {
+    # Ultimo recurso si no hay binario estatico para esta maquina: compilar
+    # squashfuse desde su codigo oficial (github.com/vasi/squashfuse).
+    #
+    # Se usa el TARBALL DE LA RELEASE, no el codigo del repositorio: la
+    # release ya trae el script ./configure generado, asi que basta con un
+    # compilador y make. Con el codigo del repositorio harian falta ademas
+    # autoconf, automake y libtool, que mucha gente no tiene.
+    local falta="" c
+    for c in gcc make sed; do
+        command -v "$c" >/dev/null 2>&1 || falta="$falta $c"
+    done
+    if [ -n "$falta" ]; then
+        say "[squashfuse] no se puede compilar: falta$falta"
+        return 1
+    fi
+    local tmp url src
+    tmp="$(mktemp -d)"
+    # el tarball de distribucion de la ultima release (nombre squashfuse-X.Y.Z.tar.gz)
+    url="$(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
+        | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+        | grep -iE 'squashfuse-[0-9].*\.tar\.(gz|xz)$' | head -n1)"
+    if [ -n "$url" ]; then
+        say "[squashfuse] compilando desde $(basename "$url") (un par de minutos)..."
+        dl "$url" "$tmp/src.tar" || url=""
+    fi
+    if [ -z "$url" ]; then
+        # sin tarball de release: probar con el codigo del repositorio, que
+        # necesita autotools
+        for c in autoconf automake libtool; do
+            command -v "$c" >/dev/null 2>&1 || {
+                say "[squashfuse] sin tarball de release y falta $c para generar configure"
+                rm -rf "$tmp"; return 1; }
+        done
+        say "[squashfuse] compilando desde el repositorio (necesita autotools)..."
+        dl "https://github.com/vasi/squashfuse/archive/refs/heads/master.tar.gz" \
+           "$tmp/src.tar" || { rm -rf "$tmp"; return 1; }
+    fi
+    ( cd "$tmp" && tar xf src.tar ) >>"$LOG_FILE" 2>&1 || { rm -rf "$tmp"; return 1; }
+    src="$(find "$tmp" -maxdepth 1 -type d -name 'squashfuse*' | head -n1)"
+    [ -d "$src" ] || { rm -rf "$tmp"; return 1; }
+    (
+        cd "$src" || exit 1
+        [ -x ./configure ] || ./autogen.sh || exit 1
+        ./configure && make -j"$(nproc 2>/dev/null || echo 2)"
+    ) >>"$LOG_FILE" 2>&1
+    if [ -x "$src/squashfuse" ]; then
+        mkdir -p "$RUNTIME_DIR/tools"
+        cp -f "$src/squashfuse" "$RUNTIME_DIR/tools/squashfuse"
+        chmod +x "$RUNTIME_DIR/tools/squashfuse"
+        rm -rf "$tmp"
+        say "[squashfuse] compilado e instalado en runtime/tools"
+        return 0
+    fi
+    rm -rf "$tmp"
+    say "[squashfuse] la compilacion fallo (mira el log)"
+    return 1
+}
+
+tool_is_ours() {
+    # ¿El binario resuelto es una copia NUESTRA (portable) o del sistema?
+    case "${1:-}" in
+        "$RUNTIME_DIR"/tools/*|"$BASE_DIR"/bin/*) return 0 ;;
+        "$BASE_DIR"/*) case "${1#"$BASE_DIR"/}" in */*) return 1 ;; *) return 0 ;; esac ;;
+        *) return 1 ;;
+    esac
+}
+
 setup_fuse_tools() {
-    # Descarga versiones PORTABLES de fuse-overlayfs y squashfuse. Solo
+    # Consigue versiones PORTABLES de fuse-overlayfs y squashfuse. Solo
     # fusermount3 (paquete fuse3) sigue siendo del sistema: lo necesita el
     # kernel para montar como usuario y no puede ser portable.
+    #
+    # Se descargan AUNQUE el sistema ya los tenga: WProton debe poder moverse
+    # a otro equipo (o a un pendrive) y seguir funcionando, y asi todos los
+    # equipos usan la misma version. Si no se consiguen, se usan los del
+    # sistema, que para eso estan.
     local a; a="$(arch_tag)"
     local ok=0
-    if [ -z "$OVERLAYFS_BIN" ]; then
+    if ! tool_is_ours "$OVERLAYFS_BIN"; then
         # fuse-overlayfs publica binarios ESTATICOS oficiales por arquitectura
         local ovl_urls
         ovl_urls="$(curl -fsSL "https://api.github.com/repos/containers/fuse-overlayfs/releases/latest" 2>/dev/null \
             | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i "$a")"
         # shellcheck disable=SC2086
-        try_static_tool fuse-overlayfs $ovl_urls && ok=1
+        if try_wproton_repo_tool fuse-overlayfs; then
+            ok=1
+        elif try_static_tool fuse-overlayfs $ovl_urls; then
+            ok=1
+        elif try_arch_package fuse-overlayfs; then
+            ok=1
+        fi
     fi
-    if [ -z "$SQUASHFUSE_BIN" ]; then
+    if ! tool_is_ours "$SQUASHFUSE_BIN"; then
         # squashfuse no publica binarios: probamos fuentes de builds estaticos
         local sq_urls="https://bin.pkgforge.dev/$a/squashfuse"
         sq_urls="$sq_urls
@@ -719,9 +901,26 @@ $(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest"
     | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i 'squashfuse' | grep -i "$a")"
         sq_urls="$sq_urls
 $(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
-    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -iv 'tar\.\|zip\|sig' | grep -i "$a")"
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+    | grep -iv 'sig\|asc' | grep -iv 'squashfuse-[0-9]' | grep -i "$a")"
+        # Por orden: nuestro repositorio -> binarios estaticos -> paquete de
+        # Arch -> compilar desde el codigo oficial.
         # shellcheck disable=SC2086
-        try_static_tool squashfuse $(printf '%s\n' "$sq_urls" | awk 'NF') && ok=1
+        if try_wproton_repo_tool squashfuse; then
+            ok=1
+        elif try_static_tool squashfuse $(printf '%s\n' "$sq_urls" | awk 'NF'); then
+            ok=1
+        elif try_arch_package squashfuse; then
+            ok=1
+        elif [ -z "$SQUASHFUSE_BIN" ]; then
+            # Compilar es el ULTIMO recurso y solo si NO hay ninguna squashfuse
+            # utilizable. Si el sistema ya trae una, se usa esa: no tiene
+            # sentido tardar minutos compilando (y en SteamOS ni siquiera hay
+            # compilador) solo por tener una copia propia.
+            build_squashfuse_src && ok=1
+        else
+            say "[squashfuse] sin copia portable; se seguira usando la del sistema"
+        fi
     fi
     SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
     OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
@@ -733,21 +932,53 @@ check_deps() {
     for c in curl tar; do
         command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
     done
-    # squashfuse/fuse-overlayfs: si faltan, se descargan portables solos
-    if [ -z "$SQUASHFUSE_BIN" ] || [ -z "$OVERLAYFS_BIN" ]; then
-        if command -v curl >/dev/null 2>&1; then
-            say "Faltan herramientas FUSE: descargando versiones portables..."
+    # fusermount3 SI es imprescindible y no se puede suplir: lo exige el kernel
+    [ -z "$FUSERMOUNT_BIN" ]  && missing="$missing fusermount3(paquete fuse3)"
+    [ -n "$missing" ] && die "Faltan dependencias del sistema:$missing
+
+Instalalas con el gestor de paquetes de tu distribucion."
+
+    # squashfuse y fuse-overlayfs: se busca una copia PROPIA aunque el sistema
+    # ya las tenga, porque WProton debe poder moverse a otro equipo o a un
+    # pendrive. Si no se consiguen, se usan las del sistema y no se aborta:
+    # es mejor dejar entrar (para configurar o reintentar desde el menu) que
+    # cerrarse sin darle opciones al usuario.
+    if ! tool_is_ours "$SQUASHFUSE_BIN" || ! tool_is_ours "$OVERLAYFS_BIN"; then
+        local reintentar=1 marca="$RUNTIME_DIR/.fuse_tools_try" edad
+        # Si ya se intento hace poco y las del sistema sirven, no insistir en
+        # cada arranque; si faltan del todo, se intenta siempre.
+        if [ -n "$SQUASHFUSE_BIN" ] && [ -n "$OVERLAYFS_BIN" ] && [ -f "$marca" ]; then
+            edad=$(( $(date +%s) - $(stat -c %Y "$marca" 2>/dev/null || echo 0) ))
+            if [ "$edad" -lt 604800 ]; then       # una semana
+                reintentar=0
+                log "Herramientas FUSE: ultimo intento hace $((edad/3600))h; se usan las del sistema"
+            fi
+        fi
+        if [ "$reintentar" = 1 ]; then
+            if [ -z "$SQUASHFUSE_BIN" ] || [ -z "$OVERLAYFS_BIN" ]; then
+                say "Preparando las herramientas de montaje (squashfuse, fuse-overlayfs)..."
+            else
+                say "Buscando copias portables de squashfuse y fuse-overlayfs..."
+            fi
+
+            mkdir -p "$RUNTIME_DIR" 2>/dev/null
             setup_fuse_tools || true
+            : > "$marca" 2>/dev/null
+            SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
+            OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
+            if tool_is_ours "$SQUASHFUSE_BIN" && tool_is_ours "$OVERLAYFS_BIN"; then
+                say "[+] Herramientas de montaje propias listas en runtime/tools"
+            fi
         fi
     fi
-    [ -z "$SQUASHFUSE_BIN" ]  && missing="$missing squashfuse"
-    [ -z "$OVERLAYFS_BIN" ]   && missing="$missing fuse-overlayfs"
-    [ -z "$FUSERMOUNT_BIN" ]  && missing="$missing fusermount3(fuse3)"
-    [ -n "$missing" ] && die "Faltan dependencias:$missing
-No se pudieron descargar automáticamente. Puedes dejar los binarios
-squashfuse y fuse-overlayfs junto a wproton.sh (o en runtime/tools/).
-fusermount3 (paquete fuse3) SI debe estar en el sistema: lo exige el kernel."
-    log "Herramientas: squashfuse=$SQUASHFUSE_BIN | overlayfs=$OVERLAYFS_BIN | fusermount=$FUSERMOUNT_BIN"
+    if [ -z "$SQUASHFUSE_BIN" ] || [ -z "$OVERLAYFS_BIN" ]; then
+        local falta=""
+        [ -z "$SQUASHFUSE_BIN" ] && falta="$falta squashfuse"
+        [ -z "$OVERLAYFS_BIN" ]  && falta="$falta fuse-overlayfs"
+        say "AVISO: faltan$falta; los juegos empaquetados no se podran montar"
+        WP_SIN_FUSE="$falta"
+    fi
+    log "Herramientas: squashfuse=$SQUASHFUSE_BIN$(tool_is_ours "$SQUASHFUSE_BIN" && printf ' [portable]' || printf ' [sistema]') | overlayfs=$OVERLAYFS_BIN$(tool_is_ours "$OVERLAYFS_BIN" && printf ' [portable]' || printf ' [sistema]') | fusermount=$FUSERMOUNT_BIN"
 }
 
 # ----------------------------------------------------------------------------
@@ -1643,6 +1874,12 @@ mapeador_stop() {
 MENU_PYGAME_PY="$RUNTIME_DIR/menu_pygame.py"
 HAS_PYGAME=-1   # -1 = sin comprobar
 
+FIRSTRUN_MARK="$RUNTIME_DIR/.first_run_done"
+WP_SIN_FUSE=""                           # herramientas de montaje que faltan
+WP_PRIMERA_VEZ=0                         # 1 = puesta en marcha inicial
+WP_INSTALL_SILENCIOSO=0                  # 1 = instalar sin pedir "Aceptar"
+INSTALL_NOTICE_PID=""
+PROGRESS_FILE=""
 PYGAME_OK_MARK="$RUNTIME_DIR/.pygame_ok"
 pygame_available() {
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
@@ -1669,10 +1906,10 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER_V45" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER_V48" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
 #!/usr/bin/env python3
-# WPROTON_HELPER_V45
+# WPROTON_HELPER_V48
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -1697,8 +1934,11 @@ os.environ.setdefault('SDL_VIDEO_CENTERED', '1')
 os.environ.setdefault('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS', '0')
 # Pantalla completa: forzada en Batocera, o recordada entre menus con un
 # marcador (cada menu es un proceso nuevo, así que la preferencia va a fichero)
-FS_MARK = os.path.join(BASE, '.menu_fullscreen')
-FULLSCREEN = os.environ.get('WP_MENU_FS') == '1' or os.path.isfile(FS_MARK)
+# Pantalla completa POR DEFECTO: se ve mejor y es lo que espera quien juega
+# con mando. Si el usuario prefiere ventana, lo cambia con Select+A / F11 y
+# queda anotado en este marcador.
+WIN_MARK = os.path.join(BASE, '.menu_windowed')
+FULLSCREEN = os.environ.get('WP_MENU_FS') == '1' or not os.path.isfile(WIN_MARK)
 # Orden de drivers de video a probar. En sesión gamescope (modo Juego de
 # SteamOS) va primero Wayland: forzar x11/XWayland deja la ventana detras y
 # se ve la pantalla en negro. En escritorio, al reves.
@@ -1736,7 +1976,7 @@ MODE, TITLE, OUTFILE = sys.argv[1], sys.argv[2], sys.argv[3]
 ARG4 = sys.argv[4] if len(sys.argv) > 4 else OUTFILE
 BROWSE_KIND = sys.argv[5] if len(sys.argv) > 5 else 'file'
 BROWSE_EXTS = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
-               '.001', '.z01', '.exe', '.wtgz')
+               '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 if BROWSE_KIND == 'keys':
     BROWSE_EXTS = ('.keys',)
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
@@ -2112,9 +2352,11 @@ def toggle_fullscreen():
         screen = _open_window()
     try:
         if FULLSCREEN:
-            open(FS_MARK, 'w').close()
-        elif os.path.isfile(FS_MARK):
-            os.remove(FS_MARK)
+            # vuelve a pantalla completa: se borra la preferencia de ventana
+            if os.path.isfile(WIN_MARK):
+                os.remove(WIN_MARK)
+        else:
+            open(WIN_MARK, 'w').close()
     except Exception:
         pass
     apply_layout()
@@ -2205,9 +2447,9 @@ def L(es, en=None):
     if es in _LANGMAP:
         return _LANGMAP[es]
     return en if en is not None else es
-THEME_NAME = os.environ.get('WP_THEME', 'clasico')
+THEME_NAME = os.environ.get('WP_THEME', 'moderno')
 if THEME_NAME not in THEMES:
-    THEME_NAME = 'clasico'
+    THEME_NAME = 'moderno'
 TH = THEMES[THEME_NAME]
 
 BG   = TH['bg']
@@ -2593,14 +2835,23 @@ def grid_metrics():
     w_from_h = int(h_max / 1.5)
     # ancho maximo razonable por carátula según el tamaño de pantalla
     w_cap = 190 if W <= 1400 else (210 if W <= 1920 else 240)
-    GIMG_W = max(120, min(w_from_h, w_cap))
-    GIMG_H = int(GIMG_W * 1.5)
-    GCW = GIMG_W + 26
-    GCH = GIMG_H + 48
     if forced > 0:
+        # columnas fijadas por el usuario: el tamaño de la carátula se calcula
+        # para que QUEPAN esas columnas (antes se mantenía el tamaño y con
+        # muchas columnas se salían de la pantalla)
         GCOLS = forced
-        GCW = max(GIMG_W + 12, avail_w // max(1, forced))
+        GCW = max(80, avail_w // forced)
+        GIMG_W = max(90, GCW - 26)
+        # y que la fila siga cabiendo de alto
+        if int(GIMG_W * 1.5) + 48 > int(avail_h / rows):
+            GIMG_W = max(90, int((int(avail_h / rows) - 48) / 1.5))
+        GIMG_H = int(GIMG_W * 1.5)
+        GCH = GIMG_H + 48
     else:
+        GIMG_W = max(120, min(w_from_h, w_cap))
+        GIMG_H = int(GIMG_W * 1.5)
+        GCW = GIMG_W + 26
+        GCH = GIMG_H + 48
         GCOLS = max(3, min(9, avail_w // GCW))
     _imgcache.clear()          # las imagenes se reescalan al nuevo tamaño
 
@@ -2913,16 +3164,26 @@ if MODE == 'canvas':
             draw_header()
         # marca centrada
         big = pygame.font.Font(None, max(48, W // 14))
+        # Composicion vertical a partir de la ALTURA REAL de la marca: antes
+        # se usaban distancias fijas y con la letra grande el texto de estado
+        # se montaba encima de "WPROTON".
         brand = big.render('WPROTON', True, ACC)
-        screen.blit(brand, ((W - brand.get_width()) // 2, H // 2 - 60))
+        try:
+            bh = brand.get_height()
+        except Exception:
+            bh = FS(96)
+        by = H // 2 - bh
+        screen.blit(brand, ((W - brand.get_width()) // 2, by))
+        _y = by + bh + FS(28)          # el estado empieza DEBAJO de la marca
         if status:
-            for _i, _ln in enumerate(wrap_title(status, f_it, W - 120, 3)):
+            for _ln in wrap_title(status, f_it, W - 120, 3):
                 sf = rtext(f_it, _ln, FG)
-                screen.blit(sf, ((W - sf.get_width()) // 2, H // 2 + 10 + _i * 30))
+                screen.blit(sf, ((W - sf.get_width()) // 2, _y))
+                _y += FS(34)
         # punto animado, para que se vea que sigue vivo
         _p = int(time.time() * 2) % 4
         dots = rtext(f_sm, '.' * _p, DIM)
-        screen.blit(dots, ((W - dots.get_width()) // 2, H // 2 + 110))
+        screen.blit(dots, ((W - dots.get_width()) // 2, _y + FS(16)))
         if SCANSURF is not None:
             screen.blit(SCANSURF, (0, 0))
         pygame.display.flip()
@@ -3613,6 +3874,13 @@ ask_text() {
 
 pick_dir() {
     # $1 = titulo, $2 = dir inicial. Imprime el dir elegido.
+    # NUESTRO navegador primero: se maneja con el mando y no depende del
+    # escritorio. zenity acababa abriendo el dialogo del sistema (Dolphin en
+    # KDE), que no se puede usar con el mando.
+    if pygame_available; then
+        browse_for_path "$1" "${2:-$HOME}" "dir"
+        return $?
+    fi
     pad_bridge_start
     if [ "$HAS_ZENITY" = 1 ]; then
         zenity --file-selection --directory --title="$1" \
@@ -3669,7 +3937,11 @@ ge_tags_curated() {
 dl() {
     # $1 = url, $2 = destino. Con barra de progreso zenity si hay GUI.
     say "Descargando $(basename "$2")..."
-    if [ "$HAS_ZENITY" = 1 ]; then
+    # Si ya hay un aviso general en pantalla (instalacion inicial) o nuestra
+    # ventana de progreso, NO abrir otra ventana encima: se solapaban.
+    if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
+        curl -fL --retry 3 -s -o "$2" "$1"
+    elif [ "$HAS_ZENITY" = 1 ]; then
         curl -fL --retry 3 -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
         local pid=$!
         ( while kill -0 $pid 2>/dev/null; do echo 50; sleep 1; done; echo 100 ) \
@@ -3685,7 +3957,10 @@ run_with_progress() {
     # $1 = texto de estado; resto = comando. Pulsador zenity si hay GUI.
     local text="$1"; shift
     say "$text"
-    if [ "$HAS_ZENITY" = 1 ]; then
+    if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
+        # ya hay un aviso en pantalla: no apilar ventanas
+        "$@" >> "$LOG_FILE" 2>&1
+    elif [ "$HAS_ZENITY" = 1 ]; then
         "$@" >> "$LOG_FILE" 2>&1 &
         local pid=$!
         ( while kill -0 $pid 2>/dev/null; do echo 50; sleep 1; done; echo 100 ) \
@@ -3772,16 +4047,39 @@ setup_python() {
     # pygame al estilo DeckStation: pip --target runtime/libs_pyX.Y
     say "Instalando pygame en runtime/$(py_libs_dir)..."
     "$PY_BIN" -m ensurepip --default-pip >> "$LOG_FILE" 2>&1 || true
-    "$PY_BIN" -m pip install --target "$RUNTIME_DIR/$(py_libs_dir)" \
-        --disable-pip-versión-check --no-warn-script-location --upgrade pygame >> "$LOG_FILE" 2>&1 \
-        || { ui_error "Fallo instalando pygame (los menus caeran a GTK/zenity)"; return 1; }
+    local libs="$RUNTIME_DIR/$(py_libs_dir)"
+    if ! "$PY_BIN" -m pip install --target "$libs" \
+            --disable-pip-version-check --no-warn-script-location --upgrade pygame \
+            >> "$LOG_FILE" 2>&1; then
+        # Segundo intento con la rueda precompilada (sin compilar nada) y sin
+        # cache, que es lo que falla en sistemas con poco espacio en /tmp
+        say "pygame no se instalo al primer intento; reintentando..."
+        "$PY_BIN" -m pip install --target "$libs" --disable-pip-version-check \
+            --no-warn-script-location --no-cache-dir --only-binary=:all: pygame \
+            >> "$LOG_FILE" 2>&1 || true
+    fi
+    if ! "$PY_BIN" -c "import sys; sys.path.insert(0, '$libs'); import pygame" \
+            >> "$LOG_FILE" 2>&1; then
+        ui_error "No se pudo instalar pygame: los menus usaran GTK/zenity.
+
+Ultimas lineas del registro:
+$(grep -iE 'error|no matching|failed' "$LOG_FILE" | tail -n 3)
+
+Puedes reintentarlo en
+Runners y herramientas -> Instalar/actualizar Python portable + pygame"
+        return 1
+    fi
     say "Instalando evdev para el mapeador .keys (opcional)..."
     "$PY_BIN" -m pip install --target "$RUNTIME_DIR/$(py_libs_dir)" \
-        --disable-pip-versión-check --no-warn-script-location evdev >> "$LOG_FILE" 2>&1 \
+        --disable-pip-version-check --no-warn-script-location evdev >> "$LOG_FILE" 2>&1 \
         || say "evdev no compilo (normal en SteamOS): deja tu carpeta evmapy/ en la raiz de WProton"
     HAS_PYGAME=-1   # re-evaluar
     rm -f "$PYGAME_OK_MARK"
-    ui_info "Python portable listo: $("$PY_BIN" -V 2>&1) + pygame"
+    if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
+        say "Python portable listo: $("$PY_BIN" -V 2>&1) + pygame"
+    else
+        ui_info "Python portable listo: $("$PY_BIN" -V 2>&1) + pygame"
+    fi
 }
 
 setup_umu() {
@@ -3811,14 +4109,22 @@ setup_proton() {
     [ -z "$url" ] && die "No se pudo obtener la URL de GE-Proton"
     local name; name="$(basename "$url" .tar.gz)"
     if [ -d "$RUNNERS_DIR/$name" ]; then
-        ui_info "GE-Proton ya al dia: $name"
+        if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
+            say "GE-Proton ya al dia: $name"
+        else
+            ui_info "GE-Proton ya al dia: $name"
+        fi
         return 0
     fi
     local tmp="$RUNNERS_DIR/.dl_tmp"; rm -rf "$tmp"; mkdir -p "$tmp"
     dl "$url" "$tmp/$(basename "$url")" || die "Fallo descargando GE-Proton"
     extract_archive "$tmp/$(basename "$url")" "$RUNNERS_DIR" || die "Fallo extrayendo GE-Proton"
     rm -rf "$tmp"
-    ui_info "GE-Proton instalado: $name"
+    if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
+        say "GE-Proton instalado: $name"
+    else
+        ui_info "GE-Proton instalado: $name"
+    fi
 }
 
 download_runner_tag() {
@@ -4258,10 +4564,13 @@ _fexe() {
 }
 
 scan_exes() {
-    # Lista filtrada para menus de seleccion manual
-    find "$1" -type f -iname '*.exe' \
+    # Lista filtrada para menus de seleccion manual. Ademas de .exe se
+    # incluyen .bat y .cmd: algunos juegos (sobre todo ports y titulos
+    # antiguos) arrancan con un script por lotes que prepara variables o
+    # elige la version correcta antes de llamar al ejecutable.
+    find "$1" -type f \( -iname '*.exe' -o -iname '*.bat' -o -iname '*.cmd' \) \
         ! -ipath '*/windows/*' ! -ipath '*/Windows/*' ! -ipath '*/system32/*' \
-        ! -ipath '*/syswow64/*' 2>/dev/null | _fexe
+        ! -ipath '*/syswow64/*' ! -iname 'autorun.cmd' 2>/dev/null | _fexe
 }
 
 find_game_exe() {
@@ -4299,8 +4608,14 @@ find_game_exe() {
     fi
 
     # 5) barrido general
-    find "$ROOT" -type f -iname '*.exe' \
+    EXE=$(find "$ROOT" -type f -iname '*.exe' \
         ! -ipath '*/windows/*' ! -ipath '*/Windows/*' ! -ipath '*/system32/*' \
+        2>/dev/null | _fexe | head -n1)
+    [ -n "$EXE" ] && { printf '%s' "$EXE"; return; }
+
+    # 6) sin ningun .exe utilizable: puede ser un juego que arranca por .bat
+    find "$ROOT" -maxdepth 2 -type f \( -iname '*.bat' -o -iname '*.cmd' \) \
+        ! -iname 'autorun.cmd' ! -ipath '*/windows/*' \
         2>/dev/null | _fexe | head -n1
 }
 
@@ -4372,7 +4687,18 @@ find_exe() {
                     [ -z "$hit" ] && hit=$(find "$root" -maxdepth 2 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                     [ -z "$hit" ] && hit=$(find "$root" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                 fi
-                [ -n "$hit" ] && { EXE_PATH="$hit"; EXE_ARGS="${ARGS_OVERRIDE:-}"; say "[+] Ejecutable por autorun.cmd: $hit"; return 0; }
+                if [ -n "$hit" ]; then
+                    EXE_PATH="$hit"
+                    # argumentos del propio autorun (CMD="juego.exe -novr"),
+                    # salvo que el perfil traiga los suyos
+                    EXE_ARGS="${ARGS_OVERRIDE:-$R_ARGS}"
+                    # ENV= y LANG= del autorun estilo Batocera
+                    AUTORUN_ENV="$R_ENV"
+                    AUTORUN_LANG="$R_LANG"
+                    say "[+] Ejecutable por autorun.cmd: $hit"
+                    [ -n "$R_ARGS" ] && say "[+] Argumentos del autorun: $R_ARGS"
+                    return 0
+                fi
             fi
         fi
         # Paso 2: heuristica completa
@@ -4834,6 +5160,10 @@ launch_game() {
     local squash="$1" mode="${2:-auto}"
     local gid; gid="$(game_id "$squash")"
 
+    # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
+    # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
+    profile_exists "$gid" || community_offer_for "$gid" || true
+
     # Recordar como "último juego jugado"
     local abs_squash; abs_squash="$(readlink -f "$squash" 2>/dev/null || printf '%s' "$squash")"
     if [ "$abs_squash" != "$LAST_GAME" ]; then
@@ -4899,6 +5229,7 @@ Configurar juego -> Comprobar integridad"
     fi
 
     EXE_PATH=""; EXE_ARGS=""
+    AUTORUN_ENV=""; AUTORUN_LANG=""     # que no se hereden del juego anterior
     if [ -n "$EXE_OVERRIDE" ] && [ -f "$merged/$EXE_OVERRIDE" ] && [ "$mode" = "auto" ]; then
         EXE_PATH="$merged/$EXE_OVERRIDE"; EXE_ARGS="$ARGS_OVERRIDE"
     else
@@ -4937,8 +5268,13 @@ Configurar juego -> Comprobar integridad"
     saves_detect_start
     (
         cd "$(dirname "$EXE_PATH")" || exit 1
+        # los .bat/.cmd se lanzan con "cmd /c"
+        local -a PRE=()
+        while IFS= read -r _a; do [ -n "$_a" ] && PRE+=("$_a"); done <<EOFRA
+$(run_args_for "$EXE_PATH")
+EOFRA
         # shellcheck disable=SC2086
-        "${RUN_CMD[@]}" "$EXE_PATH" $EXE_ARGS >> "$LOG_FILE" 2>&1
+        "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
     )
     local rc=$?
     local dur=$(( $(date +%s) - t0 ))
@@ -5032,7 +5368,9 @@ community_list() {
 
 community_fetch() {
     # $1 = nombre del .conf -> lo trae a profiles/ (preguntando si ya existe)
-    local name="$1" dest="$PROFILE_DIR/$name" tmp
+    local name="$1"
+    local dest tmp
+    dest="$PROFILE_DIR/$name"
     tmp="$(mktemp)"
     local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
     if ! dl "$url" "$tmp"; then
@@ -5067,7 +5405,9 @@ Notas del autor: $notas}"
 
 community_share() {
     # $1 = gid: prepara el perfil para enviarlo al repositorio
-    local gid="$1" src="$PROFILE_DIR/$gid.conf" out
+    local gid="$1"
+    local src out
+    src="$PROFILE_DIR/$gid.conf"
     [ -f "$src" ] || { ui_error "Este juego no tiene perfil todavia"; return 1; }
     mkdir -p "$BASE_DIR/compartir"
     out="$BASE_DIR/compartir/$gid.conf"
@@ -5080,6 +5420,88 @@ compartir/$gid.conf
 Subelo a la carpeta profiles/ del repositorio (pull request).
 Se han quitado tus estadísticas y rutas locales."
     return 0
+}
+
+COMMUNITY_INDEX="$RUNTIME_DIR/.community_index"
+
+community_index_refresh() {
+    # Lista de perfiles del repositorio, cacheada un dia. Se consulta en
+    # segundo plano y sin ruido: si no hay red, simplemente no hay aviso.
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    if [ -f "$COMMUNITY_INDEX" ]; then
+        local edad
+        edad=$(( $(date +%s) - $(stat -c %Y "$COMMUNITY_INDEX" 2>/dev/null || echo 0) ))
+        [ "$edad" -lt 86400 ] && return 0
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    community_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null
+    if [ -s "$COMMUNITY_INDEX.tmp" ]; then
+        mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
+    else
+        rm -f "$COMMUNITY_INDEX.tmp"
+        return 1
+    fi
+    return 0
+}
+
+community_match() {
+    # $1 = gid -> nombre del .conf de la comunidad que le corresponde, si lo hay.
+    #
+    # Compara ignorando mayusculas y separadores (espacios, puntos, guiones y
+    # subrayados), porque el mismo juego llega escrito de mil formas:
+    #   "Mina the Hollower" / "Mina_the_Hollower" / "Mina.the.Hollower"
+    #
+    # Y admite ademas la coleta de version o grupo que traen las descargas
+    # ("Mina.the.Hollower.v1.0.2", "Constance-GOG", "...-P2P"), pero SOLO si
+    # lo que sobra es claramente eso: asi "Doom" no se lleva por delante a
+    # "Doom Eternal".
+    local gid="$1" clave linea lclave resto
+    [ -f "$COMMUNITY_INDEX" ] || return 1
+    clave="$(printf '%s' "$gid" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
+    [ -n "$clave" ] || return 1
+    # 1) coincidencia exacta
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
+        [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
+    done < "$COMMUNITY_INDEX"
+    # 2) el juego lleva version/grupo detras del nombre del perfil
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
+        [ ${#lclave} -ge 6 ] || continue          # nombres muy cortos: no arriesgar
+        case "$clave" in
+            "$lclave"*)
+                resto="${clave#"$lclave"}"
+                case "$resto" in
+                    v[0-9]*|[0-9]*|gog*|repack*|p2p*|fitgirl*|dodi*|elamigos*|                    multi[0-9]*|rip*|proper*|update*|build*)
+                        printf '%s' "$linea"; return 0 ;;
+                esac ;;
+        esac
+    done < "$COMMUNITY_INDEX"
+    return 1
+}
+
+community_offer_for() {
+    # Al configurar o lanzar un juego por primera vez: si la comunidad tiene
+    # un perfil con ese nombre, ofrecerlo. Solo se pregunta UNA vez por juego.
+    local gid="$1" cand marca
+    marca="$PROFILE_DIR/.$gid.nocomm"
+    [ -f "$marca" ] && return 1
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    community_index_refresh || return 1
+    cand="$(community_match "$gid")" || { : > "$marca" 2>/dev/null; return 1; }
+    say "[comunidad] hay perfil para $gid: $cand"
+    if ui_ask "La comunidad tiene una configuracion ya probada para:
+
+$gid
+
+Suele traer el runner y los ajustes que hacen falta para que
+funcione bien. Quieres descargarla?"; then
+        community_fetch "$cand" && return 0
+    fi
+    : > "$marca" 2>/dev/null      # no volver a preguntar por este juego
+    return 1
 }
 
 community_menu() {
@@ -6002,14 +6424,18 @@ package_exe() {
     # .exe suelto -> confirmar raiz del juego, autorun, empaquetar, lanzar
     local exe_abs exe_dir game_root name out
     exe_abs="$(realpath "$1")"
-    if is_inno_installer "$exe_abs"; then
-        if ui_ask "Parece un instalador GOG/InnoSetup:
+    # un script por lotes nunca es un instalador: no preguntamos por GOG
+    case "$(printf '%s' "$exe_abs" | tr 'A-Z' 'a-z')" in
+        *.bat|*.cmd) ;;
+        *)
+            if is_inno_installer "$exe_abs" && \
+               ui_ask "Parece un instalador GOG/InnoSetup:
 $(basename "$exe_abs")
 Instalarlo (sin intervencion) y convertirlo a wsquashfs?"; then
-            import_gog_exe "$exe_abs"
-            return $?
-        fi
-    fi
+                import_gog_exe "$exe_abs"
+                return $?
+            fi ;;
+    esac
     exe_dir="$(dirname "$exe_abs")"
     game_root="$(pick_game_root "$exe_dir")" || { say "Importacion cancelada"; return 1; }
     name="$(basename "$game_root")"
@@ -6179,8 +6605,12 @@ launch_loose_exe() {
     saves_detect_start
     local loose_args="${ARGS_OVERRIDE:-}"
     [ -n "$loose_args" ] && say "Argumentos: $loose_args"
+    local -a PRE=()
+    while IFS= read -r _a; do [ -n "$_a" ] && PRE+=("$_a"); done <<EOFRB
+$(run_args_for "$exe")
+EOFRB
     # shellcheck disable=SC2086
-    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "$exe" $loose_args >> "$LOG_FILE" 2>&1 )
+    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 )
     local rc=$?
     kill "$trig" 2>/dev/null
     mapeador_stop
@@ -6232,7 +6662,7 @@ play_any() {
     case "$p" in
         *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
             launch_game "$p" "auto" ;;
-        *.exe|*.EXE)
+        *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
             [ -f "$p" ] || die "No existe: $p"
             local nm; nm="$(game_id "$(dirname "$p")")"
             launch_loose_exe "$nm" "$(realpath "$p")" ;;
@@ -6287,8 +6717,9 @@ canvas_start() {
     # Hace falta fondo siempre que los menus ocupen TODA la pantalla: en modo
     # Juego, en Batocera, y tambien cuando el usuario activa la pantalla
     # completa a mano con Select+A (queda anotado en .menu_fullscreen).
-    [ "${IS_GAMESCOPE:-0}" = 1 ] || [ "${WP_MENU_FS:-0}" = 1 ] \
-        || [ -f "$RUNTIME_DIR/.menu_fullscreen" ] || return 0
+    # los menus van a pantalla completa salvo que el usuario haya pedido
+    # ventana (marcador .menu_windowed)
+    [ -f "$RUNTIME_DIR/.menu_windowed" ] && return 0
     [ -n "$CANVAS_PID" ] && kill -0 "$CANVAS_PID" 2>/dev/null && return 0
     pygame_available || return 0
     write_menu_pygame
@@ -6344,8 +6775,11 @@ post_game_resettle() {
         pgrep -x wineserver >/dev/null 2>&1 || break
         sleep 0.5
     done
+    # procesos del juego que sobrevivan al wineserver. Se mira solo lo que
+    # cuelga de NUESTRO montaje o prefijo: en el modo Juego puede haber otros
+    # ".exe" de Steam que no son nuestros y no hay que esperar por ellos.
     for i in 1 2 3 4 5 6; do
-        pgrep -f '\.exe' >/dev/null 2>&1 || break
+        pgrep -f "${MOUNT_BASE:-/nunca}.*\.exe" >/dev/null 2>&1 || break
         sleep 0.5
     done
 
@@ -6375,8 +6809,12 @@ post_game_resettle() {
         done
         export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
         export WP_MENU_FS=1
-        # si el juego dejo un gamescope anidado, fuera: retiene el foco
-        pkill -f 'gamescope .*--' 2>/dev/null
+        # NUNCA matar procesos de gamescope aqui. En el modo Juego de SteamOS
+        # la propia sesion ES un gamescope ("gamescope ... -- steam -gamepadui"),
+        # asi que un pkill por patron se cargaba la sesion entera: eso era el
+        # "reinicio de la consola" que se veia al salir de un juego.
+        # Si alguna vez lanzamos un gamescope anidado, se cierra solo con el
+        # juego, porque es su proceso padre.
         sleep 0.5
     else
         sleep 0.3
@@ -6514,43 +6952,98 @@ EOFR2
     return 0
 }
 
+# Lo que NUNCA es una partida guardada: caches de shaders, temporales y, en
+# los juegos con prefijo incluido, todo el Windows del prefijo. Sin esto, la
+# copia de un juego con prefijo propio se llevaba GIGAS y tardaba una eternidad.
+BACKUP_EXCLUDES='--exclude=./drive_c/windows --exclude=./drive_c/Program Files/Common Files
+--exclude=*/dosdevices --exclude=*.dxvk-cache --exclude=*.dxvk-cache-tmp
+--exclude=*.vkd3d-cache --exclude=*.nvcache --exclude=*.shadercache
+--exclude=*/DXVK_state_cache --exclude=*/GLCache --exclude=*/ShaderCache
+--exclude=*/shadercache --exclude=*/D3DSCache --exclude=*/NVIDIA --exclude=*/AMD
+--exclude=*/Temp --exclude=*/Crashpad --exclude=*.log --exclude=*.tmp --exclude=*.dmp'
+
+backup_size_of() {
+    # Tamaño real de lo que se va a copiar (ya descontando lo excluido)
+    local locs="$1" total=0 label path sz
+    while IFS='|' read -r label path; do
+        [ -n "$path" ] || continue
+        sz="$(du -sb --exclude='*cache*' --exclude='*Cache*' --exclude='*/windows' \
+              --exclude='*.log' "$path" 2>/dev/null | awk '{print $1}')"
+        total=$(( total + ${sz:-0} ))
+    done <<EOFSZ
+$locs
+EOFSZ
+    printf '%s' "$total"
+}
+
 backup_create() {
-    # $1 = gid. Crea backups/<gid>_YYYYmmdd_HHMM.zip con todo lo localizado
-    local gid="$1" locs n zip tmp label path rel
+    # $1 = gid. Crea backups/<gid>_YYYYmmdd_HHMM.zip con las partidas.
+    local gid="$1" locs n zip tmp label path bytes
     locs="$(save_locations "$gid")"
     if [ -z "$locs" ]; then
         ui_info "No se han encontrado partidas guardadas de '$gid'.
 Se busca en el overlay del juego y en AppData/Documents del prefijo."
         return 1
     fi
+    bytes="$(backup_size_of "$locs")"
+    say "[backup] a copiar: $(human_size "${bytes:-0}")"
+    # Aviso si la copia es enorme: con prefijo incluido, el overlay puede
+    # tener el juego entero y la compresion tardaria muchisimo.
+    if [ "${bytes:-0}" -gt 2147483648 ]; then
+        ui_ask "Este juego tiene $(human_size "$bytes") de datos guardados.
+
+Suele pasar con los juegos que llevan su propio prefijo: en la carpeta
+de escritura esta tambien parte del juego, no solo las partidas.
+
+La copia puede tardar bastantes minutos. Continuar?" || return 1
+    fi
+    if ! command -v zip >/dev/null 2>&1; then
+        ui_error "Falta el comando 'zip', necesario para las copias."
+        return 1
+    fi
     mkdir -p "$BACKUP_DIR"
     zip="$BACKUP_DIR/${gid}_$(date '+%Y%m%d_%H%M').zip"
     tmp="$(mktemp -d)"
     n=0
+    progress_start "Copia de seguridad de $gid"
+    progress_set 0 "Reuniendo las partidas..."
     while IFS='|' read -r label path; do
         [ -n "$path" ] || continue
         mkdir -p "$tmp/$label"
-        cp -a "$path/." "$tmp/$label/" 2>/dev/null && n=$((n+1))
-        say "[backup] $label: $path"
+        progress_set 0 "Copiando: $label"
+        # tar con exclusiones: evita arrastrar caches y el Windows del prefijo
+        # shellcheck disable=SC2086
+        if ( cd "$path" && tar $BACKUP_EXCLUDES -cf - . ) 2>>"$LOG_FILE" \
+             | ( cd "$tmp/$label" && tar -xf - ) 2>>"$LOG_FILE"; then
+            n=$((n+1))
+            say "[backup] $label: $path"
+        fi
     done <<EOFLOC
 $locs
 EOFLOC
-    [ "$n" -eq 0 ] && { rm -rf "$tmp"; ui_error "No se pudo copiar ninguna carpeta"; return 1; }
-    # ficha con el origen de cada carpeta (para restaurar en otra máquina)
+    if [ "$n" -eq 0 ]; then
+        progress_stop; rm -rf "$tmp"
+        ui_error "No se pudo copiar ninguna carpeta"; return 1
+    fi
     {
         printf 'juego=%s\nfecha=%s\nprefijo=%s\n' "$gid" "$(date '+%Y-%m-%d %H:%M')" "$(prefix_path "$gid")"
         printf '%s\n' "$locs"
     } > "$tmp/wproton_backup.txt"
-    if run_with_progress "Creando copia de seguridad de '$gid'..." \
-            sh -c "cd '$tmp' && zip -qr '$zip' ."; then
+    progress_set 0 "Comprimiendo $(human_size "$(dir_bytes "$tmp")")..."
+    # -1 = compresion rapida: las partidas comprimen poco y lo que importa
+    # aqui es no tener al usuario esperando media hora
+    if ( cd "$tmp" && zip -1 -qr "$zip" . ) >>"$LOG_FILE" 2>&1; then
+        progress_stop
         rm -rf "$tmp"
         ui_info "Copia creada:
-$(basename "$zip")   ($(du -h "$zip" 2>/dev/null | cut -f1))
+
+$(basename "$zip")   ($(human_size "$(dir_bytes "$zip")"))
 Carpetas guardadas: $n"
         return 0
     fi
+    progress_stop
     rm -rf "$tmp" "$zip"
-    ui_error "Fallo creando el zip (falta el comando 'zip'?)"
+    ui_error "Fallo creando el zip de la copia"
     return 1
 }
 
@@ -7084,6 +7577,17 @@ stats_record() {
     return 0
 }
 
+run_args_for() {
+    # Devuelve los argumentos con que hay que lanzar un fichero: los .exe van
+    # directos, pero un .bat/.cmd necesita el interprete de comandos de
+    # Windows (cmd /c), o Wine no sabe que hacer con el.
+    local f="$1"
+    case "$(printf '%s' "$f" | tr 'A-Z' 'a-z')" in
+        *.bat|*.cmd) printf 'cmd\n/c\n%s\n' "$f" ;;
+        *)           printf '%s\n' "$f" ;;
+    esac
+}
+
 gamepad_retrigger() {
     # Re-deteccion diferida del mando (del script antiguo): dispara un evento
     # udev "add" para que SDL2/Wine reinicialice botones y ejes del pad
@@ -7105,7 +7609,7 @@ import_input() {
         *.sh)
             pad_bridge_stop
             bash "$input" ;;
-        *.exe|*.EXE)
+        *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
             [ -f "$input" ] || die "No existe: $input"
             play_any "$input" ;;
         *)
@@ -7136,6 +7640,13 @@ stats_line() {
     fi
 }
 
+grid_cols_label() {
+    case "${GRID_COLS:-0}" in
+        0|"") printf 'automático' ;;
+        *)    printf '%s' "$GRID_COLS" ;;
+    esac
+}
+
 font_label() {
     case "${FONT_SCALE:-1.0}" in
         1.25) printf 'grande' ;;
@@ -7155,7 +7666,6 @@ pad_sdl_label() {
 
 COVERS_DIR="$BASE_DIR/covers"
 PROGRESS_PID=""
-PROGRESS_FILE=""
 
 progress_start() {
     # Ventana de progreso con pygame. $1 = titulo
@@ -7320,7 +7830,8 @@ browse_for_path() {
             files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f \( \
                 -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' -o -iname '*.zip' \
                 -o -iname '*.7z' -o -iname '*.rar' -o -iname '*.001' \
-                -o -iname '*.z01' -o -iname '*.exe' -o -iname '*.wtgz' \) ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
+                -o -iname '*.z01' -o -iname '*.exe' -o -iname '*.bat' \
+                -o -iname '*.cmd' -o -iname '*.wtgz' \) ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
             header=">> IMPORTAR ESTA CARPETA <<
 .. (subir)"
             [ "$mode" = "play" ] && header=">> JUGAR ESTA CARPETA <<
@@ -7484,6 +7995,11 @@ game_config_menu() {
     local squash="$1"
     local gid; gid="${2:-$(game_id "$squash")}"
 
+    # Si nunca se configuro: mirar si la comunidad ya tiene una configuracion
+    # para este juego antes de preguntarle nada al usuario
+    if ! profile_exists "$gid"; then
+        community_offer_for "$gid" && profile_exists "$gid" && return 0
+    fi
     # Si nunca se configuro, pasar por el asistente primero
     if ! profile_exists "$gid"; then
         acquire_game_root "$squash" "$gid" ro
@@ -7773,7 +8289,7 @@ main_dispatch() {
             fi
             if [ -n "$imp" ]; then
                 case "$imp" in
-                    *.exe|*.EXE) package_exe "$imp" ;;
+                    *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD) package_exe "$imp" ;;
                     *) if [ -d "$imp" ]; then package_dir "$imp"; else import_input "$imp"; fi ;;
                 esac
             fi ;;
@@ -7794,10 +8310,15 @@ main_dispatch() {
 mkdwarfs para empaquetar y dwarfs para montar."
             fi ;;
         "Descargar herramientas FUSE"*)
+            rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
             setup_fuse_tools
+            SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
+            OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
             ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
-fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}" ;;
+$(tool_is_ours "$SQUASHFUSE_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')
+fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}
+$(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')" ;;
         "Descargar extractores GOG"*)
             local ok1="NO" ok2="NO"
             setup_innoextract && ok1="OK"
@@ -7883,6 +8404,26 @@ Los wsquashfs que ya tienes se siguen usando igual."
                         ui_error "No se pudieron preparar las herramientas de DwarFS."
                     fi ;;
             esac ;;
+        "Carátulas por fila:"*)
+            local gc
+            gc="$(menu "Cuántas carátulas por fila en la rejilla" \
+                "Automático (según el tamaño de la pantalla)" \
+                "4 - carátulas grandes" \
+                "5" \
+                "6" \
+                "7" \
+                "8 - carátulas pequeñas, más juegos a la vista" \
+                "<< Volver")" || gc=""
+            case "$gc" in
+                "Automático"*) GRID_COLS=0 ;;
+                [0-9]*)        GRID_COLS="${gc%% *}" ;;
+                *)             gc="" ;;
+            esac
+            if [ -n "$gc" ]; then
+                export WP_GRID_COLS="$GRID_COLS"
+                save_settings
+                ui_info "Carátulas por fila: $(grid_cols_label)"
+            fi ;;
         "Ordenar juegos por:"*)
             local so
             so="$(menu "Como ordenar la lista de juegos" \
@@ -7938,6 +8479,7 @@ library_menu() {
         sel="$(menu "Biblioteca y preferencias" \
             "Carpeta de juegos: $GAMES_PATH" \
             "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (carátulas)' || printf 'lista')" \
+            "Carátulas por fila: $(grid_cols_label)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Tema de los menus: $THEME" \
@@ -8034,7 +8576,76 @@ kill_all() {
     ui_info "Todo desmontado."
 }
 
+first_run_games_path() {
+    # Primera vez que se usa WProton: preguntar donde estan los juegos.
+    # Dos opciones claras en vez de un si/no, y al elegir "otra carpeta" se
+    # abre directamente el navegador de WProton (el que se maneja con mando).
+    [ -f "$FIRSTRUN_MARK" ] && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    local sel d n
+    sel="$(menu "Donde tienes tus juegos?" \
+        "Usar la carpeta games/ de WProton" \
+        "Elegir otra carpeta..." )" || sel=""
+    case "$sel" in
+        "Elegir otra carpeta"*)
+            d="$(pick_dir "Elige la carpeta con tus juegos" "$(browse_start "$HOME")")" || d=""
+            if [ -n "$d" ] && [ -d "$d" ]; then
+                GAMES_PATH="$d"
+                save_settings
+                n="$(find "$GAMES_PATH" -maxdepth 2 -type f \
+                     \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) \
+                     2>/dev/null | wc -l)"
+                ui_info "Carpeta de juegos: $(basename "$GAMES_PATH")
+${n:-0} juego(s) encontrado(s)"
+            fi ;;
+    esac
+    touch "$FIRSTRUN_MARK" 2>/dev/null
+    return 0
+}
+
+install_notice_start() {
+    # Aviso de "instalando" para la PRIMERA vez. Aqui todavia no existe ni
+    # Python ni pygame, asi que se usa lo que haya: una ventana de zenity si
+    # el escritorio la tiene, y siempre un mensaje en la terminal. Sin esto,
+    # el usuario se queda mirando una pantalla vacia mientras se descargan
+    # Python, los runners y las herramientas de montaje.
+    INSTALL_NOTICE_PID=""
+    printf '\n  WProton: primera puesta en marcha\n' >&2
+    printf '  Descargando lo necesario (Python, runners y herramientas).\n' >&2
+    printf '  Esto solo pasa la primera vez y tarda unos minutos...\n\n' >&2
+    if [ "$HAS_ZENITY" = 1 ]; then
+        ( while :; do echo 50; sleep 1; done ) 2>/dev/null \
+            | zenity --progress --title="WProton" --pulsate --no-cancel --auto-close \
+                     --width=420 \
+                     --text="Primera puesta en marcha de WProton
+
+Descargando Python, los runners y las herramientas de montaje.
+Esto solo ocurre la primera vez y puede tardar unos minutos." \
+              >/dev/null 2>&1 &
+        INSTALL_NOTICE_PID=$!
+    fi
+    return 0
+}
+
+install_notice_stop() {
+    if [ -n "${INSTALL_NOTICE_PID:-}" ]; then
+        # matar el generador y la ventana
+        pkill -P "$INSTALL_NOTICE_PID" 2>/dev/null
+        kill "$INSTALL_NOTICE_PID" 2>/dev/null
+        INSTALL_NOTICE_PID=""
+    fi
+    return 0
+}
+
 bootstrap_if_needed() {
+    local hay_que_instalar="${WP_PRIMERA_VEZ:-0}"
+    # durante la puesta en marcha, los pasos informan pero NO piden Aceptar:
+    # es un proceso automatico, no una sucesion de dialogos
+    WP_INSTALL_SILENCIOSO=1
+    [ -x "$PY_DIR/bin/python3" ] || hay_que_instalar=1
+    [ -x "$UMU_BIN" ] || hay_que_instalar=1
+    [ -z "$(runner_names)" ] && hay_que_instalar=1
+
     # Python portable primero: umu, menus y extraccion zip dependen de el
     if [ ! -x "$PY_DIR/bin/python3" ]; then
         if [ -n "$SYS_PY" ]; then
@@ -8045,10 +8656,45 @@ bootstrap_if_needed() {
             setup_python || die "No hay python3 en el sistema ni se pudo instalar el portable"
         fi
     fi
+    # Con Python y pygame ya listos, el aviso pasa a nuestra propia ventana:
+    # se ve igual en escritorio y en modo Juego, y con el tema elegido.
+    if [ "$hay_que_instalar" = 1 ] && pygame_available; then
+        install_notice_stop
+        progress_start "Primera puesta en marcha de WProton"
+        progress_set 40 "Preparando umu-launcher..."
+    fi
+
     [ -x "$UMU_BIN" ] || setup_umu
+
+    # segundo intento con los menus ya disponibles: si sigue sin poder, se
+    # avisa de forma clara (check_deps solo lo apunto en el registro)
+    if [ -n "${WP_SIN_FUSE:-}" ]; then
+        progress_set 60 "Herramientas de montaje..."
+        setup_fuse_tools || true
+        SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
+        OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
+        if [ -z "$SQUASHFUSE_BIN" ] || [ -z "$OVERLAYFS_BIN" ]; then
+            ui_error "Faltan herramientas de montaje:$WP_SIN_FUSE
+
+Sin ellas no se pueden abrir los juegos empaquetados (.wsquashfs
+y .dwarfs). Los juegos en carpeta si funcionan.
+
+Puedes instalarlas con tu gestor de paquetes, o reintentarlo en
+Runners y herramientas -> Descargar herramientas FUSE portables."
+        else
+            WP_SIN_FUSE=""
+        fi
+    fi
+
     if [ -z "$(runner_names)" ]; then
+        progress_set 75 "Descargando GE-Proton (es el paso mas largo)..."
         setup_proton
     fi
+    progress_set 100 "Listo"
+    progress_stop
+    install_notice_stop       # fuera el aviso: ya hay menus de verdad
+    WP_INSTALL_SILENCIOSO=0   # a partir de aqui, los avisos vuelven a verse
+    first_run_games_path      # solo la primera vez
 }
 
 # ----------------------------------------------------------------------------
@@ -8073,10 +8719,19 @@ rotate_logs() {
     return 0
 }
 
-export WP_THEME="${THEME:-clasico}"
+export WP_THEME="${THEME:-moderno}"
 export WP_GRID_COLS="${GRID_COLS:-0}"
 export WP_LANG="${LANGUAGE:-es}"
 export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+
+# ¿Primera puesta en marcha? Se decide ANTES de tocar nada, porque check_deps
+# ya se pone a descargar las herramientas de montaje y el usuario no puede
+# quedarse mirando una pantalla vacia.
+WP_PRIMERA_VEZ=0
+if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MARK" ]; then
+    WP_PRIMERA_VEZ=1
+    install_notice_start
+fi
 
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
@@ -8111,7 +8766,7 @@ Mas runners: menu principal -> Descargar runners" ;;
         [ -z "${2:-}" ] && die "Uso: $0 --import <exe|carpeta|zip|7z|rar>"
         bootstrap_if_needed
         case "$2" in
-            *.exe|*.EXE) package_exe "$2" ;;
+            *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD) package_exe "$2" ;;
             *) if [ -d "$2" ]; then package_dir "$2"; else import_input "$2"; fi ;;
         esac ;;
     --menu)
