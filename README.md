@@ -12,7 +12,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 ---
 
-## Qué sabe hacer
+## Características 
 
 ### Formatos de juego
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
