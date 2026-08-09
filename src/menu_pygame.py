@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# WPROTON_HELPER_V48
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -61,14 +60,22 @@ else:
     DRIVER_ORDER = ['wayland', None]
 import pygame
 
-MODE, TITLE, OUTFILE = sys.argv[1], sys.argv[2], sys.argv[3]
-# en modo 'progress' el 3er argumento ya es el fichero de estado
-ARG4 = sys.argv[4] if len(sys.argv) > 4 else OUTFILE
-BROWSE_KIND = sys.argv[5] if len(sys.argv) > 5 else 'file'
-BROWSE_EXTS = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
+# Parametros de la peticion en curso. En modo servidor cambian con cada
+# menu; en modo suelto se fijan una vez desde la linea de ordenes.
+MODE = TITLE = OUTFILE = ARG4 = ''
+BROWSE_KIND = 'file'
+BROWSE_EXTS = ()
+EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
-if BROWSE_KIND == 'keys':
-    BROWSE_EXTS = ('.keys',)
+
+def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None):
+    global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, BROWSE_EXTS, ACTION_X
+    MODE, TITLE, OUTFILE = mode, title, outfile
+    ARG4 = arg4 if arg4 is not None else outfile
+    BROWSE_KIND = browse_kind
+    BROWSE_EXTS = ('.keys',) if browse_kind == 'keys' else EXTS_NORMAL
+    if action_x is not None:
+        ACTION_X = action_x
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
 HEADER_KINDS = (K_HDR, K_UP2, K_CANCEL)
 
@@ -170,15 +177,22 @@ def grid_apply_filter():
     sel = 0
     scroll = 0
 
-if MODE in ('progress', 'text', 'canvas'):
-    pass
-elif MODE == 'browse':
-    load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
-elif MODE == 'grid':
-    load_manifest()
-    grid_apply_filter()
-else:
-    load_options()
+def load_request_data():
+    # Carga lo que necesite el modo actual (opciones, carpeta o manifiesto)
+    global FILTER, sel, scroll, kb_open, kb_r, kb_c
+    FILTER = ''
+    sel = scroll = 0
+    kb_open = False
+    kb_r = kb_c = 0
+    if MODE in ('progress', 'text', 'canvas'):
+        return
+    if MODE == 'browse':
+        load_dir(ARG4 if os.path.isdir(ARG4) else os.path.expanduser('~'))
+    elif MODE == 'grid':
+        load_manifest()
+        grid_apply_filter()
+    else:
+        load_options()
 
 def init_video():
     # pygame.init() NO lanza excepcion si solo falla el video: devuelve el
@@ -343,9 +357,10 @@ def evdev_thread():
             if now >= t_:
                 post_key(k); held[k] = now + REP_NEXT
 
-if MODE != 'canvas':
-    # el lienzo solo pinta: si leyera el mando competiria con el menu que
-    # tiene delante (dos lectores del mismo /dev/input)
+# El hilo del mando siempre activo: con el servidor hay UN solo proceso, asi
+# que no hay dos lectores compitiendo por /dev/input (que era el motivo de
+# desactivarlo en el antiguo lienzo, que era un proceso aparte).
+if sys.argv[1] != 'canvas':
     threading.Thread(target=evdev_thread, daemon=True).start()
 
 W, H = 960, 680
@@ -514,6 +529,7 @@ THEMES = {
 }
 # Accion secundaria: con WP_ACTION_X=1, la X devuelve la seleccion marcada
 # para que quien llame abra la configuración en vez de jugar.
+SERVER_MODE = False
 ACTION_X = os.environ.get('WP_ACTION_X') == '1'
 LANG = os.environ.get('WP_LANG', 'es')
 # El helper lee el MISMO lang/<codigo>.json que el script: así los textos
@@ -825,20 +841,37 @@ def wrap_title(text, font, maxw, maxlines=6):
         out = out[:maxlines - 1] + ['\u2026']
     return out or ['']
 
-TITLE_LINES = wrap_title(TITLE, f_tit if len(TITLE) < 60 else f_it, 912)
-T_FONT = f_tit if len(TITLE) < 60 else f_it
-T_LH = FS(34) if T_FONT is f_tit else FS(30)
-HEAD = int(22 * FSCALE) + len(TITLE_LINES) * T_LH + 14
-
-ROW = max(TH['row'], int(TH['row'] * FSCALE))
-PANEL_UI = TH.get('layout') in ('panel', 'arcade')
-ARCADE = TH.get('layout') == 'arcade'
-TOP = (HEAD + 30) if MODE == 'browse' else HEAD
+# Valores que dependen del TITULO y del MODO: se recalculan en cada peticion
+TITLE_LINES = ['']
+T_FONT = None
+T_LH = 30
+HEAD = 70
+ROW = 40
+PANEL_UI = False
+ARCADE = False
+TOP = HEAD
 LIST_X, LIST_Y, LIST_W, LIST_H = 16, TOP, 900, 480
 SIDE_X, SIDE_W = 0, 0
-VIS_FULL = (H - TOP - 60) // ROW
+VIS_FULL = 10
 KB_H = 200
-VIS_KB = (H - TOP - 60 - KB_H) // ROW
+VIS_KB = 6
+
+def compute_layout():
+    # Recalcula todo lo que depende del titulo y del modo de esta peticion
+    global TITLE_LINES, T_FONT, T_LH, HEAD, ROW, PANEL_UI, ARCADE, TOP
+    global LIST_X, LIST_Y, LIST_W, LIST_H, SIDE_X, SIDE_W, VIS_FULL, VIS_KB
+    T_FONT = f_tit if len(TITLE) < 60 else f_it
+    TITLE_LINES = wrap_title(TITLE, T_FONT, 912)
+    T_LH = FS(34) if T_FONT is f_tit else FS(30)
+    HEAD = int(22 * FSCALE) + len(TITLE_LINES) * T_LH + 14
+    ROW = max(TH['row'], int(TH['row'] * FSCALE))
+    PANEL_UI = TH.get('layout') in ('panel', 'arcade')
+    ARCADE = TH.get('layout') == 'arcade'
+    TOP = (HEAD + 30) if MODE == 'browse' else HEAD
+    LIST_X, LIST_Y = 16, TOP
+    VIS_FULL = max(1, (H - TOP - 60) // ROW)
+    VIS_KB = max(1, (H - TOP - 60 - KB_H) // ROW)
+    apply_layout()
 
 # --- teclado virtual (rejilla navegable con el dpad) ---
 KB_ROWS = ['ABCDEFGHIJ',
@@ -865,10 +898,19 @@ def _mark_clean_exit():
     except Exception:
         pass
 
+class SessionEnd(Exception):
+    # Fin de UNA peticion. En modo servidor no se cierra la ventana: se
+    # vuelve al reposo esperando la siguiente.
+    def __init__(self, code):
+        Exception.__init__(self, code)
+        self.code = code
+
 def safe_quit(code):
-    # el texto ya esta escrito: pase lo que pase al cerrar, salimos con el
-    # codigo correcto para que el llamador reciba el valor
+    # el texto ya esta escrito: pase lo que pase al cerrar, el llamador
+    # recibe el codigo correcto
     _mark_clean_exit()
+    if SERVER_MODE:
+        raise SessionEnd(code)
     try:
         pygame.quit()
     except Exception:
@@ -970,8 +1012,6 @@ def grid_move(dx, dy):
         scroll = row * GCOLS
     elif row >= first + vis_r:
         scroll = (row - vis_r + 1) * GCOLS
-
-apply_layout()
 
 def row_segments(label, base_color):
     # "Prefijo: compartido" -> etiqueta en color de acento, valor en blanco.
@@ -1222,465 +1262,615 @@ def kb_press():
     else:
         filter_add(KB_ROWS[kb_r][kb_c].lower())
 
-if MODE == 'canvas':
-    # Fondo persistente para el MODO JUEGO de SteamOS.
-    #
-    # El problema: cada menu abria y cerraba su ventana. Al salir de un juego,
-    # gamescope se quedaba sin ninguna superficie nuestra y no sabia a quien
-    # devolver el foco: el menu siguiente nacia detras y parecia que WProton
-    # no volvia. Con esta ventana SIEMPRE viva, el compositor siempre tiene a
-    # donde volver, y los menus se dibujan encima de ella.
-    #
-    # Se cierra sola cuando el fichero de estado dice STOP (o desaparece).
-    clockC = pygame.time.Clock()
-    status = ''
-    misses = 0
-    while True:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
+def run_session():
+    # Ejecuta UNA peticion (un menu, un teclado, una barra de progreso)
+    # y devuelve su codigo de salida. En modo servidor se llama muchas
+    # veces sobre la MISMA ventana; en modo suelto, una sola vez.
+    global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, items
+    global view, cur_path, sel, scroll, FILTER, kb_open
+    global kb_r, kb_c, GITEMS, running, done, screen
+    global FULLSCREEN, TITLE_LINES, T_FONT, T_LH, HEAD, ROW
+    global PANEL_UI, ARCADE, TOP, LIST_X, LIST_Y, LIST_W
+    global LIST_H, SIDE_X, SIDE_W, VIS_FULL, VIS_KB
+    # estado del teclado virtual: sus funciones internas lo declaran global,
+    # asi que run_session tiene que declararlo tambien o quedaria como local
+    global TXT, shift, tr_r, tr_c
+
+    if MODE == 'canvas':
+        # Fondo persistente para el MODO JUEGO de SteamOS.
+        #
+        # El problema: cada menu abria y cerraba su ventana. Al salir de un juego,
+        # gamescope se quedaba sin ninguna superficie nuestra y no sabia a quien
+        # devolver el foco: el menu siguiente nacia detras y parecia que WProton
+        # no volvia. Con esta ventana SIEMPRE viva, el compositor siempre tiene a
+        # donde volver, y los menus se dibujan encima de ella.
+        #
+        # Se cierra sola cuando el fichero de estado dice STOP (o desaparece).
+        clockC = pygame.time.Clock()
+        status = ''
+        misses = 0
+        while True:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    safe_quit(0)
+            try:
+                with open(ARG4, encoding='utf-8') as fh:
+                    status = fh.readline().strip()
+                misses = 0
+            except Exception:
+                misses += 1
+                if misses > 40:            # el fichero ya no esta: nos vamos
+                    safe_quit(0)
+            if status.startswith('STOP'):
                 safe_quit(0)
-        try:
-            with open(ARG4, encoding='utf-8') as fh:
-                status = fh.readline().strip()
-            misses = 0
-        except Exception:
-            misses += 1
-            if misses > 40:            # el fichero ya no esta: nos vamos
-                safe_quit(0)
-        if status.startswith('STOP'):
-            safe_quit(0)
-        screen.blit(BGSURF, (0, 0))
-        if PANEL_UI:
-            draw_header()
-        # marca centrada
-        big = pygame.font.Font(None, max(48, W // 14))
-        # Composicion vertical a partir de la ALTURA REAL de la marca: antes
-        # se usaban distancias fijas y con la letra grande el texto de estado
-        # se montaba encima de "WPROTON".
-        brand = big.render('WPROTON', True, ACC)
-        try:
-            bh = brand.get_height()
-        except Exception:
-            bh = FS(96)
-        by = H // 2 - bh
-        screen.blit(brand, ((W - brand.get_width()) // 2, by))
-        _y = by + bh + FS(28)          # el estado empieza DEBAJO de la marca
-        if status:
-            for _ln in wrap_title(status, f_it, W - 120, 3):
-                sf = rtext(f_it, _ln, FG)
-                screen.blit(sf, ((W - sf.get_width()) // 2, _y))
-                _y += FS(34)
-        # punto animado, para que se vea que sigue vivo
-        _p = int(time.time() * 2) % 4
-        dots = rtext(f_sm, '.' * _p, DIM)
-        screen.blit(dots, ((W - dots.get_width()) // 2, _y + FS(16)))
-        if SCANSURF is not None:
-            screen.blit(SCANSURF, (0, 0))
-        pygame.display.flip()
-        _last_frame[0] = time.time()
-        clockC.tick(15)          # muy poco consumo: no compite con el juego
+            screen.blit(BGSURF, (0, 0))
+            if PANEL_UI:
+                draw_header()
+            # marca centrada
+            big = pygame.font.Font(None, max(48, W // 14))
+            # Composicion vertical a partir de la ALTURA REAL de la marca: antes
+            # se usaban distancias fijas y con la letra grande el texto de estado
+            # se montaba encima de "WPROTON".
+            brand = big.render('WPROTON', True, ACC)
+            try:
+                bh = brand.get_height()
+            except Exception:
+                bh = FS(96)
+            by = H // 2 - bh
+            screen.blit(brand, ((W - brand.get_width()) // 2, by))
+            _y = by + bh + FS(28)          # el estado empieza DEBAJO de la marca
+            if status:
+                for _ln in wrap_title(status, f_it, W - 120, 3):
+                    sf = rtext(f_it, _ln, FG)
+                    screen.blit(sf, ((W - sf.get_width()) // 2, _y))
+                    _y += FS(34)
+            # punto animado, para que se vea que sigue vivo
+            _p = int(time.time() * 2) % 4
+            dots = rtext(f_sm, '.' * _p, DIM)
+            screen.blit(dots, ((W - dots.get_width()) // 2, _y + FS(16)))
+            if SCANSURF is not None:
+                screen.blit(SCANSURF, (0, 0))
+            pygame.display.flip()
+            _last_frame[0] = time.time()
+            clockC.tick(15)          # muy poco consumo: no compite con el juego
 
-if MODE == 'progress':
-    # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
-    bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
-    clock2 = pygame.time.Clock()
-    while True:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
-                pygame.quit(); sys.exit(0)
-        try:
-            with open(ARG4, encoding='utf-8') as fh:
-                raw = fh.readline().rstrip('\n')
-            if raw.startswith('DONE'):
-                break
-            p, _, t = raw.partition('|')
-            bar_pct = max(0, min(100, int(p or 0)))
-            bar_txt = t or bar_txt
-        except Exception:
-            pass
-        screen.blit(BGSURF, (0, 0))
-        for _i, _tl in enumerate(TITLE_LINES):
-            screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
-        pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
-        screen.blit(f_it.render(fit_label(bar_txt, f_it, W - 60), True, FG), (30, HEAD + 24))
-        bx, by, bw, bh = 30, HEAD + 74, W - 60, 26
-        pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
-        if TH['panel'] is not None:
-            pygame.draw.rect(screen, TH['border'], (bx, by, bw, bh), 1, border_radius=RAD)
-        if bar_pct > 0:
-            pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
-                             (bx, by, int(bw * bar_pct / 100.0), bh), border_radius=RAD)
-        else:
-            t0 = (time.time() * 220) % (bw * 2)
-            xx = t0 if t0 < bw else (bw * 2 - t0)
-            pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
-                             (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
-        if bar_pct:
-            screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
-        screen.blit(f_sm.render(L('Espera, esto puede tardar...', 'Please wait, this may take a while...'), True, DIM), (24, H - 40))
-        if SCANSURF is not None:
-            screen.blit(SCANSURF, (0, 0))
-        pygame.display.flip()
-        _last_frame[0] = time.time()
-        clock2.tick(30)
-    pygame.quit()
-    sys.exit(0)
-
-if MODE == 'text':
-    # Editor de una linea con teclado en pantalla: para argumentos, DLL
-    # overrides, notas... Se maneja con el mando (o el teclado real).
-    TXT = ARG4 if len(sys.argv) > 4 else ''
-    TROWS = ['1234567890-=',
-             'qwertyuiop[]',
-             'asdfghjkl;\'',
-             'zxcvbnm,./\\',
-             ' _:"|+*@#$%&']
-    TACT = [L('MAYUS', 'SHIFT'), L('BORRAR', 'DELETE'),
-            L('LIMPIAR', 'CLEAR'), L('ACEPTAR', 'ACCEPT'), L('CANCELAR', 'CANCEL')]
-    tr_r, tr_c, shift = 0, 0, False
-    clockT = pygame.time.Clock()
-    t_open2 = time.time()
-
-    def tcols(r):
-        return len(TACT) if r == len(TROWS) else len(TROWS[r])
-
-    def t_press():
-        global TXT, shift, tr_r, tr_c
-        if tr_r == len(TROWS):
-            act = TACT[tr_c]
-            if act in ('MAYUS', 'SHIFT'):
-                shift = not shift
-            elif act in ('BORRAR', 'DELETE'):
-                TXT = TXT[:-1]
-            elif act in ('LIMPIAR', 'CLEAR'):
-                TXT = ''
-            elif act in ('ACEPTAR', 'ACCEPT'):
-                return 'ok'
-            else:
-                return 'cancel'
-        else:
-            ch = TROWS[tr_r][tr_c]
-            TXT += ch.upper() if shift else ch
-        return None
-
-    while True:
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
-                safe_quit(1)
-            if ev.type != pygame.KEYDOWN:
-                continue
-            if time.time() - t_open2 < 0.35:
-                continue
-            if ev.key == pygame.K_UP:
-                tr_r = (tr_r - 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
-            elif ev.key == pygame.K_DOWN:
-                tr_r = (tr_r + 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
-            elif ev.key == pygame.K_LEFT:
-                tr_c = (tr_c - 1) % tcols(tr_r)
-            elif ev.key == pygame.K_RIGHT:
-                tr_c = (tr_c + 1) % tcols(tr_r)
-            elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                r = t_press()
-                if r == 'ok':
-                    write_out(TXT); safe_quit(0)
-                if r == 'cancel':
-                    safe_quit(1)
-            elif ev.key == pygame.K_SPACE:      # X del mando: borrar
-                TXT = TXT[:-1]
-            elif ev.key == pygame.K_BACKSPACE:
-                TXT = TXT[:-1]
-            elif ev.key == pygame.K_TAB:        # Y: aceptar rapido
-                write_out(TXT); safe_quit(0)
-            elif ev.key == pygame.K_ESCAPE:
-                safe_quit(1)
-            else:
-                ch = getattr(ev, 'unicode', '')
-                if ch and ch.isprintable():
-                    TXT += ch
-
-        screen.blit(BGSURF, (0, 0))
-        if PANEL_UI:
-            draw_header()
-        else:
+    if MODE == 'progress':
+        # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
+        bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
+        clock2 = pygame.time.Clock()
+        while True:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+            try:
+                with open(ARG4, encoding='utf-8') as fh:
+                    raw = fh.readline().rstrip('\n')
+                if raw.startswith('DONE'):
+                    break
+                p, _, t = raw.partition('|')
+                bar_pct = max(0, min(100, int(p or 0)))
+                bar_txt = t or bar_txt
+            except Exception:
+                pass
+            screen.blit(BGSURF, (0, 0))
             for _i, _tl in enumerate(TITLE_LINES):
                 screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
-            pygame.draw.line(screen, TH['border'], (24, HEAD - 8), (W - 24, HEAD - 8), 1)
-        # caja de texto
-        bx, by, bw, bh = 30, HEAD + 20, W - 60, 54
-        pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
-        pygame.draw.rect(screen, ACC, (bx, by, bw, bh), 2, border_radius=RAD)
-        cursor = '_' if int(time.time() * 2) % 2 == 0 else ' '
-        shown = TXT
-        while f_it.render(shown + cursor, True, FG).get_width() > bw - 24 and shown:
-            shown = shown[1:]
-        screen.blit(f_it.render(shown + cursor, True, FG), (bx + 12, by + 14))
-        # teclado
-        ky0 = by + bh + 26
-        cw = (W - 80) // 12
-        for r, row in enumerate(TROWS):
-            for c, ch in enumerate(row):
-                x = 40 + c * cw
-                y = ky0 + r * 44
-                if r == tr_r and c == tr_c:
-                    draw_selection((x - 8, y - 6, cw - 6, 38))
-                lab = ch.upper() if shift else ch
-                if ch == ' ':
-                    lab = L('ESP', 'SPC')
-                screen.blit(f_it.render(lab, True, FG), (x, y))
-        aw = (W - 80) // len(TACT)
-        for c, act in enumerate(TACT):
-            x = 40 + c * aw
-            y = ky0 + len(TROWS) * 44
-            if tr_r == len(TROWS) and c == tr_c:
-                draw_selection((x - 8, y - 6, aw - 14, 38))
-            col = ACC if act in ('ACEPTAR', 'ACCEPT') else (
-                  WARN if act in ('MAYUS', 'SHIFT') and shift else FG)
-            screen.blit(f_it.render(act, True, col), (x, y))
-        hint2 = L('Dpad: moverse   A: pulsar   X: borrar   Y: aceptar   B: cancelar',
-                  'Dpad: move   A: press   X: delete   Y: accept   B: cancel')
-        if PANEL_UI:
-            draw_footer([('A', L('pulsar', 'press')), ('X', L('borrar', 'delete')),
-                         ('Y', L('aceptar', 'accept')), ('B', L('cancelar', 'cancel'))])
-        else:
-            screen.blit(f_sm.render(hint2, True, DIM), (24, H - 40))
-        if SCANSURF is not None:
-            screen.blit(SCANSURF, (0, 0))
-        pygame.display.flip()
-        _last_frame[0] = time.time()
-        clockT.tick(30)
+            pygame.draw.line(screen, (60, 64, 74), (24, HEAD - 8), (W - 24, HEAD - 8), 1)
+            screen.blit(f_it.render(fit_label(bar_txt, f_it, W - 60), True, FG), (30, HEAD + 24))
+            bx, by, bw, bh = 30, HEAD + 74, W - 60, 26
+            pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
+            if TH['panel'] is not None:
+                pygame.draw.rect(screen, TH['border'], (bx, by, bw, bh), 1, border_radius=RAD)
+            if bar_pct > 0:
+                pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
+                                 (bx, by, int(bw * bar_pct / 100.0), bh), border_radius=RAD)
+            else:
+                t0 = (time.time() * 220) % (bw * 2)
+                xx = t0 if t0 < bw else (bw * 2 - t0)
+                pygame.draw.rect(screen, ACC if TH['glow'] else HIBG,
+                                 (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
+            if bar_pct:
+                screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
+            screen.blit(f_sm.render(L('Espera, esto puede tardar...', 'Please wait, this may take a while...'), True, DIM), (24, H - 40))
+            if SCANSURF is not None:
+                screen.blit(SCANSURF, (0, 0))
+            pygame.display.flip()
+            _last_frame[0] = time.time()
+            clock2.tick(30)
+        pygame.quit()
+        sys.exit(0)
 
-running, done = True, False
-GRACE = 0.35
-t_open = time.time()
-def ready():
-    return time.time() - t_open >= GRACE
+    if MODE == 'text':
+        # Editor de una linea con teclado en pantalla: para argumentos, DLL
+        # overrides, notas... Se maneja con el mando (o el teclado real).
+        TXT = ARG4 if len(sys.argv) > 4 else ''
+        TROWS = ['1234567890-=',
+                 'qwertyuiop[]',
+                 'asdfghjkl;\'',
+                 'zxcvbnm,./\\',
+                 ' _:"|+*@#$%&']
+        TACT = [L('MAYUS', 'SHIFT'), L('BORRAR', 'DELETE'),
+                L('LIMPIAR', 'CLEAR'), L('ACEPTAR', 'ACCEPT'), L('CANCELAR', 'CANCEL')]
+        tr_r, tr_c, shift = 0, 0, False
+        clockT = pygame.time.Clock()
+        t_open2 = time.time()
 
-_last_key = [None, 0.0]
-DEBOUNCE = 0.08
-while running:
-    for ev in pygame.event.get():
-        if ev.type == pygame.QUIT:
-            running = False
-        elif ev.type == pygame.KEYDOWN:
-            t_now = time.time()
-            if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
-                continue
-            _last_key[0], _last_key[1] = ev.key, t_now
-            if ev.key == pygame.K_F11:
-                toggle_fullscreen()
-                continue
-            if kb_open:
-                # --- navegacion del teclado virtual ---
+        def tcols(r):
+            return len(TACT) if r == len(TROWS) else len(TROWS[r])
+
+        def t_press():
+            global TXT, shift, tr_r, tr_c
+            if tr_r == len(TROWS):
+                act = TACT[tr_c]
+                if act in ('MAYUS', 'SHIFT'):
+                    shift = not shift
+                elif act in ('BORRAR', 'DELETE'):
+                    TXT = TXT[:-1]
+                elif act in ('LIMPIAR', 'CLEAR'):
+                    TXT = ''
+                elif act in ('ACEPTAR', 'ACCEPT'):
+                    return 'ok'
+                else:
+                    return 'cancel'
+            else:
+                ch = TROWS[tr_r][tr_c]
+                TXT += ch.upper() if shift else ch
+            return None
+
+        while True:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    safe_quit(1)
+                if ev.type != pygame.KEYDOWN:
+                    continue
+                if time.time() - t_open2 < 0.35:
+                    continue
                 if ev.key == pygame.K_UP:
-                    kb_r = (kb_r - 1) % (len(KB_ROWS) + 1)
-                    kb_c = min(kb_c, kb_cols(kb_r) - 1)
+                    tr_r = (tr_r - 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
                 elif ev.key == pygame.K_DOWN:
-                    kb_r = (kb_r + 1) % (len(KB_ROWS) + 1)
-                    kb_c = min(kb_c, kb_cols(kb_r) - 1)
+                    tr_r = (tr_r + 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
                 elif ev.key == pygame.K_LEFT:
-                    kb_c = (kb_c - 1) % kb_cols(kb_r)
+                    tr_c = (tr_c - 1) % tcols(tr_r)
                 elif ev.key == pygame.K_RIGHT:
-                    kb_c = (kb_c + 1) % kb_cols(kb_r)
+                    tr_c = (tr_c + 1) % tcols(tr_r)
                 elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    if ready(): kb_press()
-                elif ev.key == pygame.K_SPACE:
-                    if ready(): filter_back()          # X = borrar
-                elif ev.key in (pygame.K_ESCAPE, pygame.K_TAB):
-                    if ready(): kb_open = False        # B / Y = cerrar
+                    r = t_press()
+                    if r == 'ok':
+                        write_out(TXT); safe_quit(0)
+                    if r == 'cancel':
+                        safe_quit(1)
+                elif ev.key == pygame.K_SPACE:      # X del mando: borrar
+                    TXT = TXT[:-1]
                 elif ev.key == pygame.K_BACKSPACE:
-                    filter_back()
+                    TXT = TXT[:-1]
+                elif ev.key == pygame.K_TAB:        # Y: aceptar rapido
+                    write_out(TXT); safe_quit(0)
+                elif ev.key == pygame.K_ESCAPE:
+                    safe_quit(1)
                 else:
                     ch = getattr(ev, 'unicode', '')
                     if ch and ch.isprintable():
-                        filter_add(ch)
+                        TXT += ch
+
+            screen.blit(BGSURF, (0, 0))
+            if PANEL_UI:
+                draw_header()
             else:
-                if ev.key == pygame.K_ESCAPE:
-                    if ready(): on_escape()
-                elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    if ready(): on_enter()
-                elif ev.key == pygame.K_UP:
-                    if MODE == 'grid': grid_move(0, -1)
-                    else: move(-1)
-                elif ev.key == pygame.K_DOWN:
-                    if MODE == 'grid': grid_move(0, 1)
-                    else: move(1)
-                elif ev.key == pygame.K_LEFT:
-                    if MODE == 'grid': grid_move(-1, 0)
-                elif ev.key == pygame.K_RIGHT:
-                    if MODE == 'grid': grid_move(1, 0)
-                elif ev.key == pygame.K_TAB:
-                    # Y del mando (o Tab): abrir teclado de busqueda
-                    if ready() and MODE != 'check':
-                        kb_open = True
-                        kb_r, kb_c = 0, 0
-                        scroll = max(0, min(scroll, max(0, len(view) - VIS_KB)))
-                elif ev.key == pygame.K_BACKSPACE:
-                    filter_back()
-                elif ev.key == pygame.K_SPACE:
-                    if ready():
-                        if MODE == 'check':
-                            toggle()
-                        elif ACTION_X and MODE in ('list', 'grid'):
-                            action_x()
-                        else:
-                            on_enter()
-                else:
-                    # TYPE-AHEAD con teclado real: filtra al escribir
-                    if MODE != 'check':
+                for _i, _tl in enumerate(TITLE_LINES):
+                    screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
+                pygame.draw.line(screen, TH['border'], (24, HEAD - 8), (W - 24, HEAD - 8), 1)
+            # caja de texto
+            bx, by, bw, bh = 30, HEAD + 20, W - 60, 54
+            pygame.draw.rect(screen, TH['card'], (bx, by, bw, bh), border_radius=RAD)
+            pygame.draw.rect(screen, ACC, (bx, by, bw, bh), 2, border_radius=RAD)
+            cursor = '_' if int(time.time() * 2) % 2 == 0 else ' '
+            shown = TXT
+            while f_it.render(shown + cursor, True, FG).get_width() > bw - 24 and shown:
+                shown = shown[1:]
+            screen.blit(f_it.render(shown + cursor, True, FG), (bx + 12, by + 14))
+            # teclado
+            ky0 = by + bh + 26
+            cw = (W - 80) // 12
+            for r, row in enumerate(TROWS):
+                for c, ch in enumerate(row):
+                    x = 40 + c * cw
+                    y = ky0 + r * 44
+                    if r == tr_r and c == tr_c:
+                        draw_selection((x - 8, y - 6, cw - 6, 38))
+                    lab = ch.upper() if shift else ch
+                    if ch == ' ':
+                        lab = L('ESP', 'SPC')
+                    screen.blit(f_it.render(lab, True, FG), (x, y))
+            aw = (W - 80) // len(TACT)
+            for c, act in enumerate(TACT):
+                x = 40 + c * aw
+                y = ky0 + len(TROWS) * 44
+                if tr_r == len(TROWS) and c == tr_c:
+                    draw_selection((x - 8, y - 6, aw - 14, 38))
+                col = ACC if act in ('ACEPTAR', 'ACCEPT') else (
+                      WARN if act in ('MAYUS', 'SHIFT') and shift else FG)
+                screen.blit(f_it.render(act, True, col), (x, y))
+            hint2 = L('Dpad: moverse   A: pulsar   X: borrar   Y: aceptar   B: cancelar',
+                      'Dpad: move   A: press   X: delete   Y: accept   B: cancel')
+            if PANEL_UI:
+                draw_footer([('A', L('pulsar', 'press')), ('X', L('borrar', 'delete')),
+                             ('Y', L('aceptar', 'accept')), ('B', L('cancelar', 'cancel'))])
+            else:
+                screen.blit(f_sm.render(hint2, True, DIM), (24, H - 40))
+            if SCANSURF is not None:
+                screen.blit(SCANSURF, (0, 0))
+            pygame.display.flip()
+            _last_frame[0] = time.time()
+            clockT.tick(30)
+
+    running, done = True, False
+    GRACE = 0.35
+    t_open = time.time()
+    def ready():
+        return time.time() - t_open >= GRACE
+
+    _last_key = [None, 0.0]
+    DEBOUNCE = 0.08
+    while running:
+        for ev in pygame.event.get():
+            if ev.type == pygame.QUIT:
+                running = False
+            elif ev.type == pygame.KEYDOWN:
+                t_now = time.time()
+                if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
+                    continue
+                _last_key[0], _last_key[1] = ev.key, t_now
+                if ev.key == pygame.K_F11:
+                    toggle_fullscreen()
+                    continue
+                if kb_open:
+                    # --- navegacion del teclado virtual ---
+                    if ev.key == pygame.K_UP:
+                        kb_r = (kb_r - 1) % (len(KB_ROWS) + 1)
+                        kb_c = min(kb_c, kb_cols(kb_r) - 1)
+                    elif ev.key == pygame.K_DOWN:
+                        kb_r = (kb_r + 1) % (len(KB_ROWS) + 1)
+                        kb_c = min(kb_c, kb_cols(kb_r) - 1)
+                    elif ev.key == pygame.K_LEFT:
+                        kb_c = (kb_c - 1) % kb_cols(kb_r)
+                    elif ev.key == pygame.K_RIGHT:
+                        kb_c = (kb_c + 1) % kb_cols(kb_r)
+                    elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        if ready(): kb_press()
+                    elif ev.key == pygame.K_SPACE:
+                        if ready(): filter_back()          # X = borrar
+                    elif ev.key in (pygame.K_ESCAPE, pygame.K_TAB):
+                        if ready(): kb_open = False        # B / Y = cerrar
+                    elif ev.key == pygame.K_BACKSPACE:
+                        filter_back()
+                    else:
                         ch = getattr(ev, 'unicode', '')
                         if ch and ch.isprintable():
                             filter_add(ch)
+                else:
+                    if ev.key == pygame.K_ESCAPE:
+                        if ready(): on_escape()
+                    elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        if ready(): on_enter()
+                    elif ev.key == pygame.K_UP:
+                        if MODE == 'grid': grid_move(0, -1)
+                        else: move(-1)
+                    elif ev.key == pygame.K_DOWN:
+                        if MODE == 'grid': grid_move(0, 1)
+                        else: move(1)
+                    elif ev.key == pygame.K_LEFT:
+                        if MODE == 'grid': grid_move(-1, 0)
+                    elif ev.key == pygame.K_RIGHT:
+                        if MODE == 'grid': grid_move(1, 0)
+                    elif ev.key == pygame.K_TAB:
+                        # Y del mando (o Tab): abrir teclado de busqueda
+                        if ready() and MODE != 'check':
+                            kb_open = True
+                            kb_r, kb_c = 0, 0
+                            scroll = max(0, min(scroll, max(0, len(view) - VIS_KB)))
+                    elif ev.key == pygame.K_BACKSPACE:
+                        filter_back()
+                    elif ev.key == pygame.K_SPACE:
+                        if ready():
+                            if MODE == 'check':
+                                toggle()
+                            elif ACTION_X and MODE in ('list', 'grid'):
+                                action_x()
+                            else:
+                                on_enter()
+                    else:
+                        # TYPE-AHEAD con teclado real: filtra al escribir
+                        if MODE != 'check':
+                            ch = getattr(ev, 'unicode', '')
+                            if ch and ch.isprintable():
+                                filter_add(ch)
 
-    screen.blit(BGSURF, (0, 0))
-    if PANEL_UI:
-        draw_header()
-        draw_panel((LIST_X - 6, LIST_Y, LIST_W + 12, LIST_H))
-        draw_side_panel()
-    else:
-        for _i, _tl in enumerate(TITLE_LINES):
-            screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
-        if MODE == 'browse':
-            screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
-            _ry = HEAD + 20
+        screen.blit(BGSURF, (0, 0))
+        if PANEL_UI:
+            draw_header()
+            draw_panel((LIST_X - 6, LIST_Y, LIST_W + 12, LIST_H))
+            draw_side_panel()
         else:
-            _ry = HEAD - 8
-        pygame.draw.line(screen, TH['border'], (24, _ry), (W - 24, _ry), 1)
+            for _i, _tl in enumerate(TITLE_LINES):
+                screen.blit(rtext(T_FONT, _tl, FG), (24, 22 + _i * T_LH))
+            if MODE == 'browse':
+                screen.blit(f_sm.render(shorten(cur_path), True, DIM), (24, HEAD - 8))
+                _ry = HEAD + 20
+            else:
+                _ry = HEAD - 8
+            pygame.draw.line(screen, TH['border'], (24, _ry), (W - 24, _ry), 1)
 
-    if MODE == 'grid':
-        draw_grid()
-    for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
-        y = LIST_Y + 8 + (i - scroll) * ROW
-        _rect = (LIST_X, y - 4, LIST_W, ROW - 6)
-        if TH.get('btn'):
-            draw_button(_rect, i == sel and not kb_open)
-            if i == sel and not kb_open and TH.get('marker'):
-                try:
-                    pygame.draw.polygon(screen, ACC,
-                        [(LIST_X + 20, y + ROW // 2 - 4), (LIST_X + 10, y + 2),
-                         (LIST_X + 10, y + ROW - 14)])
-                except Exception:
-                    pass
-        else:
-            if PANEL_UI and i != sel:
-                pygame.draw.rect(screen, TH['card'], _rect, border_radius=RAD)
-            if i == sel and not kb_open:
-                draw_selection(_rect)
-        kind, txt, on = items[view[i]]
-        if MODE == 'check':
-            label = ('[x] ' if on else '[  ] ') + txt
-            color = ACC if on else FG
-        elif kind == K_DIR:
-            label, color = txt, DIRC
-        elif kind in HEADER_KINDS:
-            label, color = txt, (ACC if kind == K_HDR else DIM)
-        else:
-            label, color = txt, FG
-        _tx = LIST_X + (18 if PANEL_UI else 14)
-        if TH.get('numbered'):
-            _tx += 46
-            screen.blit(f_sm.render('%02d' % (i + 1), True, ACC if i == sel else TH['border']),
-                        (LIST_X + 28, y + 12))
-        _ty = y + (6 if PANEL_UI else 0)
-        _tw = LIST_X + LIST_W - _tx - 18     # ancho util hasta el borde
-        if TH.get('shadow'):
-            draw_row_text(label, f_it, (0, 0, 0), _tx + 2, _ty + 2, _tw, i == sel)
-        if kind in HEADER_KINDS or MODE == 'check':
-            draw_row_text(label, f_it, color, _tx, _ty, _tw, i == sel)
-        else:
-            draw_segments(row_segments(label, color), f_it, _tx, _ty, _tw, i == sel)
-    if not view and FILTER:
-        screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
-                    (LIST_X + 14, LIST_Y + 14))
+        if MODE == 'grid':
+            draw_grid()
+        for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
+            y = LIST_Y + 8 + (i - scroll) * ROW
+            _rect = (LIST_X, y - 4, LIST_W, ROW - 6)
+            if TH.get('btn'):
+                draw_button(_rect, i == sel and not kb_open)
+                if i == sel and not kb_open and TH.get('marker'):
+                    try:
+                        pygame.draw.polygon(screen, ACC,
+                            [(LIST_X + 20, y + ROW // 2 - 4), (LIST_X + 10, y + 2),
+                             (LIST_X + 10, y + ROW - 14)])
+                    except Exception:
+                        pass
+            else:
+                if PANEL_UI and i != sel:
+                    pygame.draw.rect(screen, TH['card'], _rect, border_radius=RAD)
+                if i == sel and not kb_open:
+                    draw_selection(_rect)
+            kind, txt, on = items[view[i]]
+            if MODE == 'check':
+                label = ('[x] ' if on else '[  ] ') + txt
+                color = ACC if on else FG
+            elif kind == K_DIR:
+                label, color = txt, DIRC
+            elif kind in HEADER_KINDS:
+                label, color = txt, (ACC if kind == K_HDR else DIM)
+            else:
+                label, color = txt, FG
+            _tx = LIST_X + (18 if PANEL_UI else 14)
+            if TH.get('numbered'):
+                _tx += 46
+                screen.blit(f_sm.render('%02d' % (i + 1), True, ACC if i == sel else TH['border']),
+                            (LIST_X + 28, y + 12))
+            _ty = y + (6 if PANEL_UI else 0)
+            _tw = LIST_X + LIST_W - _tx - 18     # ancho util hasta el borde
+            if TH.get('shadow'):
+                draw_row_text(label, f_it, (0, 0, 0), _tx + 2, _ty + 2, _tw, i == sel)
+            if kind in HEADER_KINDS or MODE == 'check':
+                draw_row_text(label, f_it, color, _tx, _ty, _tw, i == sel)
+            else:
+                draw_segments(row_segments(label, color), f_it, _tx, _ty, _tw, i == sel)
+        if not view and FILTER:
+            screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
+                        (LIST_X + 14, LIST_Y + 14))
 
-    # Barra lateral: avisa de que hay más opciones de las que caben en pantalla
-    _total = len(view)
-    _vis = (grid_rows_vis() * GCOLS) if MODE == 'grid' else vis()
-    if _total > _vis:
-        _tr_x = (LIST_X + LIST_W + 2) if PANEL_UI else (W - 14)
-        _tr_y = LIST_Y + 8
-        _tr_h = LIST_H - 16
-        pygame.draw.rect(screen, TH['card'], (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
-        _kh = max(28, int(_tr_h * _vis / float(_total)))
-        _maxoff = max(1, _total - _vis)
-        _ky = _tr_y + int((_tr_h - _kh) * min(1.0, scroll / float(_maxoff)))
-        pygame.draw.rect(screen, ACC if TH['glow'] else (120, 130, 150),
-                         (_tr_x, _ky, 6, _kh), border_radius=3)
-    if view and not PANEL_UI:
-        pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
-        screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
-    if (FILTER or kb_open) and not PANEL_UI:
-        ft = f_sm.render('Buscar: %s_' % FILTER, True, WARN)
-        screen.blit(ft, (W - 24 - ft.get_width(), max(24, HEAD - 30)))
+        # Barra lateral: avisa de que hay más opciones de las que caben en pantalla
+        _total = len(view)
+        _vis = (grid_rows_vis() * GCOLS) if MODE == 'grid' else vis()
+        if _total > _vis:
+            _tr_x = (LIST_X + LIST_W + 2) if PANEL_UI else (W - 14)
+            _tr_y = LIST_Y + 8
+            _tr_h = LIST_H - 16
+            pygame.draw.rect(screen, TH['card'], (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
+            _kh = max(28, int(_tr_h * _vis / float(_total)))
+            _maxoff = max(1, _total - _vis)
+            _ky = _tr_y + int((_tr_h - _kh) * min(1.0, scroll / float(_maxoff)))
+            pygame.draw.rect(screen, ACC if TH['glow'] else (120, 130, 150),
+                             (_tr_x, _ky, 6, _kh), border_radius=3)
+        if view and not PANEL_UI:
+            pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
+            screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
+        if (FILTER or kb_open) and not PANEL_UI:
+            ft = f_sm.render('Buscar: %s_' % FILTER, True, WARN)
+            screen.blit(ft, (W - 24 - ft.get_width(), max(24, HEAD - 30)))
 
-    if kb_open:
-        ky0 = H - KB_H - 44
-        pygame.draw.rect(screen, KBBG, (12, ky0 - 8, W - 24, KB_H + 8), border_radius=RAD)
-        if TH['panel'] is not None:
-            pygame.draw.rect(screen, TH['border'], (12, ky0 - 8, W - 24, KB_H + 8), 1, border_radius=RAD)
-        cw = (W - 60) // 10
-        for r, row in enumerate(KB_ROWS):
-            for c, ch in enumerate(row):
-                x = 30 + c * cw
-                y = ky0 + r * 36
-                if r == kb_r and c == kb_c:
-                    draw_selection((x - 6, y - 4, cw - 6, 32))
-                lab = 'ESP' if ch == ' ' else ch
-                screen.blit(f_kb.render(lab, True, FG), (x, y))
-        aw = (W - 60) // len(KB_ACTIONS)
-        for c, act in enumerate(KB_ACTIONS):
-            x = 30 + c * aw
-            y = ky0 + len(KB_ROWS) * 36
-            if kb_r == len(KB_ROWS) and c == kb_c:
-                draw_selection((x - 6, y - 4, aw - 12, 32))
-            screen.blit(f_kb.render(act, True, ACC if act == 'LISTO' else FG), (x, y))
-
-    if kb_open:
-        hint = 'Dpad: moverse   A: pulsar   X: borrar   B/Y: cerrar teclado'
-    elif MODE == 'check':
-        hint = 'X/Espacio: marcar   A/Enter: aceptar   B/Esc: cancelar'
-    elif MODE == 'browse':
-        hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
-    elif MODE == 'grid':
-        hint = ('A: jugar   X: configurar   B: volver   Y: buscar' if ACTION_X
-                else 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla')
-    else:
-        hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
-    if PANEL_UI:
         if kb_open:
-            _chips = [('Dpad', L('moverse', 'move')), ('A', L('pulsar', 'press')),
-                      ('X', L('borrar', 'delete')), ('B/Y', L('cerrar', 'close'))]
+            ky0 = H - KB_H - 44
+            pygame.draw.rect(screen, KBBG, (12, ky0 - 8, W - 24, KB_H + 8), border_radius=RAD)
+            if TH['panel'] is not None:
+                pygame.draw.rect(screen, TH['border'], (12, ky0 - 8, W - 24, KB_H + 8), 1, border_radius=RAD)
+            cw = (W - 60) // 10
+            for r, row in enumerate(KB_ROWS):
+                for c, ch in enumerate(row):
+                    x = 30 + c * cw
+                    y = ky0 + r * 36
+                    if r == kb_r and c == kb_c:
+                        draw_selection((x - 6, y - 4, cw - 6, 32))
+                    lab = 'ESP' if ch == ' ' else ch
+                    screen.blit(f_kb.render(lab, True, FG), (x, y))
+            aw = (W - 60) // len(KB_ACTIONS)
+            for c, act in enumerate(KB_ACTIONS):
+                x = 30 + c * aw
+                y = ky0 + len(KB_ROWS) * 36
+                if kb_r == len(KB_ROWS) and c == kb_c:
+                    draw_selection((x - 6, y - 4, aw - 12, 32))
+                screen.blit(f_kb.render(act, True, ACC if act == 'LISTO' else FG), (x, y))
+
+        if kb_open:
+            hint = 'Dpad: moverse   A: pulsar   X: borrar   B/Y: cerrar teclado'
         elif MODE == 'check':
-            _chips = [('X', L('marcar', 'toggle')), ('A', L('aceptar', 'accept')),
-                      ('B', L('cancelar', 'cancel'))]
+            hint = 'X/Espacio: marcar   A/Enter: aceptar   B/Esc: cancelar'
         elif MODE == 'browse':
-            _chips = [('A', L('entrar', 'enter')), ('B', L('subir', 'up')),
-                      ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
+            hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
         elif MODE == 'grid':
-            _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
-                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
-                     [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
-                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
+            hint = ('A: jugar   X: configurar   B: volver   Y: buscar' if ACTION_X
+                    else 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla')
         else:
-            _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
-                      ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
-                     [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
-                      ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
-        draw_footer(_chips)
+            hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
+        if PANEL_UI:
+            if kb_open:
+                _chips = [('Dpad', L('moverse', 'move')), ('A', L('pulsar', 'press')),
+                          ('X', L('borrar', 'delete')), ('B/Y', L('cerrar', 'close'))]
+            elif MODE == 'check':
+                _chips = [('X', L('marcar', 'toggle')), ('A', L('aceptar', 'accept')),
+                          ('B', L('cancelar', 'cancel'))]
+            elif MODE == 'browse':
+                _chips = [('A', L('entrar', 'enter')), ('B', L('subir', 'up')),
+                          ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
+            elif MODE == 'grid':
+                _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
+                          ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                         [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
+                          ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
+            else:
+                _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
+                          ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                         [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
+                          ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
+            draw_footer(_chips)
+        else:
+            screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
+        if SCANSURF is not None:
+            screen.blit(SCANSURF, (0, 0))
+        try:
+            pygame.display.flip()
+            _last_frame[0] = time.time()
+        except Exception as _e:
+            # El servidor X de gamescope puede desaparecer al cerrarse un juego
+            # ("XIO: fatal IO error"). Salimos con codigo 2 para que WProton
+            # reabra el menu, en vez de morir con un traceback.
+            sys.stderr.write('menu_pygame: se perdio la pantalla (%s)\n' % _e)
+            safe_quit(2)
+        clock.tick(60)
+
+    _mark_clean_exit()
+    return 0 if done else 1
+
+
+# ---------------------------------------------------------------------------
+# PUNTO DE ENTRADA
+#
+#   menu_pygame.py <modo> <titulo> <salida> [arg4] [tipo]   -> una peticion
+#   menu_pygame.py server <carpeta>                         -> servidor
+#
+# En modo SERVIDOR el proceso (y su ventana) NO se cierran entre menus: se
+# queda en reposo esperando la siguiente peticion. Eso quita el parpadeo al
+# cambiar de menu y, en el modo Juego de SteamOS, evita que el compositor se
+# quede sin ninguna ventana nuestra al salir de un juego.
+#
+# Protocolo, deliberadamente simple (ficheros, sin dependencias):
+#   <carpeta>/req      peticion: una linea por campo
+#   <carpeta>/req.ready  marca de "peticion lista"
+#   <carpeta>/resp     codigo de salida de la sesion
+#   <carpeta>/stop     si aparece, el servidor termina
+# ---------------------------------------------------------------------------
+
+def draw_idle(status=''):
+    # Pantalla de reposo entre peticiones: la ventana sigue viva.
+    # Se vacia la cola de eventos para que las pulsaciones hechas mientras
+    # no habia menu no se apliquen de golpe al abrir el siguiente.
+    try:
+        pygame.event.clear()
+    except Exception:
+        pass
+    if BGSURF is not None:
+        screen.blit(BGSURF, (0, 0))
     else:
-        screen.blit(f_sm.render(hint, True, DIM), (24, H - 40))
+        screen.fill(TH['bg'])
+    big = pygame.font.Font(None, max(48, W // 14))
+    brand = big.render('WPROTON', True, ACC)
+    try:
+        bh = brand.get_height()
+    except Exception:
+        bh = FS(96)
+    by = H // 2 - bh
+    screen.blit(brand, ((W - brand.get_width()) // 2, by))
+    if status:
+        sf = rtext(f_it, status, FG)
+        screen.blit(sf, ((W - sf.get_width()) // 2, by + bh + FS(24)))
     if SCANSURF is not None:
         screen.blit(SCANSURF, (0, 0))
     try:
         pygame.display.flip()
         _last_frame[0] = time.time()
-    except Exception as _e:
-        # El servidor X de gamescope puede desaparecer al cerrarse un juego
-        # ("XIO: fatal IO error"). Salimos con codigo 2 para que WProton
-        # reabra el menu, en vez de morir con un traceback.
-        sys.stderr.write('menu_pygame: se perdio la pantalla (%s)\n' % _e)
-        safe_quit(2)
-    clock.tick(60)
+    except Exception:
+        pass
 
-_mark_clean_exit()
-pygame.quit()
-sys.exit(0 if done else 1)
+def serve(dirpath):
+    global SERVER_MODE
+    SERVER_MODE = True
+    # El fondo (BGSURF) se construye al calcular la disposicion. En modo
+    # servidor la primera pantalla es el reposo, ANTES de cualquier peticion,
+    # asi que hay que prepararlo aqui o no habria nada que dibujar.
+    set_request('list', '', '')
+    compute_layout()
+    req = os.path.join(dirpath, 'req')
+    ready = os.path.join(dirpath, 'req.ready')
+    resp = os.path.join(dirpath, 'resp')
+    stop = os.path.join(dirpath, 'stop')
+    idle = pygame.time.Clock()
+    sys.stderr.write('menu_pygame: servidor de menus en %s\n' % dirpath)
+    status = ''
+    while True:
+        if os.path.isfile(stop):
+            try:
+                os.remove(stop)
+            except Exception:
+                pass
+            break
+        if os.path.isfile(ready):
+            try:
+                with open(req, encoding='utf-8') as fh:
+                    campos = fh.read().split('\n')
+            except Exception:
+                campos = []
+            try:
+                os.remove(ready)
+            except Exception:
+                pass
+            while len(campos) < 6:
+                campos.append('')
+            modo, titulo, salida, arg4, kind, ax = campos[:6]
+            if modo == 'idle':
+                # sin menu: solo actualizar el texto del reposo
+                status = titulo
+            elif modo:
+                set_request(modo, titulo, salida, arg4 or None,
+                            kind or 'file', ax == '1')
+                load_request_data()
+                compute_layout()
+                try:
+                    rc = run_session()
+                except SessionEnd as e:
+                    rc = e.code
+                except SystemExit as e:
+                    rc = e.code if isinstance(e.code, int) else 0
+                except Exception as e:
+                    sys.stderr.write('menu_pygame: fallo en la peticion (%s)\n' % e)
+                    rc = 2
+                try:
+                    with open(resp, 'w', encoding='utf-8') as fh:
+                        fh.write(str(rc))
+                except Exception:
+                    pass
+                # limpiar el estado visible entre menus
+                pygame.event.clear()
+            continue
+        try:
+            draw_idle(status)
+        except Exception as e:
+            # un fallo dibujando el reposo no puede tumbar el servidor:
+            # se anota y se sigue, que el usuario aun tiene sus menus
+            sys.stderr.write('menu_pygame: reposo: %s\n' % e)
+            time.sleep(1.0)
+        idle.tick(15)
+    sys.stderr.write('menu_pygame: servidor detenido\n')
+    try:
+        pygame.quit()
+    except Exception:
+        pass
+    sys.exit(0)
+
+if sys.argv[1] == 'server':
+    serve(sys.argv[2])
+else:
+    set_request(sys.argv[1], sys.argv[2], sys.argv[3],
+                sys.argv[4] if len(sys.argv) > 4 else None,
+                sys.argv[5] if len(sys.argv) > 5 else 'file')
+    load_request_data()
+    compute_layout()
+    rc = run_session()
+    pygame.quit()
+    sys.exit(rc)
