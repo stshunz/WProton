@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.0** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.02** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/PortWINE**, la descarga automática de runners de **Heroic**, los perfiles por juego de **TeknoParrot** y el lanzamiento vía **umu** de **Faugus Launcher**.
 
@@ -12,7 +12,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 ---
 
-## Características 
+## Qué sabe hacer
 
 ### Formatos de juego
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
@@ -25,6 +25,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - Lectura directa de `/dev/input`: funciona sin foco de ventana, con detección al vuelo, filtro de acelerómetros y soporte de crucetas de cualquier tipo.
 - **Búsqueda** escribiendo con el teclado, o con el **teclado en pantalla** (botón Y), que también sirve para escribir argumentos, notas y variables.
 - **Tres temas**: moderno (el predeterminado), clásico y arcade (synthwave con efecto CRT).
+- **Menús persistentes**: todos los menús se dibujan en un mismo proceso, sin parpadeo al cambiar de uno a otro.
 - **Vista de lista o rejilla de carátulas**, con descarga automática desde SteamGridDB.
 - Pantalla completa por defecto (**Select + A** para pasar a ventana) y tamaño de letra ajustable.
 - Interfaz en **castellano e inglés**, ampliable con ficheros de idioma.
@@ -125,7 +126,7 @@ cache/  logs/  games/
 
 ## Problemas conocidos
 
-- **SteamOS, modo Juego**: al salir de un juego, gamescope reinicia su servidor gráfico y el menú puede tardar un momento en volver. La transición se nota; la solución definitiva —un único proceso de menús que no se cierra— está prevista para la 1.01.
+- **Konsole no cierra su ventana** al terminar WProton si se lanzó desde ahí. WProton sí termina (el prompt vuelve), pero la ventana se queda abierta. En investigación; no afecta al uso normal ni al modo Juego.
 - **Compartir perfiles de la comunidad**: la descarga funciona; el envío está desactivado mientras se decide un método cómodo para quien no usa Git.
 
 ## Créditos
@@ -136,4 +137,6 @@ cache/  logs/  games/
 - [Batocera](https://batocera.org) — formatos `.wsquashfs` y `autorun.cmd`.
 - [DwarFS](https://github.com/mhx/dwarfs), [innoextract](https://github.com/dscharrer/innoextract), [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2), [OptiScaler](https://github.com/cdozdil/OptiScaler), [SteamGridDB](https://www.steamgriddb.com).
 
-*Aplicación creada con la ayuda de Claude, si has llegado hasta aquí y te resulta interesante dale una oportunidad 
+## Licencia
+
+*(Pendiente de elegir — GPL-3.0 encajaría con el ecosistema del que bebe el proyecto.)*
