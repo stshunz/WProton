@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.02"
+WPROTON_VERSION="1.05"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -189,8 +189,10 @@ write_lang_en() {
  ">> JUGAR ESTA CARPETA <<": ">> PLAY THIS FOLDER <<",
  ">> USAR ESTA CARPETA <<": ">> USE THIS FOLDER <<",
  "ACEPTAR": "ACCEPT",
+ "Abriendo Steam...": "Opening Steam...",
  "Abrir winecfg": "Open winecfg",
  "Abrir winetricks": "Open winetricks",
+ "Actualizando la base de datos de umu...": "Updating the umu database...",
  "Actualizar GE-Proton a la última": "Update GE-Proton to the latest",
  "Actualizar umu-launcher": "Update umu-launcher",
  "Ajustes de un juego": "Game settings",
@@ -199,6 +201,7 @@ write_lang_en() {
  "Asignar fichero .keys (se copia a profiles/$gid.keys)": "Assign a .keys file (copied to profiles/$gid.keys)",
  "Automático (según el tamaño de la pantalla)": "Automatic (based on screen size)",
  "Añadir este juego a Steam": "Add this game to Steam",
+ "Añadir este juego a Steam (solo en modo Escritorio)": "Add this game to Steam (Desktop mode only)",
  "Añadir lo que falte (conserva lo tuyo)": "Add what's missing (keeps yours)",
  "Añadir un juego (zip, rar, exe o carpeta)": "Add a game (zip, rar, exe or folder)",
  "BORRAR": "DELETE",
@@ -210,13 +213,16 @@ write_lang_en() {
  "Borrar saves del overlay (upper/)": "Delete overlay saves (upper/)",
  "Borrar un runner": "Delete a runner",
  "Buscar actualizaciones": "Check for updates",
+ "Buscar en la base de umu (identificador automático)": "Look up in the umu database (automatic ID)",
  "Buscar prefijos y saves huerfanos": "Find orphaned prefixes and saves",
  "CANCELAR": "CANCEL",
  "CARPETA": "FOLDER",
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
+ "Carátula: elegir una imagen del sistema": "Cover: choose an image from your system",
  "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
+ "Cerrando Steam...": "Closing Steam...",
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
@@ -230,6 +236,7 @@ write_lang_en() {
  "DLL overrides": "DLL overrides",
  "DWProton [proton] - Dawn Winery, fixes anime/gacha": "DWProton [proton] - Dawn Winery, anime/gacha fixes",
  "DXVK Async": "DXVK Async",
+ "Datos de duración de partida (HowLongToBeat)": "Playtime data (HowLongToBeat)",
  "Desactivado": "Disabled",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
  "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
@@ -260,6 +267,7 @@ write_lang_en() {
  "Exportar mi configuración a un zip": "Export my setup to a zip",
  "FSR (escalado)": "FSR (upscaling)",
  "Favorito": "Favourite",
+ "Ficha del juego (año, editor, notas de la crítica)": "Game info (year, publisher, review scores)",
  "Formato al empaquetar": "Packing format",
  "Formato para los juegos que empaquetes": "Format for the games you pack",
  "Fsync": "Fsync",
@@ -276,6 +284,7 @@ write_lang_en() {
  "Idioma del juego": "Game language",
  "Importar configuración desde un zip": "Import a setup from a zip",
  "Incluido en el wsquashfs (estilo Batocera)": "Bundled in the wsquashfs (Batocera style)",
+ "Instalando datos de duración...": "Installing playtime data...",
  "Instalar OptiScaler (FSR/DLSS/XeSS)": "Install OptiScaler (FSR/DLSS/XeSS)",
  "Instalar dgVoodoo2 (DX1-9/Glide)": "Install dgVoodoo2 (DX1-9/Glide)",
  "Instalar librerias - elige el prefijo destino": "Install libraries - choose target prefix",
@@ -300,6 +309,7 @@ write_lang_en() {
  "Mostrar el tamaño de WProton": "Show WProton's size",
  "Muy grande": "Very large",
  "NTsync (sincronizacion por kernel)": "NTsync (kernel synchronization)",
+ "Ninguno": "None",
  "No": "No",
  "Normal": "Normal",
  "Notas": "Notes",
@@ -1250,15 +1260,71 @@ find_steam_userdata_config() {
     [ -n "$best" ] && printf '%s' "$best"
 }
 
+steam_esta_abierto() {
+    pgrep -x steam >/dev/null 2>&1
+}
+
+steam_cerrar() {
+    # Cierra Steam ORDENADAMENTE y espera a que termine. Es importante: Steam
+    # reescribe shortcuts.vdf al salir, asi que si lo modificamos con Steam
+    # abierto, nuestro cambio se pierde o el fichero queda corrupto.
+    steam_esta_abierto || return 0
+    loading_say "Cerrando Steam..."
+    if command -v steam >/dev/null 2>&1; then
+        steam -shutdown >/dev/null 2>&1 &
+    else
+        pkill -x steam 2>/dev/null
+    fi
+    local i
+    for i in $(seq 1 30); do            # hasta 15 segundos
+        steam_esta_abierto || { say "[+] Steam cerrado"; sleep 1; return 0; }
+        sleep 0.5
+    done
+    say "AVISO: Steam sigue abierto tras 15 segundos"
+    return 1
+}
+
+steam_abrir() {
+    # Vuelve a abrir Steam en segundo plano, sin quedarse con el terminal
+    command -v steam >/dev/null 2>&1 || return 1
+    loading_say "Abriendo Steam..."
+    lanzar_suelto steam >/dev/null 2>&1
+    return 0
+}
+
 add_game_to_steam() {
     # $1 = ruta del juego (wsquashfs/exe/carpeta), $2 = gid
-    local game="$1" gid="$2"
+    local game="$1" gid="$2" reabrir=0
+    # En el modo Juego de SteamOS NO se puede tocar: la sesion ES Steam, y
+    # cerrarlo tumbaria la sesion entera del usuario.
+    if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
+        ui_error "No se puede añadir juegos a Steam desde el modo Juego.
+
+La sesión que estás usando ES Steam: para escribir el acceso
+directo habría que cerrarlo, y eso cerraría tu sesión.
+
+Cambia al modo Escritorio y vuelve a intentarlo."
+        return 1
+    fi
     local cfg; cfg="$(find_steam_userdata_config)"
     [ -z "$cfg" ] && { ui_error "No se encontro la carpeta userdata de Steam"; return 1; }
-    if pgrep -x steam >/dev/null 2>&1; then
-        ui_ask "Steam esta ABIERTO: sobreescribiria el acceso al cerrarse.
-Cierra Steam primero. Continuar de todos modos?" || return 1
+
+    if steam_esta_abierto; then
+        if ui_ask "Steam está abierto.
+
+Para añadir el juego hay que cerrarlo: si no, Steam reescribe
+sus accesos directos al salir y se perdería el cambio.
+
+¿Cerrar Steam, añadir el juego y volver a abrirlo?"; then
+            steam_cerrar || {
+                ui_error "No se pudo cerrar Steam. Ciérralo a mano y reintenta."
+                return 1; }
+            reabrir=1
+        else
+            return 1
+        fi
     fi
+
     write_steam_add
     local SELF; SELF="$(readlink -f "$0")"
     local vdf="$cfg/shortcuts.vdf"
@@ -1267,13 +1333,18 @@ Cierra Steam primero. Continuar de todos modos?" || return 1
     [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
     if "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "$name" "$SELF" "$(dirname "$SELF")" \
         "\"$(readlink -f "$game")\"" "$icon" >> "$LOG_FILE" 2>&1; then
-        ui_info "'$name' anadido a Steam como juego no-Steam.
-Reinicia Steam para verlo (copia previa: shortcuts.vdf.wproton.bak).
-En modo Gaming de la Deck aparecerá en NO STEAM."
+        [ "$reabrir" = 1 ] && steam_abrir
+        ui_info "'$name' añadido a Steam como juego no-Steam.
+
+$([ "$reabrir" = 1 ] && printf 'Steam se está abriendo de nuevo.' \
+                     || printf 'Abre Steam para verlo.')
+Aparecerá en la sección NO STEAM.
+Copia previa: shortcuts.vdf.wproton.bak"
     else
-        ui_error "Fallo escribiendo shortcuts.vdf (mira el log).
+        ui_error "Fallo escribiendo shortcuts.vdf (mira el registro).
 Se restauro la copia previa."
         [ -f "$vdf.wproton.bak" ] && cp -f "$vdf.wproton.bak" "$vdf"
+        [ "$reabrir" = 1 ] && steam_abrir
         return 1
     fi
 }
@@ -1282,9 +1353,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 7b7797b8ba89" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 7e65462f9c78" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 7b7797b8ba89
+# WPROTON_HELPER mapeador.py 7e65462f9c78
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
@@ -1648,38 +1719,72 @@ def main():
         except:
             continue
 
+    # UN mando puede aparecer VARIAS veces: el driver xpad crea un nodo por
+    # cada "interfaz" del aparato ("Microsoft X-Box 360 pad" y "...pad 0"),
+    # y si se elige el equivocado no llega ni un evento. Se quedan solo los
+    # nodos distintos de verdad, comparando el aparato fisico, y de cada uno
+    # el que tenga botones de mando (BTN_SOUTH) y ejes.
+    def _fisico(d):
+        # "usb-0000:00:14.0-3/input0" -> "usb-0000:00:14.0-3"
+        base = (getattr(d, 'phys', '') or '').split('/')[0]
+        return base or (getattr(d, 'uniq', '') or d.path)
+
+    def _puntua(d):
+        # cuanto mas parece un mando de verdad, mejor
+        try:
+            caps = d.capabilities()
+            teclas = caps.get(ecodes.EV_KEY, [])
+            ejes = [a for a, _ in caps.get(ecodes.EV_ABS, [])]
+            n = 0
+            if ecodes.BTN_SOUTH in teclas or ecodes.BTN_A in teclas:
+                n += 10
+            if ecodes.ABS_X in ejes and ecodes.ABS_Y in ejes:
+                n += 5
+            return n + min(len(teclas), 20) * 0.1
+        except Exception:
+            return 0
+
+    mejores = {}
+    for d in pads:
+        k = _fisico(d)
+        if k not in mejores or _puntua(d) > _puntua(mejores[k]):
+            mejores[k] = d
+    if len(mejores) < len(pads):
+        print("[+] %d nodos de entrada -> %d mando(s) real(es)"
+              % (len(pads), len(mejores)), flush=True)
+        for d in pads:
+            if d not in mejores.values():
+                try:
+                    d.close()
+                except Exception:
+                    pass
+    pads = list(mejores.values())
+
     if not pads:
         print("No se encontró ningún mando válido en el sistema.")
         return
 
-    print("[+] Esperando pulsación en el mando (Timeout ampliado: 30s)...")
-    device = None
-    start_time = time.time()
+    # NO se elige mando: se escuchan TODOS a la vez.
+    #
+    # Elegir uno era la causa de que a veces no funcionara nada: había que
+    # esperar a una pulsación (y si no llegaba, adivinar), y con mandos que
+    # exponen varios nodos de entrada se podía acabar escuchando el que no
+    # recibe eventos. Escuchando todos, el mando SIEMPRE responde: no hay
+    # nada que acertar. Si hay dos mandos de verdad, los dos valen, que es
+    # justo lo que espera quien juega a dobles.
+    device = pads[0]          # solo para el perfil de botones por defecto
+    print("[+] Mapeador escuchando %d mando(s):" % len(pads), flush=True)
+    for d in pads:
+        print("      %s" % d.name, flush=True)
 
-    while not device and (time.time() - start_time) < 30.0:
-        r, _, _ = select.select(pads, [], [], 0.1)
-        for fd in r:
-            try:
-                for event in fd.read():
-                    if event.type == ecodes.EV_KEY and event.value == 1:
-                        device = fd
-                        break
-            except:
-                continue
-            if device:
-                break
-
-    if not device:
-        print("[-] Timeout alcanzado. Aplicando auto-selección de mando...")
-        for pad in pads:
-            if any(m in pad.name.lower() for m in ["xbox", "360", "microsoft", "8bitdo", "últimate", "dualsense", "sony", "nintendo", "wireless"]):
-                device = pad
-                break
-        if not device:
-            device = pads[0]
-
-    print(f"VINCULADO DE FORMA SEGURA: {device.name}")
-
+    # El perfil de botones se toma del mando con nombre mas reconocible: si
+    # se escuchan varios nodos del mismo aparato, uno puede llamarse de forma
+    # generica y dar un perfil equivocado.
+    _con_perfil = [d for d in pads
+                   if get_perfil(d.name) is not PERFILES["GENERIC"]]
+    if _con_perfil:
+        device = _con_perfil[0]
+    print("[+] Perfil de botones segun: %s" % device.name, flush=True)
     perfil_actual = get_perfil(device.name)
     ids            = perfil_actual["ids"]
     abs_map_actual = perfil_actual["abs_map"]
@@ -1745,10 +1850,10 @@ def main():
 
     try:
         while True:
-            r, _, _ = select.select([device], [], [], 0.001)
-            if r:
+            r, _, _ = select.select(pads, [], [], 0.001)
+            for _dev in r:
                 try:
-                    for event in device.read():
+                    for event in _dev.read():
 
                         # ── Botones digitales ────────────────────────────────
                         if event.type == ecodes.EV_KEY:
@@ -1815,6 +1920,17 @@ def main():
                             ui.syn()
 
                 except (IOError, OSError):
+                    # Ese mando ha desaparecido (desconectado o dormido). Se
+                    # descarta ESE y se sigue con el resto: antes un fallo de
+                    # un mando tumbaba el mapeador entero.
+                    print("[-] Mando desconectado: %s" % _dev.name, flush=True)
+                    try:
+                        pads.remove(_dev)
+                    except ValueError:
+                        pass
+                    if not pads:
+                        print("[-] Sin mandos: el mapeador termina", flush=True)
+                        return
                     break
             if ui_mouse:
                 _n=_tm.monotonic(); _dt=min(_n-_mlast,0.05); _mlast=_n
@@ -1862,7 +1978,16 @@ import evdev' >> "$LOG_FILE" 2>&1; then
         return 1
     fi
     say "[+] Engranando mapeador para: $(basename "$1")"
-    MAPEADOR_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 lanzar_suelto "$PY_BIN" "$MAPEADOR_PY" "$1")"
+    # -u: sin el, Python guarda su salida en un bufer y el registro se queda
+    # vacio hasta que el proceso muere. Con el mapeador eso significaba no
+    # tener NI UNA linea con la que diagnosticar.
+    MAPEADOR_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 lanzar_suelto "$PY_BIN" -u "$MAPEADOR_PY" "$1")"
+    sleep 0.5
+    if [ -n "$MAPEADOR_PID" ] && kill -0 "$MAPEADOR_PID" 2>/dev/null; then
+        log "Mapeador activo (pid $MAPEADOR_PID)"
+    else
+        say "AVISO: el mapeador se cerro nada mas arrancar (mira el registro)"
+    fi
     sleep 1
     if ! kill -0 "$MAPEADOR_PID" 2>/dev/null; then
         say "AVISO: el mapeador murio al arrancar; últimas lineas del log:"
@@ -1919,9 +2044,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 96b32e8d7d43" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 69fc29c4d6c8" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 96b32e8d7d43
+# WPROTON_HELPER menu_pygame.py 69fc29c4d6c8
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -1997,7 +2122,12 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
     MODE, TITLE, OUTFILE = mode, title, outfile
     ARG4 = arg4 if arg4 is not None else outfile
     BROWSE_KIND = browse_kind
-    BROWSE_EXTS = ('.keys',) if browse_kind == 'keys' else EXTS_NORMAL
+    if browse_kind == 'keys':
+        BROWSE_EXTS = ('.keys',)
+    elif browse_kind == 'image':
+        BROWSE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+    else:
+        BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
         ACTION_X = action_x
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
@@ -2057,7 +2187,7 @@ def load_dir(path):
         items.append([K_HDR, '>> USAR ESTA CARPETA <<', False])
     elif BROWSE_KIND == 'play':
         items.append([K_HDR, '>> JUGAR ESTA CARPETA <<', False])
-    elif BROWSE_KIND != 'keys':
+    elif BROWSE_KIND not in ('keys', 'image'):
         items.append([K_HDR, '>> IMPORTAR ESTA CARPETA <<', False])
     items.append([K_UP2, '.. (subir)', False])
     items.append([K_CANCEL, '<< Cancelar', False])
@@ -2068,7 +2198,7 @@ def load_dir(path):
     for n in names:
         if not n.startswith('.') and os.path.isdir(os.path.join(cur_path, n)):
             items.append([K_DIR, n + '/', False])
-    if BROWSE_KIND in ('file', 'play', 'keys'):
+    if BROWSE_KIND in ('file', 'play', 'keys', 'image'):
         for n in names:
             p = os.path.join(cur_path, n)
             if (not n.startswith('.') and os.path.isfile(p)
@@ -2152,10 +2282,12 @@ import struct, threading, select as _select
 EV_KEY_RAW, EV_ABS_RAW = 1, 3
 IE_FMT = 'llHHi'
 IE_SZ = struct.calcsize(IE_FMT)
-# A/Start=Enter | B=Esc | X=Espacio | Y=Tab (abre el teclado de busqueda)
+# A/Start=Enter | B=Esc | X=Espacio | Y=Tab (teclado de busqueda)
+# L1=F1 (ficha del juego) | R1=F2 (marcar favorito)
 RAW_BTN = {304: pygame.K_RETURN, 315: pygame.K_RETURN,
            305: pygame.K_ESCAPE, 307: pygame.K_SPACE,
-           308: pygame.K_TAB}
+           308: pygame.K_TAB,
+           310: pygame.K_F1, 311: pygame.K_F2}
 SELECT_BTN = 314          # BTN_SELECT: con A pulsa pantalla completa
 # Crucetas que reportan BOTONES (Anbernic/Decktroid...) en vez de hat:
 DPAD_BTN = {544: pygame.K_UP, 545: pygame.K_DOWN,
@@ -3101,8 +3233,10 @@ def draw_grid():
         draw_row_text(title, f_sm, FG if i == sel else DIM,
                       x, y + GIMG_H + 8, GIMG_W, i == sel)
 
-def action_x():
-    # X sobre un juego -> devolver "WPACT:CONFIG|<lo elegido>"
+def action_sobre_juego(accion):
+    # Devuelve "WPACT:<accion>|<lo elegido>" y cierra el menu. WProton hace lo
+    # suyo y vuelve a abrir la lista donde estaba.
+    #   CONFIG -> configurar (X)      INFO -> ficha (L1)      FAV -> favorito (R1)
     global running, done
     if not view:
         return
@@ -3110,8 +3244,11 @@ def action_x():
         payload = GITEMS[view[sel]][2]
     else:
         payload = items[view[sel]][1]
-    write_out('WPACT:CONFIG|' + payload)
+    write_out('WPACT:%s|%s' % (accion, payload))
     running = False; done = True
+
+def action_x():
+    action_sobre_juego('CONFIG')
 
 def on_enter():
     global running, done
@@ -3494,6 +3631,14 @@ def run_session():
                             scroll = max(0, min(scroll, max(0, len(view) - VIS_KB)))
                     elif ev.key == pygame.K_BACKSPACE:
                         filter_back()
+                    elif ev.key == pygame.K_F1:
+                        # L1: ficha del juego, sin pasar por configuracion
+                        if ready() and ACTION_X and MODE in ('list', 'grid'):
+                            action_sobre_juego('INFO')
+                    elif ev.key == pygame.K_F2:
+                        # R1: marcar o quitar favorito al vuelo
+                        if ready() and ACTION_X and MODE in ('list', 'grid'):
+                            action_sobre_juego('FAV')
                     elif ev.key == pygame.K_SPACE:
                         if ready():
                             if MODE == 'check':
@@ -3619,7 +3764,7 @@ def run_session():
         elif MODE == 'browse':
             hint = 'A: entrar/elegir   B: subir   Y: buscar   (o escribe para filtrar)'
         elif MODE == 'grid':
-            hint = ('A: jugar   X: configurar   B: volver   Y: buscar' if ACTION_X
+            hint = ('A: jugar  X: configurar  L1: ficha  R1: favorito  B: volver' if ACTION_X
                     else 'Dpad: moverse   A: jugar   B: volver   Y: buscar   Select+A/F11: pantalla')
         else:
             hint = 'A: elegir   B: volver   Y: buscar   Select+A/F11: pantalla completa'
@@ -3634,13 +3779,15 @@ def run_session():
                 _chips = [('A', L('entrar', 'enter')), ('B', L('subir', 'up')),
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
             elif MODE == 'grid':
-                _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
-                          ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
+                          ('L1', L('ficha', 'info')), ('R1', L('favorito', 'favourite')),
+                          ('B', L('volver', 'back'))] if ACTION_X else \
                          [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
                           ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
             else:
-                _chips = [('A', L('jugar', 'play')), ('X', L('configurar', 'configure')),
-                          ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))] if ACTION_X else \
+                _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
+                          ('L1', L('ficha', 'info')), ('R1', L('favorito', 'favourite')),
+                          ('B', L('volver', 'back'))] if ACTION_X else \
                          [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
             draw_footer(_chips)
@@ -5125,16 +5272,56 @@ wizard_pick_runner() {
     return 0
 }
 
+exes_ordenados() {
+    # Todos los ejecutables de la carpeta y subcarpetas, ORDENADOS por lo
+    # probable que es que sean el juego:
+    #   1) el que sugiere la heuristica (marcado con >)
+    #   2) los de la raiz de la carpeta
+    #   3) los de subcarpetas
+    #   4) los sospechosos (instaladores, desinstaladores, redistribuibles)
+    # Se muestra la ruta relativa y el tamaño: distinguir el juego del
+    # instalador de DirectX es inmediato viendo que uno pesa 40 MB y otro 300 KB.
+    local root="$1" sugerido="${2:-}" f rel mb
+    local raiz="" subs="" malos=""
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rel="${f#"$root"/}"
+        mb="$(du -m "$f" 2>/dev/null | cut -f1)"
+        case "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" in
+            *unins*|*setup*|*vcredist*|*directx*|*dxsetup*|*dotnet*|*redist*|\
+            *crashhandler*|*crashreport*|*bugreport*|*config.exe|*launcher.exe)
+                malos="$malos$rel  [${mb:-0} MB]
+" ;;
+            */*) subs="$subs$rel  [${mb:-0} MB]
+" ;;
+            *)   raiz="$raiz$rel  [${mb:-0} MB]
+" ;;
+        esac
+    done <<EOFEX
+$(find "$root" -type f \( -iname '*.exe' -o -iname '*.bat' -o -iname '*.cmd' \) \
+     ! -ipath '*/windows/*' ! -ipath '*/system32/*' ! -ipath '*/syswow64/*' \
+     ! -iname 'autorun.cmd' 2>/dev/null | sort)
+EOFEX
+    [ -n "$sugerido" ] && printf '> %s  (sugerido)\n' "${sugerido#"$root"/}"
+    printf '%s' "$raiz"
+    printf '%s' "$subs"
+    printf '%s' "$malos"
+}
+
 wizard_pick_exe() {
-    local root="$1" list rels sel
-    list="$(scan_exes "$root")"
-    rels="$(printf '%s\n' "$list" | sed "s|^$root/||")"
+    local root="$1" list rels sel sugerido
+    sugerido="$(find_game_exe "$root" 2>/dev/null)" || sugerido=""
+    rels="$(exes_ordenados "$root" "$sugerido" | awk 'NF')"
     # shellcheck disable=SC2046
     sel="$(IFS=$'\n'; set -f; menu "Paso 2/3 - Ejecutable del juego" \
             "(automático: autorun.cmd / escaneo)" $rels)" || return 1
     if [ "$sel" = "(automático: autorun.cmd / escaneo)" ]; then
         EXE_OVERRIDE=""
     else
+        # quitar los adornos: "> ruta/juego.exe  (sugerido)" o "ruta  [40 MB]"
+        sel="${sel#> }"
+        sel="${sel%  (sugerido)}"
+        sel="$(printf '%s' "$sel" | sed 's/  \[[0-9]* MB\]$//')"
         EXE_OVERRIDE="$sel"
     fi
     return 0
@@ -5490,7 +5677,17 @@ Configurar juego -> Comprobar integridad"
     # grafica abierta mientras el juego corre es lo que acababa en "XIO:
     # fatal IO error" al reconfigurar gamescope su XWayland. El servidor se
     # vuelve a levantar al terminar, en post_game_resettle.
-    menu_server_stop_diferido 8
+    # NUESTRA VENTANA SE CIERRA ANTES DE LANZAR, sin retrasos.
+    #
+    # Hubo un intento de dejarla viva unos segundos para tapar el hueco de
+    # escritorio mientras el juego arranca. Salio caro: una ventana a
+    # pantalla completa por delante del juego se queda con el FOCO DEL
+    # TECLADO, asi que las teclas del mapeador (y del teclado de verdad) no
+    # llegaban al juego, y los juegos en ventana parecian esconderse detras.
+    # Un parpadeo de escritorio es mucho menos grave que un mando que no
+    # responde: se cierra ya y punto.
+    menu_server_stop
+    canvas_stop
     log_input_devices
     local keys_file=""
     if keys_file="$(find_keys_file "$abs_squash" "$gid")"; then
@@ -5551,15 +5748,30 @@ del script (formato usuario/repo)."
         return 0
     fi
     say "Comprobando actualizaciones (actual: v$WPROTON_VERSION)..."
-    local remote=""
-    remote="$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
-        | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4 | sed 's/^v//')"
+    # Se guardan por separado la ETIQUETA tal cual esta en GitHub (para
+    # construir las URLs) y su parte NUMERICA (para comparar). La etiqueta
+    # puede venir como "v1.02", "V1.02" o "1.02": si se le quita solo la "v"
+    # minuscula, awk convierte "V1.02" a 0 y WProton cree que esta al dia.
+    local remote="" tag=""
+    tag="$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
+    remote="$(printf '%s' "$tag" | sed 's/^[vV]//')"
     if [ -z "$remote" ]; then
         # sin releases: leer la versión de la rama main
         remote="$(curl -fsSL "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
             | grep -m1 '^WPROTON_VERSION=' | cut -d'"' -f2)"
+        tag="v$remote"
     fi
     [ -z "$remote" ] && { ui_error "No se pudo consultar la versión en GitHub ($WPROTON_REPO)"; return 1; }
+    # La version tiene que ser un numero: si no, algo raro pasa con la etiqueta
+    # y es mejor decirlo que comparar contra cero y quedarse tan tranquilo.
+    if ! printf '%s' "$remote" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
+        ui_error "La versión publicada no se entiende: '$tag'
+
+Se esperaba algo como v1.02. Revisa la etiqueta de la release."
+        return 1
+    fi
+    log "Actualizaciones: local=$WPROTON_VERSION remota=$remote (etiqueta $tag)"
     # Nomenclatura decimal: 0.5 < 0.51 < 0.52 < 0.6 < 1.0 (sort -V NO vale aquí)
     if ! awk -v a="$WPROTON_VERSION" -v b="$remote" 'BEGIN{exit !(b+0 > a+0)}'; then
         ui_info "WProton esta al dia (v$WPROTON_VERSION; remota: v$remote)"
@@ -5568,8 +5780,9 @@ del script (formato usuario/repo)."
     ui_ask "Hay una versión nueva: v$remote (actual v$WPROTON_VERSION).
 Descargar y actualizar ahora?" || return 0
     local tmp; tmp="$(mktemp)"
-    local url_rel="https://github.com/$WPROTON_REPO/releases/download/v$remote/wproton.sh"
-    local url_tag="https://raw.githubusercontent.com/$WPROTON_REPO/v$remote/wproton.sh"
+    # Se usa la etiqueta REAL: si la release es "V1.02", pedir "v1.02" da 404
+    local url_rel="https://github.com/$WPROTON_REPO/releases/download/$tag/wproton.sh"
+    local url_tag="https://raw.githubusercontent.com/$WPROTON_REPO/$tag/wproton.sh"
     local url_main="https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh"
     if ! curl -fsSL "$url_rel" -o "$tmp" 2>/dev/null; then
         curl -fsSL "$url_tag" -o "$tmp" 2>/dev/null || curl -fsSL "$url_main" -o "$tmp" 2>/dev/null \
@@ -5682,6 +5895,511 @@ community_index_refresh() {
     return 0
 }
 
+nombre_clave() {
+    # Nombre normalizado para comparar: sin mayusculas, sin separadores y sin
+    # la coletilla de version o grupo que traen las descargas. Es la base de
+    # TODAS las busquedas (umu, caratulas, ficha del juego): si esto falla,
+    # se muestran datos de otro juego, que es peor que no mostrar ninguno.
+    printf '%s' "$1" | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-'
+}
+
+nombre_coletilla() {
+    # ¿Lo que sobra tras el nombre es una version o un grupo? Sirve para
+    # aceptar "Mina.the.Hollower.v1.0.2" como "Mina the Hollower" sin que
+    # "Doom" se lleve por delante a "Doom Eternal".
+    case "${1:-}" in
+        v[0-9]*|[0-9]*|gog*|repack*|p2p*|fitgirl*|dodi*|elamigos*|\
+        multi[0-9]*|rip*|proper*|update*|build*|remastered0*) return 0 ;;
+    esac
+    return 1
+}
+
+nombre_busca() {
+    # $1 = nombre del juego, $2 = fichero con candidatos (uno por linea)
+    # Imprime el candidato que corresponde, o nada. Primero exacto, luego
+    # admitiendo coletilla; nombres muy cortos no entran en la parte flexible.
+    local gid="$1" lista="$2" clave linea lclave resto
+    [ -f "$lista" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    [ -n "$clave" ] || return 1
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        [ "$(nombre_clave "$linea")" = "$clave" ] && { printf '%s' "$linea"; return 0; }
+    done < "$lista"
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "$linea")"
+        [ ${#lclave} -ge 6 ] || continue
+        case "$clave" in
+            "$lclave"*)
+                resto="${clave#"$lclave"}"
+                nombre_coletilla "$resto" && { printf '%s' "$linea"; return 0; } ;;
+        esac
+    done < "$lista"
+    return 1
+}
+
+nombre_parecidos() {
+    # Candidatos que EMPIEZAN igual, para cuando no hay una coincidencia
+    # clara y hay que preguntar al usuario en vez de adivinar.
+    local gid="$1" lista="$2" clave linea lclave n=0
+    [ -f "$lista" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    [ ${#clave} -ge 4 ] || return 1
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "$linea")"
+        case "$lclave" in
+            "${clave:0:4}"*) printf '%s\n' "$linea"; n=$((n+1)) ;;
+        esac
+        [ "$n" -ge 5 ] && break
+    done < "$lista"
+    [ "$n" -gt 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# BASE DE DATOS DE UMU
+#   umu-database.csv (Open-Wine-Components) relaciona titulos de juego con su
+#   identificador umu. Ese identificador es el que usa protonfixes para
+#   aplicar los arreglos concretos de cada juego, asi que ponerlo bien puede
+#   ser la diferencia entre que un juego arranque o no.
+#   Son ~1200 entradas y 90 KB: se descarga entera y se consulta en local.
+# ---------------------------------------------------------------------------
+UMUDB_URL="https://raw.githubusercontent.com/Open-Wine-Components/umu-database/main/umu-database.csv"
+
+umudb_file()   { printf '%s' "$RUNTIME_DIR/umu-database.csv"; }
+umudb_titles() { printf '%s' "$RUNTIME_DIR/.umu-titles"; }
+
+umudb_update() {
+    # Descarga la base si falta o si tiene mas de una semana. Sin red no pasa
+    # nada: se usa la copia que haya, y si no hay ninguna se sigue sin ella.
+    local f; f="$(umudb_file)"
+    if [ -f "$f" ]; then
+        local edad
+        edad=$(( $(date +%s) - $(stat -c %Y "$f" 2>/dev/null || echo 0) ))
+        [ "$edad" -lt 604800 ] && [ -s "$f" ] && return 0
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    say "Actualizando la base de datos de umu..."
+    if curl -fsSL --max-time 30 "$UMUDB_URL" -o "$f.tmp" 2>/dev/null \
+       && [ -s "$f.tmp" ] && grep -qi 'umu' "$f.tmp"; then
+        mv -f "$f.tmp" "$f"
+        rm -f "$(umudb_titles)"      # el indice se rehace
+        log "Base de umu actualizada: $(wc -l < "$f") entradas"
+        return 0
+    fi
+    rm -f "$f.tmp"
+    [ -s "$f" ] && return 0
+    log "No se pudo descargar la base de umu" WARN
+    return 1
+}
+
+umudb_col() {
+    # Numero de la columna cuya cabecera coincide con $1 (insensible a
+    # mayusculas). Se lee de la CABECERA en vez de dar por hecho el orden:
+    # si el proyecto reordena columnas, esto sigue funcionando.
+    local f; f="$(umudb_file)"
+    [ -f "$f" ] || return 1
+    head -n1 "$f" | tr ',' '\n' | tr -d '"\r' \
+        | grep -in "^$1$" | head -n1 | cut -d: -f1
+}
+
+umudb_index() {
+    # Construye el indice de busqueda en UNA sola pasada de awk.
+    #
+    # Antes se recorria el CSV en bash llamando a 'tr' por linea: con las 1200
+    # entradas reales, una busqueda sin resultado tardaba 7 SEGUNDOS. Con el
+    # indice precalculado la busqueda es un 'grep' y es instantanea.
+    #
+    # Formato: clave|titulo|umu_id     (una linea por forma de encontrarlo)
+    # Se indexa por TITULO, por ACRONIMO (aow -> Age of Wonders) y por
+    # EXE_STRINGS: el nombre del ejecutable es la pista mas fiable de todas,
+    # porque no depende de como se llame la carpeta.
+    local f t ct cu ca ce
+    f="$(umudb_file)"; t="$(umudb_titles)"
+    [ -f "$f" ] || return 1
+    [ -s "$t" ] && [ "$t" -nt "$f" ] && return 0
+    ct="$(umudb_col title)";   [ -n "$ct" ] || ct=1
+    cu="$(umudb_col umu_id)";  [ -n "$cu" ] || cu=4
+    ca="$(head -n1 "$f" | tr ',' '\n' | grep -in 'acronym' | head -n1 | cut -d: -f1)"
+    ce="$(head -n1 "$f" | tr ',' '\n' | grep -in 'exe_strings' | head -n1 | cut -d: -f1)"
+    awk -F',' -v ct="$ct" -v cu="$cu" -v ca="${ca:-0}" -v ce="${ce:-0}" '
+        function limpia(x) {
+            gsub(/^"|"$|\r/, "", x)
+            return x
+        }
+        function clave(x,   y) {
+            y = tolower(limpia(x))
+            gsub(/[ ._-]/, "", y)
+            return y
+        }
+        NR == 1 { next }
+        {
+            titulo = limpia($ct); id = limpia($cu)
+            if (titulo == "" || id == "") next
+            k = clave(titulo)
+            if (k != "" && !(k SUBSEP id in visto)) {
+                visto[k SUBSEP id] = 1
+                print k "|" titulo "|" id
+            }
+            if (ca > 0) {
+                a = clave($ca)
+                if (a != "" && length(a) >= 3 && !(a SUBSEP id in visto)) {
+                    visto[a SUBSEP id] = 1
+                    print a "|" titulo "|" id
+                }
+            }
+            if (ce > 0) {
+                n = split(limpia($ce), exes, /[;: ]+/)
+                for (i = 1; i <= n; i++) {
+                    e = clave(exes[i])
+                    sub(/exe$/, "", e)
+                    if (e != "" && length(e) >= 4 && !(e SUBSEP id in visto)) {
+                        visto[e SUBSEP id] = 1
+                        print e "|" titulo "|" id
+                    }
+                }
+            }
+        }' "$f" | sort -u > "$t"
+    log "Indice de umu: $(wc -l < "$t") claves"
+    return 0
+}
+
+umudb_buscar() {
+    # $1 = nombre del juego (o del ejecutable). Imprime "titulo|umu_id".
+    # Exacto primero; luego admitiendo la coletilla de version o grupo.
+    local clave linea lclave resto t
+    t="$(umudb_titles)"
+    [ -s "$t" ] || return 1
+    clave="$(nombre_clave "$1")"
+    [ -n "$clave" ] || return 1
+    linea="$(grep -m1 -F "$clave|" "$t" 2>/dev/null)" || linea=""
+    if [ -n "$linea" ] && [ "${linea%%|*}" = "$clave" ]; then
+        printf '%s' "${linea#*|}"
+        return 0
+    fi
+    # el nombre del juego lleva version o grupo detras: "juego|" seria prefijo
+    while IFS='|' read -r lclave titulo id; do
+        [ -n "$lclave" ] || continue
+        [ ${#lclave} -ge 6 ] || continue
+        case "$clave" in
+            "$lclave"*)
+                resto="${clave#"$lclave"}"
+                nombre_coletilla "$resto" && { printf '%s|%s' "$titulo" "$id"; return 0; } ;;
+        esac
+    done < "$t"
+    return 1
+}
+
+umudb_parecidos() {
+    # Titulos que empiezan igual, para preguntar en vez de adivinar
+    local clave t
+    t="$(umudb_titles)"; [ -s "$t" ] || return 1
+    clave="$(nombre_clave "$1")"
+    [ ${#clave} -ge 4 ] || return 1
+    grep -F "${clave:0:4}" "$t" 2>/dev/null | cut -d'|' -f2 | sort -u | head -n 5
+}
+
+umudb_sugerir() {
+    # $1 = gid del juego, $2 = ruta del ejecutable (opcional, la mejor pista)
+    # Si la base conoce el juego, ofrecer su identificador. 0 = aceptado.
+    local gid="$1" exe="${2:-}" r="" titulo id cands sel
+    umudb_update || return 1
+    umudb_index  || return 1
+    # 1) por el nombre del EJECUTABLE: es la pista mas fiable, porque no
+    #    depende de como se llame la carpeta del juego
+    if [ -n "$exe" ]; then
+        r="$(umudb_buscar "$(basename "$exe" .exe)")" || r=""
+    fi
+    # 2) por el nombre del juego
+    [ -z "$r" ] && { r="$(umudb_buscar "$gid")" || r=""; }
+    if [ -z "$r" ]; then
+        # sin coincidencia clara: PREGUNTAR, nunca adivinar
+        cands="$(umudb_parecidos "$gid")" || return 1
+        [ -n "$cands" ] || return 1
+        sel="$(IFS=$'\n'; set -f; menu "¿Cuál de estos es '$gid'?" \
+              $cands "Ninguno")" || return 1
+        [ "$sel" = "Ninguno" ] && return 1
+        r="$(umudb_buscar "$sel")" || return 1
+    fi
+    titulo="${r%%|*}"; id="${r##*|}"
+    [ -n "$id" ] || return 1
+    if ui_ask "Este juego está en la base de datos de umu como:
+
+$titulo
+Identificador: $id
+
+Con él, umu aplica los arreglos conocidos de este juego.
+¿Usarlo?"; then
+        GAMEID="$id"
+        say "[+] GAMEID de umu: $id ($titulo)"
+        return 0
+    fi
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# FICHA DEL JUEGO
+#   Datos de la tienda de Steam: no necesita clave ni cuenta, y trae fecha,
+#   desarrollador, editor, generos y la nota de Metacritic. Cubre la mayoria
+#   de juegos de PC. Lo que se consulta se guarda en covers/<gid>.info.json
+#   para no repetir la peticion.
+#   Si no hay red o el juego no esta, la ficha muestra igualmente lo que
+#   sabemos por nosotros mismos: tamaño, veces jugado y tiempo total.
+# ---------------------------------------------------------------------------
+ficha_file() { printf '%s' "$COVERS_DIR/${1}.info.json"; }
+
+url_encode() {
+    # Los nombres de juego llevan espacios, apostrofes y numeros romanos; hay
+    # que codificarlos para meterlos en una URL. Se usa Python, que ya esta
+    # instalado y lo hace bien, con un respaldo simple por si acaso.
+    if [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
+        "$PY_BIN" -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null && return 0
+    fi
+    printf '%s' "$1" | sed 's/ /%20/g; s/'"'"'/%27/g; s/&/%26/g; s/?/%3F/g'
+}
+
+ficha_appid() {
+    # Busca el juego en la tienda de Steam y devuelve "appid|nombre".
+    #
+    # Todo en Python: analizar JSON con sed es fragil, y ademas el intento
+    # anterior tenia un fallo tipico de bash -- un 'return' dentro de una
+    # tuberia NO sale de la funcion, asi que siempre devolvia error aunque
+    # hubiera encontrado el juego.
+    #
+    # De los candidatos se elige el que casa por nombre normalizado (sin
+    # mayusculas ni separadores); si ninguno casa exactamente, se acepta el
+    # que empiece igual. Nunca "el primero de la lista".
+    local nombre="$1"
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" - "$nombre" <<'PYAPPID' 2>>"$LOG_FILE"
+import json, re, sys, urllib.parse, urllib.request
+
+def clave(x):
+    x = x.lower()
+    for c in ' ._-:\'!,':
+        x = x.replace(c, '')
+    return x
+
+nombre = sys.argv[1]
+k = clave(nombre)
+url = ('https://steamcommunity.com/actions/SearchApps/'
+       + urllib.parse.quote(nombre))
+try:
+    req = urllib.request.Request(url, headers={'User-Agent': 'WProton'})
+    datos = json.load(urllib.request.urlopen(req, timeout=15))
+except Exception as e:
+    sys.stderr.write('ficha: fallo consultando Steam (%s)\n' % e)
+    sys.exit(1)
+if not datos:
+    sys.stderr.write('ficha: Steam no conoce "%s"\n' % nombre)
+    sys.exit(1)
+exacto = None
+parecido = None
+for d in datos:
+    n = d.get('name', '')
+    a = d.get('appid', '')
+    if not n or not a:
+        continue
+    kn = clave(n)
+    if kn == k:
+        exacto = (a, n)
+        break
+    if parecido is None and (kn.startswith(k) or k.startswith(kn)):
+        parecido = (a, n)
+elegido = exacto or parecido
+if not elegido:
+    sys.stderr.write('ficha: ningun resultado de Steam coincide con "%s"\n' % nombre)
+    sys.exit(1)
+print('%s|%s' % elegido)
+PYAPPID
+}
+
+ficha_descargar() {
+    # $1 = gid, $2 = nombre a buscar. Guarda la ficha en covers/<gid>.info.json
+    local gid="$1" nombre="$2" r appid titulo out
+    r="$(ficha_appid "$nombre")" || return 1
+    appid="${r%%|*}"; titulo="${r##*|}"
+    [ -n "$appid" ] || return 1
+    out="$(ficha_file "$gid")"
+    mkdir -p "$COVERS_DIR"
+    curl -fsSL --max-time 20 \
+        "https://store.steampowered.com/api/appdetails?appids=$appid&l=spanish" \
+        -o "$out.tmp" 2>/dev/null || { rm -f "$out.tmp"; return 1; }
+    if grep -q '"success"[^t]*true' "$out.tmp" 2>/dev/null; then
+        mv -f "$out.tmp" "$out"
+        log "Ficha de $gid: $titulo (appid $appid)"
+        return 0
+    fi
+    rm -f "$out.tmp"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# DURACION DEL JUEGO (HowLongToBeat)
+#   Es un EXTRA OPCIONAL: howlongtobeat.com no tiene API oficial, asi que se
+#   usa la biblioteca howlongtobeatpy (MIT), que se encarga de seguir los
+#   cambios de su web. Si no esta instalada, la ficha simplemente no muestra
+#   la duracion; nada mas deja de funcionar.
+#   Se instala desde: Runners y herramientas -> Datos de duracion.
+# ---------------------------------------------------------------------------
+hltb_disponible() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    PYTHONPATH="$RUNTIME_DIR/$(py_libs_dir)" "$PY_BIN" \
+        -c 'import howlongtobeatpy' >/dev/null 2>&1
+}
+
+hltb_instalar() {
+    if hltb_disponible; then
+        ui_info "Los datos de duración ya están instalados."
+        return 0
+    fi
+    if ! ui_ask "Instalar los datos de duración de partida (HowLongToBeat)?
+
+Añade a la ficha del juego cuánto se tarda en terminarlo.
+Ocupa poco (unos 100 KB) y es opcional: si no lo instalas,
+el resto de la ficha funciona igual."; then
+        return 1
+    fi
+    loading_say "Instalando datos de duración..."
+    if "$PY_BIN" -m pip install --target "$RUNTIME_DIR/$(py_libs_dir)" \
+            --disable-pip-version-check --no-warn-script-location \
+            --upgrade howlongtobeatpy >> "$LOG_FILE" 2>&1 && hltb_disponible; then
+        ui_info "Datos de duración instalados.
+
+A partir de ahora la ficha del juego mostrará cuánto se tarda
+en terminarlo."
+        return 0
+    fi
+    ui_error "No se pudieron instalar (mira el registro).
+El resto de la ficha del juego sigue funcionando."
+    return 1
+}
+
+hltb_duracion() {
+    # $1 = nombre del juego -> "historia|completo" en horas, o nada.
+    # Solo se acepta un resultado si el nombre se parece de verdad (0.7): mas
+    # vale no decir nada que dar la duracion de otro juego.
+    hltb_disponible || return 1
+    PYTHONPATH="$RUNTIME_DIR/$(py_libs_dir)" "$PY_BIN" - "$1" <<'PYHLTB' 2>/dev/null
+import sys
+try:
+    from howlongtobeatpy import HowLongToBeat
+    res = HowLongToBeat().search(sys.argv[1], similarity_case_sensitive=False)
+    if not res:
+        sys.exit(1)
+    mejor = max(res, key=lambda e: e.similarity)
+    if mejor.similarity < 0.7:          # no es el mismo juego: mejor callar
+        sys.exit(1)
+    hist = getattr(mejor, 'main_story', None) or 0
+    todo = getattr(mejor, 'completionist', None) or 0
+    if not hist and not todo:
+        sys.exit(1)
+    print('%s|%s' % (hist, todo))
+except Exception:
+    sys.exit(1)
+PYHLTB
+}
+
+ficha_campo() {
+    # $1 = fichero json, $2 = ruta tipo "release_date.date" o "metacritic.score"
+    "$PY_BIN" - "$1" "$2" <<'PYFICHA' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
+    d = list(d.values())[0].get('data', {})
+    for parte in sys.argv[2].split('.'):
+        if isinstance(d, list):
+            d = d[int(parte)]
+        else:
+            d = d.get(parte)
+        if d is None:
+            sys.exit(1)
+    if isinstance(d, list):
+        d = ', '.join(x.get('description', x) if isinstance(x, dict) else str(x)
+                      for x in d[:4])
+    print(d)
+except Exception:
+    sys.exit(1)
+PYFICHA
+}
+
+ficha_mostrar() {
+    # $1 = gid, $2 = ruta del juego. Muestra la ficha del juego.
+    local gid="$1" ruta="${2:-}" f titulo texto nom=""
+    f="$(ficha_file "$gid")"
+    if [ ! -s "$f" ]; then
+        loading_say "Buscando información de $gid..."
+        titulo="$(printf '%s' "$gid" | tr '_' ' ')"
+        ficha_descargar "$gid" "$titulo" || true
+    fi
+    texto=""
+    if [ -s "$f" ]; then
+        local fecha dev edi gen mc
+        nom="$(ficha_campo "$f" name)"
+        fecha="$(ficha_campo "$f" release_date.date)"
+        dev="$(ficha_campo "$f" developers)"
+        edi="$(ficha_campo "$f" publishers)"
+        gen="$(ficha_campo "$f" genres)"
+        mc="$(ficha_campo "$f" metacritic.score)"
+        texto="${nom:-$gid}
+"
+        [ -n "$fecha" ] && texto="$texto
+Publicación:  $fecha"
+        [ -n "$dev" ]   && texto="$texto
+Desarrollo:   $dev"
+        [ -n "$edi" ]   && texto="$texto
+Edición:      $edi"
+        [ -n "$gen" ]   && texto="$texto
+Géneros:      $gen"
+        [ -n "$mc" ]    && texto="$texto
+Metacritic:   $mc / 100"
+
+    else
+        texto="$(printf '%s' "$gid" | tr '_' ' ')
+
+(Sin información en la tienda de Steam)"
+    fi
+
+    # Duracion: extra opcional e INDEPENDIENTE de Steam. Antes estaba dentro
+    # del bloque anterior, asi que un juego que Steam no conociera se quedaba
+    # tambien sin duracion aunque HowLongToBeat si lo tuviera.
+    local dur hist todo nombre_busqueda
+    nombre_busqueda="${nom:-$(printf '%s' "$gid" | tr '_' ' ')}"
+    dur="$(cat "$COVERS_DIR/${gid}.hltb" 2>/dev/null)" || dur=""
+    if [ -z "$dur" ] && hltb_disponible; then
+        loading_say "Consultando la duración de $nombre_busqueda..."
+        dur="$(hltb_duracion "$nombre_busqueda")" || dur=""
+        [ -n "$dur" ] && printf '%s' "$dur" > "$COVERS_DIR/${gid}.hltb"
+    fi
+    if [ -n "$dur" ]; then
+        hist="${dur%%|*}"; todo="${dur##*|}"
+        [ "${hist%%.*}" != "0" ] && texto="$texto
+Duración:     $hist h la historia"
+        [ "${todo%%.*}" != "0" ] && texto="$texto
+              $todo h al 100%"
+    fi
+    # Lo que sabemos por nosotros mismos: esto sale SIEMPRE, con red o sin ella
+    load_profile "$gid" 2>/dev/null || true
+    texto="$texto
+
+--- Tu partida ---"
+    [ -n "$ruta" ] && [ -e "$ruta" ] && \
+        texto="$texto
+Tamaño:       $(human_size "$(dir_bytes "$ruta")")"
+    texto="$texto
+Veces jugado: ${PLAY_COUNT:-0}
+Tiempo total: $(fmt_playtime "${PLAY_SECONDS:-0}")"
+    [ -n "${LAST_PLAYED:-}" ] && [ "${LAST_PLAYED:-0}" != 0 ] && \
+        texto="$texto
+Última vez:   $(date -d "@$LAST_PLAYED" '+%d/%m/%Y' 2>/dev/null)"
+    [ -n "${NOTAS:-}" ] && texto="$texto
+
+Notas: $NOTAS"
+    ui_info "$texto"
+    return 0
+}
+
 community_match() {
     # $1 = gid -> nombre del .conf de la comunidad que le corresponde, si lo hay.
     #
@@ -5780,7 +6498,7 @@ redist_target_menu() {
         "Prefijo de un juego"*)
             local g gid2
             g="$(pick_squash)" || return
-            g="${g#WPACT:CONFIG|}"
+            g="$(wpact_ruta "$g")" || return
             gid2="$(game_id "$g")"
             load_profile "$gid2"
             redist_menu "$g" "$gid2" ;;
@@ -6890,8 +7608,37 @@ play_or_config() {
             local g="${1#WPACT:CONFIG|}"
             [ -e "$g" ] || { ui_error "No existe: $g"; return 1; }
             game_config_menu "$g" ;;
+        "WPACT:INFO|"*)
+            # L1: ficha del juego, sin pasar por el menu de configuracion
+            local gi="${1#WPACT:INFO|}"
+            [ -e "$gi" ] || { ui_error "No existe: $gi"; return 1; }
+            ficha_mostrar "$(game_id "$gi")" "$gi" ;;
+        "WPACT:FAV|"*)
+            # R1: marcar o quitar favorito al vuelo
+            local gf="${1#WPACT:FAV|}" gidf
+            [ -e "$gf" ] || { ui_error "No existe: $gf"; return 1; }
+            gidf="$(game_id "$gf")"
+            load_profile "$gidf"
+            FAVORITO=$((1-${FAVORITO:-0}))
+            write_full_profile "$gidf"
+            say "[+] $gidf: favorito $([ "$FAVORITO" = 1 ] && printf 'SI' || printf 'no')" ;;
         *) play_any "$1" ;;
     esac
+}
+
+wpact_ruta() {
+    # Quita el marcador de accion y devuelve la ruta. Si el usuario pulso L1
+    # (ficha) o R1 (favorito) en un sitio donde solo se esperaba elegir un
+    # juego, se atiende esa accion y se devuelve 1 para no seguir adelante.
+    local v="$1"
+    case "$v" in
+        "WPACT:CONFIG|"*) printf '%s' "${v#WPACT:CONFIG|}" ;;
+        "WPACT:INFO|"*|"WPACT:FAV|"*)
+            play_or_config "$v" >&2
+            return 1 ;;
+        *) printf '%s' "$v" ;;
+    esac
+    return 0
 }
 
 play_any() {
@@ -7010,14 +7757,7 @@ menu_server_alive() {
 }
 
 menu_server_stop() {
-    local p dir later
-    # cancelar un cierre diferido pendiente: si no, quedaria un "sleep" vivo
-    # y el terminal desde el que se lanzo WProton no devolveria el control
-    later="$(cat "$RUNTIME_DIR/.menusrv.later" 2>/dev/null)"
-    if [ -n "$later" ]; then
-        rm -f "$RUNTIME_DIR/.menusrv.later" 2>/dev/null
-        kill "$later" 2>/dev/null
-    fi
+    local p dir
     p="$(menusrv_pid)"
     dir="$(menusrv_dir)"
     if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
@@ -7052,22 +7792,6 @@ loading_say() {
     return 0
 }
 
-menu_server_stop_diferido() {
-    # Cierra la ventana de menus DENTRO DE UNOS SEGUNDOS, no ahora mismo.
-    # Si se cierra justo antes de lanzar el juego, quedan varios segundos de
-    # escritorio a la vista hasta que el juego pinta su primera imagen. Asi
-    # la pantalla de carga aguanta hasta que el juego ya esta en pantalla.
-    # (Seguimos sin mantenerla viva DURANTE la partida, que es lo que
-    # acababa en "XIO: fatal IO error" al reconfigurar gamescope.)
-    local secs="${1:-6}"
-    ( sleep "$secs"
-      rm -f "$RUNTIME_DIR/.menusrv.later" 2>/dev/null   # ya no hay nada que cancelar
-      menu_server_stop
-      canvas_stop ) < /dev/null >/dev/null 2>&1 &
-    printf '%s' "$!" > "$RUNTIME_DIR/.menusrv.later" 2>/dev/null
-    disown $! 2>/dev/null || true
-    return 0
-}
 
 menu_server_say() {
     # Texto de la pantalla de reposo (lo que se ve mientras no hay menu)
@@ -7159,6 +7883,32 @@ canvas_stop() {
     return 0
 }
 
+juego_sigue_vivo() {
+    # ¿Queda algo DEL JUEGO corriendo?
+    #
+    # CUIDADO con lo que se cuenta como "el juego". Nuestras propias
+    # herramientas (squashfuse, fuse-overlayfs, el mapeador) llevan la ruta
+    # del montaje en su linea de ordenes, y no mueren hasta que WProton
+    # desmonta... lo que ocurre DESPUES de esta espera. Si se cuentan, la
+    # espera no termina jamas y WProton se queda colgado sin volver al menu.
+    local p linea
+    pgrep -x wineserver >/dev/null 2>&1 && return 0
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        p="${linea%% *}"
+        [ "$p" = "$$" ] && continue
+        [ "$p" = "$PPID" ] && continue
+        case "$linea" in
+            *squashfuse*|*fuse-overlayfs*|*dwarfs*|*mapeador.py*|\
+            *menu_pygame.py*|*pad_bridge*|*wproton.sh*|*pgrep*) continue ;;
+        esac
+        return 0
+    done <<EOFVIVO
+$(pgrep -af "wine64-preloader|wine-preloader|${MOUNT_BASE:-/nunca_jamas}/" 2>/dev/null)
+EOFVIVO
+    return 1
+}
+
 post_game_resettle() {
     # Por si el juego duro menos que el cierre diferido de la pantalla de
     # carga: se para lo que quede pendiente antes de levantar el servidor
@@ -7170,18 +7920,28 @@ post_game_resettle() {
     #      su XWayland al cerrarse el juego, y hasta cambia la resolucion)
     #   3) solo entonces reabrir el fondo y los menus
     # Abrir antes de tiempo era lo que provocaba "XIO: fatal IO error".
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        pgrep -x wineserver >/dev/null 2>&1 || break
+    # Esperar a que el juego termine DE VERDAD.
+    #
+    # Muchos juegos de Windows arrancan un proceso que enseguida cede el
+    # control a otro: el que WProton lanzo ya ha terminado, pero el juego
+    # sigue en pantalla. Antes se esperaban solo 5 segundos y luego se seguia
+    # adelante igualmente, asi que WProton reabria su ventana A PANTALLA
+    # COMPLETA encima del juego y este parecia "esconderse detras".
+    #
+    # Ahora se espera mientras siga habiendo algo vivo, con un tope alto por
+    # si algun proceso se queda colgado y no muere nunca.
+    local i sin_juego=0
+    for i in $(seq 1 1200); do            # tope: 10 minutos
+        if juego_sigue_vivo; then
+            sin_juego=0
+        else
+            # dos comprobaciones seguidas sin nada: ahora si ha terminado
+            sin_juego=$((sin_juego + 1))
+            [ "$sin_juego" -ge 2 ] && break
+        fi
         sleep 0.5
     done
-    # procesos del juego que sobrevivan al wineserver. Se mira solo lo que
-    # cuelga de NUESTRO montaje o prefijo: en el modo Juego puede haber otros
-    # ".exe" de Steam que no son nuestros y no hay que esperar por ellos.
-    for i in 1 2 3 4 5 6; do
-        pgrep -f "${MOUNT_BASE:-/nunca}.*\.exe" >/dev/null 2>&1 || break
-        sleep 0.5
-    done
+    [ "$i" -ge 1200 ] && log "El juego no soltaba sus procesos; se continua igualmente" WARN
 
     if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
         # el XWayland puede volver con OTRO numero: buscar uno vivo
@@ -8334,12 +9094,13 @@ EOF2
         unset WP_ACTION_X
         [ -z "$sel" ] && { log "GRID -> cancelado"; return 1; }
         log "GRID -> [$sel]"
-        if [ "${sel#WPACT:CONFIG|}" != "$sel" ]; then
-            local rel="${sel#WPACT:CONFIG|}"
-            [ "$rel" = "__LOOSE__" ] && return 1
-            printf 'WPACT:CONFIG|%s' "$GAMES_PATH/$rel"
-            return 0
-        fi
+        case "$sel" in
+            "WPACT:"*)
+                local acc="${sel%%|*}" rel="${sel#*|}"
+                [ "$rel" = "__LOOSE__" ] && return 1
+                printf '%s|%s' "$acc" "$GAMES_PATH/$rel"
+                return 0 ;;
+        esac
         if [ "$sel" = "__LOOSE__" ]; then
             browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
             return $?
@@ -8352,12 +9113,13 @@ EOF2
     local src=$?
     if [ "$src" != 0 ]; then unset WP_ACTION_X; return "$src"; fi
     unset WP_ACTION_X
-    if [ "${sel#WPACT:CONFIG|}" != "$sel" ]; then
-        local rel2="${sel#WPACT:CONFIG|}"
-        [ "$rel2" = "$loose" ] && return 1
-        printf 'WPACT:CONFIG|%s' "$GAMES_PATH/$rel2"
-        return 0
-    fi
+    case "$sel" in
+        "WPACT:"*)
+            local acc2="${sel%%|*}" rel2="${sel#*|}"
+            [ "$rel2" = "$loose" ] && return 1
+            printf '%s|%s' "$acc2" "$GAMES_PATH/$rel2"
+            return 0 ;;
+    esac
     if [ "$sel" = "$loose" ]; then
         browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
         return $?
@@ -8399,6 +9161,12 @@ game_config_menu() {
     local squash="$1"
     local gid; gid="${2:-$(game_id "$squash")}"
 
+    # Juego nuevo: mirar si la base de umu conoce este juego. Su identificador
+    # es lo que permite a protonfixes aplicar los arreglos concretos, asi que
+    # conviene proponerlo antes que nada.
+    if ! profile_exists "$gid"; then
+        umudb_sugerir "$gid" "${EXE_PATH:-}" && write_full_profile "$gid"
+    fi
     # Si nunca se configuro: mirar si la comunidad ya tiene una configuracion
     # para este juego antes de preguntarle nada al usuario
     if ! profile_exists "$gid"; then
@@ -8431,6 +9199,9 @@ game_config_menu() {
             "Argumentos: ${ARGS_OVERRIDE:-ninguno}" \
             "Prefijo: $(prefix_label)" \
             "GAMEID (protonfixes): $GAMEID" \
+            "Buscar en la base de umu (identificador automático)" \
+            "Carátula: elegir una imagen del sistema" \
+            "Ficha del juego (año, editor, notas de la crítica)" \
             "MangoHud: $(onoff "$MANGOHUD")" \
             "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
@@ -8461,7 +9232,9 @@ game_config_menu() {
             "Partidas guardadas: copias y restauracion" \
             "Comprobar el archivo y ver cuanto ocupa" \
             "$pack_row" \
-            "Añadir este juego a Steam" \
+            "$([ "${IS_GAMESCOPE:-0}" = 1 ] \
+                && printf 'Añadir este juego a Steam (solo en modo Escritorio)' \
+                || printf 'Añadir este juego a Steam')" \
             "Repetir asistente de primera ejecucion" \
             "Borrar prefijo (reinstala DLLs)" \
             "Borrar saves del overlay (upper/)" \
@@ -8500,6 +9273,19 @@ game_config_menu() {
                             ui_error "Este juego NO incluye un prefix de Wine (falta drive_c/ + system.reg)"
                         fi ;;
                 esac ;;
+            "Carátula: elegir"*)
+                caratula_manual "$gid" ;;
+            "Ficha del juego"*)
+                ficha_mostrar "$gid" "$squash" ;;
+            "Buscar en la base de umu"*)
+                if umudb_sugerir "$gid"; then
+                    write_full_profile "$gid"
+                else
+                    ui_info "No se ha encontrado '$gid' en la base de datos de umu.
+
+Puedes poner el identificador a mano en GAMEID si lo conoces:
+https://umu.openwinecomponents.org"
+                fi ;;
             "GAMEID"*)
                 GAMEID="$(ask_text "GAMEID de umu-database (umu-default = generico).
 Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org" "$GAMEID")"
@@ -8701,7 +9487,8 @@ main_dispatch() {
         "Ajustes de un juego"*)
             local g2
             if g2="$(pick_squash)"; then
-                game_config_menu "${g2#WPACT:CONFIG|}"
+                g2="$(wpact_ruta "$g2")" || return 0
+                game_config_menu "$g2"
             fi ;;
         "Descargar runners"*)    download_runner_menu ;;
         "Actualizar GE-Proton"*) setup_proton ;;
@@ -8713,6 +9500,7 @@ main_dispatch() {
                 ui_info "DwarFS listo en runtime/tools:
 mkdwarfs para empaquetar y dwarfs para montar."
             fi ;;
+        "Datos de duración"*) hltb_instalar ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
@@ -8912,6 +9700,7 @@ tools_menu() {
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
+            "Datos de duración de partida (HowLongToBeat)" \
             "Descargar herramientas DwarFS (mkdwarfs + driver)" \
             "<< Volver")" || return
         case "$sel" in
