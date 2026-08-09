@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.05"
+WPROTON_VERSION="1.06"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -204,6 +204,7 @@ write_lang_en() {
  "Añadir este juego a Steam (solo en modo Escritorio)": "Add this game to Steam (Desktop mode only)",
  "Añadir lo que falte (conserva lo tuyo)": "Add what's missing (keeps yours)",
  "Añadir un juego (zip, rar, exe o carpeta)": "Add a game (zip, rar, exe or folder)",
+ "Año": "Year",
  "BORRAR": "DELETE",
  "BUSCANDO: %s": "SEARCHING: %s",
  "Biblioteca y preferencias": "Library and preferences",
@@ -238,6 +239,7 @@ write_lang_en() {
  "DXVK Async": "DXVK Async",
  "Datos de duración de partida (HowLongToBeat)": "Playtime data (HowLongToBeat)",
  "Desactivado": "Disabled",
+ "Desarrollo": "Developer",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
  "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
  "Descargar carátulas (SteamGridDB)": "Download covers (SteamGridDB)",
@@ -250,8 +252,10 @@ write_lang_en() {
  "Detener Wine y liberar los juegos montados": "Stop Wine and release mounted games",
  "Donde tienes tus juegos?": "Where are your games?",
  "Dpad: moverse   A: pulsar   X: borrar   Y: aceptar   B: cancelar": "Dpad: move   A: press   X: delete   Y: accept   B: cancel",
+ "Duración": "Length",
  "ERROR": "ERROR",
  "ESP": "SPC",
+ "Edición": "Publisher",
  "Ejecutable": "Executable",
  "Elegir ejecutable": "Choose executable",
  "Elegir otra carpeta...": "Choose another folder...",
@@ -277,6 +281,7 @@ write_lang_en() {
  "Gamescope": "Gamescope",
  "Gamescope anidado (modo Juego)": "Nested gamescope (Game Mode)",
  "Grande (recomendado en consolas portatiles)": "Large (recommended on handhelds)",
+ "Género": "Genre",
  "Herramientas de montaje...": "Mount tools...",
  "INFO": "INFO",
  "Idioma": "Language",
@@ -292,6 +297,7 @@ write_lang_en() {
  "Instalar redistribuibles (vcredist, DirectX, .NET...)": "Install redistributables (vcredist, DirectX, .NET...)",
  "Instalar/actualizar Python portable + pygame": "Install/update portable Python + pygame",
  "Juego en carpeta": "Game in folder",
+ "Jugado": "Played",
  "Jugar (elegir juego)": "Play (choose game)",
  "Jugar al último": "Play the last one",
  "LAA (Large Address Aware)": "LAA (Large Address Aware)",
@@ -312,6 +318,7 @@ write_lang_en() {
  "Ninguno": "None",
  "No": "No",
  "Normal": "Normal",
+ "Nota": "Score",
  "Notas": "Notes",
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
  "Ordenar juegos por": "Sort games by",
@@ -353,6 +360,7 @@ write_lang_en() {
  "Tamaño por juego": "Size per game",
  "Tamaño por juego (juego + saves + prefijo)": "Size per game (game + saves + prefix)",
  "Tema de los menus": "Menu theme",
+ "Tiempo": "Time",
  "Usar la carpeta games/ de WProton": "Use WProton's games/ folder",
  "Variables extra": "Extra variables",
  "Ver donde guarda las partidas": "Show where saves are stored",
@@ -2044,9 +2052,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 69fc29c4d6c8" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 1effea039892" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 69fc29c4d6c8
+# WPROTON_HELPER menu_pygame.py 1effea039892
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2059,7 +2067,7 @@ write_menu_pygame() {
 #   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
 #   text   <titulo> <salida> <valor_inicial>  (teclado en pantalla)
 #   canvas <titulo> <fichero_estado>       (fondo persistente del modo Juego)
-import os, sys, time
+import json, os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 LIBS = os.path.join(BASE, 'libs_py%d.%d' % sys.version_info[:2])
@@ -2114,11 +2122,84 @@ import pygame
 MODE = TITLE = OUTFILE = ARG4 = ''
 BROWSE_KIND = 'file'
 BROWSE_EXTS = ()
+LIST_INFO = {}          # datos por juego para el panel derecho de la lista
+PRESEL = ''             # juego sobre el que abrir la lista (volver donde estabas)
+FAV_FILE = ''           # donde se apuntan los favoritos marcados en el menu
+COVER_CACHE = {}
+
+def leer_ficha(ruta):
+    # Saca del JSON de la tienda de Steam lo que cabe en el panel
+    if not ruta or not os.path.isfile(ruta):
+        return {}
+    try:
+        with open(ruta, encoding='utf-8') as fh:
+            d = json.load(fh)
+        d = list(d.values())[0].get('data', {})
+    except Exception:
+        return {}
+    def lista(clave, tope=2):
+        v = d.get(clave) or []
+        if isinstance(v, list):
+            v = [x.get('description', '') if isinstance(x, dict) else str(x)
+                 for x in v[:tope]]
+            return ', '.join(x for x in v if x)
+        return str(v)
+    fecha = (d.get('release_date') or {}).get('date', '') or ''
+    ano = ''
+    for trozo in str(fecha).replace(',', ' ').split():
+        if trozo.isdigit() and len(trozo) == 4:
+            ano = trozo
+    return {'nombre': d.get('name', ''),
+            'ano': ano,
+            'dev': lista('developers'),
+            'edi': lista('publishers'),
+            'gen': lista('genres'),
+            'nota': str((d.get('metacritic') or {}).get('score', '') or '')}
+
+def leer_duracion(ruta):
+    # "21.5|44" -> texto para el panel
+    if not ruta or not os.path.isfile(ruta):
+        return ''
+    try:
+        with open(ruta, encoding='utf-8') as fh:
+            partes = fh.read().strip().split('|')
+    except Exception:
+        return ''
+    try:
+        hist = float(partes[0]) if partes and partes[0] else 0
+    except ValueError:
+        hist = 0
+    return ('%g h' % hist) if hist else ''
 EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 
-def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None):
+def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
+                manifiesto=None, preseleccion=None, fav_file=None):
     global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, BROWSE_EXTS, ACTION_X
+    global LIST_INFO, PRESEL, FAV_FILE
+    PRESEL = preseleccion or ''
+    FAV_FILE = fav_file or ''
+    LIST_INFO = {}
+    if manifiesto and os.path.isfile(manifiesto):
+        # nombre|caratula|favorito|veces|segundos|ficha.json|duracion
+        # La ficha se lee AQUI: el helper es Python y sabe leer el JSON de
+        # Steam mucho mejor que bash a base de tuberias.
+        try:
+            with open(manifiesto, encoding='utf-8') as fh:
+                for linea in fh:
+                    campos = linea.rstrip('\n').split('|')
+                    if not campos or not campos[0].strip():
+                        continue
+                    while len(campos) < 6:
+                        campos.append('')
+                    d = {'cov': campos[1], 'fav': campos[2],
+                         'veces': campos[3], 'segs': campos[4],
+                         'ficha': campos[5], 'hltb': campos[6] if len(campos) > 6 else ''}
+                    d.update(leer_ficha(campos[5]))
+                    d['dur'] = leer_duracion(d.get('hltb', ''))
+                    LIST_INFO[campos[0]] = d
+        except Exception:
+            LIST_INFO = {}
     MODE, TITLE, OUTFILE = mode, title, outfile
     ARG4 = arg4 if arg4 is not None else outfile
     BROWSE_KIND = browse_kind
@@ -2231,6 +2312,21 @@ def grid_apply_filter():
     sel = 0
     scroll = 0
 
+def colocar_en_preseleccion():
+    # Abrir la lista SOBRE el juego indicado. Se usa al marcar un favorito:
+    # sin esto, la lista volveria a empezar por arriba y habria que buscar
+    # otra vez donde estabas.
+    global sel, scroll
+    if not PRESEL or not view:
+        return
+    for i, idx in enumerate(view):
+        nombre = GITEMS[idx][0] if MODE == 'grid' else items[idx][1]
+        if nombre == PRESEL:
+            sel = i
+            vis = max(1, VIS_FULL if not kb_open else VIS_KB)
+            scroll = max(0, sel - vis // 2)
+            return
+
 def load_request_data():
     # Carga lo que necesite el modo actual (opciones, carpeta o manifiesto)
     global FILTER, sel, scroll, kb_open, kb_r, kb_c
@@ -2245,8 +2341,10 @@ def load_request_data():
     elif MODE == 'grid':
         load_manifest()
         grid_apply_filter()
+        colocar_en_preseleccion()
     else:
         load_options()
+        colocar_en_preseleccion()
 
 def init_video():
     # pygame.init() NO lanza excepcion si solo falla el video: devuelve el
@@ -2792,8 +2890,43 @@ def draw_header():
         pygame.draw.rect(screen, ACC, (W - bwd - 20, 18, bwd, 24), border_radius=12)
         screen.blit(badge, (W - bwd - 11, 21))
 
+def cover_surface(ruta, ancho):
+    # Carátula escalada, guardada en memoria: sin esto se recargaria del disco
+    # 60 veces por segundo al mover la seleccion.
+    if not ruta or not os.path.isfile(ruta):
+        return None
+    clave = (ruta, ancho)
+    if clave in COVER_CACHE:
+        return COVER_CACHE[clave]
+    try:
+        img = pygame.image.load(ruta)
+        w0, h0 = img.get_size()
+        if w0 <= 0 or h0 <= 0:
+            return None
+        alto = int(ancho * h0 / w0)
+        img = pygame.transform.smoothscale(img, (ancho, alto))
+    except Exception:
+        img = None
+    if len(COVER_CACHE) > 40:
+        COVER_CACHE.clear()
+    COVER_CACHE[clave] = img
+    return img
+
+def fmt_horas(seg):
+    try:
+        seg = int(seg)
+    except Exception:
+        return ''
+    if seg < 60:
+        return ''
+    if seg < 3600:
+        return '%d min' % (seg // 60)
+    return '%d h %d min' % (seg // 3600, (seg % 3600) // 60)
+
 def draw_side_panel():
-    # Panel derecho: detalle de lo seleccionado
+    # Panel derecho: detalle de lo seleccionado. En la lista de juegos muestra
+    # ademas la CARATULA y los datos del juego, para que la lista no sea solo
+    # una columna de nombres.
     if SIDE_W <= 0:
         return
     rect = (SIDE_X, LIST_Y, SIDE_W, LIST_H)
@@ -2805,9 +2938,77 @@ def draw_side_panel():
     py += 14
     if view:
         txt = items[view[sel]][1] if MODE != 'grid' else GITEMS[view[sel]][0]
-        for ln in wrap_title(txt, f_it, SIDE_W - 34, 6):
+        datos = LIST_INFO.get(txt)
+        # el nombre del fichero no aporta nada en el panel
+        titulo_panel = (datos or {}).get('nombre') or txt
+        for _ext in ('.wsquashfs', '.squashfs', '.dwarfs'):
+            if titulo_panel.lower().endswith(_ext):
+                titulo_panel = titulo_panel[:-len(_ext)]
+                break
+        # Carátula: ocupa como mucho la mitad del alto del panel, para que
+        # siempre quede sitio para el nombre y los datos.
+        if datos and MODE == 'list':
+            cov = cover_surface(datos.get('cov'), min(SIDE_W - 32, 170))
+            if cov is not None:
+                ch = cov.get_height()
+                if ch > LIST_H // 2:
+                    cov = cover_surface(datos.get('cov'),
+                                        int((SIDE_W - 32) * (LIST_H // 2) / ch))
+                    ch = cov.get_height() if cov is not None else 0
+                if cov is not None:
+                    cx = SIDE_X + (SIDE_W - cov.get_width()) // 2
+                    pygame.draw.rect(screen, TH['border'],
+                                     (cx - 2, py - 2, cov.get_width() + 4, ch + 4), 1)
+                    screen.blit(cov, (cx, py))
+                    py += ch + 14
+        for ln in wrap_title(titulo_panel, f_it, SIDE_W - 34, 3 if datos else 6):
             screen.blit(rtext(f_it, ln, FG), (px, py))
             py += 28
+        if datos and MODE == 'list':
+            py += 6
+            filas = []
+            if datos.get('fav') == '1':
+                filas.append((L('Favorito', 'Favourite'), '\x01estrella'))
+            if datos.get('ano'):
+                filas.append((L('Año', 'Year'), datos['ano']))
+            if datos.get('dev'):
+                filas.append((L('Desarrollo', 'Developer'), datos['dev']))
+            if datos.get('edi') and datos.get('edi') != datos.get('dev'):
+                filas.append((L('Edición', 'Publisher'), datos['edi']))
+            if datos.get('gen'):
+                filas.append((L('Género', 'Genre'), datos['gen']))
+            if datos.get('nota'):
+                filas.append((L('Nota', 'Score'), '%s/100' % datos['nota']))
+            if datos.get('dur'):
+                filas.append((L('Duración', 'Length'), datos['dur']))
+            if datos.get('veces') and datos['veces'] != '0':
+                filas.append((L('Jugado', 'Played'),
+                              L('%s veces', '%s times') % datos['veces']))
+            t = fmt_horas(datos.get('segs'))
+            if t:
+                filas.append((L('Tiempo', 'Time'), t))
+            for etiqueta, valor in filas:
+                if py > LIST_Y + LIST_H - 26:
+                    break
+                se = rtext(f_sm, etiqueta, DIM)
+                screen.blit(se, (px, py))
+                if valor == '\x01estrella':
+                    # Pequeña y arriba: en una fila de 22 px, con radio 5 y
+                    # centro en y=+2 ocupa de -3 a +6, bien lejos de la linea
+                    # de abajo y a la altura del texto de su propia fila.
+                    draw_estrella(SIDE_X + SIDE_W - 16 - FS(5),
+                                  py + FS(2), FS(5), TH.get('acc2', ACC))
+                    py += 22
+                    continue
+                # el valor va a la derecha; si no cabe, se recorta con puntos
+                hueco = SIDE_W - 32 - se.get_width() - 10
+                v = str(valor)
+                sv = rtext(f_sm, v, TH.get('acc2', ACC))
+                while sv.get_width() > hueco and len(v) > 4:
+                    v = v[:-2]
+                    sv = rtext(f_sm, v + '...', TH.get('acc2', ACC))
+                screen.blit(sv, (SIDE_X + SIDE_W - 16 - sv.get_width(), py))
+                py += 22
     else:
         screen.blit(f_it.render(L('(vacio)', '(empty)'), True, DIM), (px, py))
         py += 28
@@ -3131,6 +3332,20 @@ def draw_segments(segs, font, x, y, maxw, active):
     except Exception:
         pass
 
+def draw_estrella(cx, cy, r, color):
+    # Estrella de cinco puntas dibujada a mano: el simbolo tipografico no
+    # existe en la fuente por defecto, y un asterisco quedaba pobre.
+    import math
+    pts = []
+    for i in range(10):
+        ang = math.pi / 2 + i * math.pi / 5
+        rad = r if i % 2 == 0 else r * 0.45
+        pts.append((cx + rad * math.cos(ang), cy - rad * math.sin(ang)))
+    try:
+        pygame.draw.polygon(screen, color, pts)
+    except Exception:
+        pass
+
 def draw_row_text(text, font, color, x, y, maxw, active):
     # Si el texto no cabe: en la fila seleccionada se desplaza (marquesina),
     # en las demás se recorta. Antes se salia de la tarjeta e invadia el panel.
@@ -3249,6 +3464,26 @@ def action_sobre_juego(accion):
 
 def action_x():
     action_sobre_juego('CONFIG')
+
+def marcar_favorito():
+    # Cambia el favorito en el acto (sin cerrar el menu) y lo apunta para que
+    # WProton lo guarde en el perfil cuando el menu termine.
+    if not view:
+        return
+    nombre = GITEMS[view[sel]][0] if MODE == 'grid' else items[view[sel]][1]
+    datos = LIST_INFO.get(nombre)
+    if datos is None:
+        datos = {'fav': '0'}
+        LIST_INFO[nombre] = datos
+    datos['fav'] = '0' if datos.get('fav') == '1' else '1'
+    if not FAV_FILE:
+        return
+    try:
+        # se apunta cada pulsacion: WProton alterna una vez por cada una
+        with open(FAV_FILE, 'a', encoding='utf-8') as fh:
+            fh.write(nombre + '\n')
+    except Exception:
+        pass
 
 def on_enter():
     global running, done
@@ -3636,9 +3871,13 @@ def run_session():
                         if ready() and ACTION_X and MODE in ('list', 'grid'):
                             action_sobre_juego('INFO')
                     elif ev.key == pygame.K_F2:
-                        # R1: marcar o quitar favorito al vuelo
+                        # R1: marcar o quitar favorito AQUI MISMO. Antes se
+                        # cerraba el menu, lo aplicaba WProton y se volvia a
+                        # abrir: funcionaba, pero se notaba el parpadeo. Ahora
+                        # el cambio se ve al instante y se apunta en un fichero
+                        # que WProton aplica al salir del menu.
                         if ready() and ACTION_X and MODE in ('list', 'grid'):
-                            action_sobre_juego('FAV')
+                            marcar_favorito()
                     elif ev.key == pygame.K_SPACE:
                         if ready():
                             if MODE == 'check':
@@ -3689,6 +3928,7 @@ def run_session():
                 if i == sel and not kb_open:
                     draw_selection(_rect)
             kind, txt, on = items[view[i]]
+            favorito_aqui = False
             if MODE == 'check':
                 label = ('[x] ' if on else '[  ] ') + txt
                 color = ACC if on else FG
@@ -3698,6 +3938,10 @@ def run_session():
                 label, color = txt, (ACC if kind == K_HDR else DIM)
             else:
                 label, color = txt, FG
+                # Marca de favorito en la propia lista: al pulsar R1 se ve al
+                # momento cual esta marcado, sin tener que mirar el panel.
+                if MODE == 'list' and LIST_INFO.get(txt, {}).get('fav') == '1':
+                    favorito_aqui = True
             _tx = LIST_X + (18 if PANEL_UI else 14)
             if TH.get('numbered'):
                 _tx += 46
@@ -3707,6 +3951,13 @@ def run_session():
             _tw = LIST_X + LIST_W - _tx - 18     # ancho util hasta el borde
             if TH.get('shadow'):
                 draw_row_text(label, f_it, (0, 0, 0), _tx + 2, _ty + 2, _tw, i == sel)
+            if favorito_aqui:
+                # Estrella a la DERECHA de la fila: delante quedaba pegada al
+                # nombre y descuadrada. Se reserva su hueco para que el texto
+                # largo no la pise.
+                _tw -= FS(26)
+                draw_estrella(LIST_X + LIST_W - FS(24), y + ROW // 2,
+                              FS(8), TH.get('acc2', ACC))
             if kind in HEADER_KINDS or MODE == 'check':
                 draw_row_text(label, f_it, color, _tx, _ty, _tw, i == sel)
             else:
@@ -3780,13 +4031,15 @@ def run_session():
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
             elif MODE == 'grid':
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
-                          ('L1', L('ficha', 'info')), ('R1', L('favorito', 'favourite')),
+                          ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
+                          ('R1', L('favorito', 'favourite')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
                           ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
             else:
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
-                          ('L1', L('ficha', 'info')), ('R1', L('favorito', 'favourite')),
+                          ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
+                          ('R1', L('favorito', 'favourite')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
@@ -3891,15 +4144,17 @@ def serve(dirpath):
                 os.remove(ready)
             except Exception:
                 pass
-            while len(campos) < 6:
+            while len(campos) < 9:
                 campos.append('')
-            modo, titulo, salida, arg4, kind, ax = campos[:6]
+            (modo, titulo, salida, arg4, kind, ax,
+             manif, presel, favf) = campos[:9]
             if modo == 'idle':
                 # sin menu: solo actualizar el texto del reposo
                 status = titulo
             elif modo:
                 set_request(modo, titulo, salida, arg4 or None,
-                            kind or 'file', ax == '1')
+                            kind or 'file', ax == '1', manif or None,
+                            presel or None, favf or None)
                 load_request_data()
                 compute_layout()
                 try:
@@ -3939,7 +4194,11 @@ if sys.argv[1] == 'server':
 else:
     set_request(sys.argv[1], sys.argv[2], sys.argv[3],
                 sys.argv[4] if len(sys.argv) > 4 else None,
-                sys.argv[5] if len(sys.argv) > 5 else 'file')
+                sys.argv[5] if len(sys.argv) > 5 else 'file',
+                os.environ.get('WP_ACTION_X') == '1',
+                os.environ.get('WP_LIST_INFO') or None,
+                os.environ.get('WP_PRESEL') or None,
+                os.environ.get('WP_FAV_FILE') or None)
     load_request_data()
     compute_layout()
     rc = run_session()
@@ -4107,7 +4366,8 @@ menu() {
         local hrc
         # Primero el servidor de menus (una sola ventana para toda la sesion);
         # si no esta disponible, un proceso por menu como siempre.
-        menu_server_request list "$title" "$tmpsel" "$tmpopt" "" "${WP_ACTION_X:-}"
+        menu_server_request list "$title" "$tmpsel" "$tmpopt" "" "${WP_ACTION_X:-}" \
+            "${WP_LIST_INFO:-}" "${WP_PRESEL:-}" "${WP_FAV_FILE:-}"
         hrc=$?
         if [ "$hrc" = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
@@ -7802,14 +8062,16 @@ menu_server_say() {
 }
 
 menu_server_request() {
-    # $1=modo $2=titulo $3=salida $4=arg4 $5=tipo $6=accion_x
+    # $1=modo $2=titulo $3=salida $4=arg4 $5=tipo $6=accion_x $7=manifiesto
+    # $8=preseleccion (juego sobre el que abrir la lista)
     # Manda la peticion al servidor y espera su respuesta. Devuelve el codigo
     # de la sesion, o 9 si el servidor se ha caido (para que el llamador use
     # el camino de siempre, un proceso por menu).
     menu_server_alive || return 9
     rm -f "$(menusrv_dir)/resp" 2>/dev/null
-    printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
-        "$1" "$2" "$3" "${4:-}" "${5:-}" "${6:-}" > "$(menusrv_dir)/req"
+    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+        "$1" "$2" "$3" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" \
+        > "$(menusrv_dir)/req"
     : > "$(menusrv_dir)/req.ready"
     local i=0
     while [ ! -f "$(menusrv_dir)/resp" ]; do
@@ -8864,6 +9126,14 @@ progress_stop() {
     return 0
 }
 
+profile_get() {
+    # $1 = gid, $2 = clave. Lee UN dato del perfil sin cargarlo entero: asi no
+    # se pisan las variables del juego que se este configurando ahora mismo.
+    local f="$PROFILE_DIR/$1.conf"
+    [ -f "$f" ] || return 1
+    sed -n "s/^$2=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$f" | head -n1
+}
+
 cover_for() {
     # $1 = gid -> ruta de la carátula si existe
     local e
@@ -9108,9 +9378,52 @@ EOF2
         printf '%s' "$GAMES_PATH/$sel"
         return 0
     fi
+    # Datos para el panel derecho: carátula, favorito, veces jugado, tiempo,
+    # y si hay ficha descargada, el año y la nota. Un fichero aparte, para no
+    # tocar la lista de nombres que se muestra.
+    # Datos por juego. Las FICHAS no se leen aqui: se pasa su ruta y las lee
+    # el helper, que es Python y entiende el JSON de Steam de verdad. Ademas
+    # asi la lista se abre al momento aunque haya cien juegos con ficha.
+    local infofile rel3 gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
+    infofile="$(mktemp)"
+    while IFS= read -r rel3; do
+        [ -n "$rel3" ] || continue
+        gid3="$(game_id "$GAMES_PATH/$rel3")"
+        cov3="$(cover_for "$gid3")" || cov3=""
+        mt3="$(game_meta "$GAMES_PATH/$rel3")"
+        fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
+        pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
+        fjson="$COVERS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
+        fhltb="$COVERS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
+        printf '%s|%s|%s|%s|%s|%s|%s\n' \
+            "$rel3" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
+            >> "$infofile"
+    done <<EOFINFO
+$list
+EOFINFO
+    local favfile; favfile="$(mktemp)"
+    export WP_LIST_INFO="$infofile" WP_FAV_FILE="$favfile"
     # shellcheck disable=SC2046
     sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)"
+    # OJO: $? hay que leerlo INMEDIATAMENTE despues del menu. Al colar aqui la
+    # limpieza del fichero temporal, "src" recogia el resultado de "rm" (que
+    # siempre es 0), asi que pulsar B parecia una eleccion valida y WProton
+    # intentaba lanzar un juego vacio.
     local src=$?
+    # Favoritos marcados con R1 durante el menu: el cambio ya se vio en
+    # pantalla al instante; aqui solo se guarda en el perfil de cada juego.
+    if [ -s "$favfile" ]; then
+        local fjuego fgid
+        while IFS= read -r fjuego; do
+            [ -n "$fjuego" ] || continue
+            fgid="$(game_id "$GAMES_PATH/$fjuego")"
+            load_profile "$fgid"
+            FAVORITO=$((1-${FAVORITO:-0}))
+            write_full_profile "$fgid"
+            log "Favorito de $fgid: ${FAVORITO}"
+        done < "$favfile"
+    fi
+    rm -f "$infofile" "$favfile"; unset WP_LIST_INFO WP_FAV_FILE
     if [ "$src" != 0 ]; then unset WP_ACTION_X; return "$src"; fi
     unset WP_ACTION_X
     case "$sel" in
@@ -9466,6 +9779,8 @@ main_dispatch() {
         "Jugar al último:"*)
             play_any "$LAST_GAME" ;;
         "Jugar"*)
+            # Los favoritos se marcan DENTRO del menu (R1) y se guardan al
+            # salir: no hay que reabrir nada.
             local g; g="$(pick_squash)" && play_or_config "$g" ;;
         "Añadir un juego"*)
             local imp=""
