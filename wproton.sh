@@ -1313,6 +1313,8 @@ steam_abrir() {
     command -v steam >/dev/null 2>&1 || return 1
     loading_say "Abriendo Steam..."
     lanzar_suelto steam >/dev/null 2>&1
+    sleep 1
+    loading_clear
     return 0
 }
 
@@ -2038,6 +2040,7 @@ HAS_PYGAME=-1   # -1 = sin comprobar
 
 FIRSTRUN_MARK="$RUNTIME_DIR/.first_run_done"
 WP_SIN_FUSE=""                           # herramientas de montaje que faltan
+WP_JUGANDO=0                             # 1 = hay una partida en marcha
 WP_PRIMERA_VEZ=0                         # 1 = puesta en marcha inicial
 WP_INSTALL_SILENCIOSO=0                  # 1 = instalar sin pedir "Aceptar"
 INSTALL_NOTICE_PID=""
@@ -2068,9 +2071,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 9050d2b07341" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 0c226c3d56d9" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 9050d2b07341
+# WPROTON_HELPER menu_pygame.py 0c226c3d56d9
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2316,7 +2319,8 @@ def load_manifest():
             parts = l.split('|')
             while len(parts) < 4:
                 parts.append('')
-            GITEMS.append((parts[0], parts[1], parts[2], parts[3]))
+            # lista y no tupla: el favorito se cambia en el sitio al pulsar R1
+            GITEMS.append([parts[0], parts[1], parts[2], parts[3]])
 
 def grid_apply_filter():
     global view, sel, scroll
@@ -3478,12 +3482,22 @@ def marcar_favorito():
     # WProton lo guarde en el perfil cuando el menu termine.
     if not view:
         return
-    nombre = GITEMS[view[sel]][0] if MODE == 'grid' else items[view[sel]][1]
-    datos = LIST_INFO.get(nombre)
-    if datos is None:
-        datos = {'fav': '0'}
-        LIST_INFO[nombre] = datos
-    datos['fav'] = '0' if datos.get('fav') == '1' else '1'
+    if MODE == 'grid':
+        # En la rejilla el favorito vive en GITEMS (es lo que dibuja la cinta
+        # en la caratula), no en LIST_INFO: hay que cambiarlo ahi para que se
+        # vea al instante.
+        fila = GITEMS[view[sel]]
+        nombre = fila[0]
+        while len(fila) < 4:
+            fila.append('0')
+        fila[3] = '0' if str(fila[3]) == '1' else '1'
+    else:
+        nombre = items[view[sel]][1]
+        datos = LIST_INFO.get(nombre)
+        if datos is None:
+            datos = {'fav': '0'}
+            LIST_INFO[nombre] = datos
+        datos['fav'] = '0' if datos.get('fav') == '1' else '1'
     if not FAV_FILE:
         return
     try:
@@ -4193,6 +4207,10 @@ def serve(dirpath):
                         fh.write(str(rc))
                 except Exception:
                     pass
+                # El texto de "cargando" ya cumplio su funcion: si no se
+                # borra, se queda fijo en la pantalla de reposo mostrando el
+                # ultimo mensaje aunque la tarea acabara hace rato.
+                status = ''
                 # limpiar el estado visible entre menus
                 pygame.event.clear()
             continue
@@ -4606,6 +4624,7 @@ run_with_progress() {
     say "$text"
     menu_server_say "$text"      # tambien en la pantalla de menus
     canvas_say "$text"
+    # al salir de esta funcion se limpia (ver el final)
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
         # ya hay un aviso en pantalla: no apilar ventanas
         "$@" >> "$LOG_FILE" 2>&1
@@ -4616,8 +4635,14 @@ run_with_progress() {
             | zenity --progress --title="WProton" --text="$text" \
                      --pulsate --auto-close --no-cancel 2>/dev/null
         wait $pid
+        local _rc=$?
+        loading_clear
+        return $_rc
     else
         "$@" >> "$LOG_FILE" 2>&1
+        local _rc2=$?
+        loading_clear
+        return $_rc2
     fi
 }
 
@@ -5188,6 +5213,18 @@ cleanup_all() {
     # trampa y no por el menu "Salir"). Si no se para el servidor de menus,
     # su proceso sigue vivo con la ventana en pantalla y parece que WProton
     # se ha quedado colgado.
+    #
+    # Red de seguridad: si por lo que sea llegamos aqui con una partida en
+    # marcha, se espera a que termine antes de desmontar. Desmontar debajo de
+    # un juego que esta jugando es la peor forma de cerrarlo.
+    if [ "${WP_JUGANDO:-0}" = 1 ]; then
+        log "Cierre solicitado con el juego en marcha: se espera a que termine" WARN
+        local _i
+        for _i in $(seq 1 600); do
+            juego_sigue_vivo || break
+            sleep 1
+        done
+    fi
     cleanup_mount
     pad_bridge_stop
     mapeador_stop
@@ -5403,7 +5440,10 @@ profile_defaults() {
     PLAY_SECONDS=0           # tiempo total jugado (segundos)
     LAST_PLAYED=""           # fecha de la última partida (YYYY-MM-DD HH:MM)
     SAVE_PATHS=""            # carpetas de partidas detectadas al jugar (: separadas)
-    PAD_STEAMFIX=1           # SteamOS: no ocultar el mando fisico al juego
+    # Steam Input: DESACTIVADO por defecto. Muy pocos juegos se benefician de
+    # el y en cambio puede interferir con los que leen el mando directamente.
+    # Quien lo necesite lo activa en el ajuste del juego.
+    PAD_STEAMFIX=0
     NESTED_GAMESCOPE=0       # modo Juego: lanzar dentro de gamescope propio
                              # (OFF por defecto: gamescope dentro de gamescope
                              #  rompe su capa Vulkan -> "Hooking has failed")
@@ -5766,7 +5806,7 @@ export_game_env() {
     # abre desde Steam, el juego hereda esa ocultacion pero no siempre el
     # mando virtual: SDL no ve ninguno y el mando "no funciona" aunque los
     # menus si lo lean (nosotros leemos /dev/input en crudo).
-    if [ "${PAD_STEAMFIX:-1}" = 1 ]; then
+    if [ "${PAD_STEAMFIX:-0}" = 1 ]; then
         local v val cleared=""
         for v in SDL_GAMECONTROLLER_IGNORE_DEVICES \
                  SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
@@ -5823,6 +5863,15 @@ build_runner_cmd() {
     local rdir="$1" kind
     kind="$(runner_kind "$rdir")" || die "Runner invalido: $rdir"
     RUN_CMD=()
+    # La superposicion de Steam se cuela por LD_PRELOAD cuando WProton se
+    # lanza desde el modo Juego, y en 32 bits ni siquiera carga: llena el
+    # registro de "wrong ELF class" y puede estorbar. Se quita para el juego;
+    # umu y Proton ya ponen lo que necesitan.
+    case "${LD_PRELOAD:-}" in
+        *gameoverlayrenderer*)
+            log "Quitada la superposicion de Steam del LD_PRELOAD del juego"
+            RUN_CMD+=(env -u LD_PRELOAD) ;;
+    esac
     local gs_args="$GAMESCOPE"
     if [ -z "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ "${NESTED_GAMESCOPE:-0}" = 1 ]; then
         # Modo Juego con gamescope anidado (opcional, OFF por defecto).
@@ -5861,6 +5910,19 @@ build_runner_cmd() {
 launch_game() {
     local squash="$1" mode="${2:-auto}"
     local gid; gid="$(game_id "$squash")"
+
+    # BLINDAJE: desde AQUI hasta que el juego termine, WProton ignora las
+    # senales de cierre.
+    #
+    # En el modo Juego de SteamOS, WProton se lanza como acceso directo de
+    # Steam. Al cerrarse nuestra ventana para dejar paso al juego, Steam o
+    # gamescope pueden dar por terminado el "juego" y mandar una senal TERM.
+    # Eso disparaba la trampa de salida, que DESMONTA... a veces incluso
+    # antes de arrancar el juego. Y en los .wsquashfs con prefijo incluido
+    # los ficheros de Wine viven DENTRO del montaje: el juego se quedaba sin
+    # nada y moria con "Transport endpoint is not connected".
+    trap '' INT TERM
+    WP_JUGANDO=1
 
     # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
     # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
@@ -5952,6 +6014,19 @@ Configurar juego -> Comprobar integridad"
     bundled_prefix_prepare "$rdir"
 
     loading_say "Iniciando $gid..."
+    # (el blindaje ya esta puesto desde el principio de launch_game)
+    # BLINDAJE DURANTE LA PARTIDA
+    #
+    # En el modo Juego de SteamOS, WProton se lanza como acceso directo de
+    # Steam. Al cerrarse nuestra ventana para dejar paso al juego, Steam o
+    # gamescope pueden dar por terminado el "juego" y mandarnos una senal
+    # TERM. Eso disparaba la trampa de salida, que DESMONTA... con el juego
+    # todavia corriendo. Como en los .wsquashfs con prefijo incluido los
+    # ficheros de Wine viven DENTRO del montaje, el juego se quedaba sin nada
+    # y moria con "Transport endpoint is not connected".
+    #
+    # Mientras dura la partida esas senales se ignoran. Al terminar se
+    # restablece la trampa normal.
     pad_bridge_stop   # el mando vuelve a ser del juego, no de los menus
     # La pantalla de carga aguanta unos segundos mas, hasta que el juego
     # pinta lo suyo: si la cerramos aqui se ve el escritorio de por medio.
@@ -5994,6 +6069,8 @@ EOFRA
         "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
     )
     local rc=$?
+    WP_JUGANDO=0
+    trap cleanup_all INT TERM        # se vuelve a atender las senales
     local dur=$(( $(date +%s) - t0 ))
     if [ $rc -ne 0 ] && [ $dur -lt 10 ]; then
         ui_error "El juego fallo al arrancar (rc=$rc en ${dur}s).
@@ -6614,6 +6691,7 @@ ficha_mostrar() {
         loading_say "Buscando información de $gid..."
         titulo="$(printf '%s' "$gid" | tr '_' ' ')"
         ficha_descargar "$gid" "$titulo" || true
+        loading_clear
     fi
     texto=""
     if [ -s "$f" ]; then
@@ -6653,6 +6731,7 @@ Metacritic:   $mc / 100"
         loading_say "Consultando la duración de $nombre_busqueda..."
         dur="$(hltb_duracion "$nombre_busqueda")" || dur=""
         [ -n "$dur" ] && printf '%s' "$dur" > "$COVERS_DIR/${gid}.hltb"
+        loading_clear
     fi
     if [ -n "$dur" ]; then
         hist="${dur%%|*}"; todo="${dur##*|}"
@@ -7287,6 +7366,7 @@ mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
         > "$tmp/autorun.cmd"
     say "[+] autorun.cmd -> DIR=drive_c/$exe_rel CMD=$exe_name"
 
+    loading_clear
     if build_wsquashfs "$tmp" "$gid"; then
         rm -rf "$tmp"
         ui_info "'$gid' empaquetado con su prefijo.
@@ -7837,7 +7917,15 @@ package_dir() {
     name="$(basename "$dir")"
     exe="$(find_game_exe "$dir")"
     if [ -z "$exe" ]; then
-        find_exe "$dir" "manual" || die "No se encontro ejecutable en la carpeta"
+        # Primero en modo automatico: asi se respeta el autorun.cmd de la
+        # carpeta (las .pc de Batocera lo llevan). Solo si no hay nada se
+        # pregunta al usuario. Antes se iba directo al modo manual y una
+        # carpeta con autorun.cmd daba "no se encontro ejecutable".
+        if find_exe "$dir" "auto"; then
+            :
+        else
+            find_exe "$dir" "manual" || die "No se encontro ejecutable en la carpeta"
+        fi
         exe="$EXE_PATH"
     fi
     write_autorun "$dir" "$exe"
@@ -8014,7 +8102,15 @@ play_folder() {
     else
         exe="$(find_game_exe "$dir")"
         if [ -z "$exe" ]; then
+            # Primero en modo automatico: asi se respeta el autorun.cmd de la
+        # carpeta (las .pc de Batocera lo llevan). Solo si no hay nada se
+        # pregunta al usuario. Antes se iba directo al modo manual y una
+        # carpeta con autorun.cmd daba "no se encontro ejecutable".
+        if find_exe "$dir" "auto"; then
+            :
+        else
             find_exe "$dir" "manual" || die "No se encontro ejecutable en la carpeta"
+        fi
             exe="$EXE_PATH"
         fi
     fi
@@ -8200,6 +8296,15 @@ menu_server_stop() {
     rm -rf "$dir" 2>/dev/null
     rm -f "$(menusrv_pidfile)" 2>/dev/null
     MENUSRV_PID=""
+    return 0
+}
+
+loading_clear() {
+    # Borra el mensaje de espera cuando la tarea ha terminado. Sin esto, el
+    # ultimo texto ("Descargando...", "Configurando...") se quedaba fijo en
+    # pantalla como si algo siguiera en marcha.
+    menu_server_say ""
+    canvas_say ""
     return 0
 }
 
@@ -9521,17 +9626,32 @@ EOFGP
 }
 
 es_juego_carpeta() {
-    # ¿Esta carpeta es un juego? Lo es si acaba en .pc (formato que usan
-    # algunos juegos) o si contiene un ejecutable o un autorun.cmd. Asi las
-    # carpetas sueltas aparecen en la lista como un juego mas, sin tener que
-    # empaquetarlas.
+    # ¿Esta carpeta es un juego? Se acepta si:
+    #   - acaba en .pc (formato de algunos juegos)
+    #   - tiene autorun.cmd (estilo Batocera)
+    #   - lleva dentro un drive_c (prefijo incluido)
+    #   - tiene un lanzador .sh
+    #   - contiene algun .exe/.bat (hasta 4 niveles: muchos juegos lo esconden
+    #     en Binaries/Win64/ o similar)
     local d="$1"
-    case "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" in
-        *.pc) return 0 ;;
+    case "$(printf '%s' "$d" | tr 'A-Z' 'a-z') " in
+        *.pc\ ) return 0 ;;
     esac
     [ -f "$d/autorun.cmd" ] && return 0
-    [ -n "$(find "$d" -maxdepth 2 -type f -iname '*.exe' \
-            ! -ipath '*/windows/*' 2>/dev/null | head -n1)" ] && return 0
+    [ -d "$d/drive_c" ] && return 0
+    [ -n "$(find "$d" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | head -n1)" ] && return 0
+    # Sin limite de profundidad: hay juegos que esconden el ejecutable muy
+    # adentro. Con -quit la busqueda para en el PRIMER hallazgo, asi que no
+    # penaliza aunque la carpeta sea enorme.
+    [ -n "$(find "$d" -type f \( -iname '*.exe' -o -iname '*.bat' \) \
+            ! -ipath '*/windows/*' ! -ipath '*/system32/*' \
+            -print -quit 2>/dev/null)" ] && return 0
+    # Ultimo recurso: una carpeta con muchos ficheros dentro y sin pinta de
+    # ser de capturas o documentos, se ofrece igualmente. Mas vale que
+    # aparezca y no arranque, que no aparecer y que el usuario no la vea.
+    [ -n "$(find "$d" -type f ! -iname '*.png' ! -iname '*.jpg' ! -iname '*.jpeg' \
+            ! -iname '*.txt' ! -iname '*.pdf' ! -iname '*.md' \
+            -print -quit 2>/dev/null)" ] && return 0
     return 1
 }
 
@@ -9578,7 +9698,9 @@ juego_etiqueta() {
 
 pick_squash() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
-    local list loose="(juego suelto: elegir carpeta o exe...)"
+    # Ya no hace falta la entrada "juego suelto": las carpetas de las carpetas
+    # de juegos configuradas aparecen solas en la lista.
+    local list loose=""
     # Rutas absolutas: con varias carpetas de juegos, el nombre relativo ya no
     # identifica al juego. La etiqueta que se MUESTRA se calcula aparte.
     list="$(lista_juegos | sort | sort_games)"
@@ -9609,10 +9731,34 @@ pick_squash() {
         done <<EOF2
 $list
 EOF2
-        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" grid "Elige un juego  [$GAMES_PATH]" \
-            "$tmpsel" "$man" >> "$LOG_FILE" 2>&1
-        sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$man"
+        # La rejilla tambien va por el SERVIDOR de menus: si no, abre una
+        # ventana aparte (parpadeo) y no puede marcar favoritos con R1,
+        # porque el fichero de favoritos viaja en la peticion.
+        local favfileg; favfileg="$(mktemp)"
+        menu_server_request grid "Elige un juego  [$GAMES_PATH]" "$tmpsel" "$man" \
+            "" "${WP_ACTION_X:-}" "" "" "$favfileg"
+        if [ $? = 9 ]; then
+            PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+                WP_FAV_FILE="$favfileg" \
+                env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" grid \
+                "Elige un juego  [$GAMES_PATH]" "$tmpsel" "$man" >> "$LOG_FILE" 2>&1
+        fi
+        # favoritos marcados con R1 sobre la rejilla
+        if [ -s "$favfileg" ]; then
+            local fjg fgg
+            log "Favoritos marcados en la rejilla: $(wc -l < "$favfileg")"
+            while IFS= read -r fjg; do
+                [ -n "$fjg" ] || continue
+                fgg="$(awk -F'|' -v t="$fjg" '$1==t{print $3; exit}' "$man")"
+                [ -n "$fgg" ] || { log "Favorito '$fjg' sin ruta en el manifiesto" WARN; continue; }
+                fgg="$(game_id "$fgg")"
+                load_profile "$fgg"
+                FAVORITO=$((1-${FAVORITO:-0}))
+                write_full_profile "$fgg"
+                log "Favorito de $fgg: ${FAVORITO}"
+            done < "$favfileg"
+        fi
+        sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$man" "$favfileg"
         unset WP_ACTION_X
         [ -z "$sel" ] && { log "GRID -> cancelado"; return 1; }
         log "GRID -> [$sel]"
@@ -9668,7 +9814,7 @@ EOFINFO
     [ "$(games_paths | wc -l)" -gt 1 ] && \
         titulo_lista="Elige un juego  [$(games_paths | wc -l) carpetas]"
     # shellcheck disable=SC2046
-    sel="$(IFS=$'\n'; set -f; menu "$titulo_lista" "$loose" $(printf '%s' "$etiquetas"))"
+    sel="$(IFS=$'\n'; set -f; menu "$titulo_lista" $(printf '%s' "$etiquetas"))"
     # OJO: $? hay que leerlo INMEDIATAMENTE despues del menu. Al colar aqui la
     # limpieza del fichero temporal, "src" recogia el resultado de "rm" (que
     # siempre es 0), asi que pulsar B parecia una eleccion valida y WProton
@@ -9677,11 +9823,16 @@ EOFINFO
     # Favoritos marcados con R1 durante el menu: el cambio ya se vio en
     # pantalla al instante; aqui solo se guarda en el perfil de cada juego.
     if [ -s "$favfile" ]; then
-        local fjuego fgid
+        local fjuego fgid fruta
+        log "Favoritos marcados en el menu: $(wc -l < "$favfile")"
         while IFS= read -r fjuego; do
             [ -n "$fjuego" ] || continue
-            fjuego="$(awk -F'\t' -v e="$fjuego" '$1==e{print $2; exit}' "$mapfile")"
-            [ -n "$fjuego" ] || continue
+            fruta="$(awk -F'\t' -v e="$fjuego" '$1==e{print $2; exit}' "$mapfile")"
+            if [ -z "$fruta" ]; then
+                log "Favorito '$fjuego': no se encontro su ruta en el mapa" WARN
+                continue
+            fi
+            fjuego="$fruta"
             fgid="$(game_id "$fjuego")"
             load_profile "$fgid"
             FAVORITO=$((1-${FAVORITO:-0}))
@@ -9701,13 +9852,9 @@ EOFINFO
     if [ "$src" != 0 ]; then unset WP_ACTION_X; return "$src"; fi
     unset WP_ACTION_X
     if [ -n "$sel_acc" ]; then
-        [ "$sel_txt" = "$loose" ] && return 1
+
         printf '%s|%s' "$sel_acc" "${sel_ruta:-$sel_txt}"
         return 0
-    fi
-    if [ "$sel" = "$loose" ]; then
-        browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
-        return $?
     fi
     printf '%s' "${sel_ruta:-$sel}"
 }
@@ -9758,7 +9905,7 @@ cfg_rendimiento_menu() {
             "FSR escalado pantalla completa: $(onoff "$FSR")" \
             "LAA (32bit +2GB RAM): $(onoff "$LAA")" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
-            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-1}")" \
+            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-0}")" \
             "$bat_row" \
             "Gamescope: ${GAMESCOPE:-OFF}" \
             "$gs_row" \
@@ -9867,7 +10014,7 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
         "NTsync"*)
             NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
         "Arreglo mando SteamOS"*)
-            PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
+            PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-0})); write_full_profile "$gid" ;;
         "Gamescope anidado"*)
             NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-0}))
             write_full_profile "$gid"
@@ -10492,6 +10639,11 @@ install_notice_start() {
     # el escritorio la tiene, y siempre un mensaje en la terminal. Sin esto,
     # el usuario se queda mirando una pantalla vacia mientras se descargan
     # Python, los runners y las herramientas de montaje.
+    # Si ya hay un aviso en pantalla, no se abre otro: el arranque y --setup
+    # llamaban aqui los dos y salian DOS ventanas de zenity superpuestas.
+    if [ -n "${INSTALL_NOTICE_PID:-}" ] && kill -0 "$INSTALL_NOTICE_PID" 2>/dev/null; then
+        return 0
+    fi
     INSTALL_NOTICE_PID=""
     printf '\n  WProton: primera puesta en marcha\n' >&2
     printf '  Descargando lo necesario (Python, runners y herramientas).\n' >&2
@@ -10634,8 +10786,31 @@ unset _viejo
 pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
 
 case "${1:-}" in
-    --setup)  setup_python; setup_umu; setup_proton
-              ui_info "Runtime listo. Lanza juegos por CLI o entra al menu.
+    --setup)
+        # Usa la MISMA puesta en marcha que el primer arranque: sin ella,
+        # --setup no cerraba el aviso de "instalando" (se quedaba en pantalla
+        # para siempre) y ademas preguntaba "Aceptar" en cada paso, cuando la
+        # instalacion tenia que ser desatendida.
+        WP_PRIMERA_VEZ=1
+        install_notice_start      # no hace nada si el arranque ya lo abrio
+        WP_INSTALL_SILENCIOSO=1
+        setup_python
+        if pygame_available; then
+            install_notice_stop
+            progress_start "Preparando WProton"
+            progress_set 40 "Preparando umu-launcher..."
+        fi
+        setup_umu
+        progress_set 75 "Descargando GE-Proton (es el paso mas largo)..."
+        setup_proton
+        progress_set 100 "Listo"
+        progress_stop
+        install_notice_stop
+        WP_INSTALL_SILENCIOSO=0
+        ui_info "Todo listo.
+
+Ya puedes lanzar juegos, o abrir WProton sin parametros para
+entrar en los menus.
 Mas runners: menu principal -> Descargar runners" ;;
     --kill)   kill_all ;;
     --config)
