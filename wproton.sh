@@ -8435,7 +8435,10 @@ post_game_resettle() {
     #
     # Ahora se espera mientras siga habiendo algo vivo, con un tope alto por
     # si algun proceso se queda colgado y no muere nunca.
-    local i sin_juego=0
+    # A los 20 segundos se avisa y se ofrece salida: si un juego deja algo
+    # colgado, esperar en silencio hasta 10 minutos parece que WProton se ha
+    # quedado bloqueado y el usuario no tiene forma de intervenir.
+    local i sin_juego=0 avisado=0
     for i in $(seq 1 1200); do            # tope: 10 minutos
         if juego_sigue_vivo; then
             sin_juego=0
@@ -8443,6 +8446,19 @@ post_game_resettle() {
             # dos comprobaciones seguidas sin nada: ahora si ha terminado
             sin_juego=$((sin_juego + 1))
             [ "$sin_juego" -ge 2 ] && break
+        fi
+        if [ "$i" = 40 ] && [ "$avisado" = 0 ]; then
+            avisado=1
+            menu_server_start >/dev/null 2>&1 || true
+            if ui_ask "El juego está tardando en cerrarse del todo.
+
+Puede que se haya quedado algún proceso suyo colgado.
+
+¿Forzar el cierre y volver al menú?"; then
+                say "[+] Cierre forzado del juego a peticion del usuario"
+                kill_all silencioso
+                break
+            fi
         fi
         sleep 0.5
     done
@@ -10569,12 +10585,15 @@ main_menu() {
 # 16. UTILIDADES
 # ----------------------------------------------------------------------------
 kill_all() {
+    # $1 = "silencioso" para no mostrar el aviso final (cuando ya estamos
+    # dentro de otro flujo que va a informar por su cuenta)
     say "Deteniendo Wine y desmontando todo..."
     pkill -f 'wineserver' 2>/dev/null
     pkill -f 'winedevice' 2>/dev/null
     sleep 1
     sweep_stale_mounts
-    ui_info "Todo desmontado."
+    [ "${1:-}" = silencioso ] || ui_info "Todo desmontado."
+    return 0
 }
 
 first_run_games_path() {
