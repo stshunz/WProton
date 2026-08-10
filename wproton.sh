@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.08"
+WPROTON_VERSION="1.09"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -74,6 +74,7 @@ GAMES_SORT=nombre                        # nombre | recientes | jugados
 PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
+GAMES_PATHS_EXTRA=""                     # carpetas de juegos adicionales
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
@@ -133,6 +134,12 @@ GAME_MODE_CANVAS="$GAME_MODE_CANVAS"
 #   Ponlo a 0 para volver al comportamiento antiguo (un proceso por menu).
 # --------------------------------------------------------------------------
 MENU_SERVER="$MENU_SERVER"
+# --------------------------------------------------------------------------
+# CARPETAS DE JUEGOS ADICIONALES
+#   Una por linea. Util si tienes los juegos repartidos entre varios discos.
+#   Se gestionan desde Biblioteca y preferencias -> Carpetas de juegos.
+# --------------------------------------------------------------------------
+GAMES_PATHS_EXTRA="$GAMES_PATHS_EXTRA"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
@@ -203,6 +210,7 @@ write_lang_en() {
  "Añadir este juego a Steam": "Add this game to Steam",
  "Añadir este juego a Steam (solo en modo Escritorio)": "Add this game to Steam (Desktop mode only)",
  "Añadir lo que falte (conserva lo tuyo)": "Add what's missing (keeps yours)",
+ "Añadir otra carpeta...": "Add another folder...",
  "Añadir un juego (zip, rar, exe o carpeta)": "Add a game (zip, rar, exe or folder)",
  "Año": "Year",
  "BORRAR": "DELETE",
@@ -220,6 +228,7 @@ write_lang_en() {
  "CARPETA": "FOLDER",
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
+ "Carpeta principal de juegos": "Main games folder",
  "Carátula: elegir una imagen del sistema": "Cover: choose an image from your system",
  "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
@@ -327,6 +336,7 @@ write_lang_en() {
  "Notas": "Notes",
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
  "Ordenar juegos por": "Sort games by",
+ "Otra carpeta con juegos": "Another folder with games",
  "Pantalla completa nativa": "Native fullscreen",
  "Partidas guardadas: copias y restauracion": "Saved games: backup and restore",
  "Partidas guardadas: copias y restauración": "Saved games: backup and restore",
@@ -9473,7 +9483,7 @@ sort_games() {
     local rel meta fav last secs n
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
-        meta="$(game_meta "$GAMES_PATH/$rel")"
+        meta="$(game_meta "$rel")"
         fav="${meta%%|*}"; meta="${meta#*|}"
         last="${meta%%|*}"; secs="${meta#*|}"
         case "${GAMES_SORT:-nombre}" in
@@ -9490,10 +9500,88 @@ sort_games() {
     done | sort | cut -f2-
 }
 
+games_paths() {
+    # Todas las carpetas de juegos: la principal y las adicionales.
+    # Mucha gente tiene los juegos repartidos entre varios discos, asi que
+    # GAMES_PATH sigue siendo la de siempre y GAMES_PATHS_EXTRA anade las
+    # demas (una por linea).
+    printf '%s\n' "$(abs_path "$GAMES_PATH")"
+    [ -n "${GAMES_PATHS_EXTRA:-}" ] || return 0
+    local p
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        p="$(abs_path "$p")"
+        [ -d "$p" ] || continue
+        [ "$p" = "$(abs_path "$GAMES_PATH")" ] && continue   # no repetir
+        printf '%s\n' "$p"
+    done <<EOFGP
+$GAMES_PATHS_EXTRA
+EOFGP
+    return 0
+}
+
+es_juego_carpeta() {
+    # ¿Esta carpeta es un juego? Lo es si acaba en .pc (formato que usan
+    # algunos juegos) o si contiene un ejecutable o un autorun.cmd. Asi las
+    # carpetas sueltas aparecen en la lista como un juego mas, sin tener que
+    # empaquetarlas.
+    local d="$1"
+    case "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" in
+        *.pc) return 0 ;;
+    esac
+    [ -f "$d/autorun.cmd" ] && return 0
+    [ -n "$(find "$d" -maxdepth 2 -type f -iname '*.exe' \
+            ! -ipath '*/windows/*' 2>/dev/null | head -n1)" ] && return 0
+    return 1
+}
+
+lista_juegos() {
+    # Lista de juegos de TODAS las carpetas configuradas. Cada linea es la
+    # ruta ABSOLUTA: con varias carpetas, un nombre relativo ya no basta para
+    # saber de cual viene.
+    local raiz d
+    while IFS= read -r raiz; do
+        [ -d "$raiz" ] || continue
+        # archivos empaquetados
+        find "$raiz" -maxdepth 3 -type f \
+            \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) \
+            2>/dev/null
+        # Carpetas que son un juego (incluidas las .pc). Solo se miran las
+        # de PRIMER nivel: si no, las subcarpetas del propio juego ("bin",
+        # "data"...) saldrian tambien como juegos sueltos.
+        while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            es_juego_carpeta "$d" && printf '%s\n' "$d"
+        done <<EOFDIR
+$(find "$raiz" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null)
+EOFDIR
+    done <<EOFRAIZ
+$(games_paths)
+EOFRAIZ
+    return 0
+}
+
+juego_etiqueta() {
+    # Como se muestra un juego en la lista. Si hay varias carpetas de juegos,
+    # se anade de cual viene para poder distinguir dos con el mismo nombre.
+    local ruta="$1" nom raiz base
+    nom="$(basename "$ruta")"
+    if [ "$(games_paths | wc -l)" -gt 1 ]; then
+        raiz="$(games_paths | while IFS= read -r r; do
+                    case "$ruta/" in "$r"/*) printf '%s' "$r"; break ;; esac
+                done)"
+        base="$(basename "${raiz:-}")"
+        [ -n "$base" ] && printf '%s   (%s)' "$nom" "$base" && return 0
+    fi
+    printf '%s' "$nom"
+}
+
 pick_squash() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
     local list loose="(juego suelto: elegir carpeta o exe...)"
-    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) -printf '%P\n' 2>/dev/null | sort | sort_games)"
+    # Rutas absolutas: con varias carpetas de juegos, el nombre relativo ya no
+    # identifica al juego. La etiqueta que se MUESTRA se calcula aparte.
+    list="$(lista_juegos | sort | sort_games)"
     local sel
     export WP_ACTION_X=1                 # X = configurar el juego resaltado
     if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
@@ -9503,11 +9591,12 @@ pick_squash() {
         man="$(mktemp)"; tmpsel="$(mktemp)"
         printf '%s\n' "(juego suelto: carpeta o exe)||__LOOSE__" >> "$man"
         while IFS= read -r rel; do
-            gid2="$(game_id "$GAMES_PATH/$rel")"
-            t2="$(basename "$rel")"; t2="${t2%.*}"
+            gid2="$(game_id "$rel")"
+            t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
+            t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
             cov="$(cover_for "$gid2")" || cov=""
             local mt fv sc lp info=""
-            mt="$(game_meta "$GAMES_PATH/$rel")"
+            mt="$(game_meta "$rel")"
             fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
             [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
             # OJO: nada de "|" aquí. El manifiesto usa | como separador de
@@ -9531,14 +9620,14 @@ EOF2
             "WPACT:"*)
                 local acc="${sel%%|*}" rel="${sel#*|}"
                 [ "$rel" = "__LOOSE__" ] && return 1
-                printf '%s|%s' "$acc" "$GAMES_PATH/$rel"
+                printf '%s|%s' "$acc" "$rel"
                 return 0 ;;
         esac
         if [ "$sel" = "__LOOSE__" ]; then
             browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
             return $?
         fi
-        printf '%s' "$GAMES_PATH/$sel"
+        printf '%s' "$sel"
         return 0
     fi
     # Datos para el panel derecho: carátula, favorito, veces jugado, tiempo,
@@ -9547,19 +9636,27 @@ EOF2
     # Datos por juego. Las FICHAS no se leen aqui: se pasa su ruta y las lee
     # el helper, que es Python y entiende el JSON de Steam de verdad. Ademas
     # asi la lista se abre al momento aunque haya cien juegos con ficha.
-    local infofile rel3 gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
-    infofile="$(mktemp)"
+    # La lista MUESTRA etiquetas legibles (el nombre del juego, y de que
+    # carpeta viene si hay varias), pero por dentro trabaja con rutas
+    # absolutas. El mapa guarda la correspondencia.
+    local infofile mapfile etiquetas="" etq
+    local rel3 gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
+    infofile="$(mktemp)"; mapfile="$(mktemp)"
     while IFS= read -r rel3; do
         [ -n "$rel3" ] || continue
-        gid3="$(game_id "$GAMES_PATH/$rel3")"
+        etq="$(juego_etiqueta "$rel3")"
+        printf '%s\t%s\n' "$etq" "$rel3" >> "$mapfile"
+        etiquetas="$etiquetas$etq
+"
+        gid3="$(game_id "$rel3")"
         cov3="$(cover_for "$gid3")" || cov3=""
-        mt3="$(game_meta "$GAMES_PATH/$rel3")"
+        mt3="$(game_meta "$rel3")"
         fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
         fjson="$COVERS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
         fhltb="$COVERS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
         printf '%s|%s|%s|%s|%s|%s|%s\n' \
-            "$rel3" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
+            "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
             >> "$infofile"
     done <<EOFINFO
 $list
@@ -9567,7 +9664,11 @@ EOFINFO
     local favfile; favfile="$(mktemp)"
     export WP_LIST_INFO="$infofile" WP_FAV_FILE="$favfile"
     # shellcheck disable=SC2046
-    sel="$(IFS=$'\n'; set -f; menu "Elige un juego  [$GAMES_PATH]" "$loose" $list)"
+    local titulo_lista="Elige un juego  [$GAMES_PATH]"
+    [ "$(games_paths | wc -l)" -gt 1 ] && \
+        titulo_lista="Elige un juego  [$(games_paths | wc -l) carpetas]"
+    # shellcheck disable=SC2046
+    sel="$(IFS=$'\n'; set -f; menu "$titulo_lista" "$loose" $(printf '%s' "$etiquetas"))"
     # OJO: $? hay que leerlo INMEDIATAMENTE despues del menu. Al colar aqui la
     # limpieza del fichero temporal, "src" recogia el resultado de "rm" (que
     # siempre es 0), asi que pulsar B parecia una eleccion valida y WProton
@@ -9579,28 +9680,36 @@ EOFINFO
         local fjuego fgid
         while IFS= read -r fjuego; do
             [ -n "$fjuego" ] || continue
-            fgid="$(game_id "$GAMES_PATH/$fjuego")"
+            fjuego="$(awk -F'\t' -v e="$fjuego" '$1==e{print $2; exit}' "$mapfile")"
+            [ -n "$fjuego" ] || continue
+            fgid="$(game_id "$fjuego")"
             load_profile "$fgid"
             FAVORITO=$((1-${FAVORITO:-0}))
             write_full_profile "$fgid"
             log "Favorito de $fgid: ${FAVORITO}"
         done < "$favfile"
     fi
-    rm -f "$infofile" "$favfile"; unset WP_LIST_INFO WP_FAV_FILE
+    # De etiqueta a ruta real. Tambien cuando viene con marcador de accion
+    # (X, L1, R1): el helper devuelve la etiqueta, no la ruta.
+    local sel_ruta="" sel_acc="" sel_txt="$sel"
+    case "$sel" in
+        "WPACT:"*) sel_acc="${sel%%|*}"; sel_txt="${sel#*|}" ;;
+    esac
+    [ -n "$sel_txt" ] && \
+        sel_ruta="$(awk -F'\t' -v e="$sel_txt" '$1==e{print $2; exit}' "$mapfile")"
+    rm -f "$infofile" "$favfile" "$mapfile"; unset WP_LIST_INFO WP_FAV_FILE
     if [ "$src" != 0 ]; then unset WP_ACTION_X; return "$src"; fi
     unset WP_ACTION_X
-    case "$sel" in
-        "WPACT:"*)
-            local acc2="${sel%%|*}" rel2="${sel#*|}"
-            [ "$rel2" = "$loose" ] && return 1
-            printf '%s|%s' "$acc2" "$GAMES_PATH/$rel2"
-            return 0 ;;
-    esac
+    if [ -n "$sel_acc" ]; then
+        [ "$sel_txt" = "$loose" ] && return 1
+        printf '%s|%s' "$sel_acc" "${sel_ruta:-$sel_txt}"
+        return 0
+    fi
     if [ "$sel" = "$loose" ]; then
         browse_for_path "Juego suelto (carpeta o exe)" "$(browse_start "$HOME")" "play"
         return $?
     fi
-    printf '%s' "$GAMES_PATH/$sel"
+    printf '%s' "${sel_ruta:-$sel}"
 }
 
 config_pick_exe() {
@@ -10173,6 +10282,7 @@ Los wsquashfs que ya tienes se siguen usando igual."
         "Perfiles de la comunidad"*) community_menu ;;
         "Descargar carátulas"*)
             sgdb_download_covers ;;
+        "Carpetas de juegos"*) carpetas_juegos_menu ;;
         "Carpeta de juegos:"*)
             local nd=""
             if pygame_available; then
@@ -10203,12 +10313,53 @@ Los wsquashfs que ya tienes se siguen usando igual."
     return 0
 }
 
+carpetas_juegos_menu() {
+    # Gestion de las carpetas de juegos: la principal y las adicionales, para
+    # quien tiene los juegos repartidos entre varios discos.
+    local sel p n
+    while :; do
+        n="$(games_paths | wc -l)"
+        sel="$(IFS=$'\n'; set -f; menu "Carpetas de juegos ($n)" \
+            "Carpeta principal: $GAMES_PATH" \
+            "Añadir otra carpeta..." \
+            $(games_paths | tail -n +2 | sed 's/^/Quitar: /') \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver") return 0 ;;
+            "Carpeta principal:"*)
+                p="$(pick_dir "Carpeta principal de juegos" "$GAMES_PATH")" || continue
+                [ -d "$p" ] && { GAMES_PATH="$p"; save_settings; } ;;
+            "Añadir otra carpeta"*)
+                p="$(pick_dir "Otra carpeta con juegos" "$(browse_start "$HOME")")" || continue
+                [ -d "$p" ] || continue
+                p="$(abs_path "$p")"
+                if games_paths | grep -qxF "$p"; then
+                    ui_info "Esa carpeta ya estaba en la lista."
+                    continue
+                fi
+                GAMES_PATHS_EXTRA="${GAMES_PATHS_EXTRA:+$GAMES_PATHS_EXTRA
+}$p"
+                save_settings
+                ui_info "Carpeta añadida:
+$p
+
+$(find "$p" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
+   -o -iname '*.dwarfs' \) 2>/dev/null | wc -l) juego(s) empaquetado(s) encontrado(s)." ;;
+            "Quitar: "*)
+                p="${sel#Quitar: }"
+                GAMES_PATHS_EXTRA="$(printf '%s' "$GAMES_PATHS_EXTRA" | grep -vxF "$p")"
+                save_settings
+                say "[+] Carpeta quitada de la lista: $p" ;;
+        esac
+    done
+}
+
 library_menu() {
     # Todo lo que afecta a como se ve y se ordena la biblioteca
     local sel
     while true; do
         sel="$(menu "Biblioteca y preferencias" \
-            "Carpeta de juegos: $GAMES_PATH" \
+            "Carpetas de juegos ($(games_paths | wc -l))" \
             "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (carátulas)' || printf 'lista')" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
