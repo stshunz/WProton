@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.10"
+WPROTON_VERSION="1.11"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -201,6 +201,7 @@ write_lang_en() {
  "Abriendo Steam...": "Opening Steam...",
  "Abrir winecfg": "Open winecfg",
  "Abrir winetricks": "Open winetricks",
+ "Acceso directo en el escritorio": "Desktop shortcut",
  "Actualizando la base de datos de umu...": "Updating the umu database...",
  "Actualizar GE-Proton a la última": "Update GE-Proton to the latest",
  "Actualizar umu-launcher": "Update umu-launcher",
@@ -431,6 +432,7 @@ write_lang_en() {
  "subir": "up",
  "volver": "back",
  "wsquashfs - compatible con Batocera y PortProton": "wsquashfs - compatible with Batocera and PortProton",
+ "¿Crear un acceso directo a WProton en el escritorio?": "Create a WProton shortcut on the desktop?",
  "Última vez": "Last played",
  "Último log (B para volver)": "Last log (B to go back)"
 }
@@ -6113,6 +6115,23 @@ $(tail -n 8 "$LOG_FILE")"
     return $rc
 }
 
+fecha_remota() {
+    # Fecha (en segundos) de la ultima publicacion. Sirve para detectar que se
+    # ha vuelto a subir la MISMA version con correcciones: mirando solo el
+    # numero, esa republicacion pasaria desapercibida.
+    local cab fecha
+    fecha="$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
+        | grep -o '"published_at": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
+    if [ -n "$fecha" ]; then
+        date -d "$fecha" +%s 2>/dev/null && return 0
+    fi
+    # sin release: la cabecera del fichero en la rama principal
+    cab="$(curl -fsSLI "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
+        | grep -i '^last-modified:' | head -n1 | cut -d' ' -f2-)"
+    [ -n "$cab" ] || return 1
+    date -d "$cab" +%s 2>/dev/null || return 1
+}
+
 self_update() {
     local SELF; SELF="$(readlink -f "$0")"
     if [ -z "$WPROTON_REPO" ]; then
@@ -6146,12 +6165,30 @@ Se esperaba algo como v1.02. Revisa la etiqueta de la release."
         return 1
     fi
     log "Actualizaciones: local=$WPROTON_VERSION remota=$remote (etiqueta $tag)"
+    local motivo=""
     # Nomenclatura decimal: 0.5 < 0.51 < 0.52 < 0.6 < 1.0 (sort -V NO vale aquí)
-    if ! awk -v a="$WPROTON_VERSION" -v b="$remote" 'BEGIN{exit !(b+0 > a+0)}'; then
+    if awk -v a="$WPROTON_VERSION" -v b="$remote" 'BEGIN{exit !(b+0 > a+0)}'; then
+        motivo="Hay una versión nueva: v$remote (actual v$WPROTON_VERSION)."
+    elif [ "$remote" = "$WPROTON_VERSION" ]; then
+        # MISMA version: puede haberse vuelto a publicar con correcciones. Se
+        # compara la FECHA de la publicacion con la de nuestro fichero. Solo
+        # con la version IDENTICA: si la remota fuera mas baja, ofrecer
+        # "actualizar" seria en realidad volver atras.
+        local f_remota f_local
+        f_remota="$(fecha_remota)" || f_remota=""
+        f_local="$(stat -c %Y "$(readlink -f "$0")" 2>/dev/null || echo 0)"
+        if [ -n "$f_remota" ] && [ "$f_remota" -gt $(( f_local + 120 )) ]; then
+            log "Actualizaciones: misma version, pero la publicada es mas nueva"
+            motivo="La versión v$remote se ha vuelto a publicar
+el $(date -d "@$f_remota" '+%d/%m/%Y a las %H:%M') con correcciones."
+        fi
+    fi
+    if [ -z "$motivo" ]; then
         ui_info "WProton esta al dia (v$WPROTON_VERSION; remota: v$remote)"
         return 0
     fi
-    ui_ask "Hay una versión nueva: v$remote (actual v$WPROTON_VERSION).
+    ui_ask "$motivo
+
 Descargar y actualizar ahora?" || return 0
     local tmp; tmp="$(mktemp)"
     # Se usa la etiqueta REAL: si la release es "V1.02", pedir "v1.02" da 404
@@ -9969,6 +10006,12 @@ cfg_aplicar() {
             caratula_manual "$gid" ;;
         "Ficha del juego"*)
             ficha_mostrar "$gid" "$squash" ;;
+        "Acceso directo en el escritorio"*)
+            acceso_directo_juego "$squash" "$gid" \
+                && ui_info "Acceso directo creado en el escritorio.
+
+Si el icono no aparece al momento, actualiza la vista del
+escritorio (F5)." ;;
         "Empaquetar con su prefijo"*)
             if [ -d "$squash" ]; then
                 package_con_prefijo "$squash" "$gid" "${EXE_PATH:-}"
@@ -10193,6 +10236,7 @@ game_config_menu() {
             "Carátula: elegir una imagen del sistema" \
             "Ficha del juego (año, editor, notas de la crítica)" \
             "Empaquetar con su prefijo (archivo autosuficiente)" \
+            "Acceso directo en el escritorio" \
             "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
             "Mapeador .keys: $kstat" \
             "Rendimiento y compatibilidad >>" \
@@ -10594,6 +10638,68 @@ kill_all() {
     sweep_stale_mounts
     [ "${1:-}" = silencioso ] || ui_info "Todo desmontado."
     return 0
+}
+
+carpeta_escritorio() {
+    # Donde esta el escritorio de este usuario. En español suele ser
+    # "Escritorio" y en ingles "Desktop": se pregunta al sistema en vez de
+    # adivinar, y si no sabe contestar se prueban los nombres habituales.
+    local d
+    if command -v xdg-user-dir >/dev/null 2>&1; then
+        d="$(xdg-user-dir DESKTOP 2>/dev/null)"
+        [ -n "$d" ] && [ -d "$d" ] && [ "$d" != "$HOME" ] && { printf '%s' "$d"; return 0; }
+    fi
+    for d in "$HOME/Escritorio" "$HOME/Desktop" "$HOME/Àrea de treball" "$HOME/Mahaigaina"; do
+        [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+
+crear_acceso_directo() {
+    # $1 = nombre visible, $2 = orden a ejecutar, $3 = icono (opcional),
+    # $4 = comentario (opcional)
+    local nombre="$1" orden="$2" icono="${3:-}" coment="${4:-}"
+    local esc; esc="$(carpeta_escritorio)" || {
+        ui_error "No se encontro la carpeta del escritorio."
+        return 1; }
+    # nombre de fichero sin espacios ni barras
+    local base; base="$(printf '%s' "$nombre" | tr ' /' '__' | tr -cd 'A-Za-z0-9._-')"
+    local dst="$esc/${base:-wproton}.desktop"
+    {
+        printf '[Desktop Entry]\n'
+        printf 'Type=Application\n'
+        printf 'Name=%s\n' "$nombre"
+        [ -n "$coment" ] && printf 'Comment=%s\n' "$coment"
+        printf 'Exec=%s\n' "$orden"
+        printf 'Path=%s\n' "$BASE_DIR"
+        [ -n "$icono" ] && [ -f "$icono" ] && printf 'Icon=%s\n' "$icono"
+        printf 'Terminal=false\n'
+        printf 'Categories=Game;\n'
+        printf 'StartupNotify=true\n'
+    } > "$dst" || { ui_error "No se pudo escribir el acceso directo"; return 1; }
+    chmod +x "$dst" 2>/dev/null
+    # KDE y GNOME piden que el fichero este marcado como "de confianza"
+    command -v gio >/dev/null 2>&1 && \
+        gio set "$dst" metadata::trusted true 2>/dev/null
+    say "[+] Acceso directo creado: $dst"
+    return 0
+}
+
+acceso_directo_wproton() {
+    local self; self="$(readlink -f "$0")"
+    crear_acceso_directo "WProton" "\"$self\"" "" \
+        "Lanzador de juegos de Windows para Linux"
+}
+
+acceso_directo_juego() {
+    # $1 = ruta del juego, $2 = gid
+    local juego="$1" gid="$2" nombre icono self
+    self="$(readlink -f "$0")"
+    nombre="$(basename "$juego")"
+    nombre="${nombre%.wsquashfs}"; nombre="${nombre%.squashfs}"; nombre="${nombre%.dwarfs}"
+    icono="$(cover_for "$gid")" || icono=""
+    crear_acceso_directo "$nombre" "\"$self\" \"$(readlink -f "$juego")\"" \
+        "$icono" "Jugar con WProton"
 }
 
 first_run_games_path() {
