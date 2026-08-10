@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.02** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.08** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/PortWINE**, la descarga automática de runners de **Heroic**, los perfiles por juego de **TeknoParrot** y el lanzamiento vía **umu** de **Faugus Launcher**.
 
@@ -12,12 +12,13 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 ---
 
-## Características 
+## Qué sabe hacer
 
 ### Formatos de juego
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
 - **`.dwarfs`** — igual de rápido de montar, con bastante más compresión.
 - **Carpetas sueltas**, **`.exe`** y **`.bat`** — se juegan directamente, sin empaquetar nada.
+- **Empaquetado autosuficiente**: un solo archivo con el juego y su prefijo dentro, listo para llevar a otro equipo.
 - **Importación** de `zip`, `7z`, `rar` (incluido multiparte), `.wtgz` e **instaladores de GOG**, que se convierten al formato que elijas.
 - **Prefijo incluido**: si el archivo trae su propio `drive_c` (estilo Batocera), se puede usar tal cual; si además trae su propio Wine, también.
 
@@ -26,9 +27,14 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Búsqueda** escribiendo con el teclado, o con el **teclado en pantalla** (botón Y), que también sirve para escribir argumentos, notas y variables.
 - **Tres temas**: moderno (el predeterminado), clásico y arcade (synthwave con efecto CRT).
 - **Menús persistentes**: todos los menús se dibujan en un mismo proceso, sin parpadeo al cambiar de uno a otro.
-- **Vista de lista o rejilla de carátulas**, con descarga automática desde SteamGridDB.
+- **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**, con descarga automática desde SteamGridDB o eligiendo una imagen del sistema.
 - Pantalla completa por defecto (**Select + A** para pasar a ventana) y tamaño de letra ajustable.
 - Interfaz en **castellano e inglés**, ampliable con ficheros de idioma.
+
+### Identificación de juegos
+- Consulta la **base de datos de umu** para dar con el identificador que usa protonfixes.
+- Al configurar un juego, muestra **todos** los ejecutables de la carpeta ordenados por probabilidad.
+- **Ficha del juego** con año, editor, géneros y nota de Metacritic (datos de Steam, sin clave).
 
 ### Runners
 - Descarga desde el menú: **GE-Proton**, **Proton-CachyOS**, **DWProton**, **Wine-LG**, **Proton-LG**, **Wine-GE** y **Kron4ek**.
@@ -102,6 +108,8 @@ Para integrarlo en un frontend (ES-DE, DeckStation…), apunta el lanzador a `wp
 | **A** | Elegir / jugar |
 | **B** | Volver, subir de carpeta o limpiar la búsqueda |
 | **X** | Configurar el juego resaltado · marcar casillas · borrar letra |
+| **L1** | Ficha del juego (año, editor, notas de la crítica) |
+| **R1** | Marcar o quitar favorito |
 | **Y** | Buscar (abre el teclado en pantalla) |
 | **Select + A** | Pantalla completa / ventana |
 
@@ -137,4 +145,6 @@ cache/  logs/  games/
 - [Batocera](https://batocera.org) — formatos `.wsquashfs` y `autorun.cmd`.
 - [DwarFS](https://github.com/mhx/dwarfs), [innoextract](https://github.com/dscharrer/innoextract), [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2), [OptiScaler](https://github.com/cdozdil/OptiScaler), [SteamGridDB](https://www.steamgriddb.com).
 
-*Programa hecho con la ayuda de Claude,.si has llegado aquí y te parece interesante lo que has visto dale una oportunidad.
+## Licencia
+
+*(Pendiente de elegir — GPL-3.0 encajaría con el ecosistema del que bebe el proyecto.)*

@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.06"
+WPROTON_VERSION="1.08"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -232,6 +232,8 @@ write_lang_en() {
  "Configurar dgVoodoo (Cpl)": "Configure dgVoodoo (Cpl)",
  "Copia de tu configuración (exportar / importar)": "Back up your setup (export / import)",
  "Copia de tu configuración (perfiles, ajustes y carátulas)": "Back up your setup (profiles, settings and covers)",
+ "Copiando el juego dentro de drive_c...": "Copying the game into drive_c...",
+ "Copiando el prefijo...": "Copying the prefix...",
  "Crear copia de seguridad ahora": "Create a backup now",
  "Cuántas carátulas por fila en la rejilla": "How many covers per row in the grid",
  "DLL overrides": "DLL overrides",
@@ -264,6 +266,7 @@ write_lang_en() {
  "Elige la carpeta con tus juegos": "Choose the folder with your games",
  "Elige un juego": "Choose a game",
  "Empaquetar a wsquashfs": "Pack to wsquashfs",
+ "Empaquetar con su prefijo (archivo autosuficiente)": "Package with its prefix (self-contained file)",
  "Espacio en disco": "Disk space",
  "Espera, esto puede tardar...": "Please wait, this may take a while...",
  "Estadísticas": "Statistics",
@@ -283,6 +286,7 @@ write_lang_en() {
  "Grande (recomendado en consolas portatiles)": "Large (recommended on handhelds)",
  "Género": "Genre",
  "Herramientas de montaje...": "Mount tools...",
+ "Herramientas del prefijo >>": "Prefix tools >>",
  "INFO": "INFO",
  "Idioma": "Language",
  "Idioma de los menus / Menu language": "Menu language / Idioma de los menus",
@@ -305,6 +309,7 @@ write_lang_en() {
  "LISTO": "DONE",
  "La comunidad tiene una configuracion ya probada para:": "The community has a tested setup for:",
  "Lanzar via batocera-wine": "Launch via batocera-wine",
+ "Limpiando el prefijo antes de empaquetar...": "Cleaning the prefix before packaging...",
  "Limpiar cache de shaders": "Clear shader cache",
  "Listo": "Done",
  "MAYUS": "SHIFT",
@@ -344,6 +349,7 @@ write_lang_en() {
  "Proton-CachyOS [proton] - optimizado x86-64-v3": "Proton-CachyOS [proton] - optimized x86-64-v3",
  "Proton-LG [proton] - Castro-Fidel, basado en GE": "Proton-LG [proton] - Castro-Fidel, GE-based",
  "Quitar el .keys de profiles": "Remove the .keys from profiles",
+ "Rendimiento y compatibilidad >>": "Performance and compatibility >>",
  "Repetir asistente": "Run the wizard again",
  "Restaurar una copia": "Restore a backup",
  "Runner (Proton/Wine)": "Runner (Proton/Wine)",
@@ -2052,9 +2058,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 1effea039892" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 9050d2b07341" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 1effea039892
+# WPROTON_HELPER menu_pygame.py 9050d2b07341
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2967,8 +2973,8 @@ def draw_side_panel():
         if datos and MODE == 'list':
             py += 6
             filas = []
-            if datos.get('fav') == '1':
-                filas.append((L('Favorito', 'Favourite'), '\x01estrella'))
+            # El favorito NO se repite aqui: su estrella ya se ve en la fila
+            # de la lista, y en el panel solo gastaba una linea.
             if datos.get('ano'):
                 filas.append((L('Año', 'Year'), datos['ano']))
             if datos.get('dev'):
@@ -2992,14 +2998,6 @@ def draw_side_panel():
                     break
                 se = rtext(f_sm, etiqueta, DIM)
                 screen.blit(se, (px, py))
-                if valor == '\x01estrella':
-                    # Pequeña y arriba: en una fila de 22 px, con radio 5 y
-                    # centro en y=+2 ocupa de -3 a +6, bien lejos de la linea
-                    # de abajo y a la altura del texto de su propia fila.
-                    draw_estrella(SIDE_X + SIDE_W - 16 - FS(5),
-                                  py + FS(2), FS(5), TH.get('acc2', ACC))
-                    py += 22
-                    continue
                 # el valor va a la derecha; si no cabe, se recorta con puntos
                 hueco = SIDE_W - 32 - se.get_width() - 10
                 v = str(valor)
@@ -4146,8 +4144,22 @@ def serve(dirpath):
                 pass
             while len(campos) < 9:
                 campos.append('')
+            # Los campos vienen con los saltos de linea escapados como \n:
+            # el protocolo es una linea por campo y los titulos tienen varias.
+            def _desescapa(v):
+                out = []
+                i = 0
+                while i < len(v):
+                    if v[i] == '\\' and i + 1 < len(v):
+                        if v[i + 1] == 'n':
+                            out.append('\n'); i += 2; continue
+                        if v[i + 1] == '\\':
+                            out.append('\\'); i += 2; continue
+                    out.append(v[i]); i += 1
+                return ''.join(out)
+            campos = [_desescapa(c) for c in campos[:9]]
             (modo, titulo, salida, arg4, kind, ax,
-             manif, presel, favf) = campos[:9]
+             manif, presel, favf) = campos
             if modo == 'idle':
                 # sin menu: solo actualizar el texto del reposo
                 status = titulo
@@ -7141,6 +7153,145 @@ clean_game_name() {
         | sed 's/  */ /g; s/^ //; s/ $//'
 }
 
+prefijo_limpiar() {
+    # Quita del prefijo lo que NO debe viajar dentro del archivo:
+    #   - enlaces a las carpetas del usuario (Wine crea enlaces de Escritorio,
+    #     Documentos, etc. hacia $HOME): en otro equipo apuntarian a ninguna
+    #     parte, y ademas se llevarian por delante ficheros ajenos al copiar.
+    #   - caches de shaders y temporales: son GIGAS que se regeneran solos.
+    local dc="$1" d
+    say "Limpiando el prefijo antes de empaquetar..."
+    # 1) enlaces del perfil de usuario -> carpetas normales y vacias
+    find "$dc/users" -maxdepth 3 -type l 2>/dev/null | while IFS= read -r d; do
+        rm -f "$d" && mkdir -p "$d"
+    done
+    # 2) basura conocida
+    for d in "$dc"/windows/Temp "$dc"/users/*/Temp \
+             "$dc"/users/*/AppData/Local/Temp \
+             "$dc"/users/*/AppData/Local/NVIDIA \
+             "$dc"/users/*/AppData/Local/AMD \
+             "$dc"/users/*/AppData/Local/D3DSCache; do
+        [ -d "$d" ] && rm -rf "$d" 2>/dev/null
+    done
+    find "$dc" -type f \( -name '*.dxvk-cache' -o -name '*.vkd3d-cache' \
+        -o -name '*.log' -o -name '*.dmp' \) -delete 2>/dev/null
+    return 0
+}
+
+package_con_prefijo() {
+    # Empaqueta el juego JUNTO CON su prefijo, al estilo Batocera: dentro del
+    # archivo hay un drive_c/ con Windows entero y el juego dentro, mas un
+    # autorun.cmd que dice que ejecutar. El resultado es autosuficiente: se
+    # copia a otro equipo y funciona sin instalar dependencias.
+    #
+    # $1 = carpeta del juego, $2 = gid, $3 = ejecutable (ruta absoluta)
+    local src="$1" gid="$2" exe="$3"
+    local pfx; pfx="$(prefix_path "$gid")"
+    local dc="$pfx/drive_c"
+
+    if [ ! -d "$dc" ]; then
+        ui_error "Este juego no tiene un prefijo propio todavía.
+
+Pruébalo al menos una vez con 'Prefijo: propio del juego'
+para que se cree, y vuelve a intentarlo."
+        return 1
+    fi
+    # El prefijo COMPARTIDO no vale: lleva dentro las librerias y los datos de
+    # todos los demas juegos, y el archivo saldria enorme y con cosas ajenas.
+    case "$pfx" in
+        *"/default"|*"/shared") 
+            ui_error "Este juego usa el prefijo compartido.
+
+Un archivo autosuficiente necesita un prefijo SOLO suyo: el
+compartido lleva dentro las librerías y los datos del resto de
+juegos.
+
+Cambia el prefijo a 'propio del juego', prueba el juego una vez
+y vuelve a intentarlo."
+            return 1 ;;
+    esac
+
+    local tam_pfx tam_juego total
+    tam_pfx="$(dir_bytes "$dc")"
+    tam_juego="$(dir_bytes "$src")"
+    total=$(( ${tam_pfx:-0} + ${tam_juego:-0} ))
+    if ! ui_ask "Empaquetar '$gid' CON su prefijo (autosuficiente)?
+
+Juego:    $(human_size "${tam_juego:-0}")
+Prefijo:  $(human_size "${tam_pfx:-0}")
+Total:    $(human_size "$total") antes de comprimir
+
+El resultado funciona en otro equipo sin instalar nada, pero
+ocupa bastante mas. El juego original NO se toca.
+
+Si el archivo va a ser grande, el formato DwarFS comprime bastante
+mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
+        return 1
+    fi
+    # hace falta sitio para la copia de trabajo Y para el archivo final
+    check_space "$(( total + total * 7 / 10 ))" "$WS_DIR" \
+        "empaquetar '$gid' con su prefijo" || return 1
+
+    local tmp; tmp="$WS_DIR/build_prefijo_$$"
+    rm -rf "$tmp"; mkdir -p "$tmp" || { ui_error "No se pudo crear la carpeta de trabajo"; return 1; }
+
+    loading_say "Copiando el prefijo..."
+    if ! cp -a "$dc" "$tmp/drive_c" 2>>"$LOG_FILE"; then
+        rm -rf "$tmp"; ui_error "No se pudo copiar el prefijo"; return 1
+    fi
+    prefijo_limpiar "$tmp/drive_c"
+
+    # ¿El juego ya vive DENTRO del prefijo? Entonces no hay que copiarlo otra
+    # vez: basta con apuntar al sitio donde ya esta.
+    local rel_dir="" destino abs_src abs_dc
+    abs_src="$(readlink -f "$src")"
+    abs_dc="$(readlink -f "$dc")"
+    case "$abs_src/" in
+        "$abs_dc"/*)
+            # el juego ya vive dentro del prefijo: no hay que copiarlo
+            rel_dir="${abs_src#"$abs_dc"/}"
+            say "[+] El juego ya estaba dentro del prefijo: $rel_dir" ;;
+        *)
+            destino="$tmp/drive_c/Games/$gid"
+            loading_say "Copiando el juego dentro de drive_c..."
+            mkdir -p "$(dirname "$destino")"
+            if ! cp -a "$src" "$destino" 2>>"$LOG_FILE"; then
+                rm -rf "$tmp"; ui_error "No se pudo copiar el juego"; return 1
+            fi
+            rel_dir="Games/$gid" ;;
+    esac
+
+    # autorun.cmd en la raiz, como los wsquashfs de Batocera
+    local exe_rel exe_name
+    exe_name="$(basename "$exe")"
+    exe_rel="$rel_dir"
+    if [ -n "$exe" ]; then
+        # respetar la subcarpeta del ejecutable dentro del juego
+        local sub; sub="$(dirname "$(readlink -f "$exe")")"
+        local base_src; base_src="$(readlink -f "$src")"
+        case "$sub/" in
+            "$base_src"/*) exe_rel="$rel_dir/${sub#$base_src/}" ;;
+        esac
+    fi
+    printf 'DIR="drive_c/%s"\r\nCMD="%s"\r\n' "$exe_rel" "$exe_name" \
+        > "$tmp/autorun.cmd"
+    say "[+] autorun.cmd -> DIR=drive_c/$exe_rel CMD=$exe_name"
+
+    if build_wsquashfs "$tmp" "$gid"; then
+        rm -rf "$tmp"
+        ui_info "'$gid' empaquetado con su prefijo.
+
+Ese archivo ya lleva dentro todo lo necesario: cópialo a otro
+equipo y funcionará sin instalar nada.
+
+El juego y el prefijo originales siguen donde estaban.
+Conviene probarlo antes de borrar nada."
+        return 0
+    fi
+    rm -rf "$tmp"
+    return 1
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
@@ -8061,6 +8212,15 @@ menu_server_say() {
     return 0
 }
 
+menusrv_escapa() {
+    # El protocolo es UNA LINEA POR CAMPO, pero los titulos suelen tener
+    # varias lineas ("Hay una version nueva...\nDescargar ahora?"). Sin
+    # escapar, ese salto corria todos los campos: el helper tomaba el texto
+    # del dialogo como nombre del fichero de salida y lo creaba en la carpeta
+    # de WProton. Aqui los saltos se convierten en \n literal.
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/\\n/g'
+}
+
 menu_server_request() {
     # $1=modo $2=titulo $3=salida $4=arg4 $5=tipo $6=accion_x $7=manifiesto
     # $8=preseleccion (juego sobre el que abrir la lista)
@@ -8070,7 +8230,10 @@ menu_server_request() {
     menu_server_alive || return 9
     rm -f "$(menusrv_dir)/resp" 2>/dev/null
     printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-        "$1" "$2" "$3" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" "${9:-}" \
+        "$(menusrv_escapa "$1")" "$(menusrv_escapa "$2")" "$(menusrv_escapa "$3")" \
+        "$(menusrv_escapa "${4:-}")" "$(menusrv_escapa "${5:-}")" "${6:-}" \
+        "$(menusrv_escapa "${7:-}")" "$(menusrv_escapa "${8:-}")" \
+        "$(menusrv_escapa "${9:-}")" \
         > "$(menusrv_dir)/req"
     : > "$(menusrv_dir)/req.ready"
     local i=0
@@ -9468,6 +9631,277 @@ config_gamescope() {
     write_full_profile "$gid"
 }
 
+cfg_rendimiento_menu() {
+    # Ajustes que casi nunca hay que tocar: se sacaron del menu principal del
+    # juego, que habia llegado a 42 lineas y era incomodo de recorrer con el
+    # mando. Aqui se guardan igual: al volver, el perfil se escribe entero.
+    local gid="$1" squash="${2:-}" sel gs_row bat_row
+    while :; do
+        gs_row="Gamescope anidado: $(onoff "${NESTED_GAMESCOPE:-0}")"
+        bat_row="Wayland nativo: $(onoff "$WAYLAND")"
+        sel="$(menu "Rendimiento y compatibilidad - $gid" \
+            "MangoHud: $(onoff "$MANGOHUD")" \
+            "GameMode: $(onoff "$GAMEMODE")" \
+            "Fsync: $(onoff "$FSYNC")" \
+            "Esync: $(onoff "$ESYNC")" \
+            "DXVK Async + GPL: $(onoff "$DXVK_ASYNC")" \
+            "WineD3D (OpenGL, juegos viejos): $(onoff "$WINED3D")" \
+            "FSR escalado pantalla completa: $(onoff "$FSR")" \
+            "LAA (32bit +2GB RAM): $(onoff "$LAA")" \
+            "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
+            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-1}")" \
+            "$bat_row" \
+            "Gamescope: ${GAMESCOPE:-OFF}" \
+            "$gs_row" \
+            "DLL overrides: ${DLL_OVERRIDES:-ninguno}" \
+            "Idioma del juego: ${GAME_LANG:-sistema}" \
+            "Variables extra: ${EXTRA_ENV:-ninguna}" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver") return 0 ;;
+            *) cfg_aplicar "$sel" "$gid" "$squash" ;;
+        esac
+    done
+}
+
+cfg_prefijo_menu() {
+    # Todo lo que toca el prefijo de Wine, junto y en un sitio logico
+    local gid="$1" squash="${2:-}" sel
+    while :; do
+        sel="$(menu "Herramientas del prefijo - $gid" \
+            "Abrir winecfg" \
+            "Abrir winetricks" \
+            "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)" \
+            "Configurar dgVoodoo (Cpl)" \
+            "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
+            "Borrar prefijo (reinstala DLLs)" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver") return 0 ;;
+            *) cfg_aplicar "$sel" "$gid" "$squash" ;;
+        esac
+    done
+}
+
+cfg_aplicar() {
+    # Aplica UNA opcion elegida en cualquiera de los menus de
+    # configuracion del juego (principal, rendimiento o prefijo).
+    # Estaba dentro de game_config_menu; se saco fuera para que los
+    # submenus pudieran reutilizarlo sin duplicar nada.
+    local sel="$1" gid="$2" squash="${3:-}"
+    case "$sel" in
+        ">> JUGAR AHORA <<") play_any "$squash"; load_profile "$gid" ;;
+        "Runner"*)
+            HAS_BUNDLED_RUNNER=0
+            acquire_game_root "$squash" "$gid" ro
+            [ -n "$(find_bundled_runner "$MOUNT_POINT")" ] && HAS_BUNDLED_RUNNER=1
+            release_game_root
+            wizard_pick_runner && write_full_profile "$gid" ;;
+        "Ejecutable:"*)   config_pick_exe "$squash" "$gid" ;;
+        "Argumentos:"*)
+            ARGS_OVERRIDE="$(ask_text "Argumentos de lanzamiento" "$ARGS_OVERRIDE")"
+            write_full_profile "$gid" ;;
+        "Prefijo:"*)
+            local psel
+            psel="$(menu "Prefijo de Wine para $gid (actual: $(prefix_label))" \
+                "Compartido (prefixes/default)" \
+                "Propio del juego (prefixes/$gid)" \
+                "Incluido en el wsquashfs (estilo Batocera)")" || psel=""
+            case "$psel" in
+                "Compartido"*) PREFIX_MODE="shared"; write_full_profile "$gid" ;;
+                "Propio"*)     PREFIX_MODE="own";    write_full_profile "$gid" ;;
+                "Incluido"*)
+                    acquire_game_root "$squash" "$gid" ro
+                    local ro2="$MOUNT_POINT"
+                    if has_bundled_prefix "$ro2"; then
+                        PREFIX_MODE="bundled"; write_full_profile "$gid"
+                        release_game_root
+                        ui_info "Prefix incluido activado."
+                    else
+                        release_game_root
+                        ui_error "Este juego NO incluye un prefix de Wine (falta drive_c/ + system.reg)"
+                    fi ;;
+            esac ;;
+        "Carátula: elegir"*)
+            caratula_manual "$gid" ;;
+        "Ficha del juego"*)
+            ficha_mostrar "$gid" "$squash" ;;
+        "Empaquetar con su prefijo"*)
+            if [ -d "$squash" ]; then
+                package_con_prefijo "$squash" "$gid" "${EXE_PATH:-}"
+            elif [ "$MOUNT_OK" = 1 ] && [ -n "$MOUNT_POINT" ]; then
+                package_con_prefijo "$MOUNT_POINT" "$gid" "${EXE_PATH:-}"
+            else
+                ui_error "Para empaquetar con el prefijo hace falta el juego
+en carpeta o montado.
+
+Si el juego ya es un .wsquashfs, juégalo una vez y vuelve a
+entrar aquí: estará montado y se podrá empaquetar."
+            fi ;;
+        "Buscar en la base de umu"*)
+            if umudb_sugerir "$gid"; then
+                write_full_profile "$gid"
+            else
+                ui_info "No se ha encontrado '$gid' en la base de datos de umu.
+
+Puedes poner el identificador a mano en GAMEID si lo conoces:
+https://umu.openwinecomponents.org"
+            fi ;;
+        "GAMEID"*)
+            GAMEID="$(ask_text "GAMEID de umu-database (umu-default = generico).
+Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org" "$GAMEID")"
+            [ -z "$GAMEID" ] && GAMEID="umu-default"
+            write_full_profile "$gid" ;;
+        "MangoHud:"*)     MANGOHUD=$((1-MANGOHUD));     write_full_profile "$gid" ;;
+        "Lanzar via batocera-wine"*)
+            USE_BATOCERA=$((1-${USE_BATOCERA:-1})); write_full_profile "$gid" ;;
+        "NTsync"*)
+            NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
+        "Arreglo mando SteamOS"*)
+            PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
+        "Gamescope anidado"*)
+            NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-0}))
+            write_full_profile "$gid"
+            [ "${NESTED_GAMESCOPE}" = 1 ] && ui_info "Gamescope anidado activado para este juego.
+Ayuda a volver al menu en modo Juego, pero algunos juegos
+avisan de 'Hooking has failed' o van a tirones. Si pasa,
+desactivalo aquí mismo." ;;
+        "Mando via SDL"*)
+            case "${PAD_SDL:-auto}" in
+                auto) PAD_SDL=1 ;;
+                1)    PAD_SDL=0 ;;
+                *)    PAD_SDL=auto ;;
+            esac
+            write_full_profile "$gid"
+            # el registro del prefijo debe reevaluarse
+            rm -f "$(prefix_path "$gid")/.wp_pad_sdl" 2>/dev/null ;;
+        "GameMode:"*)     GAMEMODE=$((1-GAMEMODE));     write_full_profile "$gid" ;;
+        "Fsync:"*)        FSYNC=$((1-FSYNC));           write_full_profile "$gid" ;;
+        "Esync:"*)        ESYNC=$((1-ESYNC));           write_full_profile "$gid" ;;
+        "DXVK Async"*)    DXVK_ASYNC=$((1-DXVK_ASYNC)); write_full_profile "$gid" ;;
+        "WineD3D"*)       WINED3D=$((1-WINED3D));       write_full_profile "$gid" ;;
+        "FSR"*)           FSR=$((1-FSR));               write_full_profile "$gid" ;;
+        "LAA"*)           LAA=$((1-LAA));               write_full_profile "$gid" ;;
+        "Wayland"*)       WAYLAND=$((1-WAYLAND));       write_full_profile "$gid" ;;
+        "Gamescope:"*)    config_gamescope "$gid" ;;
+        "DLL overrides:"*)
+            DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: d3d9,ddraw=n,b ; winmm=n,b)" "$DLL_OVERRIDES")"
+            write_full_profile "$gid" ;;
+        "Idioma del juego:"*)
+            GAME_LANG="$(ask_text "Locale (vacio = sistema; ej: ru_RU.UTF-8, ja_JP.UTF-8, en_US.UTF-8)" "$GAME_LANG")"
+            write_full_profile "$gid" ;;
+        "Variables extra:"*)
+            EXTRA_ENV="$(ask_text "Variables extra (ej: PROTON_USE_WINED3D=1)" "$EXTRA_ENV")"
+            write_full_profile "$gid" ;;
+        "Instalar dgVoodoo2"*)  install_dgvoodoo "$squash" "$gid"; load_profile "$gid" ;;
+        "Configurar dgVoodoo"*) config_dgvoodoo_cpl "$squash" "$gid" ;;
+        "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
+        "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
+        "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
+        ">> EMPAQUETAR A WSQUASHFS <<")
+            # El juego es una carpeta: comprimirlo conservando su perfil
+            if do_pack_dir "$squash" "$gid"; then
+                ui_info "Empaquetado: $(basename "$PACKED_OUT")
+La configuración de '$gid' se conserva para el wsquashfs."
+                if ui_ask "Jugar ahora desde el wsquashfs?"; then
+                    launch_game "$PACKED_OUT" "auto"
+                fi
+                [ -d "$squash" ] || return 0   # la carpeta ya no existe
+            fi ;;
+        "Añadir este juego a Steam")
+            add_game_to_steam "$squash" "$gid" ;;
+        "Favorito:"*)
+            FAVORITO=$((1-${FAVORITO:-0})); write_full_profile "$gid" ;;
+        "Notas:"*)
+            NOTAS="$(ask_text "Notas de este juego (argumentos que necesita, runner recomendado...)" "${NOTAS:-}")"
+            write_full_profile "$gid" ;;
+        "Partidas guardadas"*) backup_menu "$gid" ;;
+        "Comprobar el archivo"*)
+            local gsz osz psz
+            gsz="$(dir_bytes "$squash")"
+            osz="$(dir_bytes "$OVERLAY_BASE/$gid" 2>/dev/null)"
+            psz="$(dir_bytes "$(prefix_path "$gid")" 2>/dev/null)"
+            if [ -f "$squash" ] && verify_squashfs "$squash"; then
+                ui_info "Archivo correcto: $(basename "$squash")
+
+Juego:            $(human_size "${gsz:-0}")
+Saves (overlay):  $(human_size "${osz:-0}")
+Prefijo:          $(human_size "${psz:-0}")
+Libre en disco:   $(human_size "$(free_bytes "$squash")")"
+            elif [ -d "$squash" ]; then
+                ui_info "Juego en carpeta (no hay archivo que comprobar)
+
+Carpeta:          $(human_size "${gsz:-0}")
+Prefijo:          $(human_size "${psz:-0}")
+Libre en disco:   $(human_size "$(free_bytes "$squash")")"
+            fi ;;
+        # "Compartir este perfil": DESACTIVADO de momento. El envio por
+        # pull request no es practico para la mayoria de usuarios; queda
+        # pendiente decidir como se recogeran los perfiles. La funcion
+        # community_share() sigue en el script, lista para reactivarla
+        # anadiendo de nuevo su fila al menu de arriba.
+        "Compartir este perfil"*) community_share "$gid" ;;
+        "Estadísticas:"*)
+            if [ "${PLAY_COUNT:-0}" -gt 0 ]; then
+                ui_ask "Partidas: ${PLAY_COUNT:-0}
+Tiempo total: $(fmt_playtime "${PLAY_SECONDS:-0}")
+Última vez: ${LAST_PLAYED:-nunca}
+
+Poner el contador a cero?" && {
+                    PLAY_COUNT=0; PLAY_SECONDS=0; LAST_PLAYED=""
+                    write_full_profile "$gid"
+                }
+            else
+                ui_info "Todavia no hay partidas registradas de este juego."
+            fi ;;
+        "Mapeador .keys"*)
+            local kmenu
+            kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
+                "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
+                "Quitar el .keys de profiles" \
+                "<< Volver")" || kmenu=""
+            case "$kmenu" in
+                "Asignar"*)
+                    local kfsel
+                    kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
+                    if [ -n "$kfsel" ] && [ -f "$kfsel" ]; then
+                        cp -f "$kfsel" "$PROFILE_DIR/$gid.keys"
+                        ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys
+El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
+                    fi ;;
+                "Quitar"*)
+                    rm -f "$PROFILE_DIR/$gid.keys"
+                    ui_info "Eliminado profiles/$gid.keys" ;;
+            esac ;;
+        "Repetir asistente"*)
+            acquire_game_root "$squash" "$gid" ro
+            local ro="$MOUNT_POINT"
+            first_run_wizard "$gid" "$ro"
+            release_game_root
+            load_profile "$gid"
+            ui_ask "Lanzar el juego ahora?" && launch_game "$squash" "auto" ;;
+        "Borrar prefijo"*)
+            if [ "$PREFIX_MODE" = "bundled" ]; then
+                ui_info "Con el prefix incluido, los cambios viven en el overlay:
+usa 'Borrar saves del overlay (upper/)' para dejarlo de fabrica."
+                continue
+            fi
+            local pfx; pfx="$(prefix_path "$gid")"
+            ui_ask "Borrar el prefijo $(basename "$pfx")?$([ "$PREFIX_MODE" = shared ] && printf '\nOJO: es el COMPARTIDO, afecta a todos los juegos que lo usan.')" \
+                && { rm -rf "$pfx"; ui_info "Prefijo borrado."; } ;;
+        "Borrar saves"*)
+            if [ -d "$squash" ]; then
+                ui_info "Este juego es una carpeta suelta: no usa overlay.
+Los saves viven en la propia carpeta o en el prefijo."
+                continue
+            fi
+            ui_ask "SEGURO? Se borraran las partidas guardadas en el overlay de $gid" \
+                && { rm -rf "${OVERLAY_BASE:?}/$gid/upper"; ui_info "Overlay borrado."; } ;;
+        "<< Volver") return ;;
+    esac
+
+}
+
 game_config_menu() {
     # $1 = juego (wsquashfs o carpeta), $2 = gid explicito (opcional: al venir
     # del flujo de importacion, el perfil es el del nombre limpio del juego)
@@ -9515,30 +9949,11 @@ game_config_menu() {
             "Buscar en la base de umu (identificador automático)" \
             "Carátula: elegir una imagen del sistema" \
             "Ficha del juego (año, editor, notas de la crítica)" \
-            "MangoHud: $(onoff "$MANGOHUD")" \
+            "Empaquetar con su prefijo (archivo autosuficiente)" \
             "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
-            "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
-            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-1}")" \
-            "$gs_row" \
-            "$bat_row" \
-            "GameMode: $(onoff "$GAMEMODE")" \
-            "Fsync: $(onoff "$FSYNC")" \
-            "Esync: $(onoff "$ESYNC")" \
-            "DXVK Async + GPL: $(onoff "$DXVK_ASYNC")" \
-            "WineD3D (OpenGL, juegos viejos): $(onoff "$WINED3D")" \
-            "FSR escalado pantalla completa: $(onoff "$FSR")" \
-            "LAA (32bit +2GB RAM): $(onoff "$LAA")" \
-            "Wayland nativo: $(onoff "$WAYLAND")" \
-            "Gamescope: ${GAMESCOPE:-OFF}" \
-            "DLL overrides: ${DLL_OVERRIDES:-ninguno}" \
-            "Idioma del juego: ${GAME_LANG:-sistema}" \
-            "Variables extra: ${EXTRA_ENV:-ninguna}" \
-            "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)" \
-            "Configurar dgVoodoo (Cpl)" \
-            "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
-            "Abrir winecfg" \
-            "Abrir winetricks" \
             "Mapeador .keys: $kstat" \
+            "Rendimiento y compatibilidad >>" \
+            "Herramientas del prefijo >>" \
             "Favorito: $(onoff "${FAVORITO:-0}")" \
             "Notas: ${NOTAS:-(ninguna)}" \
             "Estadísticas: $(stats_line)" \
@@ -9549,208 +9964,17 @@ game_config_menu() {
                 && printf 'Añadir este juego a Steam (solo en modo Escritorio)' \
                 || printf 'Añadir este juego a Steam')" \
             "Repetir asistente de primera ejecucion" \
-            "Borrar prefijo (reinstala DLLs)" \
             "Borrar saves del overlay (upper/)" \
             "<< Volver")" || return
 
         case "$sel" in
-            ">> JUGAR AHORA <<") play_any "$squash"; load_profile "$gid" ;;
-            "Runner"*)
-                HAS_BUNDLED_RUNNER=0
-                acquire_game_root "$squash" "$gid" ro
-                [ -n "$(find_bundled_runner "$MOUNT_POINT")" ] && HAS_BUNDLED_RUNNER=1
-                release_game_root
-                wizard_pick_runner && write_full_profile "$gid" ;;
-            "Ejecutable:"*)   config_pick_exe "$squash" "$gid" ;;
-            "Argumentos:"*)
-                ARGS_OVERRIDE="$(ask_text "Argumentos de lanzamiento" "$ARGS_OVERRIDE")"
-                write_full_profile "$gid" ;;
-            "Prefijo:"*)
-                local psel
-                psel="$(menu "Prefijo de Wine para $gid (actual: $(prefix_label))" \
-                    "Compartido (prefixes/default)" \
-                    "Propio del juego (prefixes/$gid)" \
-                    "Incluido en el wsquashfs (estilo Batocera)")" || psel=""
-                case "$psel" in
-                    "Compartido"*) PREFIX_MODE="shared"; write_full_profile "$gid" ;;
-                    "Propio"*)     PREFIX_MODE="own";    write_full_profile "$gid" ;;
-                    "Incluido"*)
-                        acquire_game_root "$squash" "$gid" ro
-                        local ro2="$MOUNT_POINT"
-                        if has_bundled_prefix "$ro2"; then
-                            PREFIX_MODE="bundled"; write_full_profile "$gid"
-                            release_game_root
-                            ui_info "Prefix incluido activado."
-                        else
-                            release_game_root
-                            ui_error "Este juego NO incluye un prefix de Wine (falta drive_c/ + system.reg)"
-                        fi ;;
-                esac ;;
-            "Carátula: elegir"*)
-                caratula_manual "$gid" ;;
-            "Ficha del juego"*)
-                ficha_mostrar "$gid" "$squash" ;;
-            "Buscar en la base de umu"*)
-                if umudb_sugerir "$gid"; then
-                    write_full_profile "$gid"
-                else
-                    ui_info "No se ha encontrado '$gid' en la base de datos de umu.
-
-Puedes poner el identificador a mano en GAMEID si lo conoces:
-https://umu.openwinecomponents.org"
-                fi ;;
-            "GAMEID"*)
-                GAMEID="$(ask_text "GAMEID de umu-database (umu-default = generico).
-Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org" "$GAMEID")"
-                [ -z "$GAMEID" ] && GAMEID="umu-default"
-                write_full_profile "$gid" ;;
-            "MangoHud:"*)     MANGOHUD=$((1-MANGOHUD));     write_full_profile "$gid" ;;
-            "Lanzar via batocera-wine"*)
-                USE_BATOCERA=$((1-${USE_BATOCERA:-1})); write_full_profile "$gid" ;;
-            "NTsync"*)
-                NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
-            "Arreglo mando SteamOS"*)
-                PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-1})); write_full_profile "$gid" ;;
-            "Gamescope anidado"*)
-                NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-0}))
-                write_full_profile "$gid"
-                [ "${NESTED_GAMESCOPE}" = 1 ] && ui_info "Gamescope anidado activado para este juego.
-Ayuda a volver al menu en modo Juego, pero algunos juegos
-avisan de 'Hooking has failed' o van a tirones. Si pasa,
-desactivalo aquí mismo." ;;
-            "Mando via SDL"*)
-                case "${PAD_SDL:-auto}" in
-                    auto) PAD_SDL=1 ;;
-                    1)    PAD_SDL=0 ;;
-                    *)    PAD_SDL=auto ;;
-                esac
-                write_full_profile "$gid"
-                # el registro del prefijo debe reevaluarse
-                rm -f "$(prefix_path "$gid")/.wp_pad_sdl" 2>/dev/null ;;
-            "GameMode:"*)     GAMEMODE=$((1-GAMEMODE));     write_full_profile "$gid" ;;
-            "Fsync:"*)        FSYNC=$((1-FSYNC));           write_full_profile "$gid" ;;
-            "Esync:"*)        ESYNC=$((1-ESYNC));           write_full_profile "$gid" ;;
-            "DXVK Async"*)    DXVK_ASYNC=$((1-DXVK_ASYNC)); write_full_profile "$gid" ;;
-            "WineD3D"*)       WINED3D=$((1-WINED3D));       write_full_profile "$gid" ;;
-            "FSR"*)           FSR=$((1-FSR));               write_full_profile "$gid" ;;
-            "LAA"*)           LAA=$((1-LAA));               write_full_profile "$gid" ;;
-            "Wayland"*)       WAYLAND=$((1-WAYLAND));       write_full_profile "$gid" ;;
-            "Gamescope:"*)    config_gamescope "$gid" ;;
-            "DLL overrides:"*)
-                DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: d3d9,ddraw=n,b ; winmm=n,b)" "$DLL_OVERRIDES")"
-                write_full_profile "$gid" ;;
-            "Idioma del juego:"*)
-                GAME_LANG="$(ask_text "Locale (vacio = sistema; ej: ru_RU.UTF-8, ja_JP.UTF-8, en_US.UTF-8)" "$GAME_LANG")"
-                write_full_profile "$gid" ;;
-            "Variables extra:"*)
-                EXTRA_ENV="$(ask_text "Variables extra (ej: PROTON_USE_WINED3D=1)" "$EXTRA_ENV")"
-                write_full_profile "$gid" ;;
-            "Instalar dgVoodoo2"*)  install_dgvoodoo "$squash" "$gid"; load_profile "$gid" ;;
-            "Configurar dgVoodoo"*) config_dgvoodoo_cpl "$squash" "$gid" ;;
-            "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
-            "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
-            "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
-            ">> EMPAQUETAR A WSQUASHFS <<")
-                # El juego es una carpeta: comprimirlo conservando su perfil
-                if do_pack_dir "$squash" "$gid"; then
-                    ui_info "Empaquetado: $(basename "$PACKED_OUT")
-La configuración de '$gid' se conserva para el wsquashfs."
-                    if ui_ask "Jugar ahora desde el wsquashfs?"; then
-                        launch_game "$PACKED_OUT" "auto"
-                    fi
-                    [ -d "$squash" ] || return 0   # la carpeta ya no existe
-                fi ;;
-            "Añadir este juego a Steam")
-                add_game_to_steam "$squash" "$gid" ;;
-            "Favorito:"*)
-                FAVORITO=$((1-${FAVORITO:-0})); write_full_profile "$gid" ;;
-            "Notas:"*)
-                NOTAS="$(ask_text "Notas de este juego (argumentos que necesita, runner recomendado...)" "${NOTAS:-}")"
-                write_full_profile "$gid" ;;
-            "Partidas guardadas"*) backup_menu "$gid" ;;
-            "Comprobar el archivo"*)
-                local gsz osz psz
-                gsz="$(dir_bytes "$squash")"
-                osz="$(dir_bytes "$OVERLAY_BASE/$gid" 2>/dev/null)"
-                psz="$(dir_bytes "$(prefix_path "$gid")" 2>/dev/null)"
-                if [ -f "$squash" ] && verify_squashfs "$squash"; then
-                    ui_info "Archivo correcto: $(basename "$squash")
-
-Juego:            $(human_size "${gsz:-0}")
-Saves (overlay):  $(human_size "${osz:-0}")
-Prefijo:          $(human_size "${psz:-0}")
-Libre en disco:   $(human_size "$(free_bytes "$squash")")"
-                elif [ -d "$squash" ]; then
-                    ui_info "Juego en carpeta (no hay archivo que comprobar)
-
-Carpeta:          $(human_size "${gsz:-0}")
-Prefijo:          $(human_size "${psz:-0}")
-Libre en disco:   $(human_size "$(free_bytes "$squash")")"
-                fi ;;
-            # "Compartir este perfil": DESACTIVADO de momento. El envio por
-            # pull request no es practico para la mayoria de usuarios; queda
-            # pendiente decidir como se recogeran los perfiles. La funcion
-            # community_share() sigue en el script, lista para reactivarla
-            # anadiendo de nuevo su fila al menu de arriba.
-            "Compartir este perfil"*) community_share "$gid" ;;
-            "Estadísticas:"*)
-                if [ "${PLAY_COUNT:-0}" -gt 0 ]; then
-                    ui_ask "Partidas: ${PLAY_COUNT:-0}
-Tiempo total: $(fmt_playtime "${PLAY_SECONDS:-0}")
-Última vez: ${LAST_PLAYED:-nunca}
-
-Poner el contador a cero?" && {
-                        PLAY_COUNT=0; PLAY_SECONDS=0; LAST_PLAYED=""
-                        write_full_profile "$gid"
-                    }
-                else
-                    ui_info "Todavia no hay partidas registradas de este juego."
-                fi ;;
-            "Mapeador .keys"*)
-                local kmenu
-                kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
-                    "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
-                    "Quitar el .keys de profiles" \
-                    "<< Volver")" || kmenu=""
-                case "$kmenu" in
-                    "Asignar"*)
-                        local kfsel
-                        kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
-                        if [ -n "$kfsel" ] && [ -f "$kfsel" ]; then
-                            cp -f "$kfsel" "$PROFILE_DIR/$gid.keys"
-                            ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys
-El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
-                        fi ;;
-                    "Quitar"*)
-                        rm -f "$PROFILE_DIR/$gid.keys"
-                        ui_info "Eliminado profiles/$gid.keys" ;;
-                esac ;;
-            "Repetir asistente"*)
-                acquire_game_root "$squash" "$gid" ro
-                local ro="$MOUNT_POINT"
-                first_run_wizard "$gid" "$ro"
-                release_game_root
-                load_profile "$gid"
-                ui_ask "Lanzar el juego ahora?" && launch_game "$squash" "auto" ;;
-            "Borrar prefijo"*)
-                if [ "$PREFIX_MODE" = "bundled" ]; then
-                    ui_info "Con el prefix incluido, los cambios viven en el overlay:
-usa 'Borrar saves del overlay (upper/)' para dejarlo de fabrica."
-                    continue
-                fi
-                local pfx; pfx="$(prefix_path "$gid")"
-                ui_ask "Borrar el prefijo $(basename "$pfx")?$([ "$PREFIX_MODE" = shared ] && printf '\nOJO: es el COMPARTIDO, afecta a todos los juegos que lo usan.')" \
-                    && { rm -rf "$pfx"; ui_info "Prefijo borrado."; } ;;
-            "Borrar saves"*)
-                if [ -d "$squash" ]; then
-                    ui_info "Este juego es una carpeta suelta: no usa overlay.
-Los saves viven en la propia carpeta o en el prefijo."
-                    continue
-                fi
-                ui_ask "SEGURO? Se borraran las partidas guardadas en el overlay de $gid" \
-                    && { rm -rf "${OVERLAY_BASE:?}/$gid/upper"; ui_info "Overlay borrado."; } ;;
-            "<< Volver") return ;;
+            "<< Volver") write_full_profile "$gid"; return 0 ;;
+            "Rendimiento y compatibilidad >>")
+                cfg_rendimiento_menu "$gid" "$squash"; continue ;;
+            "Herramientas del prefijo >>")
+                cfg_prefijo_menu "$gid" "$squash"; continue ;;
         esac
+        cfg_aplicar "$sel" "$gid" "$squash"
     done
 }
 

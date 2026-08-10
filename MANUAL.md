@@ -88,7 +88,11 @@ Ese mismo teclado en pantalla se usa para escribir argumentos, notas o cualquier
 
 ## 3. Ajustes de un juego
 
-Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes de un juego*). Lo más útil:
+Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes de un juego*).
+
+Arriba está lo del día a día. Lo que casi nunca se toca vive en dos submenús: **Rendimiento y compatibilidad** (MangoHud, Fsync, DXVK, FSR, gamescope…) y **Herramientas del prefijo** (winecfg, winetricks, dgVoodoo2, OptiScaler).
+
+Lo más útil:
 
 **Ejecutable** — qué se lanza. Si el juego arranca con un `.bat` en vez de un `.exe` (habitual en ports y juegos antiguos), elígelo aquí: aparece en la lista junto a los ejecutables y WProton lo lanza con el intérprete de comandos de Windows.
 
@@ -102,6 +106,18 @@ Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes
 - *Incluido en el archivo*: si el juego trae el suyo (estilo Batocera).
 
 **Mando vía SDL** — en automático. Se activa solo con mandos que lo necesitan (DualSense, DualShock, mandos de Nintendo) y se queda apagado con mandos XInput como los de la Steam Deck o la Legion Go.
+
+**Buscar en la base de umu** — consulta la base de datos de
+[umu](https://github.com/Open-Wine-Components/umu-database) y, si encuentra el
+juego, pone el identificador que necesita protonfixes para aplicarle sus
+arreglos. Al añadir un juego nuevo lo propone solo.
+
+**Carátula** — descárgala de SteamGridDB o elige una imagen de tu disco.
+
+**Empaquetar con su prefijo** — crea un archivo **autosuficiente**: lleva dentro
+el juego y su prefijo, así que se copia a otro equipo y funciona sin instalar
+nada. Necesita que el juego use un prefijo propio (no el compartido) y que lo
+hayas probado antes. El original no se toca.
 
 **Notas** — un recordatorio tuyo: *"necesita -novr"*, *"con GE 9-27 va mejor"*.
 
@@ -146,7 +162,7 @@ En *Ajustes de un juego → Partidas guardadas*:
 
 En *Biblioteca y preferencias*:
 
-- **Vista de juegos**: lista o **rejilla de carátulas**.
+- **Vista de juegos**: lista o **rejilla de carátulas**. En la lista, el panel de la derecha muestra la carátula del juego resaltado y sus datos.
 - **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
 - **Descargar carátulas**: necesita una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API). Se pide una sola vez.
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).

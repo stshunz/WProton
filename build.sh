@@ -2,9 +2,10 @@
 # ----------------------------------------------------------------------------
 # build.sh - genera wproton.sh a partir de wproton.base.sh y src/
 #
-#   ./build.sh              genera wproton.sh
+#   ./build.sh              genera wproton.sh (pasando la auditoria antes)
 #   ./build.sh --check      comprueba que el generado coincide con el actual
 #   ./build.sh --extract F  vuelca los .py de un wproton.sh ya hecho a src/
+#   ./build.sh --sin-auditar  genera sin auditar (para pruebas rapidas)
 #
 # El usuario final sigue descargando UN SOLO fichero: wproton.sh. Aquí dentro
 # trabajamos con Python de verdad (con resaltado, linter y depurador) y este
@@ -66,10 +67,21 @@ comprobar_json() {
     return 0
 }
 
+auditar() {
+    [ -f "$AQUI/auditar.py" ] || return 0
+    case " $* " in *" --sin-auditar "*) return 0 ;; esac
+    "${PYTHON:-python3}" "$AQUI/auditar.py" || {
+        rojo "La auditoria encontro fallos: corrigelos o usa --sin-auditar"
+        return 1
+    }
+    return 0
+}
+
 generar() {
     [ -f "$BASE" ] || { rojo "Falta $BASE"; exit 1; }
     comprobar_python || exit 1
     comprobar_json   || exit 1
+    auditar "$@"     || exit 1
 
     local tmp; tmp="$(mktemp)"
     local linea nombre f marca n=0
@@ -189,5 +201,5 @@ case "${1:-}" in
     --check)   comprobar "${2:-}" ;;
     --extract) extraer "${2:-}" ;;
     -h|--help) sed -n '2,12p' "$0" ;;
-    *)         generar ;;
+    *)         generar "$@" ;;
 esac

@@ -1,3 +1,106 @@
+## v1.08
+
+**El menú de ajustes de un juego pasa de 42 opciones a 24.** Se había vuelto
+incómodo de recorrer con el mando, así que lo que casi nunca se toca se ha
+agrupado en dos submenús:
+
+- **Rendimiento y compatibilidad** (17): MangoHud, GameMode, Fsync, Esync,
+  DXVK Async, WineD3D, FSR, LAA, NTsync, arreglo del mando de SteamOS, Wayland,
+  gamescope, DLL overrides, idioma del juego y variables extra.
+- **Herramientas del prefijo** (7): winecfg, winetricks, dgVoodoo2, OptiScaler
+  y borrar el prefijo.
+
+Arriba se queda lo del día a día: jugar, runner, ejecutable, argumentos,
+prefijo, mando, ficha, carátula, favorito, notas, partidas guardadas y
+empaquetado.
+
+Por dentro, los tres menús comparten un único manejador (`cfg_aplicar`), así
+que no hay lógica duplicada y los ajustes se guardan igual desde cualquiera de
+ellos.
+
+## v1.07
+
+**Empaquetar un juego con su prefijo.** Nueva opción en *Ajustes de un juego*:
+crea un `.wsquashfs` (o `.dwarfs`) **autosuficiente**, al estilo de los de
+Batocera. Dentro lleva un `drive_c` completo con el juego dentro y un
+`autorun.cmd` que indica qué ejecutar: se copia a otro equipo y funciona sin
+instalar dependencias ni configurar nada.
+
+Antes de comprimir, WProton **limpia el prefijo**:
+
+- **Quita los enlaces del perfil de usuario.** Wine crea enlaces de Escritorio,
+  Documentos o Descargas hacia tu carpeta personal; dentro del archivo
+  apuntarían a ninguna parte y, al copiarlos, podrían llevarse por delante
+  ficheros ajenos al juego. Se sustituyen por carpetas normales.
+- **Borra cachés de shaders, temporales y registros**, que son gigas que se
+  regeneran solos.
+
+Comprobaciones antes de empezar: que el prefijo sea **propio del juego** (con
+el compartido el archivo llevaría dentro las librerías y los datos del resto),
+que haya sitio en disco, y aviso del tamaño total antes de comprimir. **El
+juego y el prefijo originales no se tocan**, así que se puede probar el
+resultado con tranquilidad.
+
+Si el archivo va a ser grande, conviene el formato **DwarFS**, que comprime
+bastante más (se elige en *Biblioteca y preferencias*).
+
+## v1.06
+
+- **Corregido un fallo importante en los diálogos.** El protocolo entre WProton
+  y su proceso de menús usa una línea por campo, pero los títulos suelen tener
+  varias líneas. Eso desplazaba todos los campos: el menú tomaba **el texto del
+  diálogo como nombre del fichero de respuesta** y lo creaba en la carpeta de
+  WProton (de ahí ficheros como *"Descargar y actualizar ahora?.done"*), y la
+  respuesta del usuario se perdía. Por eso la actualización preguntaba y no
+  hacía nada. Ahora los saltos de línea se escapan al enviarlos.
+
+- **Corregido**: al pulsar B para salir de la lista de juegos, WProton daba el
+  error *"No se encontró ejecutable en la carpeta"* y se cerraba. El código de
+  salida del menú se leía **después** de borrar un fichero temporal, así que en
+  realidad se estaba comprobando el resultado del borrado: cancelar parecía una
+  elección válida.
+- **Corregido**: faltaba el botón **Y (buscar)** en la leyenda de la lista.
+
+**La lista de juegos ahora enseña la carátula.** En el panel de la derecha, al
+moverte por la lista, aparece la carátula del juego resaltado y sus datos:
+
+```
+  SELECCION
+  ┌──────────┐
+  │ carátula │
+  └──────────┘
+  Doom Eternal
+
+  Favorito              *
+  Año                2020
+  Nota             88/100
+  Jugado          7 veces
+  Tiempo       2 h 35 min
+```
+
+Sale todo lo que haya: año, desarrollador, editor, géneros y nota de Steam,
+duración de HowLongToBeat si lo tienes instalado, y lo que sabe WProton por sí
+mismo (favorito, veces jugado y tiempo total). Los datos de Steam aparecen en
+cuanto hayas consultado la ficha del juego una vez con **L1**.
+
+En el panel se muestra el **nombre del juego**, no el del fichero, y los
+valores largos se recortan para que no se salgan del panel. La carátula se ajusta para no ocupar más de la
+mitad del panel, así que el nombre y los datos siempre se ven, y se guarda en
+memoria para que moverse por la lista siga siendo instantáneo.
+
+**Marcar favoritos al instante.** **R1** marca o desmarca sin cerrar el menú:
+el cambio se ve en el mismo momento, sin parpadeo. Los favoritos llevan una
+estrella dibujada a la derecha de su fila en la lista. Se dibuja a mano porque
+la fuente por defecto no trae ese símbolo y en algunos sistemas saldría un
+cuadrado vacío.
+
+Por dentro: el menú apunta cada pulsación y WProton guarda los cambios en los
+perfiles al salir de la lista, así que lo que ves en pantalla y lo que queda
+guardado siempre coinciden.
+
+Con esto, la vista de lista deja de ser una columna de nombres sin perder lo
+que la hace útil: ver muchos juegos de un vistazo y buscar escribiendo.
+
 ## v1.05.1
 
 - **Corregido: WProton no volvía al menú al cerrar el juego.** La espera a que
