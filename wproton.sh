@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.12"
+WPROTON_VERSION="1.13"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -219,6 +219,7 @@ write_lang_en() {
  "Arreglo mando SteamOS (Steam Input)": "SteamOS controller fix (Steam Input)",
  "Asignar fichero .keys (se copia a profiles/$gid.keys)": "Assign a .keys file (copied to profiles/$gid.keys)",
  "Automático (según el tamaño de la pantalla)": "Automatic (based on screen size)",
+ "Añadir WProton a Steam (con su imagen)": "Add WProton to Steam (with artwork)",
  "Añadir este juego a Steam": "Add this game to Steam",
  "Añadir este juego a Steam (solo en modo Escritorio)": "Add this game to Steam (Desktop mode only)",
  "Añadir lo que falte (conserva lo tuyo)": "Add what's missing (keeps yours)",
@@ -1327,6 +1328,86 @@ steam_abrir() {
     return 0
 }
 
+steam_appid_de() {
+    # Steam identifica cada acceso directo con un numero calculado a partir
+    # de su ruta y su nombre. Se necesita para saber como llamar a las
+    # imagenes de la biblioteca.
+    "$PY_BIN" - "$1" "$2" <<'PYAPPID' 2>/dev/null
+import sys, zlib
+exe, nombre = sys.argv[1], sys.argv[2]
+crc = (zlib.crc32((exe + nombre).encode('utf-8')) | 0x80000000) & 0xFFFFFFFF
+print(crc)
+PYAPPID
+}
+
+steam_poner_imagenes() {
+    # Copia las imagenes de WProton a la carpeta "grid" de Steam, con los
+    # nombres que Steam espera para cada formato. Sin esto, en el modo Juego
+    # aparece un cuadro gris con el nombre.
+    # $1 = carpeta userdata/<id>/config, $2 = appid
+    local cfg="$1" appid="$2"
+    [ -n "$appid" ] || return 1
+    local arte="$RUNTIME_DIR/arte"
+    if [ ! -f "$arte/wproton_p.png" ]; then
+        pygame_available || return 1
+        write_menu_pygame
+        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_VIDEODRIVER=dummy \
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" logo "$arte" \
+            >> "$LOG_FILE" 2>&1 || return 1
+    fi
+    local grid="$cfg/grid"
+    mkdir -p "$grid" || return 1
+    # nombres que usa Steam: <appid>p (vertical), <appid> (apaisada),
+    # <appid>_hero (cabecera) y <appid>_logo (logotipo encima)
+    cp -f "$arte/wproton_p.png"      "$grid/${appid}p.png"     2>/dev/null
+    cp -f "$arte/wproton_header.png" "$grid/${appid}.png"      2>/dev/null
+    cp -f "$arte/wproton_hero.png"   "$grid/${appid}_hero.png" 2>/dev/null
+    cp -f "$arte/wproton_logo.png"   "$grid/${appid}_logo.png" 2>/dev/null
+    say "[+] Imagenes de la biblioteca puestas (appid $appid)"
+    return 0
+}
+
+anadir_wproton_a_steam() {
+    # Añade el propio WProton a Steam como juego no-Steam, con sus imagenes.
+    # Asi se puede entrar en la biblioteca desde el modo Juego sin salir al
+    # escritorio.
+    if [ "${IS_GAMESCOPE:-0}" = 1 ]; then
+        ui_error "Esto solo se puede hacer desde el modo Escritorio.
+
+En el modo Juego, la sesion ES Steam y habria que cerrarlo."
+        return 1
+    fi
+    local cfg; cfg="$(find_steam_userdata_config)"
+    [ -n "$cfg" ] || { ui_error "No se encontro la carpeta de Steam"; return 1; }
+    local self; self="$(readlink -f "$0")"
+    local reabrir=0
+    if steam_esta_abierto; then
+        ui_ask "Steam está abierto y hay que cerrarlo para añadir WProton.
+
+¿Cerrar Steam, añadirlo y volver a abrirlo?" || return 1
+        steam_cerrar || { ui_error "No se pudo cerrar Steam"; return 1; }
+        reabrir=1
+    fi
+    write_steam_add
+    local vdf="$cfg/shortcuts.vdf"
+    [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
+    if ! "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "WProton" "$self" \
+         "$(dirname "$self")" "" "" >> "$LOG_FILE" 2>&1; then
+        ui_error "Fallo escribiendo shortcuts.vdf (mira el registro)"
+        [ "$reabrir" = 1 ] && steam_abrir
+        return 1
+    fi
+    steam_poner_imagenes "$cfg" "$(steam_appid_de "$self" "WProton")" || \
+        say "AVISO: no se pudieron generar las imagenes de la biblioteca"
+    [ "$reabrir" = 1 ] && steam_abrir
+    ui_info "WProton añadido a Steam.
+
+Lo encontraras en la seccion NO STEAM, con su imagen.
+Desde el modo Juego podras abrir tu biblioteca sin salir
+al escritorio."
+    return 0
+}
+
 add_game_to_steam() {
     # $1 = ruta del juego (wsquashfs/exe/carpeta), $2 = gid
     local game="$1" gid="$2" reabrir=0
@@ -2080,9 +2161,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 0c226c3d56d9" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 89dfd0035718" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 0c226c3d56d9
+# WPROTON_HELPER menu_pygame.py 89dfd0035718
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2902,11 +2983,12 @@ def draw_header():
     pygame.draw.rect(screen, TH['panel'], (0, 0, W, hh))
     hbar((0, hh - 3, W, 3), ACC, TH.get('acc2', ACC))
     if ARCADE:
-        for _o, _c in (((3, 3), TH['acc2']), ((0, 0), ACC)):
-            screen.blit(f_tit.render('WPROTON', True, _c), (24 + _o[0], 16 + _o[1]))
-        brand = f_tit.render('WPROTON', True, ACC)
+        # sombra de un color y encima la marca a dos colores
+        screen.blit(marca_surface(f_tit, TH['acc2']), (27, 19))
+        brand = marca_surface(f_tit)
+        screen.blit(brand, (24, 16))
     else:
-        brand = f_tit.render('WPROTON', True, ACC)
+        brand = marca_surface(f_tit)
         screen.blit(brand, (24, 16))
     bx = 24 + brand.get_width() + 16
     pygame.draw.rect(screen, TH['border'], (bx - 8, 14, 2, hh - 34))
@@ -3353,6 +3435,26 @@ def draw_segments(segs, font, x, y, maxw, active):
     except Exception:
         pass
 
+MORADO_W = (150, 90, 230)      # el morado de la W del logotipo
+
+def marca_surface(fuente, color=None):
+    # "WPROTON" con la W en morado y el resto en el color de acento. Se
+    # devuelve como una sola imagen para poder centrarla y medirla como
+    # antes. Con "color" se fuerza un unico color (sombra del tema arcade).
+    c_w = color if color else MORADO_W
+    c_r = color if color else ACC
+    sw = fuente.render('W', True, c_w)
+    sr = fuente.render('PROTON', True, c_r)
+    try:
+        sup = pygame.Surface((sw.get_width() + sr.get_width(),
+                              max(sw.get_height(), sr.get_height())),
+                             pygame.SRCALPHA)
+        sup.blit(sw, (0, 0))
+        sup.blit(sr, (sw.get_width(), 0))
+        return sup
+    except Exception:
+        return fuente.render('WPROTON', True, c_r)
+
 def draw_estrella(cx, cy, r, color):
     # Estrella de cinco puntas dibujada a mano: el simbolo tipografico no
     # existe en la fuente por defecto, y un asterisco quedaba pobre.
@@ -3638,7 +3740,7 @@ def run_session():
             # Composicion vertical a partir de la ALTURA REAL de la marca: antes
             # se usaban distancias fijas y con la letra grande el texto de estado
             # se montaba encima de "WPROTON".
-            brand = big.render('WPROTON', True, ACC)
+            brand = marca_surface(big)
             try:
                 bh = brand.get_height()
             except Exception:
@@ -4125,7 +4227,7 @@ def draw_idle(status=''):
     else:
         screen.fill(TH['bg'])
     big = pygame.font.Font(None, max(48, W // 14))
-    brand = big.render('WPROTON', True, ACC)
+    brand = marca_surface(big)
     try:
         bh = brand.get_height()
     except Exception:
@@ -4237,6 +4339,62 @@ def serve(dirpath):
     except Exception:
         pass
     sys.exit(0)
+
+def dibujar_logo(sup, ancho, alto, con_lema=True):
+    # Logotipo de WProton: la W en morado y el resto en el color de acento.
+    # Se dibuja en vez de traer un PNG para que el script siga siendo UN solo
+    # fichero: las imagenes de Steam se generan aqui mismo.
+    fondo_a = (14, 18, 30)
+    fondo_b = (26, 32, 54)
+    # fondo con degradado vertical suave
+    for y in range(alto):
+        t = y / max(1, alto - 1)
+        col = tuple(int(fondo_a[i] + (fondo_b[i] - fondo_a[i]) * t) for i in range(3))
+        pygame.draw.line(sup, col, (0, y), (ancho, y))
+    # tamaño de letra proporcional al ancho
+    cuerpo = max(16, int(ancho * 0.17))
+    f = pygame.font.Font(None, cuerpo)
+    marca = marca_surface(f)
+    total = marca.get_width()
+    x = (ancho - total) // 2
+    y = (alto - marca.get_height()) // 2
+    sup.blit(marca, (x, y))
+    # subrayado en dos tramos, uno por color, bajo cada parte de la palabra
+    lw = max(2, alto // 90)
+    y2 = y + marca.get_height() + max(4, alto // 40)
+    corte = x + f.size('W')[0]
+    pygame.draw.line(sup, MORADO_W, (x, y2), (corte, y2), lw)
+    pygame.draw.line(sup, ACC, (corte, y2), (x + total, y2), lw)
+    if con_lema and alto > 220:
+        f2 = pygame.font.Font(None, max(12, int(cuerpo * 0.26)))
+        lema = f2.render('Juegos de Windows en Linux', True, DIM)
+        sup.blit(lema, ((ancho - lema.get_width()) // 2, y2 + max(8, alto // 30)))
+    return sup
+
+def generar_imagenes(destino):
+    # Genera las imagenes que Steam usa en su biblioteca. Cada una tiene su
+    # proporcion: si se pone una cuadrada, Steam la deforma.
+    medidas = (('p', 600, 900),          # vertical (rejilla de la biblioteca)
+               ('header', 920, 430),     # apaisada
+               ('hero', 1920, 620),      # cabecera grande
+               ('logo', 640, 360))       # logotipo sobre la cabecera
+    os.makedirs(destino, exist_ok=True)
+    hechas = []
+    for nombre, an, al in medidas:
+        try:
+            sup = pygame.Surface((an, al))
+            dibujar_logo(sup, an, al, con_lema=(nombre != 'logo'))
+            ruta = os.path.join(destino, 'wproton_%s.png' % nombre)
+            pygame.image.save(sup, ruta)
+            hechas.append(ruta)
+        except Exception as e:
+            sys.stderr.write('logo: fallo generando %s (%s)\n' % (nombre, e))
+    for r in hechas:
+        print(r)
+    return 0 if hechas else 1
+
+if sys.argv[1] == 'logo':
+    sys.exit(generar_imagenes(sys.argv[2]))
 
 if sys.argv[1] == 'server':
     serve(sys.argv[2])
@@ -10967,6 +11125,20 @@ first_run_games_path() {
 ${n:-0} juego(s) encontrado(s)"
             fi ;;
     esac
+    # Accesos, ahora que ya esta todo listo y el usuario sabe que funciona
+    if carpeta_escritorio >/dev/null 2>&1; then
+        ui_ask "¿Crear un acceso directo a WProton en el escritorio?" \
+            && acceso_directo_wproton
+    fi
+    # Añadirlo a Steam solo tiene sentido desde el escritorio: en el modo
+    # Juego la sesion ES Steam y habria que cerrarlo para escribir en el.
+    if [ "${IS_GAMESCOPE:-0}" != 1 ] && find_steam_userdata_config >/dev/null 2>&1; then
+        ui_ask "¿Añadir WProton a Steam?
+
+Aparecera en tu biblioteca con su imagen, y podras abrirlo desde
+el modo Juego sin salir al escritorio." \
+            && { anadir_wproton_a_steam || true; }
+    fi
     touch "$FIRSTRUN_MARK" 2>/dev/null
     return 0
 }
