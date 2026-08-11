@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.11"
+WPROTON_VERSION="1.12"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -75,6 +75,8 @@ PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 GAMES_PATHS_EXTRA=""                     # carpetas de juegos adicionales
+GE_CUSTOM_NAME="GE-Custom"               # nombre del runner propio
+GE_CUSTOM_URL="https://www.mediafire.com/file/oqprcy5dpju5m1k/ge-custom.tar.gz/file"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
@@ -140,6 +142,13 @@ MENU_SERVER="$MENU_SERVER"
 #   Se gestionan desde Biblioteca y preferencias -> Carpetas de juegos.
 # --------------------------------------------------------------------------
 GAMES_PATHS_EXTRA="$GAMES_PATHS_EXTRA"
+# --------------------------------------------------------------------------
+# RUNNER PROPIO DE WPROTON
+#   Se descarga en la instalacion, junto al ultimo GE-Proton.
+#   Deja GE_CUSTOM_URL vacio si no lo quieres.
+# --------------------------------------------------------------------------
+GE_CUSTOM_NAME="$GE_CUSTOM_NAME"
+GE_CUSTOM_URL="$GE_CUSTOM_URL"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
@@ -256,6 +265,7 @@ write_lang_en() {
  "Desarrollo": "Developer",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
  "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
+ "Descargando el runner propio de WProton...": "Downloading WProton's own runner...",
  "Descargar carátulas (SteamGridDB)": "Download covers (SteamGridDB)",
  "Descargar extractores GOG (innoextract + innounp)": "Download GOG extractors (innoextract + innounp)",
  "Descargar herramientas DwarFS (mkdwarfs + driver)": "Download DwarFS tools (mkdwarfs + driver)",
@@ -329,11 +339,13 @@ write_lang_en() {
  "MangoHud": "MangoHud",
  "Mapeador .keys": ".keys mapper",
  "Montando el juego...": "Mounting the game...",
+ "Montar un disco...": "Mount a drive...",
  "Mostrar el tamaño de WProton": "Show WProton's size",
  "Muy grande": "Very large",
  "NTsync (sincronizacion por kernel)": "NTsync (kernel synchronization)",
  "Ninguno": "None",
  "No": "No",
+ "No montar nada": "Do not mount anything",
  "Normal": "Normal",
  "Nota": "Score",
  "Notas": "Notes",
@@ -366,6 +378,7 @@ write_lang_en() {
  "Repetir asistente": "Run the wizard again",
  "Restaurar una copia": "Restore a backup",
  "Runner (Proton/Wine)": "Runner (Proton/Wine)",
+ "Runner propio de WProton (GE-Custom)": "WProton's own runner (GE-Custom)",
  "Runners y herramientas": "Runners and tools",
  "SELECCION": "SELECTION",
  "Salir": "Exit",
@@ -4771,6 +4784,65 @@ setup_umu() {
     say "umu-launcher instalado en runtime/umu/"
 }
 
+mediafire_directo() {
+    # MediaFire no da un enlace directo: la pagina lleva dentro el enlace real
+    # al fichero. Se extrae de ahi. Si algun dia cambian su web esto dejara de
+    # funcionar, por eso el runner propio deberia acabar alojado en el
+    # repositorio de WProton (ver GE_CUSTOM_URL en settings.conf).
+    local pagina="$1" html directo
+    case "$pagina" in
+        *mediafire.com*) ;;
+        *) printf '%s' "$pagina"; return 0 ;;   # ya es un enlace directo
+    esac
+    html="$(curl -fsSL --max-time 30 "$pagina" 2>/dev/null)" || return 1
+    directo="$(printf '%s' "$html" \
+        | grep -oE 'https://download[0-9]*\.mediafire\.com/[^"'"'"'<> ]+' \
+        | head -n1)"
+    [ -n "$directo" ] || return 1
+    printf '%s' "$directo"
+    return 0
+}
+
+setup_proton_custom() {
+    # Runner propio de WProton. Se descarga en la instalacion junto al ultimo
+    # GE-Proton, y tambien se puede pedir desde "Descargar runners".
+    local url="${GE_CUSTOM_URL:-}"
+    [ -n "$url" ] || { say "Sin URL para el runner propio (GE_CUSTOM_URL)"; return 1; }
+    local nombre="${GE_CUSTOM_NAME:-GE-Custom}"
+    if [ -d "$RUNNERS_DIR/$nombre" ]; then
+        [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ] && say "Runner propio ya instalado: $nombre" \
+                                              || ui_info "Runner propio ya instalado: $nombre"
+        return 0
+    fi
+    loading_say "Descargando el runner propio de WProton..."
+    local directo; directo="$(mediafire_directo "$url")" || {
+        say "AVISO: no se pudo resolver el enlace del runner propio"
+        return 1; }
+    local tmp="$RUNNERS_DIR/.dl_custom"; rm -rf "$tmp"; mkdir -p "$tmp"
+    if ! dl "$directo" "$tmp/ge-custom.tar.gz"; then
+        rm -rf "$tmp"; say "AVISO: fallo la descarga del runner propio"; return 1
+    fi
+    # comprobar que es de verdad un tar.gz y no una pagina de error
+    if ! tar tzf "$tmp/ge-custom.tar.gz" >/dev/null 2>&1; then
+        rm -rf "$tmp"
+        say "AVISO: lo descargado no es un tar.gz (el enlace habra cambiado)"
+        return 1
+    fi
+    if ! extract_archive "$tmp/ge-custom.tar.gz" "$RUNNERS_DIR"; then
+        rm -rf "$tmp"; say "AVISO: fallo extrayendo el runner propio"; return 1
+    fi
+    rm -rf "$tmp"
+    # si el tar traia otro nombre de carpeta, se respeta: solo se avisa
+    if [ ! -d "$RUNNERS_DIR/$nombre" ]; then
+        local real; real="$(find "$RUNNERS_DIR" -maxdepth 1 -type d -newer "$RUNNERS_DIR" \
+                            ! -name '.*' 2>/dev/null | head -n1)"
+        [ -n "$real" ] && nombre="$(basename "$real")"
+    fi
+    [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ] && say "Runner propio instalado: $nombre" \
+                                          || ui_info "Runner propio instalado: $nombre"
+    return 0
+}
+
 setup_proton() {
     # Descarga rapida: último GE-Proton x86_64 (excluye aarch64)
     say "Buscando último GE-Proton x86_64..."
@@ -6884,11 +6956,20 @@ redist_menu() {
 0|vcrun2008 (VC++ 2008)
 0|vcrun2005 (VC++ 2005)
 0|d3dx9 (DirectX 9 - D3DX)
-0|d3dcompiler_47 (compilador de shaders D3D)
+0|d3dx10 (DirectX 10 - D3DX)
+0|d3dx11_43 (DirectX 11 - D3DX)
+0|d3dcompiler_43 (compilador de shaders, juegos DX9/DX11)
+0|d3dcompiler_47 (compilador de shaders, juegos modernos)
+0|directx_todo (pack: D3DX 9/10/11 + los dos compiladores)
+0|xna40 (XNA 4.0 - muchos indies: Terraria, Bastion...)
 0|physx (NVIDIA PhysX)
 0|ue4prereqs (Prerrequisitos Unreal Engine - pack)
 0|xact (XACT/XAudio, juegos viejos)
 0|mf (Media Foundation - videos in-game)
+0|openal (sonido OpenAL)
+0|dinput8 (mando/teclado en juegos viejos)
+0|corefonts (fuentes de Windows - textos que no se ven)
+0|msxml6 (MSXML 6 - algunos instaladores y juegos)
 0|dotnet48 (.NET 4.8 - instalacion LENTA)
 EOF
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
@@ -6898,6 +6979,15 @@ EOF
     [ $rc -ne 0 ] && return 1
     local verbs; verbs="$(printf '%s' "$sel" | tr '|' '\n' | awk 'NF{print $1}' | tr '\n' ' ')"
     verbs="${verbs% }"
+    # "directx_todo" no es un verbo de winetricks: es un pack nuestro con todo
+    # lo de DirectX que suelen pedir los juegos, comodo cuando no se sabe cual
+    # falta. OJO: no confundir con DXVK, que es otra cosa (la traduccion de
+    # DirectX a Vulkan) y se activa en Rendimiento y compatibilidad.
+    case " $verbs " in *" directx_todo "*)
+        verbs="$(printf '%s' " $verbs " | sed 's/ directx_todo / d3dx9 d3dx10 d3dx11_43 d3dcompiler_43 d3dcompiler_47 /')"
+        verbs="$(printf '%s' "$verbs" | tr ' ' '\n' | awk 'NF' | awk '!seen[$0]++' | tr '\n' ' ')"
+        verbs="${verbs% }"; verbs="${verbs# }" ;;
+    esac
     # "ue4prereqs" no es un verbo de winetricks: expandir al pack equivalente
     # al UE4PrereqSetup (VC++ moderno + shaders D3D + XAudio)
     case " $verbs " in *" ue4prereqs "*)
@@ -9629,6 +9719,85 @@ sort_games() {
     done | sort | cut -f2-
 }
 
+discos_sin_montar() {
+    # Particiones con sistema de ficheros que NO estan montadas.
+    # Formato: dispositivo|etiqueta|tipo|tamaño
+    command -v lsblk >/dev/null 2>&1 || return 1
+    lsblk -rno PATH,LABEL,FSTYPE,SIZE,MOUNTPOINT 2>/dev/null | awk '
+        NF >= 4 && $5 == "" && $3 != "" && $3 != "swap" &&
+        $3 != "crypto_LUKS" && $3 != "linux_raid_member" {
+            etiqueta = $2; gsub(/\\x20/, " ", etiqueta)
+            print $1 "|" etiqueta "|" $3 "|" $4
+        }'
+    return 0
+}
+
+montar_disco() {
+    # Monta con udisks2, que es lo que usa el propio escritorio: NO necesita
+    # contraseña ni permisos de root, y deja el disco en /run/media/<usuario>.
+    # $1 = dispositivo. Imprime el punto de montaje.
+    local dev="$1" salida
+    command -v udisksctl >/dev/null 2>&1 || return 1
+    salida="$(udisksctl mount -b "$dev" --no-user-interaction 2>&1)" || {
+        log "No se pudo montar $dev: $salida" WARN
+        return 1
+    }
+    # "Mounted /dev/sda1 at /run/media/deck/JUEGOS"
+    printf '%s' "$salida" | sed -n 's/.* at \(.*\)$/\1/p' | sed 's/\.$//'
+    return 0
+}
+
+montar_discos_de_juegos() {
+    # Si alguna carpeta de juegos no existe, es muy probable que su disco no
+    # este montado: pasa a menudo en el modo Juego de SteamOS con discos
+    # externos o una segunda unidad. Se ofrece montarlos aqui mismo, sin
+    # tener que salir al escritorio.
+    local p faltan="" 
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        [ -d "$p" ] || faltan="$faltan$p
+"
+    done <<EOFCJ
+$(games_paths)
+EOFCJ
+    [ -n "$faltan" ] || return 0
+
+    local discos; discos="$(discos_sin_montar)" || return 0
+    [ -n "$discos" ] || return 0
+
+    say "Carpetas de juegos que no estan disponibles:"
+    printf '%s' "$faltan" | while IFS= read -r p; do [ -n "$p" ] && say "    $p"; done
+
+    local opciones="" d dev etq tipo tam
+    while IFS='|' read -r dev etq tipo tam; do
+        [ -n "$dev" ] || continue
+        opciones="$opciones${etq:-sin etiqueta}   [$tipo, $tam]   $dev
+"
+    done <<EOFD
+$discos
+EOFD
+    local sel
+    sel="$(IFS=$'\n'; set -f; menu "Falta alguna carpeta de juegos.
+¿Montar uno de estos discos?" $opciones "No montar nada")" || return 0
+    [ "$sel" = "No montar nada" ] && return 0
+
+    dev="${sel##*   }"
+    local mp
+    if mp="$(montar_disco "$dev")" && [ -n "$mp" ]; then
+        ui_info "Disco montado en:
+$mp
+
+Si tus juegos están ahí, añade esa carpeta en
+Biblioteca y preferencias -> Carpetas de juegos."
+        return 0
+    fi
+    ui_error "No se pudo montar $dev.
+
+Prueba a montarlo desde el escritorio una vez; después
+WProton podrá hacerlo solo."
+    return 1
+}
+
 games_paths() {
     # Todas las carpetas de juegos: la principal y las adicionales.
     # Mucha gente tiene los juegos repartidos entre varios discos, asi que
@@ -10326,6 +10495,14 @@ main_dispatch() {
                 ui_info "DwarFS listo en runtime/tools:
 mkdwarfs para empaquetar y dwarfs para montar."
             fi ;;
+        "Runner propio de WProton"*)
+            if ! setup_proton_custom; then
+                ui_error "No se pudo descargar el runner propio.
+
+Mira el registro: lo mas probable es que el enlace de descarga
+haya cambiado. Puedes poner otro en GE_CUSTOM_URL, dentro de
+settings.conf."
+            fi ;;
         "Datos de duración"*) hltb_instalar ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
@@ -10500,6 +10677,7 @@ carpetas_juegos_menu() {
         sel="$(IFS=$'\n'; set -f; menu "Carpetas de juegos ($n)" \
             "Carpeta principal: $GAMES_PATH" \
             "Añadir otra carpeta..." \
+            "Montar un disco..." \
             $(games_paths | tail -n +2 | sed 's/^/Quitar: /') \
             "<< Volver")" || return 0
         case "$sel" in
@@ -10507,6 +10685,7 @@ carpetas_juegos_menu() {
             "Carpeta principal:"*)
                 p="$(pick_dir "Carpeta principal de juegos" "$GAMES_PATH")" || continue
                 [ -d "$p" ] && { GAMES_PATH="$p"; save_settings; } ;;
+            "Montar un disco"*) montar_discos_de_juegos || true ;;
             "Añadir otra carpeta"*)
                 p="$(pick_dir "Otra carpeta con juegos" "$(browse_start "$HOME")")" || continue
                 [ -d "$p" ] || continue
@@ -10567,6 +10746,7 @@ tools_menu() {
             "Actualizar umu-launcher" \
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
+            "Runner propio de WProton (GE-Custom)" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
             "Datos de duración de partida (HowLongToBeat)" \
             "Descargar herramientas DwarFS (mkdwarfs + driver)" \
@@ -10830,6 +11010,12 @@ Runners y herramientas -> Descargar herramientas FUSE portables."
         progress_set 75 "Descargando GE-Proton (es el paso mas largo)..."
         setup_proton
     fi
+    # Runner propio: se intenta siempre, pero si falla no se corta la
+    # instalacion. Con GE-Proton ya se puede jugar.
+    if [ -n "${GE_CUSTOM_URL:-}" ] && [ ! -d "$RUNNERS_DIR/${GE_CUSTOM_NAME:-GE-Custom}" ]; then
+        progress_set 90 "Descargando el runner propio de WProton..."
+        setup_proton_custom || say "Se continua sin el runner propio"
+    fi
     progress_set 100 "Listo"
     progress_stop
     install_notice_stop
@@ -10840,6 +11026,10 @@ Runners y herramientas -> Descargar herramientas FUSE portables."
 bootstrap_if_needed() {
     instalar_runtime
     first_run_games_path      # solo la primera vez
+    # Si falta alguna carpeta de juegos, puede ser que su disco no este
+    # montado (tipico en el modo Juego con un disco externo o una segunda
+    # unidad): se ofrece montarlo sin salir de aqui.
+    montar_discos_de_juegos || true
 }
 
 # ----------------------------------------------------------------------------
