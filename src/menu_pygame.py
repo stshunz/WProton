@@ -243,7 +243,8 @@ def load_manifest():
             parts = l.split('|')
             while len(parts) < 4:
                 parts.append('')
-            GITEMS.append((parts[0], parts[1], parts[2], parts[3]))
+            # lista y no tupla: el favorito se cambia en el sitio al pulsar R1
+            GITEMS.append([parts[0], parts[1], parts[2], parts[3]])
 
 def grid_apply_filter():
     global view, sel, scroll
@@ -816,11 +817,12 @@ def draw_header():
     pygame.draw.rect(screen, TH['panel'], (0, 0, W, hh))
     hbar((0, hh - 3, W, 3), ACC, TH.get('acc2', ACC))
     if ARCADE:
-        for _o, _c in (((3, 3), TH['acc2']), ((0, 0), ACC)):
-            screen.blit(f_tit.render('WPROTON', True, _c), (24 + _o[0], 16 + _o[1]))
-        brand = f_tit.render('WPROTON', True, ACC)
+        # sombra de un color y encima la marca a dos colores
+        screen.blit(marca_surface(f_tit, TH['acc2']), (27, 19))
+        brand = marca_surface(f_tit)
+        screen.blit(brand, (24, 16))
     else:
-        brand = f_tit.render('WPROTON', True, ACC)
+        brand = marca_surface(f_tit)
         screen.blit(brand, (24, 16))
     bx = 24 + brand.get_width() + 16
     pygame.draw.rect(screen, TH['border'], (bx - 8, 14, 2, hh - 34))
@@ -1267,6 +1269,26 @@ def draw_segments(segs, font, x, y, maxw, active):
     except Exception:
         pass
 
+MORADO_W = (150, 90, 230)      # el morado de la W del logotipo
+
+def marca_surface(fuente, color=None):
+    # "WPROTON" con la W en morado y el resto en el color de acento. Se
+    # devuelve como una sola imagen para poder centrarla y medirla como
+    # antes. Con "color" se fuerza un unico color (sombra del tema arcade).
+    c_w = color if color else MORADO_W
+    c_r = color if color else ACC
+    sw = fuente.render('W', True, c_w)
+    sr = fuente.render('PROTON', True, c_r)
+    try:
+        sup = pygame.Surface((sw.get_width() + sr.get_width(),
+                              max(sw.get_height(), sr.get_height())),
+                             pygame.SRCALPHA)
+        sup.blit(sw, (0, 0))
+        sup.blit(sr, (sw.get_width(), 0))
+        return sup
+    except Exception:
+        return fuente.render('WPROTON', True, c_r)
+
 def draw_estrella(cx, cy, r, color):
     # Estrella de cinco puntas dibujada a mano: el simbolo tipografico no
     # existe en la fuente por defecto, y un asterisco quedaba pobre.
@@ -1405,12 +1427,22 @@ def marcar_favorito():
     # WProton lo guarde en el perfil cuando el menu termine.
     if not view:
         return
-    nombre = GITEMS[view[sel]][0] if MODE == 'grid' else items[view[sel]][1]
-    datos = LIST_INFO.get(nombre)
-    if datos is None:
-        datos = {'fav': '0'}
-        LIST_INFO[nombre] = datos
-    datos['fav'] = '0' if datos.get('fav') == '1' else '1'
+    if MODE == 'grid':
+        # En la rejilla el favorito vive en GITEMS (es lo que dibuja la cinta
+        # en la caratula), no en LIST_INFO: hay que cambiarlo ahi para que se
+        # vea al instante.
+        fila = GITEMS[view[sel]]
+        nombre = fila[0]
+        while len(fila) < 4:
+            fila.append('0')
+        fila[3] = '0' if str(fila[3]) == '1' else '1'
+    else:
+        nombre = items[view[sel]][1]
+        datos = LIST_INFO.get(nombre)
+        if datos is None:
+            datos = {'fav': '0'}
+            LIST_INFO[nombre] = datos
+        datos['fav'] = '0' if datos.get('fav') == '1' else '1'
     if not FAV_FILE:
         return
     try:
@@ -1542,7 +1574,7 @@ def run_session():
             # Composicion vertical a partir de la ALTURA REAL de la marca: antes
             # se usaban distancias fijas y con la letra grande el texto de estado
             # se montaba encima de "WPROTON".
-            brand = big.render('WPROTON', True, ACC)
+            brand = marca_surface(big)
             try:
                 bh = brand.get_height()
             except Exception:
@@ -2029,7 +2061,7 @@ def draw_idle(status=''):
     else:
         screen.fill(TH['bg'])
     big = pygame.font.Font(None, max(48, W // 14))
-    brand = big.render('WPROTON', True, ACC)
+    brand = marca_surface(big)
     try:
         bh = brand.get_height()
     except Exception:
@@ -2120,6 +2152,10 @@ def serve(dirpath):
                         fh.write(str(rc))
                 except Exception:
                     pass
+                # El texto de "cargando" ya cumplio su funcion: si no se
+                # borra, se queda fijo en la pantalla de reposo mostrando el
+                # ultimo mensaje aunque la tarea acabara hace rato.
+                status = ''
                 # limpiar el estado visible entre menus
                 pygame.event.clear()
             continue
@@ -2137,6 +2173,66 @@ def serve(dirpath):
     except Exception:
         pass
     sys.exit(0)
+
+def dibujar_logo(sup, ancho, alto, con_lema=True):
+    # Logotipo de WProton: la W en morado y el resto en el color de acento.
+    # Se dibuja en vez de traer un PNG para que el script siga siendo UN solo
+    # fichero: las imagenes de Steam se generan aqui mismo.
+    fondo_a = (14, 18, 30)
+    fondo_b = (26, 32, 54)
+    # fondo con degradado vertical suave
+    for y in range(alto):
+        t = y / max(1, alto - 1)
+        col = tuple(int(fondo_a[i] + (fondo_b[i] - fondo_a[i]) * t) for i in range(3))
+        pygame.draw.line(sup, col, (0, y), (ancho, y))
+    # tamaño de letra proporcional al ancho
+    cuerpo = max(16, int(ancho * 0.17))
+    f = pygame.font.Font(None, cuerpo)
+    marca = marca_surface(f)
+    total = marca.get_width()
+    x = (ancho - total) // 2
+    y = (alto - marca.get_height()) // 2
+    sup.blit(marca, (x, y))
+    # subrayado en dos tramos, uno por color, bajo cada parte de la palabra
+    lw = max(2, alto // 90)
+    y2 = y + marca.get_height() + max(4, alto // 40)
+    corte = x + f.size('W')[0]
+    pygame.draw.line(sup, MORADO_W, (x, y2), (corte, y2), lw)
+    pygame.draw.line(sup, ACC, (corte, y2), (x + total, y2), lw)
+    if con_lema and alto > 220:
+        f2 = pygame.font.Font(None, max(12, int(cuerpo * 0.26)))
+        lema = f2.render('Juegos de Windows en Linux', True, DIM)
+        sup.blit(lema, ((ancho - lema.get_width()) // 2, y2 + max(8, alto // 30)))
+    return sup
+
+def generar_imagenes(destino):
+    # Genera las imagenes que Steam usa en su biblioteca. Cada una tiene su
+    # proporcion: si se pone una cuadrada, Steam la deforma.
+    medidas = (('p', 600, 900),          # vertical (rejilla de la biblioteca)
+               ('header', 920, 430),     # apaisada
+               ('hero', 1920, 620),      # cabecera grande
+               ('logo', 640, 360),       # logotipo sobre la cabecera
+               ('icono', 256, 256))      # icono del acceso directo
+    os.makedirs(destino, exist_ok=True)
+    hechas = []
+    for nombre, an, al in medidas:
+        ruta_previa = os.path.join(destino, 'wproton_%s.png' % nombre)
+        if os.path.exists(ruta_previa) and os.path.getsize(ruta_previa) > 0:
+            continue          # ya hay una imagen buena: no se pisa
+        try:
+            sup = pygame.Surface((an, al))
+            dibujar_logo(sup, an, al, con_lema=(nombre != 'logo'))
+            ruta = os.path.join(destino, 'wproton_%s.png' % nombre)
+            pygame.image.save(sup, ruta)
+            hechas.append(ruta)
+        except Exception as e:
+            sys.stderr.write('logo: fallo generando %s (%s)\n' % (nombre, e))
+    for r in hechas:
+        print(r)
+    return 0 if hechas else 1
+
+if sys.argv[1] == 'logo':
+    sys.exit(generar_imagenes(sys.argv[2]))
 
 if sys.argv[1] == 'server':
     serve(sys.argv[2])
