@@ -378,7 +378,6 @@ write_lang_en() {
  "Repetir asistente": "Run the wizard again",
  "Restaurar una copia": "Restore a backup",
  "Runner (Proton/Wine)": "Runner (Proton/Wine)",
- "Runner propio de WProton (GE-Custom)": "WProton's own runner (GE-Custom)",
  "Runners y herramientas": "Runners and tools",
  "SELECCION": "SELECTION",
  "Salir": "Exit",
@@ -399,6 +398,7 @@ write_lang_en() {
  "Ver el registro de la última sesión": "View the last session log",
  "Vista de juegos": "Games view",
  "Volviendo al menú...": "Back to the menu...",
+ "WProton Custom [proton] - el runner propio de WProton": "WProton Custom [proton] - WProton's own runner",
  "Wayland nativo": "Native Wayland",
  "Wine Kron4ek [wine] - vanilla / staging / tkg": "Wine Kron4ek [wine] - vanilla / staging / tkg",
  "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam": "Wine-GE [wine] - GloriousEggroll, non-Steam games",
@@ -4814,7 +4814,13 @@ setup_proton_custom() {
                                               || ui_info "Runner propio ya instalado: $nombre"
         return 0
     fi
-    loading_say "Descargando el runner propio de WProton..."
+    # Si hay una ventana de progreso (la de Python), se informa por ahi; si
+    # no, por el canal habitual. Nada de abrir un zenity aparte.
+    if [ -n "${PROGRESS_FILE:-}" ]; then
+        progress_set 90 "Descargando el runner propio de WProton..."
+    else
+        loading_say "Descargando el runner propio de WProton..."
+    fi
     local directo; directo="$(mediafire_directo "$url")" || {
         say "AVISO: no se pudo resolver el enlace del runner propio"
         return 1; }
@@ -4953,7 +4959,17 @@ download_runner_menu() {
         "Proton-LG [proton] - Castro-Fidel, basado en GE" \
         "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam" \
         "Wine Kron4ek [wine] - vanilla / staging / tkg" \
+        "WProton Custom [proton] - el runner propio de WProton" \
         "<< Volver")" || return
+    case "$src" in
+        "WProton Custom"*)
+            setup_proton_custom || ui_error "No se pudo descargar el runner propio.
+
+Mira el registro: lo mas probable es que el enlace de descarga
+haya cambiado. Puedes poner otro en GE_CUSTOM_URL, dentro de
+settings.conf."
+            return ;;
+    esac
     local dwproton=0 tagfilter=""
     case "$src" in
         "GE-Proton"*)      repo="GloriousEggroll/proton-ge-custom" ;;
@@ -10495,14 +10511,6 @@ main_dispatch() {
                 ui_info "DwarFS listo en runtime/tools:
 mkdwarfs para empaquetar y dwarfs para montar."
             fi ;;
-        "Runner propio de WProton"*)
-            if ! setup_proton_custom; then
-                ui_error "No se pudo descargar el runner propio.
-
-Mira el registro: lo mas probable es que el enlace de descarga
-haya cambiado. Puedes poner otro en GE_CUSTOM_URL, dentro de
-settings.conf."
-            fi ;;
         "Datos de duración"*) hltb_instalar ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
@@ -10746,7 +10754,6 @@ tools_menu() {
             "Actualizar umu-launcher" \
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
-            "Runner propio de WProton (GE-Custom)" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
             "Datos de duración de partida (HowLongToBeat)" \
             "Descargar herramientas DwarFS (mkdwarfs + driver)" \
@@ -11007,14 +11014,16 @@ Runners y herramientas -> Descargar herramientas FUSE portables."
     fi
 
     if [ -z "$(runner_names)" ]; then
-        progress_set 75 "Descargando GE-Proton (es el paso mas largo)..."
+        progress_set 70 "Descargando GE-Proton (es el paso mas largo)..."
         setup_proton
-    fi
-    # Runner propio: se intenta siempre, pero si falla no se corta la
-    # instalacion. Con GE-Proton ya se puede jugar.
-    if [ -n "${GE_CUSTOM_URL:-}" ] && [ ! -d "$RUNNERS_DIR/${GE_CUSTOM_NAME:-GE-Custom}" ]; then
-        progress_set 90 "Descargando el runner propio de WProton..."
-        setup_proton_custom || say "Se continua sin el runner propio"
+        # El runner propio, SOLO en una instalacion nueva. Si se pusiera
+        # fuera de este bloque, se reintentaria en cada arranque de quien lo
+        # hubiera borrado a proposito o de quien le fallara la descarga.
+        # Despues siempre se puede pedir en "Descargar runners".
+        if [ -n "${GE_CUSTOM_URL:-}" ]; then
+            progress_set 90 "Descargando el runner propio de WProton..."
+            setup_proton_custom || say "Se continua sin el runner propio"
+        fi
     fi
     progress_set 100 "Listo"
     progress_stop
