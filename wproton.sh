@@ -1340,6 +1340,46 @@ print(crc)
 PYAPPID
 }
 
+arte_conseguir() {
+    # Deja en runtime/arte/ las cuatro imagenes de la biblioteca de Steam.
+    #
+    # Orden de preferencia:
+    #   1) las que ya haya (no se vuelven a descargar)
+    #   2) una carpeta art/ junto a wproton.sh (para quien las quiera propias)
+    #   3) las del repositorio (las buenas, hechas a mano)
+    #   4) las que dibuja WProton (sencillas, pero siempre disponibles)
+    local arte="$RUNTIME_DIR/arte" f faltan=0
+    mkdir -p "$arte" 2>/dev/null
+    for f in wproton_p wproton_header wproton_hero wproton_logo; do
+        [ -s "$arte/$f.png" ] && continue
+        # copia local junto al script
+        if [ -s "$BASE_DIR/art/$f.png" ]; then
+            cp -f "$BASE_DIR/art/$f.png" "$arte/$f.png" 2>/dev/null && continue
+        fi
+        # repositorio
+        if curl -fsSL --max-time 40 \
+             "https://raw.githubusercontent.com/$WPROTON_REPO/main/art/$f.png" \
+             -o "$arte/$f.png.tmp" 2>/dev/null \
+           && [ -s "$arte/$f.png.tmp" ] \
+           && head -c 8 "$arte/$f.png.tmp" | grep -q 'PNG'; then
+            mv -f "$arte/$f.png.tmp" "$arte/$f.png"
+            continue
+        fi
+        rm -f "$arte/$f.png.tmp"
+        faltan=1
+    done
+    # lo que falte, dibujado por WProton
+    if [ "$faltan" = 1 ]; then
+        log "Alguna imagen no se pudo traer: se dibujan las que falten"
+        pygame_available || return 1
+        write_menu_pygame
+        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_VIDEODRIVER=dummy \
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" logo "$arte" \
+            >> "$LOG_FILE" 2>&1 || return 1
+    fi
+    return 0
+}
+
 steam_poner_imagenes() {
     # Copia las imagenes de WProton a la carpeta "grid" de Steam, con los
     # nombres que Steam espera para cada formato. Sin esto, en el modo Juego
@@ -1348,13 +1388,8 @@ steam_poner_imagenes() {
     local cfg="$1" appid="$2"
     [ -n "$appid" ] || return 1
     local arte="$RUNTIME_DIR/arte"
-    if [ ! -f "$arte/wproton_p.png" ]; then
-        pygame_available || return 1
-        write_menu_pygame
-        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_VIDEODRIVER=dummy \
-            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" logo "$arte" \
-            >> "$LOG_FILE" 2>&1 || return 1
-    fi
+    loading_say "Preparando las imagenes de la biblioteca..."
+    arte_conseguir || return 1
     local grid="$cfg/grid"
     mkdir -p "$grid" || return 1
     # nombres que usa Steam: <appid>p (vertical), <appid> (apaisada),
@@ -2161,9 +2196,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 89dfd0035718" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py d7c66dcab384" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 89dfd0035718
+# WPROTON_HELPER menu_pygame.py d7c66dcab384
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -4381,6 +4416,9 @@ def generar_imagenes(destino):
     os.makedirs(destino, exist_ok=True)
     hechas = []
     for nombre, an, al in medidas:
+        ruta_previa = os.path.join(destino, 'wproton_%s.png' % nombre)
+        if os.path.exists(ruta_previa) and os.path.getsize(ruta_previa) > 0:
+            continue          # ya hay una imagen buena: no se pisa
         try:
             sup = pygame.Surface((an, al))
             dibujar_logo(sup, an, al, con_lema=(nombre != 'logo'))
