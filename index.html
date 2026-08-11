@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WProton — Juega a tus juegos de Windows en Linux</title>
+<meta name="description" content="Un solo fichero que monta, configura y lanza tus juegos de Windows en Linux. Se maneja con el mando y funciona en el modo Juego de SteamOS.">
+<link rel="icon" href="art/wproton_icono.png">
+<meta property="og:title" content="WProton">
+<meta property="og:description" content="Juega a tus juegos de Windows en Linux. Un solo fichero, manejable con el mando.">
+<meta property="og:image" content="art/wproton_header.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --fondo:#0b0f1a;
+  --fondo2:#141a2e;
+  --panel:#1a2138;
+  --borde:#2a3454;
+  --texto:#e8edf7;
+  --tenue:#8b99b5;
+  --acento:#38d6e0;   /* turquesa: el acento de los menús */
+  --morado:#965ae6;   /* la W */
+  --magenta:#ff2d95;  /* del logotipo */
+  --radio:10px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}
+  *{animation:none!important;transition:none!important}}
+body{
+  margin:0;background:var(--fondo);color:var(--texto);
+  font:400 17px/1.65 "Chakra Petch",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{font-weight:700;line-height:1.15;margin:0}
+a{color:var(--acento)}
+.envoltura{max-width:1120px;margin:0 auto;padding:0 24px}
+
+/* ---------- barra superior ---------- */
+.barra{
+  position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+  background:rgba(11,15,26,.82);border-bottom:1px solid var(--borde);
+}
+.barra .envoltura{display:flex;align-items:center;gap:18px;height:64px}
+.marca{display:flex;align-items:center;gap:11px;font-weight:700;font-size:20px;
+  letter-spacing:.02em;text-decoration:none;color:var(--texto)}
+.marca img{width:30px;height:30px}
+.marca b{color:var(--morado);font-weight:700}
+.barra nav{margin-left:auto;display:flex;gap:24px;font-size:15px}
+.barra nav a{color:var(--tenue);text-decoration:none}
+.barra nav a:hover,.barra nav a:focus-visible{color:var(--texto)}
+@media(max-width:760px){.barra nav{display:none}}
+
+/* ---------- portada ---------- */
+.portada{padding:76px 0 40px;position:relative;overflow:hidden}
+.portada::before{
+  content:"";position:absolute;inset:-40% -20% auto;height:560px;
+  background:radial-gradient(60% 60% at 30% 40%,rgba(150,90,230,.22),transparent 70%),
+             radial-gradient(50% 50% at 75% 30%,rgba(56,214,224,.16),transparent 70%);
+  pointer-events:none;
+}
+.portada .envoltura{position:relative}
+.rejilla-portada{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+@media(max-width:960px){.rejilla-portada{grid-template-columns:1fr;gap:36px}}
+.antetitulo{
+  font:600 13px/1 "IBM Plex Mono",monospace;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--acento);margin-bottom:18px
+}
+h1{font-size:clamp(38px,5.4vw,60px);letter-spacing:-.01em}
+h1 em{font-style:normal;color:var(--morado)}
+.entradilla{color:var(--tenue);font-size:19px;margin:20px 0 30px;max-width:33em}
+.botones{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+.boton{
+  display:inline-flex;align-items:center;gap:9px;padding:13px 22px;border-radius:var(--radio);
+  font-weight:600;text-decoration:none;font-size:16px;border:1px solid transparent;
+}
+.boton-primario{background:var(--acento);color:#06121a}
+.boton-primario:hover{background:#5ee6ee}
+.boton-secundario{border-color:var(--borde);color:var(--texto)}
+.boton-secundario:hover{border-color:var(--acento)}
+.nota-descarga{font:400 14px/1.5 "IBM Plex Mono",monospace;color:var(--tenue);margin-top:16px}
+
+/* ---------- la interfaz recreada ---------- */
+.demo{
+  border:1px solid var(--borde);border-radius:14px;overflow:hidden;
+  background:linear-gradient(180deg,#0e1424,#151c31);
+  box-shadow:0 24px 60px rgba(0,0,0,.5);
+}
+.demo-cabecera{
+  display:flex;align-items:center;gap:12px;padding:13px 16px;
+  background:#111829;border-bottom:2px solid var(--acento);
+}
+.demo-cabecera .logo{font-weight:700;font-size:15px;letter-spacing:.04em}
+.demo-cabecera .logo b{color:var(--morado)}
+.demo-cabecera .titulo{color:var(--tenue);font-size:14px;
+  border-left:1px solid var(--borde);padding-left:12px}
+.demo-cuerpo{display:grid;grid-template-columns:1fr 190px;gap:12px;padding:12px;min-height:264px}
+@media(max-width:520px){.demo-cuerpo{grid-template-columns:1fr}.demo-panel{display:none}}
+.demo-lista{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+.demo-lista li{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 13px;border-radius:7px;background:#161d33;color:var(--tenue);
+  font-size:15px;cursor:pointer;border:1px solid transparent;transition:.14s;
+}
+.demo-lista li:hover{border-color:var(--borde)}
+.demo-lista li[aria-selected="true"]{
+  background:linear-gradient(90deg,rgba(56,214,224,.22),rgba(56,214,224,.05));
+  border-color:var(--acento);color:var(--texto);font-weight:600;
+}
+.estrella{color:var(--morado);font-size:13px}
+.demo-panel{
+  border:1px solid var(--borde);border-radius:8px;padding:12px;background:#131a2c;
+  display:flex;flex-direction:column;gap:9px
+}
+.demo-panel .rotulo{font:600 11px/1 "IBM Plex Mono",monospace;letter-spacing:.14em;
+  color:var(--acento);text-transform:uppercase}
+.caratula{
+  aspect-ratio:2/3;border-radius:5px;border:1px solid var(--borde);
+  background:linear-gradient(150deg,#243156,#3b2a63);display:grid;place-items:center;
+  color:var(--tenue);font-size:11px;text-align:center;padding:6px
+}
+.demo-panel dl{margin:0;font-size:12.5px}
+.demo-panel div{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+.demo-panel dt{color:var(--tenue)}
+.demo-panel dd{margin:0;color:var(--texto)}
+.demo-pie{
+  display:flex;flex-wrap:wrap;gap:14px;padding:11px 16px;
+  border-top:1px solid var(--borde);background:#101627;font-size:13px;color:var(--tenue)
+}
+.tecla{
+  display:inline-grid;place-items:center;min-width:26px;height:22px;padding:0 7px;
+  border-radius:6px;background:var(--acento);color:#06121a;font-weight:700;font-size:12px;
+  margin-right:6px
+}
+.pista{font-size:13px;color:var(--tenue);margin-top:12px;text-align:center}
+.pista kbd{font-family:"IBM Plex Mono",monospace;background:#182036;
+  border:1px solid var(--borde);border-radius:5px;padding:1px 6px;font-size:12px}
+
+/* ---------- secciones ---------- */
+section{padding:74px 0;border-top:1px solid var(--borde)}
+.cabecera-seccion{max-width:44em;margin-bottom:38px}
+.cabecera-seccion h2{font-size:clamp(26px,3vw,34px)}
+.cabecera-seccion p{color:var(--tenue);margin:12px 0 0}
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fit,minmax(272px,1fr));gap:18px}
+.tarjeta{
+  border:1px solid var(--borde);border-radius:var(--radio);padding:22px;
+  background:linear-gradient(180deg,#131a2c,#111728)
+}
+.tarjeta h3{font-size:18px;margin-bottom:8px}
+.tarjeta h3 span{color:var(--acento)}
+.tarjeta p{color:var(--tenue);margin:0;font-size:15.5px}
+
+/* pasos: es una secuencia real, por eso van numerados */
+.pasos{counter-reset:paso;display:grid;gap:16px}
+.paso{
+  display:grid;grid-template-columns:44px 1fr;gap:18px;align-items:start;
+  border:1px solid var(--borde);border-radius:var(--radio);padding:20px 22px;background:#111728
+}
+.paso::before{
+  counter-increment:paso;content:counter(paso,decimal-leading-zero);
+  font:700 15px/44px "IBM Plex Mono",monospace;color:var(--morado);text-align:center;
+  border:1px solid var(--borde);border-radius:8px;height:44px
+}
+.paso h3{font-size:17px;margin-bottom:5px}
+.paso p{margin:0;color:var(--tenue);font-size:15.5px}
+.paso code{
+  display:inline-block;margin-top:9px;font-family:"IBM Plex Mono",monospace;font-size:14px;
+  background:#0b1120;border:1px solid var(--borde);border-radius:6px;padding:7px 11px;color:var(--acento)
+}
+table{width:100%;border-collapse:collapse;font-size:15.5px}
+th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--borde)}
+th{font:600 12px/1 "IBM Plex Mono",monospace;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--tenue)}
+td code{font-family:"IBM Plex Mono",monospace;font-size:14px;color:var(--acento)}
+details{border:1px solid var(--borde);border-radius:var(--radio);padding:16px 20px;
+  background:#111728;margin-bottom:12px}
+details summary{cursor:pointer;font-weight:600;font-size:16.5px}
+details summary::marker{color:var(--acento)}
+details p{color:var(--tenue);margin:11px 0 0;font-size:15.5px}
+.cierre{text-align:center;padding:84px 0}
+.cierre h2{font-size:clamp(28px,3.4vw,38px)}
+.cierre p{color:var(--tenue);max-width:34em;margin:14px auto 28px}
+footer{border-top:1px solid var(--borde);padding:34px 0;color:var(--tenue);font-size:14.5px}
+footer .envoltura{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between}
+footer a{color:var(--tenue)}
+:focus-visible{outline:2px solid var(--acento);outline-offset:3px;border-radius:4px}
+</style>
+</head>
+<body>
+
+<header class="barra">
+  <div class="envoltura">
+    <a class="marca" href="#"><img src="art/wproton_icono.png" alt=""><span><b>W</b>Proton</span></a>
+    <nav>
+      <a href="#empezar">Empezar</a>
+      <a href="#formatos">Formatos</a>
+      <a href="#modo-juego">Modo Juego</a>
+      <a href="#dudas">Dudas</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="portada">
+  <div class="envoltura rejilla-portada">
+    <div>
+      <p class="antetitulo">Un fichero · sin instalación</p>
+      <h1>Tus juegos de Windows, <em>en Linux</em>, con el mando en la mano.</h1>
+      <p class="entradilla">
+        WProton monta el juego, prepara Wine o Proton y lo lanza. Todo desde
+        unos menús que se manejan con el mando, también en el modo Juego de la
+        Steam Deck.
+      </p>
+      <div class="botones">
+        <a class="boton boton-primario" href="https://github.com/stshunz/WProton/releases/latest">
+          Descargar wproton.sh
+        </a>
+        <a class="boton boton-secundario" href="https://github.com/stshunz/WProton">Ver en GitHub</a>
+      </div>
+      <p class="nota-descarga">chmod +x wproton.sh &amp;&amp; ./wproton.sh</p>
+    </div>
+
+    <div>
+      <!-- La interfaz de WProton, recreada. Se mueve con las flechas. -->
+      <div class="demo" id="demo">
+        <div class="demo-cabecera">
+          <span class="logo"><b>W</b>PROTON</span>
+          <span class="titulo">Elige un juego</span>
+        </div>
+        <div class="demo-cuerpo">
+          <ul class="demo-lista" id="lista" role="listbox" tabindex="0"
+              aria-label="Ejemplo de la lista de juegos de WProton">
+          </ul>
+          <div class="demo-panel">
+            <span class="rotulo">Selección</span>
+            <div class="caratula" id="caratula">carátula</div>
+            <dl>
+              <div><dt>Año</dt><dd id="d-ano">—</dd></div>
+              <div><dt>Género</dt><dd id="d-genero">—</dd></div>
+              <div><dt>Duración</dt><dd id="d-duracion">—</dd></div>
+              <div><dt>Jugado</dt><dd id="d-jugado">—</dd></div>
+            </dl>
+          </div>
+        </div>
+        <div class="demo-pie">
+          <span><i class="tecla">A</i>jugar</span>
+          <span><i class="tecla">X</i>config</span>
+          <span><i class="tecla">Y</i>buscar</span>
+          <span><i class="tecla">L1</i>ficha</span>
+          <span><i class="tecla">R1</i>favorito</span>
+          <span><i class="tecla">B</i>volver</span>
+        </div>
+      </div>
+      <p class="pista">Muévete con <kbd>↑</kbd> <kbd>↓</kbd> o pulsa en un juego.</p>
+    </div>
+  </div>
+</section>
+
+<section id="empezar">
+  <div class="envoltura">
+    <div class="cabecera-seccion">
+      <h2>Empezar</h2>
+      <p>La primera vez, WProton descarga solo lo que necesita: Python, los
+         runners y las herramientas de montaje. Tarda unos minutos y no vuelve
+         a pasar.</p>
+    </div>
+    <div class="pasos">
+      <div class="paso">
+        <div>
+          <h3>Descarga el fichero</h3>
+          <p>Es uno solo, <code>wproton.sh</code>. Déjalo donde quieras: crea
+             sus carpetas ahí al lado y no toca nada del sistema.</p>
+        </div>
+      </div>
+      <div class="paso">
+        <div>
+          <h3>Dale permiso y ábrelo</h3>
+          <p>Con doble clic desde el explorador, o desde la terminal:</p>
+          <code>chmod +x wproton.sh &amp;&amp; ./wproton.sh --setup</code>
+        </div>
+      </div>
+      <div class="paso">
+        <div>
+          <h3>Dile dónde tienes los juegos</h3>
+          <p>Te lo pregunta al terminar. Puedes añadir varias carpetas si los
+             tienes repartidos entre discos.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="formatos">
+  <div class="envoltura">
+    <div class="cabecera-seccion">
+      <h2>Qué puede abrir</h2>
+      <p>Todo aparece junto en la misma lista, venga empaquetado o suelto.</p>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Formato</th><th>Qué es</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>.wsquashfs</code></td>
+            <td>Juego empaquetado. Se monta al vuelo y las partidas se guardan aparte.</td></tr>
+        <tr><td><code>.dwarfs</code></td>
+            <td>Igual, pero comprime bastante más. Útil con juegos grandes.</td></tr>
+        <tr><td>Carpetas</td>
+            <td>Un juego descomprimido, tal cual. También las que acaban en <code>.pc</code>.</td></tr>
+        <tr><td><code>.exe</code> · <code>.bat</code></td>
+            <td>Se juegan directamente, sin empaquetar nada antes.</td></tr>
+        <tr><td><code>.zip</code> · <code>.7z</code> · <code>.rar</code></td>
+            <td>Se importan y se empaquetan solos.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="modo-juego">
+  <div class="envoltura">
+    <div class="cabecera-seccion">
+      <h2>Pensado para el mando</h2>
+      <p>No es una interfaz de escritorio a la que además se le puede enchufar
+         un mando: se diseñó al revés.</p>
+    </div>
+    <div class="tarjetas">
+      <div class="tarjeta">
+        <h3><span>En</span> el modo Juego</h3>
+        <p>Funciona dentro de la sesión de la Steam Deck, sin salir al
+           escritorio. Y puede añadirse a Steam con su propia imagen.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Un</span> ajuste por juego</h3>
+        <p>Runner, prefijo, MangoHud, FSR, gamescope, DLL o variables: cada
+           juego guarda lo suyo y no se pisan entre ellos.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Fichas</span> y carátulas</h3>
+        <p>Año, editor, géneros, nota de la crítica y cuánto se tarda en
+           terminarlo, con la carátula al lado.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Mandos</span> raros, también</h3>
+        <p>Un fichero <code>.keys</code> traduce el mando a teclado para los
+           juegos que no lo soportan. Con perfiles para DualSense y DS4.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Llévatelo</span> a otro equipo</h3>
+        <p>Empaqueta un juego junto a su prefijo y tendrás un archivo que
+           funciona en otra máquina sin instalar nada.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Sin</span> tocar el sistema</h3>
+        <p>Todo vive en su carpeta: Python, runners y herramientas. Para
+           desinstalarlo, se borra y ya está.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="dudas">
+  <div class="envoltura">
+    <div class="cabecera-seccion">
+      <h2>Dudas frecuentes</h2>
+    </div>
+    <details>
+      <summary>¿Necesito tener Steam?</summary>
+      <p>No. WProton usa Wine o Proton por su cuenta. Si tienes Steam, puede
+         añadirse a la biblioteca para abrirlo desde el modo Juego, pero es
+         opcional.</p>
+    </details>
+    <details>
+      <summary>¿En qué sistemas funciona?</summary>
+      <p>Se prueba en CachyOS, SteamOS (Steam Deck y Legion Go S) y Batocera.
+         Al ser un script de usuario, en otras distribuciones debería
+         funcionar igual mientras haya FUSE.</p>
+    </details>
+    <details>
+      <summary>¿Hace falta permiso de administrador?</summary>
+      <p>No. Ni para instalarlo ni para usarlo. Si le faltan las herramientas
+         de montaje, se descarga su propia copia portable.</p>
+    </details>
+    <details>
+      <summary>¿Dónde se guardan mis partidas?</summary>
+      <p>Fuera del archivo del juego, en su carpeta de datos. Así puedes
+         reemplazar el juego sin perderlas, y hay copias de seguridad desde el
+         menú.</p>
+    </details>
+    <details>
+      <summary>Mi mando no responde en un juego</summary>
+      <p>Prueba <em>Mando Sony</em> en los ajustes del juego si es un DualSense
+         o un DS4. Para juegos sin soporte de mando, un fichero
+         <code>.keys</code> lo traduce a teclado.</p>
+    </details>
+  </div>
+</section>
+
+<section class="cierre">
+  <div class="envoltura">
+    <h2>Un fichero y a jugar</h2>
+    <p>Descárgalo, dale permiso de ejecución y ábrelo. Lo demás lo hace él.</p>
+    <div class="botones" style="justify-content:center">
+      <a class="boton boton-primario" href="https://github.com/stshunz/WProton/releases/latest">
+        Descargar la última versión
+      </a>
+      <a class="boton boton-secundario" href="https://github.com/stshunz/WProton/blob/main/MANUAL.md">
+        Leer el manual
+      </a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="envoltura">
+    <span>WProton — software libre, hecho por y para quien juega en Linux.</span>
+    <span>
+      <a href="https://github.com/stshunz/WProton">Código</a> ·
+      <a href="https://github.com/stshunz/WProton/blob/main/CHANGELOG.md">Novedades</a> ·
+      <a href="https://github.com/stshunz/WProton/issues">Avisar de un fallo</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+// La lista de la portada imita la de WProton: misma navegación, mismos datos.
+const juegos = [
+  {n:"80's OVERDRIVE",  fav:true,  ano:"2020", gen:"Carreras, Indie", dur:"5 h",    jug:"3 veces"},
+  {n:"88 Heroes",       fav:false, ano:"2017", gen:"Acción, Plataformas", dur:"8 h", jug:"2 veces"},
+  {n:"Constance",       fav:true,  ano:"2025", gen:"Metroidvania", dur:"12 h",      jug:"7 veces"},
+  {n:"Donkey Kong Land",fav:false, ano:"2024", gen:"Plataformas", dur:"6 h",        jug:"1 vez"},
+  {n:"Fantasy Soccer",  fav:false, ano:"2019", gen:"Deportes", dur:"—",             jug:"—"}
+];
+const lista = document.getElementById('lista');
+let sel = 0;
+
+function pintar(){
+  lista.innerHTML = juegos.map((j,i)=>
+    `<li role="option" aria-selected="${i===sel}" data-i="${i}">
+       <span>${j.n}</span>${j.fav?'<span class="estrella" aria-label="favorito">★</span>':''}
+     </li>`).join('');
+  const j = juegos[sel];
+  document.getElementById('caratula').textContent = j.n;
+  document.getElementById('d-ano').textContent = j.ano;
+  document.getElementById('d-genero').textContent = j.gen;
+  document.getElementById('d-duracion').textContent = j.dur;
+  document.getElementById('d-jugado').textContent = j.jug;
+}
+function mover(d){ sel = (sel + d + juegos.length) % juegos.length; pintar(); }
+
+lista.addEventListener('keydown', e=>{
+  if(e.key==='ArrowDown'){ mover(1); e.preventDefault(); }
+  if(e.key==='ArrowUp'){ mover(-1); e.preventDefault(); }
+});
+lista.addEventListener('click', e=>{
+  const li = e.target.closest('li'); if(!li) return;
+  sel = +li.dataset.i; pintar();
+});
+pintar();
+</script>
+</body>
+</html>
