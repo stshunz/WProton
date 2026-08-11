@@ -239,6 +239,7 @@ write_lang_en() {
  "Buscar prefijos y saves huerfanos": "Find orphaned prefixes and saves",
  "CANCELAR": "CANCEL",
  "CARPETA": "FOLDER",
+ "Cambiar las imágenes de WProton en Steam": "Change WProton's artwork in Steam",
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
  "Carpeta principal de juegos": "Main games folder",
@@ -314,6 +315,8 @@ write_lang_en() {
  "Idioma": "Language",
  "Idioma de los menus / Menu language": "Menu language / Idioma de los menus",
  "Idioma del juego": "Game language",
+ "Imagenes de la comunidad (neon, con Wine/Proton/Linux)": "Community artwork (neon, with Wine/Proton/Linux)",
+ "Imagenes sencillas dibujadas por WProton": "Simple artwork drawn by WProton",
  "Importar configuración desde un zip": "Import a setup from a zip",
  "Incluido en el wsquashfs (estilo Batocera)": "Bundled in the wsquashfs (Batocera style)",
  "Instalando datos de duración...": "Installing playtime data...",
@@ -336,6 +339,7 @@ write_lang_en() {
  "Limpiar cache de shaders": "Clear shader cache",
  "Listo": "Done",
  "MAYUS": "SHIFT",
+ "Mando Sony (DualSense/DS4):": "Sony controller (DualSense/DS4):",
  "Mando via SDL (DualSense como Xbox)": "Controller via SDL (DualSense as Xbox)",
  "MangoHud": "MangoHud",
  "Mapeador .keys": ".keys mapper",
@@ -1348,9 +1352,20 @@ arte_conseguir() {
     #   2) una carpeta art/ junto a wproton.sh (para quien las quiera propias)
     #   3) las del repositorio (las buenas, hechas a mano)
     #   4) las que dibuja WProton (sencillas, pero siempre disponibles)
-    local arte="$RUNTIME_DIR/arte" f faltan=0
+    local estilo="${1:-}" arte="$RUNTIME_DIR/arte" f faltan=0
     mkdir -p "$arte" 2>/dev/null
-    for f in wproton_p wproton_header wproton_hero wproton_logo; do
+    # Al pedir un estilo concreto se empieza de cero: si no, se quedarian las
+    # de antes y parecia que elegir no servia de nada.
+    [ -n "$estilo" ] && rm -f "$arte"/wproton_*.png 2>/dev/null
+    if [ "$estilo" = propio ]; then
+        pygame_available || { ui_error "Hacen falta los menus graficos"; return 1; }
+        write_menu_pygame
+        PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_VIDEODRIVER=dummy \
+            env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" logo "$arte" \
+            >> "$LOG_FILE" 2>&1 || return 1
+        return 0
+    fi
+    for f in wproton_p wproton_header wproton_hero wproton_logo wproton_icono; do
         [ -s "$arte/$f.png" ] && continue
         # copia local junto al script
         if [ -s "$BASE_DIR/art/$f.png" ]; then
@@ -1384,12 +1399,12 @@ steam_poner_imagenes() {
     # Copia las imagenes de WProton a la carpeta "grid" de Steam, con los
     # nombres que Steam espera para cada formato. Sin esto, en el modo Juego
     # aparece un cuadro gris con el nombre.
-    # $1 = carpeta userdata/<id>/config, $2 = appid
-    local cfg="$1" appid="$2"
+    # $1 = carpeta userdata/<id>/config, $2 = appid, $3 = estilo (opcional)
+    local cfg="$1" appid="$2" estilo="${3:-}"
     [ -n "$appid" ] || return 1
     local arte="$RUNTIME_DIR/arte"
     loading_say "Preparando las imagenes de la biblioteca..."
-    arte_conseguir || return 1
+    arte_conseguir "$estilo" || return 1
     local grid="$cfg/grid"
     mkdir -p "$grid" || return 1
     # nombres que usa Steam: <appid>p (vertical), <appid> (apaisada),
@@ -1427,7 +1442,7 @@ En el modo Juego, la sesion ES Steam y habria que cerrarlo."
     local vdf="$cfg/shortcuts.vdf"
     [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
     if ! "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "WProton" "$self" \
-         "$(dirname "$self")" "" "" >> "$LOG_FILE" 2>&1; then
+         "$(dirname "$self")" "" "$(icono_wproton)" >> "$LOG_FILE" 2>&1; then
         ui_error "Fallo escribiendo shortcuts.vdf (mira el registro)"
         [ "$reabrir" = 1 ] && steam_abrir
         return 1
@@ -2196,9 +2211,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py d7c66dcab384" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 94659d15b7c9" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py d7c66dcab384
+# WPROTON_HELPER menu_pygame.py 94659d15b7c9
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -4412,7 +4427,8 @@ def generar_imagenes(destino):
     medidas = (('p', 600, 900),          # vertical (rejilla de la biblioteca)
                ('header', 920, 430),     # apaisada
                ('hero', 1920, 620),      # cabecera grande
-               ('logo', 640, 360))       # logotipo sobre la cabecera
+               ('logo', 640, 360),       # logotipo sobre la cabecera
+               ('icono', 256, 256))      # icono del acceso directo
     os.makedirs(destino, exist_ok=True)
     hechas = []
     for nombre, an, al in medidas:
@@ -5783,6 +5799,12 @@ profile_defaults() {
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
+    # Mandos de Sony (DualSense / DS4) con GE-Proton 11-4 o mas nuevo:
+    #   auto  - lo que decida Proton (bien en juegos con soporte completo)
+    #   ds4   - el DualSense se presenta como un DS4 (juegos con soporte DS4)
+    #   xinput- se convierte a mando de Xbox (juegos viejos o con mapeo raro)
+    #   steam - ademas, se finge Steam Input (juegos que lo exigen)
+    PAD_SONY=auto
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
     NOTAS=""                 # apunte libre ("necesita -novr", "usar GE 9-27"...)
@@ -5831,6 +5853,7 @@ ARGS_OVERRIDE="$ARGS_OVERRIDE"
 PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
+PAD_SONY=${PAD_SONY:-auto}
 PAD_STEAMFIX=$PAD_STEAMFIX
 NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
@@ -6142,6 +6165,22 @@ export_game_env() {
     # Mandos Sony/Switch fuera de Steam: sin esto Proton los pasa por hidraw
     # y los juegos solo-XInput no los ven (el caso The Mummy Demastered)
     local pad_auto pad_eff pad_why
+    # Mandos de Sony. GE-Proton 11-4 ("arreglo de mandos") cambio como se
+    # manejan DualSense y DS4, y trajo estas variables pensadas sobre todo
+    # para jugar FUERA de Steam, que es nuestro caso: los ajustes automaticos
+    # de Proton solo se activan para juegos conocidos DE Steam.
+    case "${PAD_SONY:-auto}" in
+        ds4)
+            export PROTON_SONY_DUALSENSE_AS_DUALSHOCK4=1
+            say "[+] Mando Sony: el DualSense se presenta como DualShock 4" ;;
+        xinput)
+            export PROTON_SONY_HIDRAW_XINPUT=1
+            say "[+] Mando Sony: convertido a mando de Xbox (XInput)" ;;
+        steam)
+            export PROTON_SONY_HIDRAW_XINPUT=1
+            export PROTON_STEAMINPUT_XINPUT_FALLBACK=1
+            say "[+] Mando Sony: XInput + Steam Input simulado" ;;
+    esac
     if [ "${PAD_SDL:-auto}" = auto ]; then
         pad_auto="$(pad_sdl_auto)"
         pad_eff="${pad_auto%%|*}"; pad_why="auto: ${pad_auto#*|}"
@@ -9737,6 +9776,15 @@ font_label() {
     esac
 }
 
+pad_sony_label() {
+    case "${PAD_SONY:-auto}" in
+        ds4)    printf 'como DualShock 4' ;;
+        xinput) printf 'como mando de Xbox' ;;
+        steam)  printf 'Xbox + Steam Input' ;;
+        *)      printf 'automatico' ;;
+    esac
+}
+
 pad_sdl_label() {
     case "${PAD_SDL:-auto}" in
         1) printf 'ON (forzado)' ;;
@@ -10488,6 +10536,22 @@ Solo aplica a runners Proton. Busca el id en https://umu.openwinecomponents.org"
 Ayuda a volver al menu en modo Juego, pero algunos juegos
 avisan de 'Hooking has failed' o van a tirones. Si pasa,
 desactivalo aquí mismo." ;;
+        "Mando Sony"*)
+            case "${PAD_SONY:-auto}" in
+                auto)   PAD_SONY=ds4 ;;
+                ds4)    PAD_SONY=xinput ;;
+                xinput) PAD_SONY=steam ;;
+                *)      PAD_SONY=auto ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Mando Sony: $(pad_sony_label)
+
+  automatico          lo que decida Proton (juegos con soporte completo)
+  como DualShock 4    para juegos que solo entienden el DS4
+  como mando de Xbox  para juegos viejos o con el mapeo cambiado
+  Xbox + Steam Input  para los que exigen Steam Input
+
+Necesita GE-Proton 11-4 o mas nuevo." ;;
         "Mando via SDL"*)
             case "${PAD_SDL:-auto}" in
                 auto) PAD_SDL=1 ;;
@@ -10674,6 +10738,7 @@ game_config_menu() {
             "Empaquetar con su prefijo (archivo autosuficiente)" \
             "Acceso directo en el escritorio" \
             "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
+            "Mando Sony (DualSense/DS4): $(pad_sony_label)" \
             "Mapeador .keys: $kstat" \
             "Rendimiento y compatibilidad >>" \
             "Herramientas del prefijo >>" \
@@ -10762,6 +10827,8 @@ main_dispatch() {
                 ui_info "DwarFS listo en runtime/tools:
 mkdwarfs para empaquetar y dwarfs para montar."
             fi ;;
+        "Añadir WProton a Steam"*) anadir_wproton_a_steam || true ;;
+        "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Datos de duración"*) hltb_instalar ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
@@ -11006,6 +11073,8 @@ tools_menu() {
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
+            "Añadir WProton a Steam (con su imagen)" \
+            "Cambiar las imágenes de WProton en Steam" \
             "Datos de duración de partida (HowLongToBeat)" \
             "Descargar herramientas DwarFS (mkdwarfs + driver)" \
             "<< Volver")" || return
@@ -11123,9 +11192,19 @@ crear_acceso_directo() {
     return 0
 }
 
+icono_wproton() {
+    # Icono de WProton para el acceso directo. Si no esta descargado se
+    # intenta traer; si no hay forma, el acceso se crea sin icono (mejor eso
+    # que no crearlo).
+    local arte="$RUNTIME_DIR/arte"
+    [ -s "$arte/wproton_icono.png" ] || arte_conseguir >/dev/null 2>&1
+    [ -s "$arte/wproton_icono.png" ] && printf '%s' "$arte/wproton_icono.png"
+    return 0
+}
+
 acceso_directo_wproton() {
     local self; self="$(readlink -f "$0")"
-    crear_acceso_directo "WProton" "\"$self\"" "" \
+    crear_acceso_directo "WProton" "\"$self\"" "$(icono_wproton)" \
         "Lanzador de juegos de Windows para Linux"
 }
 
