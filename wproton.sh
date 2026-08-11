@@ -4609,12 +4609,41 @@ ge_tags_curated() {
 }
 
 dl() {
-    # $1 = url, $2 = destino. Con barra de progreso zenity si hay GUI.
-    say "Descargando $(basename "$2")..."
-    # Si ya hay un aviso general en pantalla (instalacion inicial) o nuestra
-    # ventana de progreso, NO abrir otra ventana encima: se solapaban.
+    # $1 = url, $2 = destino.
+    #
+    # La barra es la NUESTRA (pygame). Con curl se puede saber el porcentaje
+    # real, asi que la barra avanza de verdad en vez de ir "pulsando".
+    local nombre; nombre="$(basename "$2")"
+    say "Descargando $nombre..."
+    # Si ya hay una ventana en pantalla, NO abrir otra encima: se solapaban.
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
         curl -fL --retry 3 -s -o "$2" "$1"
+    elif pygame_available; then
+        progress_start "Descargando $nombre"
+        # Tamaño total, para que la barra avance de verdad. Si el servidor no
+        # lo dice, se avanza despacio: al menos se ve que sigue trabajando.
+        local total; total="$(curl -fsIL --max-time 15 "$1" 2>/dev/null \
+            | grep -i '^content-length:' | tail -n1 \
+            | tr -dc '0-9')"
+        curl -fL --retry 3 -s -o "$2" "$1" &
+        local pid=$! pct=0 hechos=0
+        while kill -0 $pid 2>/dev/null; do
+            sleep 1
+            hechos="$(stat -c %s "$2" 2>/dev/null || echo 0)"
+            if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
+                pct=$(( hechos * 100 / total ))
+                [ "$pct" -gt 99 ] && pct=99
+                progress_set "$pct" "Descargando $nombre  ($(human_size "$hechos") de $(human_size "$total"))"
+            else
+                [ "$pct" -lt 90 ] && pct=$((pct + 2))
+                progress_set "$pct" "Descargando $nombre  ($(human_size "$hechos"))"
+            fi
+        done
+        wait $pid
+        local rc=$?
+        progress_set 100 "Listo"
+        progress_stop
+        return $rc
     elif [ "$HAS_ZENITY" = 1 ]; then
         curl -fL --retry 3 -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
         local pid=$!
@@ -4628,15 +4657,41 @@ dl() {
 }
 
 run_with_progress() {
-    # $1 = texto de estado; resto = comando. Pulsador zenity si hay GUI.
+    # $1 = texto de estado; resto = comando.
+    #
+    # La ventana de progreso es la NUESTRA (pygame): se ve igual en escritorio
+    # y en modo Juego, con el tema elegido y manejable con el mando. Zenity
+    # queda solo como respaldo para quien no tenga pygame; mezclar los dos
+    # estilos en la misma instalacion quedaba descuidado.
     local text="$1"; shift
     say "$text"
     menu_server_say "$text"      # tambien en la pantalla de menus
     canvas_say "$text"
-    # al salir de esta funcion se limpia (ver el final)
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
-        # ya hay un aviso en pantalla: no apilar ventanas
+        # ya hay una ventana en pantalla: no apilar otra encima
         "$@" >> "$LOG_FILE" 2>&1
+        local _rc0=$?
+        loading_clear
+        return $_rc0
+    elif pygame_available; then
+        progress_start "WProton"
+        progress_set 10 "$text"
+        "$@" >> "$LOG_FILE" 2>&1 &
+        local pid=$!
+        # avance "vivo" mientras dura: no sabemos cuanto falta, pero al menos
+        # se ve que la cosa sigue en marcha
+        local pct=10
+        while kill -0 $pid 2>/dev/null; do
+            sleep 1
+            [ "$pct" -lt 90 ] && pct=$((pct + 2))
+            progress_set "$pct" "$text"
+        done
+        wait $pid
+        local _rc1=$?
+        progress_set 100 "Listo"
+        progress_stop
+        loading_clear
+        return $_rc1
     elif [ "$HAS_ZENITY" = 1 ]; then
         "$@" >> "$LOG_FILE" 2>&1 &
         local pid=$!
