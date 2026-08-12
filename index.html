@@ -179,6 +179,14 @@ details{border:1px solid var(--borde);border-radius:var(--radio);padding:16px 20
 details summary{cursor:pointer;font-weight:600;font-size:16.5px}
 details summary::marker{color:var(--acento)}
 details p{color:var(--tenue);margin:11px 0 0;font-size:15.5px}
+/* galería de capturas: son la prueba de que existe, van a tamaño grande */
+.galeria{display:grid;gap:28px}
+.captura{border:1px solid var(--borde);border-radius:var(--radio);overflow:hidden;
+  background:#0e1424}
+.captura img{display:block;width:100%;height:auto}
+.captura figcaption{padding:13px 18px;color:var(--tenue);font-size:15px;
+  border-top:1px solid var(--borde)}
+.captura figcaption b{color:var(--texto);font-weight:600}
 .cierre{text-align:center;padding:84px 0}
 .cierre h2{font-size:clamp(28px,3.4vw,38px)}
 .cierre p{color:var(--tenue);max-width:34em;margin:14px auto 28px}
@@ -197,6 +205,7 @@ footer a{color:var(--tenue)}
       <a href="#empezar">Empezar</a>
       <a href="#formatos">Formatos</a>
       <a href="#modo-juego">Modo Juego</a>
+      <a href="#capturas">Capturas</a>
       <a href="#dudas">Dudas</a>
     </nav>
   </div>
@@ -356,6 +365,41 @@ footer a{color:var(--tenue)}
         <p>Todo vive en su carpeta: Python, runners y herramientas. Para
            desinstalarlo, se borra y ya está.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="capturas">
+  <div class="envoltura">
+    <div class="cabecera-seccion">
+      <h2>Así se ve</h2>
+      <p>Capturas reales, tomadas en un escritorio con mando en la mano.</p>
+    </div>
+    <div class="galeria">
+      <figure class="captura">
+        <img src="img/lista.png" alt="Lista de juegos de WProton con la carátula y los datos del juego seleccionado" loading="lazy" width="960" height="540">
+        <figcaption><b>La biblioteca.</b> A la derecha, la carátula y la ficha
+          del juego resaltado: año, estudio, género, cuánto se tarda en
+          terminarlo y lo que llevas jugado. La estrella marca los favoritos.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/rejilla.jpg" alt="Vista de rejilla de WProton: los juegos como carátulas grandes" loading="lazy" width="960" height="540">
+        <figcaption><b>O en rejilla, si prefieres las carátulas.</b> La misma
+          biblioteca, con los juegos como portadas. Se cambia de una vista a
+          otra en <i>Biblioteca y preferencias</i>.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/ajustes.png" alt="Pantalla de ajustes de un juego en WProton" loading="lazy" width="960" height="540">
+        <figcaption><b>Los ajustes de un juego.</b> Cada juego guarda los suyos:
+          runner, prefijo, argumentos, mando… Lo que casi nunca se toca queda
+          recogido en dos submenús.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/runners.png" alt="Menú de runners y herramientas de WProton" loading="lazy" width="960" height="540">
+        <figcaption><b>Runners y herramientas.</b> Descargar versiones de Proton
+          o Wine, librerías de Windows, añadir WProton a Steam y poco más:
+          todo desde aquí, sin salir a la terminal.</figcaption>
+      </figure>
     </div>
   </div>
 </section>

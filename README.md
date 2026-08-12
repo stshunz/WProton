@@ -4,7 +4,9 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.08** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.15** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+
+![WProton: la biblioteca de juegos, con la carátula y la ficha del juego seleccionado](img/lista.png)
 
 Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/PortWINE**, la descarga automática de runners de **Heroic**, los perfiles por juego de **TeknoParrot** y el lanzamiento vía **umu** de **Faugus Launcher**.
 
@@ -12,12 +14,13 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 ---
 
-## Características 
+## Qué sabe hacer
 
 ### Formatos de juego
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
 - **`.dwarfs`** — igual de rápido de montar, con bastante más compresión.
-- **Carpetas sueltas**, **`.exe`** y **`.bat`** — se juegan directamente, sin empaquetar nada.
+- **Carpetas sueltas** (incluidas las `.pc`), **`.exe`** y **`.bat`** — aparecen en la biblioteca y se juegan directamente, sin empaquetar nada.
+- **Varias carpetas de juegos**: útil si los tienes repartidos entre discos.
 - **Empaquetado autosuficiente**: un solo archivo con el juego y su prefijo dentro, listo para llevar a otro equipo.
 - **Importación** de `zip`, `7z`, `rar` (incluido multiparte), `.wtgz` e **instaladores de GOG**, que se convierten al formato que elijas.
 - **Prefijo incluido**: si el archivo trae su propio `drive_c` (estilo Batocera), se puede usar tal cual; si además trae su propio Wine, también.
@@ -27,7 +30,10 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Búsqueda** escribiendo con el teclado, o con el **teclado en pantalla** (botón Y), que también sirve para escribir argumentos, notas y variables.
 - **Tres temas**: moderno (el predeterminado), clásico y arcade (synthwave con efecto CRT).
 - **Menús persistentes**: todos los menús se dibujan en un mismo proceso, sin parpadeo al cambiar de uno a otro.
-- **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**, con descarga automática desde SteamGridDB o eligiendo una imagen del sistema.
+- **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**:
+
+![Vista de rejilla de WProton](img/rejilla.jpg)
+, con descarga automática desde SteamGridDB o eligiendo una imagen del sistema.
 - Pantalla completa por defecto (**Select + A** para pasar a ventana) y tamaño de letra ajustable.
 - Interfaz en **castellano e inglés**, ampliable con ficheros de idioma.
 
@@ -37,6 +43,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Ficha del juego** con año, editor, géneros y nota de Metacritic (datos de Steam, sin clave).
 
 ### Runners
+- **Runner propio de WProton** (GE-Custom), que se instala de serie.
 - Descarga desde el menú: **GE-Proton**, **Proton-CachyOS**, **DWProton**, **Wine-LG**, **Proton-LG**, **Wine-GE** y **Kron4ek**.
 - **Auto-descarga**: si el perfil de un juego pide un runner que no tienes, se descarga solo antes de lanzar.
 - En Batocera detecta los Wine del sistema y los de `/userdata/system/wine/custom`.
@@ -145,4 +152,6 @@ cache/  logs/  games/
 - [Batocera](https://batocera.org) — formatos `.wsquashfs` y `autorun.cmd`.
 - [DwarFS](https://github.com/mhx/dwarfs), [innoextract](https://github.com/dscharrer/innoextract), [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2), [OptiScaler](https://github.com/cdozdil/OptiScaler), [SteamGridDB](https://www.steamgriddb.com).
 
-*Programa hecho con la ayuda de Claude, si has llegado hasta aquí y te gusta lo que hace sale una oportunidad 
+## Licencia
+
+*(Pendiente de elegir — GPL-3.0 encajaría con el ecosistema del que bebe el proyecto.)*

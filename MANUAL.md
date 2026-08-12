@@ -16,6 +16,8 @@ chmod +x wproton.sh
 ./wproton.sh --setup
 ```
 
+O más sencillo: **doble clic en `wproton.sh`** desde el explorador de archivos. Las dos formas hacen exactamente lo mismo; con doble clic te ahorras abrir la terminal.
+
 `--setup` descarga lo que WProton necesita —su propio Python, los menús, umu-launcher y un GE-Proton— **dentro de su carpeta**. No instala nada en el sistema ni pide contraseña.
 
 La primera vez tarda unos minutos. Después, arranca con:
@@ -49,6 +51,8 @@ Esos archivos son la forma en que WProton guarda los juegos: **un solo fichero c
 | Un `.exe` suelto | Igual, tomando su carpeta como raíz |
 | Un `.bat` o `.cmd` | Igual: algunos juegos arrancan con un script en vez de un ejecutable |
 
+> Las carpetas que estén **dentro de tu carpeta de juegos** salen solas en la lista, sin tener que añadirlas: basta con que tengan un ejecutable, un `autorun.cmd`, un `drive_c` o que acaben en `.pc`.
+
 > Empaquetar no es obligatorio: una carpeta o un `.exe` se pueden jugar tal cual, sin convertir nada. Empaquetar solo sirve para tenerlo todo en un fichero, que ocupa menos y es más cómodo de mover.
 
 Cuando el juego esté en una carpeta, aparece este menú:
@@ -79,6 +83,8 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | **X** | Configurar el juego resaltado (en la lista de juegos) |
 | **Y** | Buscar |
 | **Select + A** | Pantalla completa / ventana |
+| **Select** (5 s) | (con un juego abierto) Cerrarlo y volver al menú |
+| **Select + Y** | (con un juego abierto) Recuperar el foco si se ha ido detrás |
 
 **Buscar entre muchos juegos**: pulsa **Y** y aparece un teclado en pantalla; o, si tienes teclado, empieza a escribir directamente. Se filtran los juegos cuyo nombre *empiece* por lo que escribas.
 
@@ -86,9 +92,13 @@ Ese mismo teclado en pantalla se usa para escribir argumentos, notas o cualquier
 
 ---
 
+![La biblioteca de WProton: lista de juegos con la carátula y la ficha del juego seleccionado](img/lista.png)
+
 ## 3. Ajustes de un juego
 
 Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes de un juego*).
+
+![Pantalla de ajustes de un juego](img/ajustes.png)
 
 Arriba está lo del día a día. Lo que casi nunca se toca vive en dos submenús: **Rendimiento y compatibilidad** (MangoHud, Fsync, DXVK, FSR, gamescope…) y **Herramientas del prefijo** (winecfg, winetricks, dgVoodoo2, OptiScaler).
 
@@ -120,6 +130,13 @@ nada. Necesita que el juego use un prefijo propio (no el compartido) y que lo
 hayas probado antes. El original no se toca.
 
 **Notas** — un recordatorio tuyo: *"necesita -novr"*, *"con GE 9-27 va mejor"*.
+
+**Borrar la configuración de este juego** — quita sus ajustes y empieza de
+cero. El juego y las partidas no se tocan, y queda una copia `.bak` por si
+acaso. También están todos juntos en *Perfiles guardados*.
+
+**Acceso directo en el escritorio** — crea un icono que lanza ese juego
+directamente, con su carátula. Útil para los que juegas a menudo.
 
 **Favorito** — lo pone al principio de la lista, con una cinta en la carátula.
 
@@ -163,6 +180,8 @@ En *Ajustes de un juego → Partidas guardadas*:
 En *Biblioteca y preferencias*:
 
 - **Vista de juegos**: lista o **rejilla de carátulas**. En la lista, el panel de la derecha muestra la carátula del juego resaltado y sus datos.
+
+![Vista de rejilla: los juegos como carátulas grandes](img/rejilla.jpg)
 - **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
 - **Descargar carátulas**: necesita una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API). Se pide una sola vez.
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
@@ -231,6 +250,110 @@ Mira el ajuste *Mando vía SDL* del juego. En automático debería acertar, pero
 
 **¿Se llenará la carpeta `logs/` de ficheros?**
 No: WProton borra los registros que tengan más de dos días.
+
+**Mi mando de PlayStation no responde (DualSense o DualShock 4).**
+Desde GE-Proton 11-4 los mandos de Sony se leen por `/dev/hidraw`, y en muchos
+sistemas esos dispositivos no son legibles por el usuario.
+
+La forma cómoda: *Runners y herramientas → Arreglar permisos del mando*.
+WProton deja el fichero preparado y te dice los comandos exactos para tu
+sistema, que solo tienes que copiar en una terminal.
+
+> Los comandos de abajo funcionan en cualquier terminal. Si en algún sitio ves
+> instrucciones con `sudo tee ... <<'EOF'`, eso es sintaxis de **bash** y da un
+> error de sintaxis en **fish**, que es el shell por defecto de CachyOS.
+
+A mano, en una distribución normal:
+
+```bash
+sudo cp runtime/70-wproton-mandos.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+**En SteamOS hay dos pasos más**, y son la causa habitual de que "el comando no
+funcione": el sistema de ficheros es de solo lectura y hay que desbloquearlo,
+y el usuario `deck` no trae contraseña de fábrica, así que `sudo` no puede
+funcionar hasta que se crea una:
+
+```bash
+passwd                          # solo la primera vez, crea tu contraseña
+sudo steamos-readonly disable
+sudo cp runtime/70-wproton-mandos.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo steamos-readonly enable
+```
+
+Después, desconecta y vuelve a conectar el mando.
+
+**Mi mando de PlayStation ha dejado de funcionar tras actualizar GE-Proton.**
+GE-Proton 11-4 rehízo el soporte de los mandos de Sony. Entra en los ajustes
+del juego y prueba *Mando Sony (DualSense/DS4)*: normalmente lo arregla la
+opción **como mando de Xbox**, y en juegos con soporte de DS4, **como
+DualShock 4**.
+
+Ojo: *Mando via SDL* y *Mando Sony* son incompatibles. Al elegir un modo Sony,
+la primera se ignora automáticamente.
+
+**Mis juegos están en otro disco y no aparecen.**
+Entra en *Biblioteca y preferencias → Montar un disco*: te lista los que hay
+sin montar y, al elegir uno, lo monta y te ofrece añadirlo como carpeta de
+juegos. No hace falta contraseña.
+
+Si el disco ya estaba configurado como carpeta de juegos, WProton lo detecta
+al arrancar y te ofrece montarlo él solo.
+
+**El juego se ha ido detrás de otra ventana y no puedo volver.**
+Con el teclado, Alt+Tab. Si quieres hacerlo con el mando, crea el `.keys` de
+ejemplo desde *Runners y herramientas* y cópialo junto al juego: trae
+Select+Y para el Alt+Tab. No viene puesto de serie porque el mapeador crea un
+teclado virtual durante la partida y algunos juegos se confunden al ver un
+dispositivo nuevo.
+
+Las combinaciones globales están en `runtime/wproton_global.keys` y se pueden
+cambiar a mano. Si un juego tiene su propio `.keys`, ese tiene preferencia.
+
+**En SteamOS me dice que evdev no compiló.**
+SteamOS no trae las cabeceras del kernel, así que ese módulo no se puede
+compilar ahí. WProton lo detecta y descarga la versión ya compilada, que
+funciona igual. Si por lo que sea no lo consigue, prueba *Runners y
+herramientas → Instalar evdev*, o copia una carpeta `evmapy/` con el módulo a
+la raíz de WProton.
+
+Cerrar el juego con el mando **no depende de eso**: WProton lee el mando
+directamente y funciona igual.
+
+**Se ve el puntero del ratón encima del juego.**
+WProton lo esconde al lanzar y lo devuelve al terminar. Si prefieres que no lo
+toque, pon `OCULTAR_CURSOR=0` en `settings.conf`.
+
+**¿Cómo salgo de un juego que no tiene opción de salir?**
+Mantén pulsado **Select** cinco segundos y WProton lo cierra. En la Steam
+Deck también sirve el botón de Steam. Si prefieres otra cosa, puedes
+desactivarlo con `PAD_EXIT=0` en `settings.conf`.
+
+Si prefieres otra combinación, en `settings.conf`:
+
+| `PAD_EXIT_COMBO` | Qué hay que mantener |
+|---|---|
+| `select` | Select (el de serie) |
+| `l3r3` | Los dos sticks a la vez |
+| `start` | Select + Start (en SteamOS choca con el cambio de modo del mando) |
+
+Y `PAD_EXIT_SEGUNDOS` cambia cuánto hay que mantenerlo.
+
+**WProton se ha quedado en "Volviendo al menú..." y no reacciona.**
+Algunos juegos dejan procesos colgados al cerrarse y WProton espera a que
+terminen. A los 20 segundos te pregunta si quieres forzar el cierre; responde
+que sí y volverás al menú.
+
+Si aun así no reacciona, desde otra terminal:
+
+```bash
+./wproton.sh --kill
+```
+
+Eso detiene Wine y desmonta todo. Es seguro: las partidas guardadas no se
+tocan.
 
 **¿Cómo actualizo?**
 *Buscar actualizaciones* en el menú principal, o `./wproton.sh --update`. Descarga la versión nueva, la valida y guarda la anterior como `.bak`.
