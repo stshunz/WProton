@@ -179,6 +179,14 @@ details{border:1px solid var(--borde);border-radius:var(--radio);padding:16px 20
 details summary{cursor:pointer;font-weight:600;font-size:16.5px}
 details summary::marker{color:var(--acento)}
 details p{color:var(--tenue);margin:11px 0 0;font-size:15.5px}
+/* el vídeo va primero: enseña cómo se maneja mejor que cualquier texto */
+.video{border:1px solid var(--borde);border-radius:var(--radio);overflow:hidden;
+  background:#0e1424;margin-bottom:30px}
+.video video{display:block;width:100%;height:auto;background:#0e1424}
+.video figcaption{padding:13px 18px;color:var(--tenue);font-size:15px;
+  border-top:1px solid var(--borde)}
+.video figcaption b{color:var(--texto);font-weight:600}
+
 /* galería de capturas: son la prueba de que existe, van a tamaño grande */
 .galeria{display:grid;gap:28px}
 .captura{border:1px solid var(--borde);border-radius:var(--radio);overflow:hidden;
@@ -373,8 +381,20 @@ footer a{color:var(--tenue)}
   <div class="envoltura">
     <div class="cabecera-seccion">
       <h2>Así se ve</h2>
-      <p>Capturas reales, tomadas en un escritorio con mando en la mano.</p>
+      <p>Un vídeo corto y capturas reales, tomadas en un escritorio con el
+         mando en la mano.</p>
     </div>
+    <figure class="video">
+      <video controls preload="none" poster="img/poster.jpg" width="1920" height="1080">
+        <source src="img/wproton.mp4" type="video/mp4">
+        Tu navegador no puede reproducir el vídeo.
+        <a href="img/wproton.mp4">Descárgalo aquí</a>.
+      </video>
+      <figcaption><b>Treinta segundos con el mando en la mano.</b> Moverse por
+        la biblioteca, cambiar entre lista y rejilla, y entrar en los ajustes
+        de un juego.</figcaption>
+    </figure>
+
     <div class="galeria">
       <figure class="captura">
         <img src="img/lista.png" alt="Lista de juegos de WProton con la carátula y los datos del juego seleccionado" loading="lazy" width="960" height="540">
