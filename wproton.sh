@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.14"
+WPROTON_VERSION="1.15"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -75,7 +75,7 @@ PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
-PAD_FOCO=0                               # 1 = Select+Y envia Alt+Tab (teclado virtual)
+DIAG_MANDO=0                             # 1 = registro detallado del mando
 PAD_EXIT=1                               # cerrar el juego con el mando
 PAD_EXIT_COMBO=select                    # select | l3r3 | start
 PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacion
@@ -148,11 +148,12 @@ MENU_SERVER="$MENU_SERVER"
 # --------------------------------------------------------------------------
 OCULTAR_CURSOR="$OCULTAR_CURSOR"
 # --------------------------------------------------------------------------
-# RECUPERAR EL FOCO CON EL MANDO (Select+Y = Alt+Tab)
-#   Necesita crear un teclado virtual durante la partida. Algunos juegos se
-#   confunden al aparecer un dispositivo nuevo, por eso viene desactivado.
+# DIAGNOSTICO DEL MANDO
+#   Con 1, el registro anota que dispositivos se leen, que variables recibe
+#   el juego y que botones llegan. Util solo cuando algo falla; en el uso
+#   normal alarga el registro sin aportar nada.
 # --------------------------------------------------------------------------
-PAD_FOCO="$PAD_FOCO"
+DIAG_MANDO="$DIAG_MANDO"
 PAD_EXIT="$PAD_EXIT"
 PAD_EXIT_COMBO="$PAD_EXIT_COMBO"
 PAD_EXIT_SEGUNDOS="$PAD_EXIT_SEGUNDOS"
@@ -176,6 +177,11 @@ BACKUP_SYNC_DEST="$BACKUP_SYNC_DEST"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
 # de wproton.sh, no al directorio actual). Ej.: GAMES_PATH="ROMs/windows"
 EOF
+    # Modo desarrollo: se anade al final y SOLO si ya estaba activo. Asi no
+    # aparece en el fichero de quien no lo haya puesto a mano, pero tampoco
+    # se pierde al guardar ajustes (esta funcion reescribe el fichero entero).
+    [ "${DEV_MODE:-0}" = 1 ] && printf 'DEV_MODE=1\n' >> "$SETTINGS_FILE"
+    return 0
 }
 abs_path() {
     # Rutas relativas -> relativas a la CARPETA DE WPROTON (no al directorio
@@ -239,7 +245,6 @@ write_lang_en() {
  "Arreglar permisos del mando (hidraw)": "Fix controller permissions (hidraw)",
  "Arreglo mando SteamOS (Steam Input)": "SteamOS controller fix (Steam Input)",
  "Asignar fichero .keys (se copia a profiles/$gid.keys)": "Assign a .keys file (copied to profiles/$gid.keys)",
- "Automatico  (lo que decida Proton)": "Automatic  (whatever Proton decides)",
  "Automático (según el tamaño de la pantalla)": "Automatic (based on screen size)",
  "Añadir WProton a Steam (con su imagen)": "Add WProton to Steam (with artwork)",
  "Añadir este juego a Steam": "Add this game to Steam",
@@ -271,8 +276,6 @@ write_lang_en() {
  "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
  "Cerrando Steam...": "Closing Steam...",
- "Como DualShock 4  (juegos con soporte de DS4)": "As a DualShock 4  (games with DS4 support)",
- "Como mando de Xbox  (lo mas compatible)": "As an Xbox controller  (most compatible)",
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
@@ -284,6 +287,7 @@ write_lang_en() {
  "Copiando el juego dentro de drive_c...": "Copying the game into drive_c...",
  "Copiando el prefijo...": "Copying the prefix...",
  "Crear copia de seguridad ahora": "Create a backup now",
+ "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)": "Create an example .keys (Alt+Tab, Alt+F4)",
  "Cuántas carátulas por fila en la rejilla": "How many covers per row in the grid",
  "DLL overrides": "DLL overrides",
  "DWProton [proton] - Dawn Winery, fixes anime/gacha": "DWProton [proton] - Dawn Winery, anime/gacha fixes",
@@ -440,7 +444,6 @@ write_lang_en() {
  "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam": "Wine-GE [wine] - GloriousEggroll, non-Steam games",
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
- "Xbox + Steam Input  (juegos que lo exigen)": "Xbox + Steam Input  (games that require it)",
  "__version__": "1",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
@@ -480,6 +483,7 @@ write_lang_en() {
  "rejilla (carátulas)": "grid (covers)",
  "sin partidas todavia": "no sessions yet",
  "subir": "up",
+ "vista": "view",
  "volver": "back",
  "wsquashfs - compatible con Batocera y PortProton": "wsquashfs - compatible with Batocera and PortProton",
  "¿Crear un acceso directo a WProton en el escritorio?": "Create a WProton shortcut on the desktop?",
@@ -577,6 +581,55 @@ wp_tr() {
             fi ;;
     esac
     printf '%s' "$txt"
+}
+
+sgdb_key_leer() {
+    # Clave de SteamGridDB.
+    #
+    # La idea es que nadie tenga que teclearla con el mando: basta con dejar
+    # un fichero de texto junto a wproton.sh con la clave dentro, y WProton lo
+    # recoge, lo convierte a sgdb.key con permisos solo para su dueño y borra
+    # el original. Asi la clave deja de estar en un .txt a la vista.
+    #
+    # Todo vive junto a wproton.sh: nada en ~/.config, para no perder la
+    # portabilidad (llevarse la carpeta a otro equipo y que funcione igual).
+    #
+    # Orden: sgdb.key -> cualquier .txt que parezca la clave -> settings.conf
+    local f k perm
+    if [ -r "$BASE_DIR/sgdb.key" ]; then
+        k="$(grep -v '^\s*#' "$BASE_DIR/sgdb.key" 2>/dev/null | grep -m1 . | tr -d '[:space:]')"
+        if [ -n "$k" ]; then
+            perm="$(stat -c %a "$BASE_DIR/sgdb.key" 2>/dev/null || echo 600)"
+            [ "$perm" = 600 ] || chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+            printf '%s' "$k"
+            return 0
+        fi
+    fi
+    # CUALQUIER .txt que haya junto a wproton.sh. No se mira el nombre: la
+    # gente lo llamara como quiera. Lo que decide es el CONTENIDO: una sola
+    # linea de 16 o mas caracteres alfanumericos, que es como son las claves.
+    # Un .txt con notas o instrucciones no pasa ese filtro y no se toca.
+    for f in "$BASE_DIR"/*.txt; do
+        [ -r "$f" ] || continue
+        k="$(grep -v '^\s*#' "$f" 2>/dev/null | grep -m1 . | tr -d '[:space:]')"
+        # una clave de SteamGridDB son 32 caracteres alfanumericos; se acepta
+        # cualquier cosa razonable pero se descarta texto suelto
+        case "$k" in
+            *[!A-Za-z0-9_-]*|'') continue ;;
+        esac
+        [ "${#k}" -lt 16 ] && continue
+        if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+            chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+            rm -f "$f" 2>/dev/null
+            # OJO: esta funcion se lee con $(...), asi que NO puede escribir
+            # nada por pantalla: se mezclaria con la clave. Solo al registro.
+            log "Clave de SteamGridDB recogida de $(basename "$f"); guardada en sgdb.key y borrado el .txt"
+        fi
+        printf '%s' "$k"
+        return 0
+    done
+    printf '%s' "${SGDB_KEY:-}"
+    return 0
 }
 
 load_settings() {
@@ -2227,6 +2280,12 @@ WP_INSTALL_SILENCIOSO=0                  # 1 = instalar sin pedir "Aceptar"
 INSTALL_NOTICE_PID=""
 PROGRESS_FILE=""
 PYGAME_OK_MARK="$RUNTIME_DIR/.pygame_ok"
+# Modo desarrollo: se pasa al helper para que F12 guarde la pantalla
+if [ "${DEV_MODE:-0}" = 1 ]; then
+    export WP_DEV=1
+    export WP_CAPT_DIR="$BASE_DIR/capturas"
+fi
+
 pygame_available() {
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
     # Cache en fichero: menu() corre en subshells y una variable no persiste,
@@ -2252,9 +2311,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 3f0cf619865d" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 3c9afd7c2a44" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 3f0cf619865d
+# WPROTON_HELPER menu_pygame.py 3c9afd7c2a44
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2640,6 +2699,70 @@ def find_raw_pads():
         pads.append('/dev/input/' + ev)
     return pads
 
+DEV = os.environ.get('WP_DEV') == '1'
+CAPT_DIR = os.environ.get('WP_CAPT_DIR', '')
+
+REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0}
+
+def grabar_fotograma():
+    # Graba los menus DESDE DENTRO, guardando fotogramas.
+    #
+    # Hace falta porque ffmpeg, que lee la pantalla desde fuera, saca video
+    # NEGRO: la ventana de pygame se dibuja con aceleracion y su contenido no
+    # llega a la ventana raiz de las X. Desde aqui sale exacto, igual que las
+    # capturas con F12.
+    #
+    # Se activa dejando un fichero .rec con la marca de tiempo final, asi que
+    # no hace falta reiniciar el proceso de menus.
+    if not DEV or screen is None:
+        return
+    ahora = time.time()
+    if ahora - REC['comprobado'] > 1.0:
+        REC['comprobado'] = ahora
+        marca = os.path.join(CAPT_DIR or '.', '.rec')
+        try:
+            if os.path.isfile(marca):
+                with open(marca) as fh:
+                    hasta, destino = fh.read().split('\n')[:2]
+                if float(hasta) > ahora and REC['dir'] != destino:
+                    REC.update({'hasta': float(hasta), 'dir': destino, 'n': 0})
+                    os.makedirs(destino, exist_ok=True)
+                    sys.stderr.write('menu_pygame: grabando menus en %s\n' % destino)
+        except Exception:
+            pass
+    if not REC['dir'] or ahora > REC['hasta']:
+        if REC['dir'] and ahora > REC['hasta']:
+            sys.stderr.write('menu_pygame: grabacion terminada (%d fotogramas)\n'
+                             % REC['n'])
+            REC['dir'] = ''
+        return
+    if ahora - REC['ultimo'] < 0.1:      # 10 por segundo: suficiente y ligero
+        return
+    REC['ultimo'] = ahora
+    try:
+        pygame.image.save(screen, os.path.join(REC['dir'], 'f%05d.png' % REC['n']))
+        REC['n'] += 1
+    except Exception:
+        pass
+
+def captura():
+    # Guarda la pantalla actual del menu. Se hace desde pygame, asi que sale
+    # exacta y sin bordes de ventana ni raton, que es lo que hace falta para
+    # el manual y la web.
+    if not (DEV and CAPT_DIR) or screen is None:
+        return
+    try:
+        os.makedirs(CAPT_DIR, exist_ok=True)
+        nombre = time.strftime('wproton_%Y%m%d_%H%M%S')
+        ruta = os.path.join(CAPT_DIR, nombre + '.png')
+        n = 2
+        while os.path.exists(ruta):
+            ruta = os.path.join(CAPT_DIR, '%s_%d.png' % (nombre, n)); n += 1
+        pygame.image.save(screen, ruta)
+        sys.stderr.write('menu_pygame: captura -> %s\n' % ruta)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo capturar (%s)\n' % e)
+
 def eventos():
     # pygame.event.get() a prueba de cambios de mandos.
     #
@@ -2725,7 +2848,14 @@ def evdev_thread():
                     sel_held[0] = (v != 0)
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
-                        post_key(pygame.K_F11)      # Select + A
+                        post_key(pygame.K_F11)      # Select + A: pantalla completa
+                    elif c == 307 and sel_held[0]:
+                        # Select + X: cambiar entre lista y rejilla.
+                        #
+                        # Antes era L2, pero en la mayoria de mandos L2 y R2
+                        # NO son botones: son ejes analogicos (ABS_Z/ABS_RZ),
+                        # asi que su codigo de boton no llega nunca.
+                        post_key(pygame.K_F3)
                     else:
                         post_key(RAW_BTN[c])
                 elif t == EV_ABS_RAW and c in (16, 17):
@@ -2764,20 +2894,31 @@ def _open_window():
     if FULLSCREEN:
         return pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     return pygame.display.set_mode((W, H))
-try:
-    screen = _open_window()
-except Exception as e:
-    sys.stderr.write('menu_pygame: no se pudo abrir la ventana (%s)\n' % e)
-    if FULLSCREEN:                      # reintentar en ventana
-        FULLSCREEN = False
+# Los modos que NO dibujan no deben abrir ventana.
+#
+# El vigilante del mando solo lee /dev/input y el generador de imagenes
+# trabaja en memoria, pero ambos abrian una ventana a pantalla completa que
+# nunca se dibujaba: negra. La del vigilante ademas sobrevive a la partida,
+# asi que al cerrar WProton se quedaba la pantalla en negro.
+SIN_VENTANA = len(sys.argv) > 1 and sys.argv[1] in ('guardia', 'logo')
+screen = None
+if SIN_VENTANA:
+    sys.stderr.write('menu_pygame: modo "%s": sin ventana\n' % sys.argv[1])
+else:
+    try:
         screen = _open_window()
-    else:
-        raise
-if FULLSCREEN:
-    W, H = screen.get_size()
-pygame.display.set_caption('WProton')
-sys.stderr.write('menu_pygame: video driver = %s | ventana %dx%d | fullscreen=%s\n'
-                 % (pygame.display.get_driver(), W, H, FULLSCREEN))
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo abrir la ventana (%s)\n' % e)
+        if FULLSCREEN:                      # reintentar en ventana
+            FULLSCREEN = False
+            screen = _open_window()
+        else:
+            raise
+    if FULLSCREEN:
+        W, H = screen.get_size()
+    pygame.display.set_caption('WProton')
+    sys.stderr.write('menu_pygame: video driver = %s | ventana %dx%d | fullscreen=%s\n'
+                     % (pygame.display.get_driver(), W, H, FULLSCREEN))
 
 _last_frame = [time.time()]
 
@@ -3901,6 +4042,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clockC.tick(15)          # muy poco consumo: no compite con el juego
 
@@ -3945,6 +4087,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clock2.tick(30)
         pygame.quit()
@@ -4070,6 +4213,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clockT.tick(30)
 
@@ -4086,6 +4230,9 @@ def run_session():
             if ev.type == pygame.QUIT:
                 running = False
             elif ev.type == pygame.KEYDOWN:
+                if DEV and ev.key == pygame.K_F12:
+                    captura()
+                    continue
                 t_now = time.time()
                 if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
                     continue
@@ -4144,6 +4291,12 @@ def run_session():
                         # L1: ficha del juego, sin pasar por configuracion
                         if ready() and ACTION_X and MODE in ('list', 'grid'):
                             action_sobre_juego('INFO')
+                    elif ev.key == pygame.K_F3:
+                        # L2: cambiar entre lista y rejilla. Se cierra el menu
+                        # y WProton lo reabre en la otra vista; con el servidor
+                        # de menus, el cambio se ve al momento.
+                        if ready() and ACTION_X and MODE in ('list', 'grid'):
+                            action_sobre_juego('VISTA')
                     elif ev.key == pygame.K_F2:
                         # R1: marcar o quitar favorito AQUI MISMO. Antes se
                         # cerraba el menu, lo aplicaba WProton y se volvia a
@@ -4307,6 +4460,7 @@ def run_session():
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
                           ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
                           ('R1', L('favorito', 'favourite')),
+                          ('Sel+X', L('vista', 'view')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
                           ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
@@ -4314,6 +4468,7 @@ def run_session():
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
                           ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
                           ('R1', L('favorito', 'favourite')),
+                          ('Sel+X', L('vista', 'view')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
@@ -4324,6 +4479,7 @@ def run_session():
             screen.blit(SCANSURF, (0, 0))
         try:
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
         except Exception as _e:
             # El servidor X de gamescope puede desaparecer al cerrarse un juego
@@ -4382,6 +4538,7 @@ def draw_idle(status=''):
         screen.blit(SCANSURF, (0, 0))
     try:
         pygame.display.flip()
+        grabar_fotograma()
         _last_frame[0] = time.time()
     except Exception:
         pass
@@ -4609,7 +4766,7 @@ def guardia(marca, segundos=5.0, combo='select'):
     import struct
     FMT = 'llHHi'
     SZ = struct.calcsize(FMT)
-    SELECT, START, L3, R3, Y_BTN = 314, 315, 317, 318, 308
+    SELECT, START, L3, R3 = 314, 315, 317, 318
     if combo == 'l3r3':
         REQ, nombre_combo = (L3, R3), 'L3+R3'
     elif combo == 'start':
@@ -4626,7 +4783,6 @@ def guardia(marca, segundos=5.0, combo='select'):
     fds = {}
     pulsados = {}          # dispositivo -> botones pulsados en el
     desde = None
-    desde_foco = None
     avisado = set()
     ultimo_escaneo = 0.0
     sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para cerrar)\n'
@@ -4724,24 +4880,6 @@ def guardia(marca, segundos=5.0, combo='select'):
                                          '(la combinacion espera %s)\n'
                                          % (p, sorted(aqui), list(REQ)))
             desde = None
-        # Select + Y -> recuperar el foco
-        foco_ok = any(SELECT in aqui and Y_BTN in aqui for aqui in pulsados.values())
-        if foco_ok and combo != 'select':
-            if desde_foco is None:
-                desde_foco = time.time()
-            elif time.time() - desde_foco >= 0.5:
-                try:
-                    with open(marca, 'w') as fh:
-                        fh.write('foco\n')
-                except Exception:
-                    pass
-                sys.stderr.write('menu_pygame: Select+Y -> recuperar el foco\n')
-                desde_foco = None
-                for aqui in pulsados.values():
-                    aqui.discard(Y_BTN)
-                time.sleep(1.0)
-        else:
-            desde_foco = None
         time.sleep(0.05)
 
 if sys.argv[1] == 'guardia':
@@ -6167,10 +6305,13 @@ profile_defaults() {
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     # Mandos de Sony (DualSense / DS4) con GE-Proton 11-4 o mas nuevo:
-    #   auto  - lo que decida Proton (bien en juegos con soporte completo)
-    #   ds4   - el DualSense se presenta como un DS4 (juegos con soporte DS4)
-    #   xinput- se convierte a mando de Xbox (juegos viejos o con mapeo raro)
-    #   steam - ademas, se finge Steam Input (juegos que lo exigen)
+    #   auto - lo que decida Proton (lo normal)
+    #   1    - forzar que el mando se presente como uno de Xbox
+    #   0    - no tocar nada
+    #
+    # Antes habia cuatro modos. Ninguno arreglo un solo caso real: el problema
+    # de los mandos estaba en los permisos y en un proceso nuestro que se
+    # mataba solo. Se deja en tres estados, como el resto de opciones.
     PAD_SONY=auto
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
@@ -6566,19 +6707,12 @@ export_game_env() {
     fi
     local pad_sony_activo=0
     [ "$mandos_del_runner" = 1 ] || case "${PAD_SONY:-auto}" in
-        ds4)
-            export PROTON_SONY_DUALSENSE_AS_DUALSHOCK4=1
-            pad_sony_activo=1
-            say "[+] Mando Sony: el DualSense se presenta como DualShock 4" ;;
-        xinput)
+        1)
             export PROTON_SONY_HIDRAW_XINPUT=1
             pad_sony_activo=1
-            say "[+] Mando Sony: convertido a mando de Xbox (XInput)" ;;
-        steam)
-            export PROTON_SONY_HIDRAW_XINPUT=1
-            export PROTON_STEAMINPUT_XINPUT_FALLBACK=1
-            pad_sony_activo=1
-            say "[+] Mando Sony: XInput + Steam Input simulado" ;;
+            say "[+] Mando Sony: forzado a mando de Xbox" ;;
+        0)
+            say "[+] Mando Sony: sin tocar (desactivado en el perfil)" ;;
     esac
     if [ "$mandos_del_runner" = 1 ]; then
         :                                   # el runner se encarga
@@ -6816,16 +6950,6 @@ Configurar juego -> Comprobar integridad"
     bundled_prefix_prepare "$rdir"
 
     guardia_salida_start
-    # Combinaciones globales (Select+Y = Alt+Tab). DESACTIVADO por defecto.
-    #
-    # Para esto hay que crear un teclado virtual (uinput) durante toda la
-    # partida, y bastantes juegos re-exploran sus dispositivos de entrada
-    # cuando aparece uno nuevo. No compensa hacerlo en TODAS las partidas por
-    # una funcion secundaria: cerrar el juego no lo necesita (el guardia solo
-    # lee el mando). Quien quiera el Alt+Tab lo activa con PAD_FOCO=1.
-    if [ "${PAD_FOCO:-0}" = 1 ] && [ -z "${keys_file:-}" ]; then
-        mapeador_start "$(keys_globales)"
-    fi
     loading_say "Iniciando $gid..."
     # (el blindaje ya esta puesto desde el principio de launch_game)
     # BLINDAJE DURANTE LA PARTIDA
@@ -6878,14 +7002,14 @@ Configurar juego -> Comprobar integridad"
             say "[i] Usa el prefijo compartido: si el mando falla, prueba con uno propio" ;;
     esac
     # Diagnostico completo del mando (se puede apagar con WP_DIAG_PAD=0)
-    [ "${WP_DIAG_PAD:-1}" = 1 ] && diag_mando_antes
+    [ "${DIAG_MANDO:-0}" = 1 ] && diag_mando_antes
     local t0; t0=$(date +%s)
     STATS_T0="$t0"
     saves_detect_start
     # Vigilante: cuando el juego ya este corriendo, apunta en el registro lo
     # que ha recibido DE VERDAD. Es la unica forma de saber si nuestras
     # variables llegaron o alguien las cambio por el camino.
-    if [ "${WP_DIAG_PAD:-1}" = 1 ]; then
+    if [ "${DIAG_MANDO:-0}" = 1 ]; then
         ( exe_base="$(basename "$EXE_PATH")"
           for _i in $(seq 1 40); do
               sleep 0.5
@@ -8069,13 +8193,23 @@ need_exe_dir() {
     dirname "$EXE_OVERRIDE"
 }
 
-install_dgvoodoo() {
+preparar_carpeta_exe() {
+    # Deja el juego montado en escritura y devuelve la carpeta donde vive su
+    # ejecutable: es lo que necesitan las herramientas que copian ficheros
+    # dentro del juego (dgVoodoo2, OptiScaler). Estaba escrito dos veces.
+    # Si falla, desmonta y devuelve 1.
     local squash="$1" gid="$2"
     load_profile "$gid"
     acquire_game_root "$squash" "$gid" rw
-    local merged="$MOUNT_POINT"
-    local exedir; exedir="$(need_exe_dir "$merged" "$gid")" || { release_game_root; return 1; }
-    local target="$merged/$exedir"
+    local merged="$MOUNT_POINT" exedir
+    exedir="$(need_exe_dir "$merged" "$gid")" || { release_game_root; return 1; }
+    printf '%s/%s' "$merged" "$exedir"
+    return 0
+}
+
+install_dgvoodoo() {
+    local squash="$1" gid="$2" target
+    target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
 
     local pkg="$DL_DIR/dgvoodoo2.zip"
     if [ ! -f "$pkg" ]; then
@@ -8102,12 +8236,8 @@ Configuralo con la opción 'Configurar dgVoodoo (Cpl)'"
 }
 
 install_optiscaler() {
-    local squash="$1" gid="$2"
-    load_profile "$gid"
-    acquire_game_root "$squash" "$gid" rw
-    local merged="$MOUNT_POINT"
-    local exedir; exedir="$(need_exe_dir "$merged" "$gid")" || { release_game_root; return 1; }
-    local target="$merged/$exedir"
+    local squash="$1" gid="$2" target
+    target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
 
     local url pkg
     url="$(gh_latest_asset "optiscaler/OptiScaler" '\.(7z|zip)$')"
@@ -9266,29 +9396,27 @@ menusrv_pid()     { cat "$(menusrv_pidfile)" 2>/dev/null; }
 
 GUARDIA_PID=""
 
-keys_globales() {
-    # Fichero .keys propio de WProton, con SOLO las combinaciones globales.
-    # Se lo pasamos a nuestro mapeador, que ya sabe traducir mando a teclado
-    # por uinput: funciona igual en X11 y en Wayland, y no hace falta instalar
-    # nada (xdotool y wmctrl solo valen en X11).
+keys_ejemplo_crear() {
+    # Deja un .keys de ejemplo con las combinaciones utiles, para quien quiera
+    # usarlas. NO se aplica solo: para que funcione hay que ponerlo junto a un
+    # juego (<juego>.wsquashfs.keys) o copiarlo como perfil del juego.
     #
-    # Importante: solo lleva COMBINACIONES. Si mapeara botones sueltos, el
-    # juego recibiria la pulsacion del mando Y la tecla, con entradas dobles.
-    local f="$RUNTIME_DIR/wproton_global.keys"
-    if [ ! -s "$f" ]; then
-        mkdir -p "$RUNTIME_DIR" 2>/dev/null
-        cat > "$f" <<'EOFKEYS'
+    # No se activa de serie porque el mapeador crea un teclado virtual durante
+    # la partida y algunos juegos se confunden al ver un dispositivo nuevo.
+    local f="$RUNTIME_DIR/ejemplo.keys"
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$f" <<'EOFKEYS'
 {
-  "_comentario": "Combinaciones globales de WProton. Solo combos: los botones sueltos los maneja el juego.",
+  "_comentario": "Ejemplo de WProton. Copialo junto a un juego como <juego>.wsquashfs.keys",
+  "_aviso": "Solo COMBINACIONES: si mapeas botones sueltos, el juego recibira la pulsacion del mando Y la tecla.",
   "actions_player1": [
-    { "trigger": ["hotkey", "y"],     "target": ["KEY_LEFTALT", "KEY_TAB"] },
-    { "trigger": ["l3", "r3"], "target": ["KEY_LEFTALT", "KEY_F4"] }
+    { "trigger": ["hotkey", "y"],  "target": ["KEY_LEFTALT", "KEY_TAB"] },
+    { "trigger": ["l3", "r3"],     "target": ["KEY_LEFTALT", "KEY_F4"] }
   ]
 }
 EOFKEYS
-        say "[+] Creado el .keys global: $f"
-    fi
     printf '%s' "$f"
+    return 0
 }
 
 guardia_salida_start() {
@@ -9331,10 +9459,6 @@ guardia_salida_start() {
                       pkill -f "wineserver" 2>/dev/null
                       [ -n "${MOUNT_BASE:-}" ] && pkill -f "$MOUNT_BASE/" 2>/dev/null
                       break ;;
-                  foco)
-                      # lo atiende el mapeador con el .keys global (Alt+Tab);
-                      # aqui solo se deja constancia
-                      say "[+] Select+Y: Alt+Tab enviado por el mapeador" ;;
               esac
           fi
           sleep 0.4
@@ -9352,6 +9476,22 @@ guardia_salida_stop() {
     [ -n "${GUARDIA_PID:-}" ] && kill "$GUARDIA_PID" 2>/dev/null
     GUARDIA_PID=""
     rm -f "$RUNTIME_DIR/.salir_juego" 2>/dev/null
+    return 0
+}
+
+menu_server_reiniciar() {
+    # El proceso de menus lee el tema, el idioma, el tamaño de letra y las
+    # columnas de la rejilla UNA VEZ, al arrancar. Como desde la 1.02 ese
+    # proceso es persistente, cambiar cualquiera de esas cosas no se notaba
+    # hasta cerrar y volver a abrir WProton. Aqui se reinicia para que el
+    # cambio se vea al momento.
+    export WP_THEME="${THEME:-moderno}"
+    export WP_GRID_COLS="${GRID_COLS:-0}"
+    export WP_LANG="${LANGUAGE:-es}"
+    export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+    menu_server_alive || return 0          # si no habia servidor, nada que hacer
+    menu_server_stop
+    menu_server_start || true
     return 0
 }
 
@@ -10498,6 +10638,178 @@ font_label() {
     esac
 }
 
+dev_dir() {
+    local d="$BASE_DIR/capturas"
+    mkdir -p "$d" 2>/dev/null
+    printf '%s' "$d"
+}
+
+dev_herramienta() {
+    # Que hay en el sistema para capturar. Se prueban por orden de calidad.
+    if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v grim >/dev/null 2>&1; then
+        printf 'grim'; return 0; fi
+    command -v ffmpeg     >/dev/null 2>&1 && { printf 'ffmpeg';     return 0; }
+    command -v import     >/dev/null 2>&1 && { printf 'import';     return 0; }
+    command -v spectacle  >/dev/null 2>&1 && { printf 'spectacle';  return 0; }
+    command -v gnome-screenshot >/dev/null 2>&1 && { printf 'gnome'; return 0; }
+    return 1
+}
+
+dev_captura_pantalla() {
+    # Captura TODA la pantalla (sirve tambien con un juego delante).
+    # $1 = segundos de espera antes de disparar
+    local espera="${1:-5}" dst; dst="$(dev_dir)/pantalla_$(date +%Y%m%d_%H%M%S).png"
+    local h; h="$(dev_herramienta)" || {
+        ui_error "No hay con que capturar.
+
+Instala una de estas: ffmpeg, imagemagick (import), grim (Wayland)
+o spectacle."
+        return 1; }
+    # En SEGUNDO PLANO: WProton vuelve al menu al momento y tu navegas hasta
+    # donde quieras mientras corre la cuenta atras. Si esperara aqui, la
+    # captura saldria siempre del mismo sitio y no serviria de nada.
+    local tam; tam="$(dev_tam)"
+    ( sleep "$espera"
+      case "$h" in
+          grim)      grim "$dst" ;;
+          ffmpeg)    ffmpeg -y -f x11grab -video_size "$tam" -i "${DISPLAY:-:0}" \
+                         -frames:v 1 "$dst" ;;
+          import)    import -window root "$dst" ;;
+          spectacle) spectacle -b -n -o "$dst" ;;
+          gnome)     gnome-screenshot -f "$dst" ;;
+      esac
+      if [ -s "$dst" ]; then
+          log "[dev] Captura guardada: $dst"
+      else
+          log "[dev] La captura salio vacia" WARN
+      fi
+    ) < /dev/null >> "$LOG_FILE" 2>&1 &
+    ui_info "Captura programada.
+
+Se disparara dentro de $espera segundos, con $h.
+
+Ve donde quieras: WProton vuelve al menu ahora mismo.
+El resultado ira a:
+$dst"
+    return 0
+}
+
+dev_tam() {
+    # Tamaño de la pantalla, para ffmpeg
+    local t=""
+    command -v xrandr >/dev/null 2>&1 && \
+        t="$(xrandr 2>/dev/null | awk '/\*/{print $1; exit}')"
+    printf '%s' "${t:-1920x1080}"
+}
+
+dev_video() {
+    # Graba un video corto de la pantalla. $1 = segundos, $2 = espera previa
+    local seg="${1:-15}" espera="${2:-5}"
+    command -v ffmpeg >/dev/null 2>&1 || {
+        ui_error "Para grabar video hace falta ffmpeg."
+        return 1; }
+    local dst; dst="$(dev_dir)/video_$(date +%Y%m%d_%H%M%S).mp4"
+    local tam; tam="$(dev_tam)"
+    # En SEGUNDO PLANO y en su propia sesion: la gracia es grabarte navegando
+    # por WProton, asi que el programa tiene que seguir funcionando. Antes se
+    # quedaba esperando aqui y solo grababa el menu parado.
+    ( sleep "$espera"
+      if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wf-recorder >/dev/null 2>&1; then
+          timeout $((seg + 5)) wf-recorder -f "$dst" -t "${seg}s"
+      else
+          ffmpeg -y -f x11grab -framerate 30 -video_size "$tam" \
+              -i "${DISPLAY:-:0}" -t "$seg" \
+              -c:v libx264 -preset veryfast -pix_fmt yuv420p "$dst"
+      fi
+      if [ -s "$dst" ]; then
+          log "[dev] Video guardado: $dst"
+      else
+          log "[dev] El video salio vacio" WARN
+      fi
+    ) < /dev/null >> "$LOG_FILE" 2>&1 &
+    ui_info "Grabacion programada.
+
+Empieza dentro de $espera segundos y dura $seg.
+
+Sal de este menu y navega con normalidad: se esta grabando la
+pantalla entera. El video ira a:
+$dst"
+    return 0
+}
+
+dev_video_menus() {
+    # Graba los MENUS desde dentro de pygame y luego monta el video.
+    #
+    # ffmpeg leyendo la pantalla desde fuera saca video negro: la ventana de
+    # los menus se dibuja con aceleracion y su contenido no llega a la ventana
+    # raiz de las X. Desde dentro sale exacto.
+    #
+    # Contrapartida: solo graba los MENUS. Mientras el juego corre no hay
+    # menus que dibujar, asi que para grabar la partida hace falta la otra
+    # opcion (pantalla completa con ffmpeg).
+    local seg="${1:-30}" espera="${2:-5}"
+    command -v ffmpeg >/dev/null 2>&1 || {
+        ui_error "Para montar el video hace falta ffmpeg."; return 1; }
+    local dir; dir="$(dev_dir)"
+    local frames="$dir/.frames_$(date +%H%M%S)"
+    local dst="$dir/menus_$(date +%Y%m%d_%H%M%S).mp4"
+    rm -rf "$frames"; mkdir -p "$frames"
+    # marca que lee el proceso de menus: hasta cuando grabar y donde
+    printf '%s\n%s\n' "$(( $(date +%s) + espera + seg ))" "$frames" > "$dir/.rec"
+    ( sleep $((espera + seg + 2))
+      rm -f "$dir/.rec"
+      if [ -n "$(ls -A "$frames" 2>/dev/null)" ]; then
+          ffmpeg -y -framerate 10 -i "$frames/f%05d.png" \
+              -c:v libx264 -preset veryfast -pix_fmt yuv420p -r 30 "$dst"
+          [ -s "$dst" ] && log "[dev] Video de menus: $dst"
+      else
+          log "[dev] No se capturo ningun fotograma" WARN
+      fi
+      rm -rf "$frames"
+    ) < /dev/null >> "$LOG_FILE" 2>&1 &
+    ui_info "Grabacion de los menus programada.
+
+Empieza en $espera segundos y dura $seg.
+
+Sal de aqui y navega por los menus: se graba lo que se ve.
+Esta forma NO graba los juegos, solo los menus, pero sale
+perfecta (la otra opcion puede salir en negro).
+
+El video ira a:
+$dst"
+    return 0
+}
+
+dev_menu() {
+    # Solo aparece con DEV_MODE=1 en settings.conf. No esta documentado.
+    local sel
+    while :; do
+        sel="$(menu "Modo desarrollo" \
+            "Captura de pantalla (5 s de margen)" \
+            "Captura de pantalla (15 s de margen)" \
+            "Grabar los menus - 30 s (recomendado)" \
+            "Grabar los menus - 60 s" \
+            "Grabar la pantalla entera - 30 s (puede salir en negro)" \
+            "Ver la carpeta de capturas" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver") return 0 ;;
+            "Captura de pantalla (5"*)   dev_captura_pantalla 5  || true ;;
+            "Captura de pantalla (15"*)  dev_captura_pantalla 15 || true ;;
+            "Grabar los menus - 30"*)    dev_video_menus 30 5  || true ;;
+            "Grabar los menus - 60"*)    dev_video_menus 60 5  || true ;;
+            "Grabar la pantalla entera"*) dev_video 30 10 || true ;;
+            "Ver la carpeta"*)
+                ui_info "Capturas en:
+$(dev_dir)
+
+$(ls -1t "$(dev_dir)" 2>/dev/null | head -n 10 | sed 's/^/  /')
+
+Dentro de los menus, F12 guarda la pantalla al momento." ;;
+        esac
+    done
+}
+
 probar_mando() {
     # Escucha el mando durante unos segundos y enseña QUE llega: que
     # dispositivos se leen y con que codigo llega cada boton. Es la forma
@@ -10646,10 +10958,9 @@ runner_gestiona_mandos() {
 
 pad_sony_label() {
     case "${PAD_SONY:-auto}" in
-        ds4)    printf 'como DualShock 4' ;;
-        xinput) printf 'como mando de Xbox' ;;
-        steam)  printf 'Xbox + Steam Input' ;;
-        *)      printf 'automatico' ;;
+        1) printf 'ON (como mando de Xbox)' ;;
+        0) printf 'OFF' ;;
+        *) printf 'AUTO' ;;
     esac
 }
 
@@ -10724,12 +11035,24 @@ urlencode_py() {
 
 sgdb_download_covers() {
     # Descarga carátulas 600x900 de SteamGridDB para los juegos sin carátula
+    # la clave puede venir de un fichero aparte
+    SGDB_KEY="$(sgdb_key_leer)"
     if [ -z "$SGDB_KEY" ]; then
         local k
         k="$(ask_text "Pega tu API key de SteamGridDB
-(gratis en steamgriddb.com -> Profile -> Preferences -> API)" "")"
+(gratis en steamgriddb.com -> Profile -> Preferences -> API)
+
+Se guardara en sgdb.key, solo legible por ti, y NO en
+settings.conf (que se comparte al pedir ayuda)." "")"
         [ -z "$k" ] && return 1
-        SGDB_KEY="$k"; save_settings
+        SGDB_KEY="$k"
+        # en su propio fichero y sin permisos para nadie mas
+        if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+            chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+            say "[+] Clave guardada en sgdb.key (solo legible por ti)"
+        else
+            save_settings           # si no se pudo escribir, como antes
+        fi
     fi
     mkdir -p "$COVERS_DIR"
     local list total=0 got=0 pend=0 idx=0
@@ -11179,6 +11502,29 @@ juego_etiqueta() {
 }
 
 pick_squash() {
+    # Elegir un juego. Si dentro se pide cambiar de vista (Select+X), se
+    # cambia y se vuelve a abrir AQUI MISMO: quien llama no tiene que saber
+    # nada de eso. Antes el marcador salia hacia fuera y se interpretaba como
+    # una cancelacion, asi que se volvia al menu principal.
+    local elegido
+    while :; do
+        elegido="$(pick_squash_una_vez)" || return $?
+        case "$elegido" in
+            "WPACT:VISTA|"*)
+                case "${GAMES_VIEW:-list}" in
+                    grid) GAMES_VIEW=list ;;
+                    *)    GAMES_VIEW=grid ;;
+                esac
+                save_settings
+                say "[+] Vista: $GAMES_VIEW"
+                continue ;;
+        esac
+        printf '%s' "$elegido"
+        return 0
+    done
+}
+
+pick_squash_una_vez() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
     # Ya no hace falta la entrada "juego suelto": las carpetas de las carpetas
     # de juegos configuradas aparecen solas en la lista.
@@ -11533,23 +11879,11 @@ Ayuda a volver al menu en modo Juego, pero algunos juegos
 avisan de 'Hooking has failed' o van a tirones. Si pasa,
 desactivalo aquí mismo." ;;
         "Mando Sony"*)
-            # Menu de eleccion directa. Antes esta opcion iba ROTANDO entre
-            # los cuatro valores a cada pulsacion: para llegar al que querias
-            # habia que pulsar varias veces y pasar por los otros. Con cuatro
-            # valores y una explicacion por cada uno, es mejor elegir.
-            local sony_sel
-            sony_sel="$(menu "Mando Sony (DualSense / DualShock 4) - $gid" \
-                "Automatico  (lo que decida Proton)" \
-                "Como DualShock 4  (juegos con soporte de DS4)" \
-                "Como mando de Xbox  (lo mas compatible)" \
-                "Xbox + Steam Input  (juegos que lo exigen)" \
-                "<< Volver")" || return 0
-            case "$sony_sel" in
-                "Automatico"*)          PAD_SONY=auto ;;
-                "Como DualShock 4"*)    PAD_SONY=ds4 ;;
-                "Como mando de Xbox"*)  PAD_SONY=xinput ;;
-                "Xbox + Steam Input"*)  PAD_SONY=steam ;;
-                *) return 0 ;;
+            # Tres estados, igual que el resto de opciones del mando.
+            case "${PAD_SONY:-auto}" in
+                auto) PAD_SONY=1 ;;
+                1)    PAD_SONY=0 ;;
+                *)    PAD_SONY=auto ;;
             esac
             write_full_profile "$gid"
             say "[+] Mando Sony: $(pad_sony_label)" ;;
@@ -11850,6 +12184,17 @@ mkdwarfs para empaquetar y dwarfs para montar."
         "Añadir WProton a Steam"*) anadir_wproton_a_steam || true ;;
         "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Probar el mando"*) probar_mando ;;
+        "Crear un .keys de ejemplo"*)
+            ui_info "Ejemplo creado en:
+$(keys_ejemplo_crear)
+
+Trae dos combinaciones:
+  Select + Y    -> Alt+Tab (recuperar el foco)
+  L3 + R3       -> Alt+F4  (cerrar el juego)
+
+Para usarlo en un juego, copialo junto a el con el mismo nombre
+y la extension .keys. Por ejemplo:
+  Mi Juego.wsquashfs  ->  Mi Juego.wsquashfs.keys" ;;
         "Arreglar permisos del mando"*) arreglar_permisos_mando ;;
         "Instalar evdev"*)
             if instalar_evdev; then
@@ -11917,6 +12262,7 @@ $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf
             if [ -n "$fsz" ]; then
                 export WP_FONT_SCALE="$FONT_SCALE"
                 save_settings
+            menu_server_reiniciar
                 ui_info "Tamaño de letra: $(font_label)"
             fi ;;
         "Tema de los menus:"*)
@@ -11929,8 +12275,8 @@ $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf
             case "$th" in
                 clasico*|moderno*|arcade*)
                     THEME="${th%% *}"
-                    export WP_THEME="$THEME"
                     save_settings
+                    menu_server_reiniciar
                     ui_info "Tema activado: $THEME" ;;
             esac ;;
         "Espacio en disco") disk_menu ;;
@@ -11977,6 +12323,7 @@ Los wsquashfs que ya tienes se siguen usando igual."
             if [ -n "$gc" ]; then
                 export WP_GRID_COLS="$GRID_COLS"
                 save_settings
+            menu_server_reiniciar
                 ui_info "Carátulas por fila: $(grid_cols_label)"
             fi ;;
         "Ordenar juegos por:"*)
@@ -12113,6 +12460,7 @@ tools_menu() {
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
             "Probar el mando (ver que botones llegan)" \
+            "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)" \
             "Arreglar permisos del mando (hidraw)" \
             "Instalar evdev (para los ficheros .keys)" \
             "Datos de duración de partida (HowLongToBeat)" \
@@ -12456,6 +12804,14 @@ export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
 # ¿Primera puesta en marcha? Se decide ANTES de tocar nada, porque check_deps
 # ya se pone a descargar las herramientas de montaje y el usuario no puede
 # quedarse mirando una pantalla vacia.
+# Modo desarrollo: se comprueba ANTES de instalar nada, para que "--dev" sin
+# activar avise al momento en vez de lanzar una instalacion completa.
+if [ "${1:-}" = "--dev" ] && [ "${DEV_MODE:-0}" != 1 ]; then
+    printf '\n  El modo desarrollo no esta activado.\n' >&2
+    printf '  Pon DEV_MODE=1 en %s\n\n' "$SETTINGS_FILE" >&2
+    exit 1
+fi
+
 WP_PRIMERA_VEZ=0
 if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MARK" ]; then
     WP_PRIMERA_VEZ=1
@@ -12489,6 +12845,16 @@ case "${1:-}" in
 Ya puedes lanzar juegos, o abrir WProton sin parametros para
 entrar en los menus.
 Mas runners: menu principal -> Descargar runners" ;;
+    --dev)
+        # Modo desarrollo (sin documentar). No hay opcion en los menus a
+        # proposito: asi no aparece en las capturas de pantalla.
+        # Al salir del menu de desarrollo se abre WProton con normalidad,
+        # que es justo lo que hace falta para grabar un video: se arranca la
+        # grabacion y se navega mientras corre.
+        bootstrap_if_needed
+        menu_server_start || canvas_start
+        dev_menu
+        main_menu ;;
     --kill)   kill_all ;;
     --config)
         bootstrap_if_needed

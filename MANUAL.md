@@ -83,6 +83,7 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | **X** | Configurar el juego resaltado (en la lista de juegos) |
 | **Y** | Buscar |
 | **Select + A** | Pantalla completa / ventana |
+| **Select + X** | Cambiar entre lista y rejilla |
 | **Select** (5 s) | (con un juego abierto) Cerrarlo y volver al menú |
 | **Select + Y** | (con un juego abierto) Recuperar el foco si se ha ido detrás |
 
@@ -123,6 +124,11 @@ juego, pone el identificador que necesita protonfixes para aplicarle sus
 arreglos. Al añadir un juego nuevo lo propone solo.
 
 **Carátula** — descárgala de SteamGridDB o elige una imagen de tu disco.
+
+> Para las descargas de SteamGridDB hace falta una clave gratuita
+> (steamgriddb.com → Profile → Preferences → API). En vez de teclearla con el
+> mando, puedes pegarla en un fichero de texto y dejarlo junto a `wproton.sh`:
+> WProton la recoge, la guarda a buen recaudo y borra el fichero.
 
 **Empaquetar con su prefijo** — crea un archivo **autosuficiente**: lleva dentro
 el juego y su prefijo, así que se copia a otro equipo y funciona sin instalar
