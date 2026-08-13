@@ -14,7 +14,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 ---
 
-## Qué sabe hacer
+## Características 
 
 ### Formatos de juego
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
@@ -152,6 +152,4 @@ cache/  logs/  games/
 - [Batocera](https://batocera.org) — formatos `.wsquashfs` y `autorun.cmd`.
 - [DwarFS](https://github.com/mhx/dwarfs), [innoextract](https://github.com/dscharrer/innoextract), [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2), [OptiScaler](https://github.com/cdozdil/OptiScaler), [SteamGridDB](https://www.steamgriddb.com).
 
-## Licencia
-
-*(Pendiente de elegir — GPL-3.0 encajaría con el ecosistema del que bebe el proyecto.)*
+*Aplicación hecha con la ayuda de Claude, si has llegado hasta aquí y te resulta interesante proyecto, pruébalo.
