@@ -64,7 +64,8 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 # --- Ajustes globales (settings.conf se crea con valores por defecto) ---
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
-GAMES_VIEW="list"                        # lista | grid (rejilla con carátulas)
+GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
+LIST_COVER=vertical                      # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
 THEME="moderno"                          # aspecto de los menus: clasico | moderno | arcade
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
@@ -96,6 +97,9 @@ GAMES_PATH="$GAMES_PATH"
 LAST_GAME="$LAST_GAME"
 # Vista del selector de juegos: list | grid
 GAMES_VIEW="$GAMES_VIEW"
+# Forma de la caratula que se enseña en el panel de la vista de lista:
+#   vertical | wide (panoramica) | 43
+LIST_COVER="$LIST_COVER"
 # Última carpeta usada en el navegador de ficheros:
 LAST_BROWSE="$LAST_BROWSE"
 # Aspecto de los menus: clasico | moderno
@@ -223,6 +227,8 @@ write_lang_en() {
  "1280x800 (Steam Deck)": "1280x800 (Steam Deck)",
  "1920x1080": "1920x1080",
  "4 - carátulas grandes": "4 - large covers",
+ "4:3": "4:3",
+ "4:3 (640x480)": "4:3 (640x480)",
  "8 - carátulas pequeñas, más juegos a la vista": "8 - small covers, more games on screen",
  "<< Aceptar": "<< OK",
  "<< Cancelar": "<< Cancel",
@@ -272,6 +278,7 @@ write_lang_en() {
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
  "Carpeta principal de juegos": "Main games folder",
+ "Carátula: buscar en SteamGridDB por nombre": "Cover: search SteamGridDB by name",
  "Carátula: elegir una imagen del sistema": "Cover: choose an image from your system",
  "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
@@ -288,6 +295,8 @@ write_lang_en() {
  "Copiando el prefijo...": "Copying the prefix...",
  "Crear copia de seguridad ahora": "Create a backup now",
  "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)": "Create an example .keys (Alt+Tab, Alt+F4)",
+ "Cuadrada 4:3": "Square 4:3",
+ "Cuadrada 4:3 (640x480)": "Square 4:3 (640x480)",
  "Cuántas carátulas por fila en la rejilla": "How many covers per row in the grid",
  "DLL overrides": "DLL overrides",
  "DWProton [proton] - Dawn Winery, fixes anime/gacha": "DWProton [proton] - Dawn Winery, anime/gacha fixes",
@@ -390,6 +399,8 @@ write_lang_en() {
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
  "Ordenar juegos por": "Sort games by",
  "Otra carpeta con juegos": "Another folder with games",
+ "Panorámica (ancha, tipo Steam)": "Panoramic (wide, Steam style)",
+ "Panorámica (tipo Steam)": "Panoramic (Steam style)",
  "Pantalla completa nativa": "Native fullscreen",
  "Partidas guardadas: copias y restauracion": "Saved games: backup and restore",
  "Partidas guardadas: copias y restauración": "Saved games: backup and restore",
@@ -425,6 +436,9 @@ write_lang_en() {
  "Sincronizar AHORA con rsync": "Sync NOW with rsync",
  "Sincronizar backups/ con otro sitio": "Sync backups/ with another place",
  "Sincronizar la carpeta backups (rsync / Syncthing)": "Sync the backups folder (rsync / Syncthing)",
+ "Solo cuadradas (4:3)": "4:3 only",
+ "Solo panorámicas (tipo Steam)": "Panoramic only (Steam style)",
+ "Solo verticales (2:3)": "Vertical only (2:3)",
  "Sustituir todo (se pierde tu configuración actual)": "Replace everything (your current setup is lost)",
  "Tamaño de la letra": "Text size",
  "Tamaño de la letra en los menus": "Text size in menus",
@@ -432,10 +446,12 @@ write_lang_en() {
  "Tamaño por juego (juego + saves + prefijo)": "Size per game (game + saves + prefix)",
  "Tema de los menus": "Menu theme",
  "Tiempo": "Time",
+ "Todas (las tres formas)": "All three shapes",
  "Usar la carpeta games/ de WProton": "Use WProton's games/ folder",
  "Variables extra": "Extra variables",
  "Ver donde guarda las partidas": "Show where saves are stored",
  "Ver el registro de la última sesión": "View the last session log",
+ "Vertical (2:3)": "Vertical (2:3)",
  "Vista de juegos": "Games view",
  "Volviendo al menú...": "Back to the menu...",
  "WProton Custom [proton] - el runner propio de WProton": "WProton Custom [proton] - WProton's own runner",
@@ -477,18 +493,25 @@ write_lang_en() {
  "nombre - alfabetico": "name - alphabetical",
  "normal": "normal",
  "nunca": "never",
+ "panorámica": "panoramic",
  "pantalla": "screen",
  "propio del juego": "per-game",
  "pulsar": "press",
  "recientes": "recent",
  "recientes - los últimos jugados primero": "recent - last played first",
  "rejilla (carátulas)": "grid (covers)",
+ "rejilla 4:3": "4:3 grid",
+ "rejilla panorámica": "panoramic grid",
+ "rejilla vertical (2:3)": "vertical grid (2:3)",
  "sin partidas todavia": "no sessions yet",
  "subir": "up",
+ "vertical (2:3)": "vertical (2:3)",
  "vista": "view",
  "volver": "back",
  "wsquashfs - compatible con Batocera y PortProton": "wsquashfs - compatible with Batocera and PortProton",
  "¿Crear un acceso directo a WProton en el escritorio?": "Create a WProton shortcut on the desktop?",
+ "¿Cuál es?": "Which one is it?",
+ "¿Qué carátulas quieres descargar?": "Which covers do you want to download?",
  "Última vez": "Last played",
  "Último log (B para volver)": "Last log (B to go back)"
 }
@@ -2313,9 +2336,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 3c9afd7c2a44" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 80481a521e34" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 3c9afd7c2a44
+# WPROTON_HELPER menu_pygame.py 80481a521e34
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2435,7 +2458,8 @@ EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 
 def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
-                manifiesto=None, preseleccion=None, fav_file=None):
+                manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
+    set_aspecto(aspecto)
     global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, BROWSE_EXTS, ACTION_X
     global LIST_INFO, PRESEL, FAV_FILE
     PRESEL = preseleccion or ''
@@ -3343,12 +3367,14 @@ def draw_side_panel():
         # Carátula: ocupa como mucho la mitad del alto del panel, para que
         # siempre quede sitio para el nombre y los datos.
         if datos and MODE == 'list':
-            cov = cover_surface(datos.get('cov'), min(SIDE_W - 32, 170))
+            # Un poco mas grande que antes (170): con caratulas horizontales
+            # se quedaba pequeña y no se leia el titulo.
+            cov = cover_surface(datos.get('cov'), min(SIDE_W - 24, 240))
             if cov is not None:
                 ch = cov.get_height()
-                if ch > LIST_H // 2:
+                if ch > int(LIST_H * 0.55):
                     cov = cover_surface(datos.get('cov'),
-                                        int((SIDE_W - 32) * (LIST_H // 2) / ch))
+                                        int((SIDE_W - 24) * int(LIST_H * 0.55) / ch))
                     ch = cov.get_height() if cov is not None else 0
                 if cov is not None:
                     cx = SIDE_X + (SIDE_W - cov.get_width()) // 2
@@ -3585,6 +3611,27 @@ def toggle():
 GCOLS = 5
 GCW, GCH = 176, 268
 GIMG_W, GIMG_H = 150, 225
+
+# Proporcion de la caratula: alto = ancho * ASPECTO.
+#   1.5  -> vertical, 2:3, la clasica de las tiendas
+#   0.47 -> panoramica, tipo cabecera de Steam (920x430)
+#   0.75 -> 4:3, para colecciones de caratulas cuadradas (640x480)
+# Cuanto mas ancha, menos caben por fila pero mas grandes se ven.
+ASPECTOS = {'1': 0.47, 'wide': 0.47, '43': 0.75, 'vertical': 1.5, '': 1.5}
+ASPECTO = ASPECTOS.get(os.environ.get('WP_GRID_BANNER', ''), 1.5)
+
+def set_aspecto(valor):
+    # La proporcion viaja en CADA peticion, no solo al arrancar.
+    #
+    # Antes se leia una sola vez, al iniciar el proceso de menus. Como ese
+    # proceso es persistente, cambiar de vista dejaba las casillas con la
+    # forma anterior: las caratulas verticales salian en recuadros anchos.
+    # Asi no depende de reiniciar nada.
+    global ASPECTO
+    nuevo = ASPECTOS.get(valor or '', 1.5)
+    if nuevo != ASPECTO:
+        ASPECTO = nuevo
+        _imgcache.clear()      # las caratulas escaladas ya no valen
 _imgcache = {}
 
 def grid_metrics():
@@ -3608,9 +3655,11 @@ def grid_metrics():
         rows = 2
     # altura por fila (incluye el hueco del titulo): así las filas CABEN
     h_max = int(avail_h / rows) - 48
-    w_from_h = int(h_max / 1.5)
+    w_from_h = int(h_max / ASPECTO)
     # ancho maximo razonable por carátula según el tamaño de pantalla
     w_cap = 190 if W <= 1400 else (210 if W <= 1920 else 240)
+    if ASPECTO < 1:          # horizontales: mas anchas, caben menos por fila
+        w_cap = int(w_cap * 2.1)
     if forced > 0:
         # columnas fijadas por el usuario: el tamaño de la carátula se calcula
         # para que QUEPAN esas columnas (antes se mantenía el tamaño y con
@@ -3619,13 +3668,13 @@ def grid_metrics():
         GCW = max(80, avail_w // forced)
         GIMG_W = max(90, GCW - 26)
         # y que la fila siga cabiendo de alto
-        if int(GIMG_W * 1.5) + 48 > int(avail_h / rows):
-            GIMG_W = max(90, int((int(avail_h / rows) - 48) / 1.5))
-        GIMG_H = int(GIMG_W * 1.5)
+        if int(GIMG_W * ASPECTO) + 48 > int(avail_h / rows):
+            GIMG_W = max(90, int((int(avail_h / rows) - 48) / ASPECTO))
+        GIMG_H = int(GIMG_W * ASPECTO)
         GCH = GIMG_H + 48
     else:
         GIMG_W = max(120, min(w_from_h, w_cap))
-        GIMG_H = int(GIMG_W * 1.5)
+        GIMG_H = int(GIMG_W * ASPECTO)
         GCW = GIMG_W + 26
         GCH = GIMG_H + 48
         GCOLS = max(3, min(9, avail_w // GCW))
@@ -3798,15 +3847,36 @@ def fit_label(txt, font, maxw):
     return t
 
 def grid_img(path):
+    # La caratula se ajusta a la casilla SIN DEFORMARLA.
+    #
+    # Antes se estiraba hasta llenarla, asi que en la vista de caratulas
+    # anchas una vertical salia achatada y horrible. Ahora se escala hasta
+    # que quepa entera y se centra sobre el fondo de la casilla; asi una
+    # vertical en una casilla ancha se ve bien, solo con aire a los lados.
+    clave = (path, GIMG_W, GIMG_H)
+    if clave in _imgcache:
+        return _imgcache[clave]
     if not path or not os.path.isfile(path):
+        _imgcache[clave] = None
         return None
-    if path not in _imgcache:
-        try:
-            img = pygame.image.load(path)
-            _imgcache[path] = pygame.transform.smoothscale(img, (GIMG_W, GIMG_H))
-        except Exception:
-            _imgcache[path] = None
-    return _imgcache[path]
+    try:
+        img = pygame.image.load(path).convert_alpha()
+        w0, h0 = img.get_size()
+        if w0 <= 0 or h0 <= 0:
+            raise ValueError('imagen vacia')
+        escala = min(GIMG_W / w0, GIMG_H / h0)
+        an, al = max(1, int(w0 * escala)), max(1, int(h0 * escala))
+        peq = pygame.transform.smoothscale(img, (an, al))
+        if an == GIMG_W and al == GIMG_H:
+            _imgcache[clave] = peq
+        else:
+            lienzo = pygame.Surface((GIMG_W, GIMG_H), pygame.SRCALPHA)
+            lienzo.fill(TH.get('card', (20, 26, 44)))
+            lienzo.blit(peq, ((GIMG_W - an) // 2, (GIMG_H - al) // 2))
+            _imgcache[clave] = lienzo
+    except Exception:
+        _imgcache[clave] = None
+    return _imgcache[clave]
 
 def draw_grid():
     gx0 = LIST_X + max(0, (LIST_W - GCOLS * GCW) // 2) + (GCW - GIMG_W) // 2
@@ -4577,7 +4647,7 @@ def serve(dirpath):
                 os.remove(ready)
             except Exception:
                 pass
-            while len(campos) < 9:
+            while len(campos) < 10:
                 campos.append('')
             # Los campos vienen con los saltos de linea escapados como \n:
             # el protocolo es una linea por campo y los titulos tienen varias.
@@ -4592,16 +4662,16 @@ def serve(dirpath):
                             out.append('\\'); i += 2; continue
                     out.append(v[i]); i += 1
                 return ''.join(out)
-            campos = [_desescapa(c) for c in campos[:9]]
+            campos = [_desescapa(c) for c in campos[:10]]
             (modo, titulo, salida, arg4, kind, ax,
-             manif, presel, favf) = campos
+             manif, presel, favf, aspec) = campos
             if modo == 'idle':
                 # sin menu: solo actualizar el texto del reposo
                 status = titulo
             elif modo:
                 set_request(modo, titulo, salida, arg4 or None,
                             kind or 'file', ax == '1', manif or None,
-                            presel or None, favf or None)
+                            presel or None, favf or None, aspec or None)
                 load_request_data()
                 compute_layout()
                 try:
@@ -4901,7 +4971,8 @@ else:
                 os.environ.get('WP_ACTION_X') == '1',
                 os.environ.get('WP_LIST_INFO') or None,
                 os.environ.get('WP_PRESEL') or None,
-                os.environ.get('WP_FAV_FILE') or None)
+                os.environ.get('WP_FAV_FILE') or None,
+                os.environ.get('WP_GRID_BANNER') or None)
     load_request_data()
     compute_layout()
     rc = run_session()
@@ -5070,7 +5141,8 @@ menu() {
         # Primero el servidor de menus (una sola ventana para toda la sesion);
         # si no esta disponible, un proceso por menu como siempre.
         menu_server_request list "$title" "$tmpsel" "$tmpopt" "" "${WP_ACTION_X:-}" \
-            "${WP_LIST_INFO:-}" "${WP_PRESEL:-}" "${WP_FAV_FILE:-}"
+            "${WP_LIST_INFO:-}" "${WP_PRESEL:-}" "${WP_FAV_FILE:-}" \
+            "${WP_GRID_BANNER:-vertical}"
         hrc=$?
         if [ "$hrc" = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
@@ -9630,16 +9702,17 @@ menusrv_escapa() {
 menu_server_request() {
     # $1=modo $2=titulo $3=salida $4=arg4 $5=tipo $6=accion_x $7=manifiesto
     # $8=preseleccion (juego sobre el que abrir la lista)
+    # $10=proporcion de la caratula (vertical | wide | 43)
     # Manda la peticion al servidor y espera su respuesta. Devuelve el codigo
     # de la sesion, o 9 si el servidor se ha caido (para que el llamador use
     # el camino de siempre, un proceso por menu).
     menu_server_alive || return 9
     rm -f "$(menusrv_dir)/resp" 2>/dev/null
-    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         "$(menusrv_escapa "$1")" "$(menusrv_escapa "$2")" "$(menusrv_escapa "$3")" \
         "$(menusrv_escapa "${4:-}")" "$(menusrv_escapa "${5:-}")" "${6:-}" \
         "$(menusrv_escapa "${7:-}")" "$(menusrv_escapa "${8:-}")" \
-        "$(menusrv_escapa "${9:-}")" \
+        "$(menusrv_escapa "${9:-}")" "${10:-}" \
         > "$(menusrv_dir)/req"
     : > "$(menusrv_dir)/req.ready"
     local i=0
@@ -9888,6 +9961,8 @@ saves_detect_end() {
                 *"/cache/"*|*"/Cache/"*|*"/CachedData/"*|*"/NVIDIA/"*|*"/AMD/"*|\
                 *"/D3DSCache/"*|*"/DXCache/"*|*"/shadercache/"*|*"/ShaderCache/"*|\
                 *"/GPUCache/"*|*"/Intel/"*|*"/Unity/"*|*"/CrashReportClient/"*|\
+                *"/dxvk/"*|*"/DXVK/"*|*"/vkd3d/"*|*"/VKD3D/"*|*"/dxvk-cache/"*|\
+                *"/mesa_shader_cache"*|*"/radv_builtin_shaders"*|\
                 *.log|*.tmp|*.dmp|*.dxvk-cache|*.dxvk-cache-tmp|*.vkd3d-cache|\
                 *.nvcache|*.bin.cache|*.shader*|*.pipeline_cache|*.ubulk) continue ;;
             esac
@@ -9926,13 +10001,29 @@ EOFP
 
 save_locations() {
     # $1 = gid -> "etiqueta|ruta" de cada sitio con partidas de ESTE juego.
+    # Los perfiles guardados antes de esta version pueden traer carpetas de
+    # cache que se colaron. Se descartan al usarlos, sin tener que borrar el
+    # perfil ni volver a jugar.
+    saves_es_cache() {
+        case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+            */dxvk|*/vkd3d|*/dxvk-cache|*/d3dscache|*/shadercache|*/gpucache|\
+            */nvidia|*/amd|*/temp|*/crashpad|*/mesa_shader_cache) return 0 ;;
+        esac
+        return 1
+    }
     # 1) lo aprendido observando la partida (SAVE_PATHS del perfil)
     # 2) si no hay nada, carpetas cuyo nombre se parezca al del juego
     # 3) el overlay del wsquashfs, que siempre es del juego
     local gid="$1" p root up base
     if [ -n "${SAVE_PATHS:-}" ]; then
         while IFS= read -r p; do
-            [ -n "$p" ] && [ -d "$p" ] && printf '%s|%s\n' "$(basename "$p")" "$p"
+            [ -n "$p" ] || continue
+            [ -d "$p" ] || continue
+            if saves_es_cache "$p"; then
+                log "Copia: se omite $p (es cache de shaders, se regenera sola)"
+                continue
+            fi
+            printf '%s|%s\n' "${p##*/}" "$p"
         done <<EOFSP
 $(printf '%s' "$SAVE_PATHS" | tr ':' '\n')
 EOFSP
@@ -10366,6 +10457,16 @@ config_export() {
         mkdir -p "$tmp/wproton_config/covers"
         cp -a "$COVERS_DIR/." "$tmp/wproton_config/covers/" 2>/dev/null
     fi
+    if [ -d "$COVERS_WIDE_DIR" ] && \
+       [ -n "$(find "$COVERS_WIDE_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/covers_wide"
+        cp -a "$COVERS_WIDE_DIR/." "$tmp/wproton_config/covers_wide/" 2>/dev/null
+    fi
+    if [ -d "$COVERS_43_DIR" ] && \
+       [ -n "$(find "$COVERS_43_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/covers_43"
+        cp -a "$COVERS_43_DIR/." "$tmp/wproton_config/covers_43/" 2>/dev/null
+    fi
     if [ -d "$LANG_DIR" ]; then
         mkdir -p "$tmp/wproton_config/lang"
         cp -a "$LANG_DIR/." "$tmp/wproton_config/lang/" 2>/dev/null
@@ -10438,6 +10539,8 @@ por los del zip. Se guardara antes una copia en backups/." || { rm -rf "$tmp"; r
                 cp -a "$base/profiles/." "$PROFILE_DIR/" 2>/dev/null
             fi
             [ -d "$base/covers" ] && { mkdir -p "$COVERS_DIR"; cp -a "$base/covers/." "$COVERS_DIR/" 2>/dev/null; }
+            [ -d "$base/covers_wide" ] && { mkdir -p "$COVERS_WIDE_DIR"; cp -a "$base/covers_wide/." "$COVERS_WIDE_DIR/" 2>/dev/null; }
+            [ -d "$base/covers_43" ] && { mkdir -p "$COVERS_43_DIR"; cp -a "$base/covers_43/." "$COVERS_43_DIR/" 2>/dev/null; }
             [ -d "$base/lang" ] && { mkdir -p "$LANG_DIR"; cp -a "$base/lang/." "$LANG_DIR/" 2>/dev/null; }
             rm -rf "$tmp"
             load_settings
@@ -11005,6 +11108,36 @@ pad_sdl_label() {
 }
 
 COVERS_DIR="$BASE_DIR/covers"
+# Las horizontales van en SU PROPIA carpeta, no con un sufijo en el nombre:
+# asi quien ya tenga una coleccion de caratulas anchas puede copiarla tal
+# cual, con los ficheros llamados como el juego.
+COVERS_WIDE_DIR="$BASE_DIR/covers_wide"   # panoramica (cabecera de Steam)
+COVERS_43_DIR="$BASE_DIR/covers_43"       # 4:3 (640x480)
+
+covers_dir_de() {
+    # Carpeta que corresponde a cada forma de caratula.
+    case "${1:-vertical}" in
+        wide) printf '%s' "$COVERS_WIDE_DIR" ;;
+        43)   printf '%s' "$COVERS_43_DIR" ;;
+        *)    printf '%s' "$COVERS_DIR" ;;
+    esac
+}
+
+covers_wide_preparar() {
+    # Crea la carpeta y traslada lo que se hubiera guardado con el nombre
+    # anterior (covers/<juego>.wide.png). Se hace una sola vez y en silencio.
+    mkdir -p "$COVERS_WIDE_DIR" "$COVERS_43_DIR" 2>/dev/null
+    local f base
+    for f in "$COVERS_DIR"/*.wide.png "$COVERS_DIR"/*.wide.jpg \
+             "$COVERS_DIR"/*.wide.jpeg "$COVERS_DIR"/*.wide.webp; do
+        [ -f "$f" ] || continue
+        base="$(basename "$f")"
+        # "Doom.wide.png" -> "Doom.png"
+        mv -f "$f" "$COVERS_WIDE_DIR/${base%.wide.*}.${base##*.}" 2>/dev/null \
+            && log "Caratula ancha movida a covers_wide/: $base"
+    done
+    return 0
+}
 PROGRESS_PID=""
 
 progress_start() {
@@ -11051,9 +11184,49 @@ profile_get() {
     sed -n "s/^$2=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$f" | head -n1
 }
 
+cover_tipo_real() {
+    # ¿Existe la caratula de ESA forma, de verdad? ($1 = gid, $2 = forma)
+    #
+    # Hace falta aparte de cover_for porque aquella, si no encuentra la forma
+    # pedida, devuelve la vertical como respaldo: muy comodo para dibujar,
+    # pero traicionero para decidir si hay que descargar algo (siempre
+    # parecia que ya estaba).
+    local e d; d="$(covers_dir_de "${2:-vertical}")"
+    for e in png jpg jpeg webp; do
+        [ -f "$d/$1.$e" ] && { printf '%s' "$d/$1.$e"; return 0; }
+    done
+    if [ "${2:-}" = wide ]; then       # nomenclatura anterior
+        for e in png jpg jpeg webp; do
+            [ -f "$COVERS_DIR/$1.wide.$e" ] && { printf '%s' "$COVERS_DIR/$1.wide.$e"; return 0; }
+        done
+    fi
+    return 1
+}
+
 cover_for() {
-    # $1 = gid -> ruta de la carátula si existe
-    local e
+    # $1 = gid, $2 = "wide" para la carátula horizontal (opcional).
+    #
+    # Se guardan en carpetas distintas, con el MISMO nombre de fichero:
+    #   covers/<juego>.png         vertical (2:3), la de siempre
+    #   covers_wide/<juego>.png    panoramica, tipo cabecera de Steam
+    #   covers_43/<juego>.png      4:3 (640x480)
+    #
+    # Si se pide la horizontal y no la hay, se usa la vertical: mejor una
+    # caratula deformada que un hueco vacio.
+    local e d
+    if [ -n "${2:-}" ] && [ "${2:-}" != vertical ]; then
+        d="$(covers_dir_de "$2")"
+        for e in png jpg jpeg webp; do
+            [ -f "$d/$1.$e" ] && { printf '%s' "$d/$1.$e"; return 0; }
+        done
+        # compatibilidad con la nomenclatura anterior (covers/<juego>.wide.*)
+        if [ "$2" = wide ]; then
+            for e in png jpg jpeg webp; do
+                [ -f "$COVERS_DIR/$1.wide.$e" ] && \
+                    { printf '%s' "$COVERS_DIR/$1.wide.$e"; return 0; }
+            done
+        fi
+    fi
     for e in png jpg jpeg webp; do
         [ -f "$COVERS_DIR/$1.$e" ] && { printf '%s' "$COVERS_DIR/$1.$e"; return 0; }
     done
@@ -11064,8 +11237,150 @@ urlencode_py() {
     "$PY_BIN" -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null
 }
 
+caratula_manual() {
+    # Elegir una imagen del disco como caratula. $1 = gid.
+    #
+    # Se puede poner la vertical (rejilla clasica) o la horizontal (rejilla
+    # de caratulas anchas), y se guardan por separado.
+    local gid="$1" tipo destino img ext
+    tipo="$(menu "Carátula de $gid" \
+        "Vertical (2:3, como las tiendas)" \
+        "Panorámica (ancha, tipo Steam)" \
+        "Cuadrada 4:3 (640x480)" \
+        "<< Volver")" || return 0
+    case "$tipo" in
+        "Vertical"*)   destino="$(covers_dir_de vertical)" ;;
+        "Panorámica"*) destino="$(covers_dir_de wide)" ;;
+        "Cuadrada"*)   destino="$(covers_dir_de 43)" ;;
+        *) return 0 ;;
+    esac
+    img="$(browse_for_path "Elige una imagen" "$(browse_start "$HOME")" "image")" || return 0
+    [ -f "$img" ] || return 1
+    ext="${img##*.}"
+    case "$(printf '%s' "$ext" | tr 'A-Z' 'a-z')" in
+        png|jpg|jpeg|webp) ext="$(printf '%s' "$ext" | tr 'A-Z' 'a-z')" ;;
+        *) ui_error "Eso no parece una imagen (png, jpg o webp)."; return 1 ;;
+    esac
+    mkdir -p "$destino" 2>/dev/null
+    # se quitan las que hubiera de ese tipo, para no dejar dos con distinta
+    # extension y que gane la que no toca
+    local e
+    for e in png jpg jpeg webp; do rm -f "$destino/$gid.$e" 2>/dev/null; done
+    if cp -f "$img" "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+        say "[+] Caratula guardada: $(basename "$destino")/$gid.$ext"
+        ui_info "Carátula guardada.
+
+Se vera en la biblioteca al volver a la lista."
+        return 0
+    fi
+    ui_error "No se pudo copiar la imagen."
+    return 1
+}
+
+sgdb_buscar_manual() {
+    # Buscar la caratula de UN juego escribiendo el nombre a mano.
+    #
+    # La busqueda automatica usa el nombre del fichero, que muchas veces trae
+    # version, region o el nombre del grupo, y entonces no encuentra nada.
+    # Aqui se escribe el titulo de verdad y se elige entre los resultados.
+    local gid="$1"
+    SGDB_KEY="$(sgdb_key_leer)"
+    [ -n "$SGDB_KEY" ] || { ui_error "Falta la API key de SteamGridDB.
+
+Descarga carátulas una vez desde el menú y te la pedirá, o deja
+un fichero de texto con la clave junto a wproton.sh."; return 1; }
+
+    local tipo destino dims
+    tipo="$(menu "Buscar carátula de: $gid" \
+        "Vertical (2:3)" \
+        "Panorámica (tipo Steam)" \
+        "Cuadrada 4:3" \
+        "<< Volver")" || return 0
+    case "$tipo" in
+        "Vertical"*)   destino="$(covers_dir_de vertical)"; dims="600x900" ;;
+        "Panorámica"*) destino="$(covers_dir_de wide)";     dims="920x430,460x215" ;;
+        "Cuadrada"*)   destino="$(covers_dir_de 43)";       dims="640x480,512x384" ;;
+        *) return 0 ;;
+    esac
+
+    local busca; busca="$(ask_text "Nombre del juego para buscar en SteamGridDB" \
+                          "$(printf '%s' "$gid" | tr '._' '  ')")"
+    [ -n "$busca" ] || return 0
+
+    loading_say "Buscando \"$busca\"..."
+    local q; q="$(urlencode_py "$busca")"
+    local gjson; gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
+    loading_clear
+    # nombres e identificadores de los resultados, en paralelo
+    local ids nombres
+    ids="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | grep -o '[0-9]*')"
+    nombres="$(printf '%s' "$gjson" | grep -o '"name": *"[^"]*"' | cut -d'"' -f4)"
+    [ -n "$ids" ] || { ui_error "Sin resultados para: $busca"; return 1; }
+
+    # menu con los titulos encontrados
+    local opciones="" n=0 nom
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        n=$((n+1)); opciones="$opciones$n. $nom
+"
+        [ "$n" -ge 12 ] && break
+    done <<EOFN
+$nombres
+EOFN
+    local elegido
+    # shellcheck disable=SC2046
+    elegido="$(IFS=$'\n'; set -f; menu "¿Cuál es?" $opciones "<< Volver")" || return 0
+    [ "$elegido" = "<< Volver" ] && return 0
+    local pos="${elegido%%.*}"
+    local gameid; gameid="$(printf '%s' "$ids" | sed -n "${pos}p")"
+    [ -n "$gameid" ] || return 1
+
+    loading_say "Descargando carátula..."
+    local ujson url ext
+    ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+        2>>"$LOG_FILE")"
+    url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+    loading_clear
+    [ -n "$url" ] || { ui_error "Ese juego no tiene carátula de ese tipo en SteamGridDB.
+
+Prueba con el otro tipo, o pon una imagen tuya desde
+'Carátula: elegir una imagen'."; return 1; }
+    ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+    mkdir -p "$destino" 2>/dev/null
+    local e
+    for e in png jpg jpeg webp; do rm -f "$destino/$gid.$e" 2>/dev/null; done
+    if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+        say "[+] Caratula guardada: $(basename "$destino")/$gid.$ext"
+        ui_info "Carátula guardada.
+
+Se vera al volver a la lista."
+        return 0
+    fi
+    ui_error "No se pudo descargar la imagen."
+    return 1
+}
+
 sgdb_download_covers() {
-    # Descarga carátulas 600x900 de SteamGridDB para los juegos sin carátula
+    # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
+    # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
+    # vista.
+    local quiere
+    quiere="$(menu "¿Qué carátulas quieres descargar?" \
+        "Solo verticales (2:3)" \
+        "Solo panorámicas (tipo Steam)" \
+        "Solo cuadradas (4:3)" \
+        "Todas (las tres formas)" \
+        "<< Volver")" || return 0
+    local tipos
+    case "$quiere" in
+        "Solo vert"*) tipos="vertical" ;;
+        "Solo pano"*) tipos="wide" ;;
+        "Solo cuad"*) tipos="43" ;;
+        "Todas"*)     tipos="vertical wide 43" ;;
+        *) return 0 ;;
+    esac
     # la clave puede venir de un fichero aparte
     SGDB_KEY="$(sgdb_key_leer)"
     if [ -z "$SGDB_KEY" ]; then
@@ -11089,18 +11404,33 @@ settings.conf (que se comparte al pedir ayuda)." "")"
     local list total=0 got=0 pend=0 idx=0
     list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
-    local f gid title q gjson gameid ujson url ext
+    local f gid title q gjson gameid ujson url ext _falta _t
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        cover_for "$(game_id "$f")" >/dev/null || pend=$((pend+1))
+        # Pendiente si le falta alguna de las que se han pedido
+        local _g _falta=0; _g="$(game_id "$f")"
+        local _t
+        for _t in $tipos; do
+            cover_tipo_real "$_g" "$_t" >/dev/null 2>&1 || _falta=1
+        done
+        [ "$_falta" = 1 ] && pend=$((pend+1))
     done <<EOF0
 $list
 EOF0
-    [ "$pend" -eq 0 ] && { ui_info "Todos los juegos ya tienen carátula en covers/"; return 0; }
+    [ "$pend" -eq 0 ] && { ui_info "No falta ninguna carátula de las pedidas."; return 0; }
     progress_start "Descargando carátulas de SteamGridDB"
     while IFS= read -r f; do
         gid="$(game_id "$f")"
-        cover_for "$gid" >/dev/null && continue
+        # Saltar el juego SOLO si ya tiene todas las que se han pedido.
+        #
+        # Antes se descartaba con solo tener la vertical, asi que al pedir
+        # "solo anchas" se ignoraban justamente los juegos que ya tenian
+        # caratula: se buscaba unicamente en los que no tenian ninguna.
+        _falta=0
+        for _t in $tipos; do
+            cover_tipo_real "$gid" "$_t" >/dev/null 2>&1 || _falta=1
+        done
+        [ "$_falta" = 0 ] && continue
         total=$((total+1)); idx=$((idx+1))
         title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
         progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $title"
@@ -11114,14 +11444,37 @@ EOF0
         fi
         gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
         [ -z "$gameid" ] && { say "[SGDB]   sin resultados para: $title"; continue; }
-        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=600x900&types=static" 2>>"$LOG_FILE")"
-        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-        [ -z "$url" ] && { say "[SGDB]   sin grids 600x900 para: $title"; continue; }
-        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-        if curl -fsSL "$url" -o "$COVERS_DIR/$gid.$ext" 2>>"$LOG_FILE"; then
-            got=$((got+1)); say "[SGDB]   OK -> covers/$gid.$ext"
-        fi
+        # Se piden las DOS: la vertical para la rejilla clasica y la
+        # horizontal para la vista de carátulas anchas. Cada una se guarda
+        # con su nombre, asi que no se pisan.
+        local destino dims bajada=0
+        for tipo in $tipos; do
+            destino="$(covers_dir_de "$tipo")"
+            case "$tipo" in
+                vertical) dims="600x900" ;;
+                wide)     dims="920x430,460x215" ;;
+                43)       dims="640x480,512x384" ;;
+            esac
+            mkdir -p "$destino" 2>/dev/null
+            # si ya la tenemos, no se vuelve a pedir
+            # No se vuelve a descargar lo que ya hay: la vertical podria ser
+            # una que el usuario eligio a mano.
+            cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+            ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+                2>>"$LOG_FILE")"
+            url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+            if [ -z "$url" ]; then
+                say "[SGDB]   sin carátula $tipo ($dims) para: $title"
+                continue
+            fi
+            ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+            if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+                bajada=1
+                say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+            fi
+        done
+        [ "$bajada" = 1 ] && got=$((got+1))
     done <<EOF2
 $list
 EOF2
@@ -11577,9 +11930,12 @@ pick_squash() {
         elegido="$(pick_squash_una_vez)" || return $?
         case "$elegido" in
             "WPACT:VISTA|"*)
+                # Tres vistas: lista -> rejilla vertical -> rejilla horizontal
                 case "${GAMES_VIEW:-list}" in
-                    grid) GAMES_VIEW=list ;;
-                    *)    GAMES_VIEW=grid ;;
+                    list)   GAMES_VIEW=grid ;;
+                    grid)   GAMES_VIEW=banner ;;
+                    banner) GAMES_VIEW=cuadro ;;
+                    *)      GAMES_VIEW=list ;;
                 esac
                 save_settings
                 say "[+] Vista: $GAMES_VIEW"
@@ -11630,17 +11986,27 @@ Tienes tres formas de añadir juegos:
     fi
     local sel
     export WP_ACTION_X=1                 # X = configurar el juego resaltado
-    if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
+    # "banner" es la misma rejilla con las caratulas horizontales
+    # El proceso de menus lee la proporcion de la caratula al arrancar, y es
+    # persistente: si solo se cambia la variable, la rejilla sigue saliendo
+    # como antes. Al cambiar de/hacia la vista ancha hay que reiniciarlo.
+    # La proporcion viaja en la peticion, asi que no hace falta reiniciar el
+    # proceso de menus al cambiar de vista.
+    local _aspecto _es_rejilla; _aspecto="$(vista_forma)"
+    export WP_GRID_BANNER="$_aspecto"
+    case "${GAMES_VIEW:-list}" in grid|banner|cuadro) _es_rejilla=1 ;; *) _es_rejilla=0 ;; esac
+    if [ "$_es_rejilla" = 1 ] && pygame_available && [ -n "$list" ]; then
         pad_bridge_stop
         write_menu_pygame
         local man tmpsel rel gid2 t2 cov
         man="$(mktemp)"; tmpsel="$(mktemp)"
-        printf '%s\n' "(juego suelto: carpeta o exe)||__LOOSE__" >> "$man"
         while IFS= read -r rel; do
             gid2="$(game_id "$rel")"
             t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
             t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
-            cov="$(cover_for "$gid2")" || cov=""
+            # con la vista de caratulas anchas se pide la horizontal; si el
+            # juego no la tiene, cover_for devuelve la vertical
+            cov="$(cover_for "$gid2" "$_aspecto")" || cov=""
             local mt fv sc lp info=""
             mt="$(game_meta "$rel")"
             fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
@@ -11660,7 +12026,7 @@ EOF2
         # porque el fichero de favoritos viaja en la peticion.
         local favfileg; favfileg="$(mktemp)"
         menu_server_request grid "Elige un juego  [$GAMES_PATH]" "$tmpsel" "$man" \
-            "" "${WP_ACTION_X:-}" "" "" "$favfileg"
+            "" "${WP_ACTION_X:-}" "" "" "$favfileg" "$_aspecto"
         if [ $? = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
                 WP_FAV_FILE="$favfileg" \
@@ -11719,7 +12085,7 @@ EOF2
         etiquetas="$etiquetas$etq
 "
         gid3="$(game_id "$rel3")"
-        cov3="$(cover_for "$gid3")" || cov3=""
+        cov3="$(cover_for "$gid3" "${LIST_COVER:-vertical}")" || cov3=""
         mt3="$(game_meta "$rel3")"
         fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
@@ -11906,6 +12272,8 @@ cfg_aplicar() {
             esac ;;
         "Carátula: elegir"*)
             caratula_manual "$gid" ;;
+        "Carátula: buscar en SteamGridDB"*)
+            sgdb_buscar_manual "$gid" || true ;;
         "Ficha del juego"*)
             ficha_mostrar "$gid" "$squash" ;;
         "Borrar la configuración de este juego"*)
@@ -12166,7 +12534,8 @@ game_config_menu() {
             "Prefijo: $(prefix_label)" \
             "GAMEID (protonfixes): $GAMEID" \
             "Buscar en la base de umu (identificador automático)" \
-            "Carátula: elegir una imagen del sistema" \
+            "Carátula: elegir una imagen (vertical u horizontal)" \
+            "Carátula: buscar en SteamGridDB por nombre" \
             "Ficha del juego (año, editor, notas de la crítica)" \
             "Empaquetar con su prefijo (archivo autosuficiente)" \
             "Acceso directo en el escritorio" \
@@ -12429,8 +12798,20 @@ Los wsquashfs que ya tienes se siguen usando igual."
                     GAMES_SORT="${so%% *}"; save_settings
                     ui_info "Orden: $GAMES_SORT (los favoritos van siempre primero)" ;;
             esac ;;
+        "Carátula en la vista de lista:"*)
+            case "${LIST_COVER:-vertical}" in
+                vertical) LIST_COVER=wide ;;
+                wide)     LIST_COVER=43 ;;
+                *)        LIST_COVER=vertical ;;
+            esac
+            save_settings ;;
         "Vista de juegos:"*)
-            [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
+            case "${GAMES_VIEW:-list}" in
+                list)   GAMES_VIEW=grid ;;
+                grid)   GAMES_VIEW=banner ;;
+                banner) GAMES_VIEW=cuadro ;;
+                *)      GAMES_VIEW=list ;;
+            esac
             save_settings ;;
         "Perfiles de la comunidad"*) community_menu ;;
         "Perfiles guardados"*)       perfiles_menu ;;
@@ -12511,6 +12892,33 @@ $(find "$p" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
     done
 }
 
+list_cover_label() {
+    case "${LIST_COVER:-vertical}" in
+        wide) printf 'panorámica' ;;
+        43)   printf '4:3' ;;
+        *)    printf 'vertical (2:3)' ;;
+    esac
+}
+
+vista_label() {
+    case "${GAMES_VIEW:-list}" in
+        grid)   printf 'rejilla vertical (2:3)' ;;
+        banner) printf 'rejilla panorámica' ;;
+        cuadro) printf 'rejilla 4:3' ;;
+        *)      printf 'lista' ;;
+    esac
+}
+
+vista_forma() {
+    # Que forma de caratula usa cada vista
+    case "${GAMES_VIEW:-list}" in
+        banner) printf 'wide' ;;
+        cuadro) printf '43' ;;
+        grid)   printf 'vertical' ;;
+        *)      printf '%s' "${LIST_COVER:-vertical}" ;;
+    esac
+}
+
 library_menu() {
     # Todo lo que afecta a como se ve y se ordena la biblioteca
     local sel
@@ -12518,7 +12926,8 @@ library_menu() {
         sel="$(menu "Biblioteca y preferencias" \
             "Carpetas de juegos ($(games_paths | wc -l))" \
             "Montar un disco (USB, disco externo...)" \
-            "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (carátulas)' || printf 'lista')" \
+            "Vista de juegos: $(vista_label)" \
+            "Carátula en la vista de lista: $(list_cover_label)" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
@@ -12914,6 +13323,7 @@ if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MA
     install_notice_start
 fi
 
+covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
