@@ -83,7 +83,8 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | **X** | Configurar el juego resaltado (en la lista de juegos) |
 | **Y** | Buscar |
 | **Select + A** | Pantalla completa / ventana |
-| **Select + X** | Cambiar entre lista y rejilla |
+| **Select + X** | Cambiar de vista: lista → vertical → panorámica → 4:3 |
+| **X** sobre *Jugar al último* | Configurar ese juego sin abrir la lista |
 | **Select** (5 s) | (con un juego abierto) Cerrarlo y volver al menú |
 | **Select + Y** | (con un juego abierto) Recuperar el foco si se ha ido detrás |
 
@@ -123,7 +124,24 @@ Lo más útil:
 juego, pone el identificador que necesita protonfixes para aplicarle sus
 arreglos. Al añadir un juego nuevo lo propone solo.
 
-**Carátula** — descárgala de SteamGridDB o elige una imagen de tu disco.
+**Carátula** — hay tres formas: descargarlas todas de golpe desde *Carátulas y
+perfiles*, **buscar la de ese juego por nombre** (si el fichero se llama de
+forma rara y la búsqueda automática falla), o elegir una imagen de tu disco. Hay
+dos, y cada una vive en su carpeta con el nombre del juego:
+
+| Carpeta | Para qué |
+|---|---|
+| `covers/` | Vertical (2:3), para la lista y la rejilla clásica |
+| `covers_wide/` | Panorámica, tipo cabecera de Steam |
+| `covers_43/` | Cuadrada 4:3 (640x480) |
+
+Cada vista usa su carpeta, y en la vista de lista puedes elegir cuál se
+enseña en el panel (*Biblioteca y preferencias → Carátula en la vista de
+lista*). Si un juego no tiene la de esa forma, se usa la vertical. Las
+imágenes nunca se deforman: se centran en su casilla.
+
+Si ya tienes una colección de carátulas, cópiala en la carpeta que
+corresponda: los ficheros se llaman igual que el juego.
 
 > Para las descargas de SteamGridDB hace falta una clave gratuita
 > (steamgriddb.com → Profile → Preferences → API). En vez de teclearla con el
@@ -290,6 +308,11 @@ sudo steamos-readonly enable
 ```
 
 Después, desconecta y vuelve a conectar el mando.
+
+**Mi mando iba bien con una versión anterior de GE-Proton.**
+Prueba a poner *Mando via SDL* en **ON** en los ajustes de ese juego: hace que
+el juego reciba el mando por SDL en vez de por la vía nueva, que es como
+funcionaba antes.
 
 **Mi mando de PlayStation ha dejado de funcionar tras actualizar GE-Proton.**
 GE-Proton 11-4 rehízo el soporte de los mandos de Sony. Entra en los ajustes
