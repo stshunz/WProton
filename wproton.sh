@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.16"
+WPROTON_VERSION="1.17"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -2336,9 +2336,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 80481a521e34" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py fb349cbe73be" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 80481a521e34
+# WPROTON_HELPER menu_pygame.py fb349cbe73be
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2457,6 +2457,13 @@ def leer_duracion(ruta):
 EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 
+# Al IMPORTAR un juego no se enseñan los ya empaquetados (.wsquashfs y
+# .dwarfs): esos ya salen solos en la biblioteca, y verlos aqui solo confunde
+# —parece que hay que añadirlos otra vez—. Quedan los formatos que si hay que
+# importar: comprimidos, ejecutables y carpetas.
+EXTS_IMPORTAR = ('.zip', '.7z', '.rar', '.001', '.z01',
+                 '.exe', '.bat', '.cmd', '.wtgz')
+
 def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
                 manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
     set_aspecto(aspecto)
@@ -2492,6 +2499,8 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
         BROWSE_EXTS = ('.keys',)
     elif browse_kind == 'image':
         BROWSE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+    elif browse_kind == 'importar':
+        BROWSE_EXTS = EXTS_IMPORTAR
     else:
         BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
@@ -2564,7 +2573,7 @@ def load_dir(path):
     for n in names:
         if not n.startswith('.') and os.path.isdir(os.path.join(cur_path, n)):
             items.append([K_DIR, n + '/', False])
-    if BROWSE_KIND in ('file', 'play', 'keys', 'image'):
+    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar'):
         for n in names:
             p = os.path.join(cur_path, n)
             if (not n.startswith('.') and os.path.isfile(p)
@@ -3309,6 +3318,22 @@ def draw_header():
         pygame.draw.rect(screen, ACC, (W - bwd - 20, 18, bwd, 24), border_radius=12)
         screen.blit(badge, (W - bwd - 11, 21))
 
+_forma_cache = {}
+
+def es_ancha(path):
+    # ¿La caratula es mas ancha que alta? Se recuerda para no abrir el
+    # fichero en cada fotograma.
+    if not path:
+        return False
+    if path not in _forma_cache:
+        try:
+            img = pygame.image.load(path)
+            w, h = img.get_size()
+            _forma_cache[path] = (w > h)
+        except Exception:
+            _forma_cache[path] = False
+    return _forma_cache[path]
+
 def cover_surface(ruta, ancho):
     # Carátula escalada, guardada en memoria: sin esto se recargaria del disco
     # 60 veces por segundo al mover la seleccion.
@@ -3369,12 +3394,23 @@ def draw_side_panel():
         if datos and MODE == 'list':
             # Un poco mas grande que antes (170): con caratulas horizontales
             # se quedaba pequeña y no se leia el titulo.
-            cov = cover_surface(datos.get('cov'), min(SIDE_W - 24, 240))
+            # Ancho maximo segun la forma de la caratula.
+            #
+            # Las verticales se limitan a 240 px: mas grandes se comen el
+            # panel y no dejan sitio a los datos del juego. Las panoramicas y
+            # las 4:3 son mucho mas bajas para el mismo ancho, asi que pueden
+            # ocupar el panel entero y se ven bastante mejor.
+            _ancho_max = SIDE_W - 16
+            if not es_ancha(datos.get('cov')):
+                _ancho_max = min(SIDE_W - 24, 240)
+            cov = cover_surface(datos.get('cov'), _ancho_max)
             if cov is not None:
                 ch = cov.get_height()
-                if ch > int(LIST_H * 0.55):
+                # el tope de alto solo estorba a las verticales
+                _alto_max = int(LIST_H * (0.45 if es_ancha(datos.get('cov')) else 0.55))
+                if ch > _alto_max:
                     cov = cover_surface(datos.get('cov'),
-                                        int((SIDE_W - 24) * int(LIST_H * 0.55) / ch))
+                                        int(_ancho_max * _alto_max / ch))
                     ch = cov.get_height() if cov is not None else 0
                 if cov is not None:
                     cx = SIDE_X + (SIDE_W - cov.get_width()) // 2
@@ -4010,6 +4046,11 @@ def on_escape():
         parent = os.path.dirname(cur_path)
         if parent != cur_path:
             load_dir(parent)
+        else:
+            # Ya estamos en la raiz: no hay donde subir, asi que B cierra el
+            # navegador. Antes no hacia nada y daba la sensacion de que se
+            # habia quedado colgado.
+            running = False
     else:
         running = False
 
@@ -11910,6 +11951,12 @@ juego_etiqueta() {
     # contaban las carpetas por cada juego, con varios procesos cada vez.
     local ruta="$1" nom raiz base
     nom="${ruta##*/}"
+    # Sin la extension: al usuario le interesa el nombre del juego, no si es
+    # un .wsquashfs o un .dwarfs. Las carpetas .pc se dejan como estan, que
+    # ahi el ".pc" forma parte del nombre.
+    case "$nom" in
+        *.wsquashfs|*.squashfs|*.dwarfs) nom="${nom%.*}" ;;
+    esac
     if [ "${WP_N_RAICES:-$(games_paths | grep -c .)}" -gt 1 ]; then
         raiz="$(games_paths | while IFS= read -r r; do
                     case "$ruta/" in "$r"/*) printf '%s' "$r"; break ;; esac
@@ -12081,6 +12128,13 @@ EOF2
     while IFS= read -r rel3; do
         [ -n "$rel3" ] || continue
         etq="$(juego_etiqueta "$rel3")"
+        # La etiqueta es la clave para volver a la ruta. Al quitar la
+        # extension pueden coincidir dos juegos (el mismo nombre en
+        # .wsquashfs y en .dwarfs, por ejemplo): en ese caso se deja el
+        # nombre completo del segundo, para no perder ninguno.
+        if cut -f1 "$mapfile" 2>/dev/null | grep -qxF "$etq"; then
+            etq="${rel3##*/}"
+        fi
         printf '%s\t%s\n' "$etq" "$rel3" >> "$mapfile"
         etiquetas="$etiquetas$etq
 "
@@ -12611,7 +12665,7 @@ main_dispatch() {
         "Añadir un juego"*)
             local imp=""
             if pygame_available; then
-                imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "file")" || imp=""
+                imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "importar")" || imp=""
             elif [ "$HAS_ZENITY" = 1 ]; then
                 pad_bridge_start
                 imp="$(zenity --file-selection --title="Elige zip/7z/rar/exe o entra en la carpeta" 2>/dev/null)"
