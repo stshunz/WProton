@@ -515,6 +515,11 @@ def main():
                                         except Exception as _e: print(f"[!] {_e}")
                                         pulsados.clear()
                                     else:
+                                        # dejar constancia: sin esto no habia
+                                        # forma de saber si una combinacion
+                                        # habia disparado o no
+                                        print("[combo] %s -> %s" % (c["req"], c["outs"]),
+                                              flush=True)
                                         for t in c["outs"]: ui.write(ecodes.EV_KEY, t, 1)
                                 elif c["active"] and not all_pressed and event.value == 0:
                                     c["active"] = False
