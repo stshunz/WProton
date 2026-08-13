@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.15"
+WPROTON_VERSION="1.16"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -440,7 +440,9 @@ write_lang_en() {
  "Volviendo al menú...": "Back to the menu...",
  "WProton Custom [proton] - el runner propio de WProton": "WProton Custom [proton] - WProton's own runner",
  "Wayland nativo": "Native Wayland",
+ "Wine Caffe [wine] - Bottles, Wine TKG estable": "Wine Caffe [wine] - Bottles, stable Wine TKG",
  "Wine Kron4ek [wine] - vanilla / staging / tkg": "Wine Kron4ek [wine] - vanilla / staging / tkg",
+ "Wine Soda [wine] - Bottles, basado en el Wine de Valve": "Wine Soda [wine] - Bottles, based on Valve's Wine",
  "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam": "Wine-GE [wine] - GloriousEggroll, non-Steam games",
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
@@ -5730,6 +5732,8 @@ download_runner_menu() {
         "Proton-LG [proton] - Castro-Fidel, basado en GE" \
         "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam" \
         "Wine Kron4ek [wine] - vanilla / staging / tkg" \
+        "Wine Soda [wine] - Bottles, basado en el Wine de Valve" \
+        "Wine Caffe [wine] - Bottles, Wine TKG estable" \
         "WProton Custom [proton] - el runner propio de WProton" \
         "<< Volver")" || return
     case "$src" in
@@ -5750,6 +5754,10 @@ settings.conf."
         "Proton-LG"*)      repo="Castro-Fidel/wine_builds"; tagfilter="^PROTON_" ;;
         "Wine-GE"*)        repo="GloriousEggroll/wine-ge-custom" ;;
         "Wine Kron4ek"*)   repo="Kron4ek/Wine-Builds" ;;
+        # Los runners de Bottles: el mismo repositorio publica varias
+        # familias, asi que se filtra por la etiqueta.
+        "Wine Soda"*)      repo="bottlesdevs/wine"; tagfilter="^soda-" ;;
+        "Wine Caffe"*)     repo="bottlesdevs/wine"; tagfilter="^caffe-" ;;
         *) return ;;
     esac
 
@@ -6087,20 +6095,34 @@ cleanup_all() {
     # Red de seguridad: si por lo que sea llegamos aqui con una partida en
     # marcha, se espera a que termine antes de desmontar. Desmontar debajo de
     # un juego que esta jugando es la peor forma de cerrarlo.
+    # Espera acotada. Antes eran hasta DIEZ MINUTOS en silencio: desde fuera
+    # parecia que WProton se habia colgado y no quedaba mas remedio que
+    # matarlo. Veinte segundos son de sobra para que un juego suelte sus
+    # procesos; si tarda mas, se sigue igualmente y se deja dicho en el
+    # registro.
     if [ "${WP_JUGANDO:-0}" = 1 ]; then
-        log "Cierre solicitado con el juego en marcha: se espera a que termine" WARN
+        log "Cierre con el juego aun en marcha: se espera un poco" WARN
         local _i
-        for _i in $(seq 1 600); do
+        for _i in $(seq 1 20); do
             juego_sigue_vivo || break
             sleep 1
         done
+        [ "$_i" -ge 20 ] && log "El juego no solto sus procesos; se cierra igualmente" WARN
     fi
+    # Cada paso deja rastro: si el cierre se atasca, el registro dice donde.
+    log "Cierre: desmontando"
     cleanup_mount
+    log "Cierre: parando el puente del mando"
     pad_bridge_stop
+    log "Cierre: parando el mapeador"
     mapeador_stop
+    log "Cierre: parando el vigilante"
     guardia_salida_stop
+    log "Cierre: parando el fondo"
     canvas_stop
+    log "Cierre: parando el servidor de menus"
     menu_server_stop
+    log "Cierre: completado"
 }
 trap cleanup_all EXIT INT TERM
 
@@ -6691,9 +6713,10 @@ export_game_env() {
     # ajustes de mando esta todo lo demas (NTsync, FSR, WineD3D, overrides,
     # variables extra). Se usa una bandera y se saltan SOLO los de mando.
     local mandos_del_runner=0
-    if [ "${PAD_SONY:-auto}" = auto ] && runner_gestiona_mandos "$(basename "$rdir")"; then
+    if [ "${PAD_SONY:-auto}" = auto ] && [ "${PAD_SDL:-auto}" = auto ] \
+       && runner_gestiona_mandos "$(basename "$rdir")"; then
         mandos_del_runner=1
-        unset PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
+        unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
         say "[+] Mandos: los gestiona $(basename "$rdir"), WProton no interviene"
         # GE-Proton 11-4+ lee los mandos de Sony por /dev/hidraw. Si esos
         # nodos no se pueden leer, el soporte nuevo no ve el mando y no hay
@@ -6718,7 +6741,7 @@ export_game_env() {
         :                                   # el runner se encarga
     elif [ "$pad_sony_activo" = 1 ]; then
         # hidraw tiene que quedar ENCENDIDO para que los ajustes Sony valgan
-        unset PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
+        unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
         say "    (Mando via SDL se ignora: es incompatible con los modos Sony)"
     elif [ "${PAD_SDL:-auto}" = auto ]; then
         pad_auto="$(pad_sdl_auto)"
@@ -6729,7 +6752,15 @@ export_game_env() {
     if [ "$mandos_del_runner" = 1 ] || [ "$pad_sony_activo" = 1 ]; then
         :                                   # ya resuelto arriba
     elif [ "$pad_eff" = 1 ]; then
-        export PROTON_PREFER_SDL=1 PROTON_DISABLE_HIDRAW=1
+        # PROTON_USE_SDL es la opcion "sdlinput" de GE-Proton: usa la
+        # entrada SDL EN VEZ de hidraw, que es como funcionaba antes de la
+        # 11-4. PROTON_PREFER_SDL es el nombre antiguo (GE-Proton 9-24), se
+        # deja por si el runner es mas viejo.
+        #
+        # NO se toca PROTON_DISABLE_HIDRAW: en Proton no es un si/no, espera
+        # una lista de fabricante/modelo. Pasarle "1" no desactivaba nada y
+        # solo servia para chocar con los ajustes de mandos Sony.
+        export PROTON_USE_SDL=1 PROTON_PREFER_SDL=1
         say "[+] Mando via SDL: ACTIVADO ($pad_why)"
     else
         say "[+] Mando via SDL: desactivado ($pad_why)"
@@ -9247,7 +9278,7 @@ diag_mando_antes() {
     say "--- diagnostico de mando -------------------------------------"
     # 1) Que variables de mando van a llegar al juego
     local v vistas=0
-    for v in PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW \
+    for v in PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW \
              PROTON_SONY_HIDRAW_XINPUT PROTON_SONY_DUALSENSE_AS_DUALSHOCK4 \
              PROTON_STEAMINPUT_XINPUT_FALLBACK PROTON_ENABLE_HIDRAW \
              SDL_GAMECONTROLLER_IGNORE_DEVICES SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
@@ -11338,6 +11369,37 @@ Ya deberian aparecer sus juegos en la lista."
     return 0
 }
 
+montar_discos_recordados() {
+    # Si una carpeta de juegos no aparece pero SU disco esta conectado, se
+    # monta solo. Es el caso de siempre: se dejo configurado un disco externo
+    # y al encender el equipo no viene montado.
+    #
+    # Solo se monta lo que ya estaba configurado como carpeta de juegos: no se
+    # toca ningun otro disco del sistema.
+    local p faltan=0 dev etq tipo tam mp montados=0
+    while IFS= read -r p; do
+        [ -n "$p" ] && [ ! -d "$p" ] && faltan=1
+    done <<EOFCR
+$(games_paths)
+EOFCR
+    [ "$faltan" = 1 ] || return 0
+    local discos; discos="$(discos_sin_montar)" || return 0
+    [ -n "$discos" ] || return 0
+    while IFS='|' read -r dev etq tipo tam; do
+        [ -n "$dev" ] || continue
+        # ¿alguna carpeta que falta menciona la etiqueta de este disco?
+        printf '%s' "$(games_paths)" | grep -qF "${etq:-__nada__}" || continue
+        if mp="$(montar_disco "$dev")" && [ -n "$mp" ]; then
+            say "[+] Disco '$etq' montado solo en $mp"
+            montados=$((montados+1))
+        fi
+    done <<EOFCD
+$discos
+EOFCD
+    [ "$montados" -gt 0 ] && sleep 1
+    return 0
+}
+
 montar_discos_de_juegos() {
     # Si alguna carpeta de juegos no existe, es muy probable que su disco no
     # este montado: pasa a menudo en el modo Juego de SteamOS con discos
@@ -11445,17 +11507,18 @@ es_juego_carpeta() {
     [ -f "$d/autorun.cmd" ] && return 0
     [ -d "$d/drive_c" ] && return 0
     [ -n "$(find "$d" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | head -n1)" ] && return 0
-    # Sin limite de profundidad: hay juegos que esconden el ejecutable muy
-    # adentro. Con -quit la busqueda para en el PRIMER hallazgo, asi que no
-    # penaliza aunque la carpeta sea enorme.
-    [ -n "$(find "$d" -type f \( -iname '*.exe' -o -iname '*.bat' \) \
+    # OJO con la profundidad: sin limite, una carpeta SIN ejecutable se
+    # recorre entera. Con juegos de miles de ficheros y una biblioteca
+    # grande, eso son minutos de espera al abrir la lista. Cuatro niveles
+    # cubren de sobra los casos reales (Binaries/Win64/... incluido).
+    [ -n "$(find "$d" -maxdepth 4 -type f \( -iname '*.exe' -o -iname '*.bat' \) \
             ! -ipath '*/windows/*' ! -ipath '*/system32/*' \
             -print -quit 2>/dev/null)" ] && return 0
-    # Ultimo recurso: una carpeta con muchos ficheros dentro y sin pinta de
-    # ser de capturas o documentos, se ofrece igualmente. Mas vale que
-    # aparezca y no arranque, que no aparecer y que el usuario no la vea.
-    [ -n "$(find "$d" -type f ! -iname '*.png' ! -iname '*.jpg' ! -iname '*.jpeg' \
-            ! -iname '*.txt' ! -iname '*.pdf' ! -iname '*.md' \
+    # Ultimo recurso, tambien acotado: si hay contenido que no sean imagenes
+    # ni documentos, se ofrece igual. Mas vale que aparezca y no arranque,
+    # que no aparecer y que el usuario no lo encuentre.
+    [ -n "$(find "$d" -maxdepth 2 -type f ! -iname '*.png' ! -iname '*.jpg' \
+            ! -iname '*.jpeg' ! -iname '*.txt' ! -iname '*.pdf' ! -iname '*.md' \
             -print -quit 2>/dev/null)" ] && return 0
     return 1
 }
@@ -11489,9 +11552,12 @@ EOFRAIZ
 juego_etiqueta() {
     # Como se muestra un juego en la lista. Si hay varias carpetas de juegos,
     # se anade de cual viene para poder distinguir dos con el mismo nombre.
+    #
+    # WP_N_RAICES lo calcula quien recorre la lista, UNA sola vez: antes se
+    # contaban las carpetas por cada juego, con varios procesos cada vez.
     local ruta="$1" nom raiz base
-    nom="$(basename "$ruta")"
-    if [ "$(games_paths | wc -l)" -gt 1 ]; then
+    nom="${ruta##*/}"
+    if [ "${WP_N_RAICES:-$(games_paths | grep -c .)}" -gt 1 ]; then
         raiz="$(games_paths | while IFS= read -r r; do
                     case "$ruta/" in "$r"/*) printf '%s' "$r"; break ;; esac
                 done)"
@@ -11531,7 +11597,19 @@ pick_squash_una_vez() {
     local list
     # Rutas absolutas: con varias carpetas de juegos, el nombre relativo ya no
     # identifica al juego. La etiqueta que se MUESTRA se calcula aparte.
-    list="$(lista_juegos | sort | sort_games)"
+    # Se cronometra cada fase. Con bibliotecas grandes abrir la lista puede
+    # tardar mucho, y sin medirlo no hay forma de saber que parte es la lenta.
+    local _t0 _t1 _n
+    WP_N_RAICES="$(games_paths | grep -c . || echo 1)"
+    export WP_N_RAICES
+    _t0="$(date +%s)"
+    local _crudo; _crudo="$(lista_juegos)"
+    _t1="$(date +%s)"
+    _n="$(printf '%s' "$_crudo" | grep -c . || true)"
+    log "Biblioteca: $_n juegos encontrados en $((_t1-_t0))s"
+    list="$(printf '%s' "$_crudo" | sort | sort_games)"
+    _t0="$(date +%s)"
+    log "Biblioteca: ordenada en $((_t0-_t1))s"
     # Biblioteca vacia: antes se volvia al menu principal SIN DECIR NADA, y
     # quien acababa de instalar WProton no entendia por que "Jugar" y
     # "Ajustes de un juego" no hacian nada.
@@ -11654,6 +11732,8 @@ EOF2
 $list
 EOFINFO
     local favfile; favfile="$(mktemp)"
+    _t1="$(date +%s)"
+    log "Biblioteca: datos de los juegos en $((_t1-_t0))s"
     export WP_LIST_INFO="$infofile" WP_FAV_FILE="$favfile"
     # shellcheck disable=SC2046
     local titulo_lista="Elige un juego  [$GAMES_PATH]"
@@ -12144,6 +12224,17 @@ main_dispatch() {
     case "$sel" in
         "Jugar al último:"*)
             play_any "$LAST_GAME" ;;
+        "WPACT:CONFIG|"*)
+            # X sobre "Jugar al ultimo": configurar ESE juego sin tener que
+            # abrir la lista entera, que con muchos juegos tarda.
+            local gx="${sel#WPACT:CONFIG|}"
+            case "$gx" in
+                *"Jugar al último"*)
+                    [ -n "$LAST_GAME" ] && [ -e "$LAST_GAME" ] \
+                        && game_config_menu "$LAST_GAME" \
+                        || ui_error "No hay ningun juego reciente." ;;
+                *) : ;;
+            esac ;;
         "Jugar"*)
             # Los favoritos se marcan DENTRO del menu (R1) y se guardan al
             # salir: no hay que reabrir nada.
@@ -12507,8 +12598,12 @@ main_menu() {
                "Buscar actualizaciones [v$WPROTON_VERSION]" \
                "Salir")
         local sel
+        # Con X se configura el juego de "Jugar al ultimo" sin abrir la lista
+        # entera, que con muchos juegos tarda en cargar.
+        [ -n "$LAST_GAME" ] && [ -e "$LAST_GAME" ] && export WP_ACTION_X=1
         sel="$(menu "WProton v$WPROTON_VERSION - Menu principal" "${opts[@]}")"
         local mrc=$?
+        unset WP_ACTION_X
         if [ "$mrc" = 2 ]; then
             # el menu no se pudo dibujar: reintentar el bucle, no cerrar
             say "Reintentando abrir el menu principal..."
@@ -12771,7 +12866,8 @@ bootstrap_if_needed() {
     # Si falta alguna carpeta de juegos, puede ser que su disco no este
     # montado (tipico en el modo Juego con un disco externo o una segunda
     # unidad): se ofrece montarlo sin salir de aqui.
-    montar_discos_de_juegos || true
+    montar_discos_recordados || true    # los ya configurados, sin preguntar
+    montar_discos_de_juegos || true     # y si aun falta alguno, se pregunta
 }
 
 # ----------------------------------------------------------------------------
