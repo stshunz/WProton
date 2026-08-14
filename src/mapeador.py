@@ -442,6 +442,21 @@ def main():
     ]
     map_dirs = {k: [] for k in DIR_KEYS}
 
+    # Estilo de nombres del fichero .keys.
+    #
+    # Hay dos convenciones para los mismos botones fisicos:
+    #   Xbox     -> A es el de abajo,  B el de la derecha
+    #   Nintendo -> A es el de la derecha, B el de abajo  (lo que usa
+    #               Batocera, y por tanto los .keys hechos alli)
+    # Con el estilo equivocado, A y B (y a menudo X e Y) salen cruzados.
+    # No se puede adivinar mirando el fichero, asi que se elige por juego.
+    if os.environ.get('WP_KEYS_ESTILO') == 'nintendo':
+        for _p, _q in (('a', 'b'), ('x', 'y')):
+            if _p in ids and _q in ids:
+                ids[_p], ids[_q] = ids[_q], ids[_p]
+        print("[keys] Estilo de botones: Nintendo/Batocera (A y B cambiados)",
+              flush=True)
+
     for act in data.get('actions_player1', []):
         trig, target = act['trigger'], act['target']
         is_kb = (target == "TECLADO_VIRTUAL")
@@ -453,6 +468,13 @@ def main():
                                "active": False, "kb": is_kb})
         elif trig in map_dirs:
             map_dirs[trig] = t_codes
+            # Hay mandos (Anbernic, Decktroid y similares) cuya cruceta llega
+            # como BOTONES sueltos en vez de como eje. El helper de menus ya
+            # los contemplaba; aqui no, y en esos mandos la cruceta no hacia
+            # nada. Se registran tambien como botones normales.
+            _btn_cruceta = {"up": 544, "down": 545, "left": 546, "right": 547}
+            if trig in _btn_cruceta:
+                map_normal[_btn_cruceta[trig]] = t_codes
         elif trig in ids:
             map_normal[ids[trig]] = t_codes
 
@@ -476,6 +498,26 @@ def main():
     }
     _mclick_abs = _TRIG_ABS.get(_mclick, ()) if _mclick else ()
     _mclick_pressed = False  # Estado previo del trigger analógico
+
+    # Gatillos L2/R2 como EJE, no como boton.
+    #
+    # En casi todos los mandos (Xbox, Steam Deck, DualSense) los gatillos no
+    # mandan una pulsacion: mandan un eje de 0 al maximo segun lo apretados
+    # que esten. Los codigos de boton 312 y 313 no llegan nunca, asi que un
+    # .keys con "l2" o "r2" no hacia nada. Aqui se traduce el eje a
+    # pulsacion, con un umbral de la cuarta parte del recorrido.
+    _gatillo_teclas = {}
+    for _n, _ejes in (("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE)),
+                      ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS))):
+        _cod = ids.get(_n)
+        if _cod is not None and map_normal.get(_cod):
+            for _e in _ejes:
+                _gatillo_teclas[_e] = map_normal[_cod]
+    _gatillo_on = {}     # eje -> si esta pulsado ahora
+    _gatillo_umbral = {} # eje -> a partir de que valor cuenta como pulsado
+    if _gatillo_teclas:
+        print("[keys] Gatillos analogicos activos para %d eje(s)"
+              % len(_gatillo_teclas), flush=True)
     ui_mouse=None
     if _mcfg:
         try:
@@ -552,12 +594,42 @@ def main():
                                     ui_mouse.write(ecodes.EV_KEY, ecodes.BTN_LEFT,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
+                            # Gatillo analogico -> pulsacion de tecla
+                            if event.code in _gatillo_teclas:
+                                _um = _gatillo_umbral.get(event.code)
+                                if _um is None:
+                                    # El recorrido cambia entre mandos (0-255,
+                                    # 0-1023, 0-32767): se pregunta al propio
+                                    # mando en vez de suponer un valor.
+                                    try:
+                                        _um = max(8, _dev.absinfo(event.code).max // 4)
+                                    except Exception:
+                                        _um = 64
+                                    _gatillo_umbral[event.code] = _um
+                                _pulsado = event.value > _um
+                                if _pulsado != _gatillo_on.get(event.code, False):
+                                    _gatillo_on[event.code] = _pulsado
+                                    for _t in _gatillo_teclas[event.code]:
+                                        ui.write(ecodes.EV_KEY, _t, 1 if _pulsado else 0)
+                                    ui.syn()
                             # Mapeo de dirección → teclado
                             if event.code in abs_map_actual:
                                 neg_dir, pos_dir = abs_map_actual[event.code]
-                                val = event.value - center
-                                neg_active = val < -threshold
-                                pos_active = val > threshold
+                                # La CRUCETA no es analogica: solo manda -1, 0
+                                # o +1. Compararla con el umbral de los sticks
+                                # (16000, para no detectar el roce) hacia que
+                                # no se activara NUNCA. Para los ejes de
+                                # cruceta el centro es 0 y basta con el signo.
+                                if event.code in (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y,
+                                                  ecodes.ABS_HAT1X, ecodes.ABS_HAT1Y,
+                                                  ecodes.ABS_HAT2X, ecodes.ABS_HAT2Y):
+                                    val = event.value
+                                    neg_active = val < 0
+                                    pos_active = val > 0
+                                else:
+                                    val = event.value - center
+                                    neg_active = val < -threshold
+                                    pos_active = val > threshold
                                 for direction, active in ((neg_dir, neg_active), (pos_dir, pos_active)):
                                     if active != ejes_on[direction]:
                                         ejes_on[direction] = active

@@ -116,10 +116,28 @@ def leer_duracion(ruta):
 EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 
+# Al IMPORTAR un juego no se enseñan los ya empaquetados (.wsquashfs y
+# .dwarfs): esos ya salen solos en la biblioteca, y verlos aqui solo confunde
+# —parece que hay que añadirlos otra vez—. Quedan los formatos que si hay que
+# importar: comprimidos, ejecutables y carpetas.
+EXTS_IMPORTAR = ('.zip', '.7z', '.rar', '.001', '.z01',
+                 '.exe', '.bat', '.cmd', '.wtgz')
+
 def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
-                manifiesto=None, preseleccion=None, fav_file=None):
+                manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
+    set_aspecto(aspecto)
     global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, BROWSE_EXTS, ACTION_X
-    global LIST_INFO, PRESEL, FAV_FILE
+    global LIST_INFO, PRESEL, FAV_FILE, FILTER, kb_open, kb_r, kb_c
+    # El proceso de menus es persistente: sin esto, lo escrito en una busqueda
+    # anterior seguia filtrando la pantalla siguiente. Se veian cuatro
+    # ficheros de cien y parecia que faltaban; y el teclado en pantalla salia
+    # con el texto de antes, al que se le iban sumando letras.
+    if FILTER:
+        sys.stderr.write('menu_pygame: se limpia la busqueda %r al abrir '
+                         'una pantalla nueva\n' % FILTER)
+    FILTER = ''
+    kb_open = False
+    kb_r = kb_c = 0
     PRESEL = preseleccion or ''
     FAV_FILE = fav_file or ''
     LIST_INFO = {}
@@ -150,6 +168,8 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
         BROWSE_EXTS = ('.keys',)
     elif browse_kind == 'image':
         BROWSE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+    elif browse_kind == 'importar':
+        BROWSE_EXTS = EXTS_IMPORTAR
     else:
         BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
@@ -222,7 +242,7 @@ def load_dir(path):
     for n in names:
         if not n.startswith('.') and os.path.isdir(os.path.join(cur_path, n)):
             items.append([K_DIR, n + '/', False])
-    if BROWSE_KIND in ('file', 'play', 'keys', 'image'):
+    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar'):
         for n in names:
             p = os.path.join(cur_path, n)
             if (not n.startswith('.') and os.path.isfile(p)
@@ -346,16 +366,27 @@ BAD_DEV = ('accel', 'gyro', 'imu', 'motion', 'sensor')
 def find_raw_pads():
     # Solo mandos de verdad: fuera acelerometros/giroscopos que Batocera y los
     # handhelds exponen como joystick (movian el menu al inclinar la consola)
+    # UN mando puede exponer VARIOS nodos: el controlador xpad crea uno por
+    # interfaz ("Microsoft X-Box 360 pad" y "...pad 0"), y el DualSense saca
+    # ademas sus sensores. Si se leen todos, cada pulsacion llega DOS veces y
+    # los menus saltan de dos en dos.
+    #
+    # Se agrupan por aparato fisico (la linea "P: Phys=") y de cada grupo se
+    # deja UN nodo, el primero (el principal).
     pads = []
+    vistos = set()
     try:
         blocks = open('/proc/bus/input/devices').read().split('\n\n')
     except OSError:
         return pads
     for b in blocks:
-        name, ev, has_js = '', None, False
+        name, ev, has_js, phys = '', None, False, ''
         for line in b.split('\n'):
             if line.startswith('N:'):
                 name = line.lower()
+            elif line.startswith('P:'):
+                # "P: Phys=usb-0000:00:14.0-3/input0" -> "usb-0000:00:14.0-3"
+                phys = line.split('=', 1)[-1].strip().split('/')[0]
             elif line.startswith('H:'):
                 l2 = line.replace('=', ' ')
                 if ' js' in l2:
@@ -363,9 +394,103 @@ def find_raw_pads():
                 for tok in l2.split():
                     if tok.startswith('event'):
                         ev = tok
-        if has_js and ev and not any(k in name for k in BAD_DEV):
-            pads.append('/dev/input/' + ev)
+        if not (has_js and ev) or any(k in name for k in BAD_DEV):
+            continue
+        clave = phys or ev          # sin phys, cada nodo va por su cuenta
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        pads.append('/dev/input/' + ev)
     return pads
+
+DEV = os.environ.get('WP_DEV') == '1'
+CAPT_DIR = os.environ.get('WP_CAPT_DIR', '')
+
+REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0}
+
+def grabar_fotograma():
+    # Graba los menus DESDE DENTRO, guardando fotogramas.
+    #
+    # Hace falta porque ffmpeg, que lee la pantalla desde fuera, saca video
+    # NEGRO: la ventana de pygame se dibuja con aceleracion y su contenido no
+    # llega a la ventana raiz de las X. Desde aqui sale exacto, igual que las
+    # capturas con F12.
+    #
+    # Se activa dejando un fichero .rec con la marca de tiempo final, asi que
+    # no hace falta reiniciar el proceso de menus.
+    if not DEV or screen is None:
+        return
+    ahora = time.time()
+    if ahora - REC['comprobado'] > 1.0:
+        REC['comprobado'] = ahora
+        marca = os.path.join(CAPT_DIR or '.', '.rec')
+        try:
+            if os.path.isfile(marca):
+                with open(marca) as fh:
+                    hasta, destino = fh.read().split('\n')[:2]
+                if float(hasta) > ahora and REC['dir'] != destino:
+                    REC.update({'hasta': float(hasta), 'dir': destino, 'n': 0})
+                    os.makedirs(destino, exist_ok=True)
+                    sys.stderr.write('menu_pygame: grabando menus en %s\n' % destino)
+        except Exception:
+            pass
+    if not REC['dir'] or ahora > REC['hasta']:
+        if REC['dir'] and ahora > REC['hasta']:
+            sys.stderr.write('menu_pygame: grabacion terminada (%d fotogramas)\n'
+                             % REC['n'])
+            REC['dir'] = ''
+        return
+    if ahora - REC['ultimo'] < 0.1:      # 10 por segundo: suficiente y ligero
+        return
+    REC['ultimo'] = ahora
+    try:
+        pygame.image.save(screen, os.path.join(REC['dir'], 'f%05d.png' % REC['n']))
+        REC['n'] += 1
+    except Exception:
+        pass
+
+def captura():
+    # Guarda la pantalla actual del menu. Se hace desde pygame, asi que sale
+    # exacta y sin bordes de ventana ni raton, que es lo que hace falta para
+    # el manual y la web.
+    if not (DEV and CAPT_DIR) or screen is None:
+        return
+    try:
+        os.makedirs(CAPT_DIR, exist_ok=True)
+        nombre = time.strftime('wproton_%Y%m%d_%H%M%S')
+        ruta = os.path.join(CAPT_DIR, nombre + '.png')
+        n = 2
+        while os.path.exists(ruta):
+            ruta = os.path.join(CAPT_DIR, '%s_%d.png' % (nombre, n)); n += 1
+        pygame.image.save(screen, ruta)
+        sys.stderr.write('menu_pygame: captura -> %s\n' % ruta)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo capturar (%s)\n' % e)
+
+def eventos():
+    # pygame.event.get() a prueba de cambios de mandos.
+    #
+    # Cuando Steam se cierra y se vuelve a abrir, crea y destruye sus mandos
+    # virtuales. pygame recibe entonces avisos de "mando desconectado" de un
+    # joystick que no tiene fichado y revienta DENTRO de event.get() con un
+    # "KeyError: 0", que sale como SystemError y se lleva por delante el menu
+    # entero. Aqui se absorbe: se reinicia el subsistema de joystick y se
+    # sigue, en vez de perder la ventana.
+    try:
+        return pygame.event.get()
+    except (SystemError, KeyError, Exception) as e:
+        sys.stderr.write('menu_pygame: cambio de mandos durante la lectura '
+                         '(%s); se reinicia el subsistema\n' % e)
+        try:
+            pygame.event.clear()
+        except Exception:
+            pass
+        try:
+            pygame.joystick.quit()
+            pygame.joystick.init()
+        except Exception:
+            pass
+        return []
 
 def post_key(k):
     try:
@@ -427,7 +552,14 @@ def evdev_thread():
                     sel_held[0] = (v != 0)
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
-                        post_key(pygame.K_F11)      # Select + A
+                        post_key(pygame.K_F11)      # Select + A: pantalla completa
+                    elif c == 307 and sel_held[0]:
+                        # Select + X: cambiar entre lista y rejilla.
+                        #
+                        # Antes era L2, pero en la mayoria de mandos L2 y R2
+                        # NO son botones: son ejes analogicos (ABS_Z/ABS_RZ),
+                        # asi que su codigo de boton no llega nunca.
+                        post_key(pygame.K_F3)
                     else:
                         post_key(RAW_BTN[c])
                 elif t == EV_ABS_RAW and c in (16, 17):
@@ -466,20 +598,31 @@ def _open_window():
     if FULLSCREEN:
         return pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     return pygame.display.set_mode((W, H))
-try:
-    screen = _open_window()
-except Exception as e:
-    sys.stderr.write('menu_pygame: no se pudo abrir la ventana (%s)\n' % e)
-    if FULLSCREEN:                      # reintentar en ventana
-        FULLSCREEN = False
+# Los modos que NO dibujan no deben abrir ventana.
+#
+# El vigilante del mando solo lee /dev/input y el generador de imagenes
+# trabaja en memoria, pero ambos abrian una ventana a pantalla completa que
+# nunca se dibujaba: negra. La del vigilante ademas sobrevive a la partida,
+# asi que al cerrar WProton se quedaba la pantalla en negro.
+SIN_VENTANA = len(sys.argv) > 1 and sys.argv[1] in ('guardia', 'logo')
+screen = None
+if SIN_VENTANA:
+    sys.stderr.write('menu_pygame: modo "%s": sin ventana\n' % sys.argv[1])
+else:
+    try:
         screen = _open_window()
-    else:
-        raise
-if FULLSCREEN:
-    W, H = screen.get_size()
-pygame.display.set_caption('WProton')
-sys.stderr.write('menu_pygame: video driver = %s | ventana %dx%d | fullscreen=%s\n'
-                 % (pygame.display.get_driver(), W, H, FULLSCREEN))
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo abrir la ventana (%s)\n' % e)
+        if FULLSCREEN:                      # reintentar en ventana
+            FULLSCREEN = False
+            screen = _open_window()
+        else:
+            raise
+    if FULLSCREEN:
+        W, H = screen.get_size()
+    pygame.display.set_caption('WProton')
+    sys.stderr.write('menu_pygame: video driver = %s | ventana %dx%d | fullscreen=%s\n'
+                     % (pygame.display.get_driver(), W, H, FULLSCREEN))
 
 _last_frame = [time.time()]
 
@@ -507,7 +650,16 @@ def frame_watchdog():
                 os._exit(3)
     threading.Thread(target=_vigila, daemon=True).start()
 
-frame_watchdog()
+# OJO: solo para los modos CON VENTANA.
+#
+# El vigilante mata el proceso si pasan 6 segundos sin dibujar un fotograma,
+# para reintentar con otro driver cuando la ventana se queda en negro. Pero
+# los modos "guardia" (vigilar el mando durante la partida) y "logo" (generar
+# las imagenes) NO DIBUJAN NADA: a los 6 segundos los daba por colgados y los
+# mataba. Por eso el cierre con el mando dejaba de funcionar nada mas empezar
+# a jugar.
+if len(sys.argv) > 1 and sys.argv[1] not in ('guardia', 'logo'):
+    frame_watchdog()
 
 if IS_GAMESCOPE_SESS:
     try:
@@ -835,6 +987,22 @@ def draw_header():
         pygame.draw.rect(screen, ACC, (W - bwd - 20, 18, bwd, 24), border_radius=12)
         screen.blit(badge, (W - bwd - 11, 21))
 
+_forma_cache = {}
+
+def es_ancha(path):
+    # ¿La caratula es mas ancha que alta? Se recuerda para no abrir el
+    # fichero en cada fotograma.
+    if not path:
+        return False
+    if path not in _forma_cache:
+        try:
+            img = pygame.image.load(path)
+            w, h = img.get_size()
+            _forma_cache[path] = (w > h)
+        except Exception:
+            _forma_cache[path] = False
+    return _forma_cache[path]
+
 def cover_surface(ruta, ancho):
     # Carátula escalada, guardada en memoria: sin esto se recargaria del disco
     # 60 veces por segundo al mover la seleccion.
@@ -893,12 +1061,25 @@ def draw_side_panel():
         # Carátula: ocupa como mucho la mitad del alto del panel, para que
         # siempre quede sitio para el nombre y los datos.
         if datos and MODE == 'list':
-            cov = cover_surface(datos.get('cov'), min(SIDE_W - 32, 170))
+            # Un poco mas grande que antes (170): con caratulas horizontales
+            # se quedaba pequeña y no se leia el titulo.
+            # Ancho maximo segun la forma de la caratula.
+            #
+            # Las verticales se limitan a 240 px: mas grandes se comen el
+            # panel y no dejan sitio a los datos del juego. Las panoramicas y
+            # las 4:3 son mucho mas bajas para el mismo ancho, asi que pueden
+            # ocupar el panel entero y se ven bastante mejor.
+            _ancho_max = SIDE_W - 16
+            if not es_ancha(datos.get('cov')):
+                _ancho_max = min(SIDE_W - 24, 240)
+            cov = cover_surface(datos.get('cov'), _ancho_max)
             if cov is not None:
                 ch = cov.get_height()
-                if ch > LIST_H // 2:
+                # el tope de alto solo estorba a las verticales
+                _alto_max = int(LIST_H * (0.45 if es_ancha(datos.get('cov')) else 0.55))
+                if ch > _alto_max:
                     cov = cover_surface(datos.get('cov'),
-                                        int((SIDE_W - 32) * (LIST_H // 2) / ch))
+                                        int(_ancho_max * _alto_max / ch))
                     ch = cov.get_height() if cov is not None else 0
                 if cov is not None:
                     cx = SIDE_X + (SIDE_W - cov.get_width()) // 2
@@ -959,6 +1140,15 @@ def draw_side_panel():
     if FILTER:
         py += 10
         screen.blit(f_sm.render('BUSCANDO: %s' % FILTER, True, WARN), (px, py))
+        py += 20
+        # Si la busqueda no deja ver nada, hay que decirlo Y decir como
+        # quitarla. Una pantalla vacia con un filtro puesto parece que no hay
+        # ficheros, y no que estan escondidos.
+        if not view:
+            for _ln in wrap_title('Nada coincide con esa busqueda. '
+                                  'Pulsa B para quitarla.', f_sm, SIDE_W - 34, 3):
+                screen.blit(rtext(f_sm, _ln, WARN), (px, py))
+                py += 20
 
 def draw_footer(chips):
     fy = H - 46
@@ -1135,6 +1325,27 @@ def toggle():
 GCOLS = 5
 GCW, GCH = 176, 268
 GIMG_W, GIMG_H = 150, 225
+
+# Proporcion de la caratula: alto = ancho * ASPECTO.
+#   1.5  -> vertical, 2:3, la clasica de las tiendas
+#   0.47 -> panoramica, tipo cabecera de Steam (920x430)
+#   0.75 -> 4:3, para colecciones de caratulas cuadradas (640x480)
+# Cuanto mas ancha, menos caben por fila pero mas grandes se ven.
+ASPECTOS = {'1': 0.47, 'wide': 0.47, '43': 0.75, 'vertical': 1.5, '': 1.5}
+ASPECTO = ASPECTOS.get(os.environ.get('WP_GRID_BANNER', ''), 1.5)
+
+def set_aspecto(valor):
+    # La proporcion viaja en CADA peticion, no solo al arrancar.
+    #
+    # Antes se leia una sola vez, al iniciar el proceso de menus. Como ese
+    # proceso es persistente, cambiar de vista dejaba las casillas con la
+    # forma anterior: las caratulas verticales salian en recuadros anchos.
+    # Asi no depende de reiniciar nada.
+    global ASPECTO
+    nuevo = ASPECTOS.get(valor or '', 1.5)
+    if nuevo != ASPECTO:
+        ASPECTO = nuevo
+        _imgcache.clear()      # las caratulas escaladas ya no valen
 _imgcache = {}
 
 def grid_metrics():
@@ -1158,9 +1369,11 @@ def grid_metrics():
         rows = 2
     # altura por fila (incluye el hueco del titulo): así las filas CABEN
     h_max = int(avail_h / rows) - 48
-    w_from_h = int(h_max / 1.5)
+    w_from_h = int(h_max / ASPECTO)
     # ancho maximo razonable por carátula según el tamaño de pantalla
     w_cap = 190 if W <= 1400 else (210 if W <= 1920 else 240)
+    if ASPECTO < 1:          # horizontales: mas anchas, caben menos por fila
+        w_cap = int(w_cap * 2.1)
     if forced > 0:
         # columnas fijadas por el usuario: el tamaño de la carátula se calcula
         # para que QUEPAN esas columnas (antes se mantenía el tamaño y con
@@ -1169,13 +1382,13 @@ def grid_metrics():
         GCW = max(80, avail_w // forced)
         GIMG_W = max(90, GCW - 26)
         # y que la fila siga cabiendo de alto
-        if int(GIMG_W * 1.5) + 48 > int(avail_h / rows):
-            GIMG_W = max(90, int((int(avail_h / rows) - 48) / 1.5))
-        GIMG_H = int(GIMG_W * 1.5)
+        if int(GIMG_W * ASPECTO) + 48 > int(avail_h / rows):
+            GIMG_W = max(90, int((int(avail_h / rows) - 48) / ASPECTO))
+        GIMG_H = int(GIMG_W * ASPECTO)
         GCH = GIMG_H + 48
     else:
         GIMG_W = max(120, min(w_from_h, w_cap))
-        GIMG_H = int(GIMG_W * 1.5)
+        GIMG_H = int(GIMG_W * ASPECTO)
         GCW = GIMG_W + 26
         GCH = GIMG_H + 48
         GCOLS = max(3, min(9, avail_w // GCW))
@@ -1348,15 +1561,36 @@ def fit_label(txt, font, maxw):
     return t
 
 def grid_img(path):
+    # La caratula se ajusta a la casilla SIN DEFORMARLA.
+    #
+    # Antes se estiraba hasta llenarla, asi que en la vista de caratulas
+    # anchas una vertical salia achatada y horrible. Ahora se escala hasta
+    # que quepa entera y se centra sobre el fondo de la casilla; asi una
+    # vertical en una casilla ancha se ve bien, solo con aire a los lados.
+    clave = (path, GIMG_W, GIMG_H)
+    if clave in _imgcache:
+        return _imgcache[clave]
     if not path or not os.path.isfile(path):
+        _imgcache[clave] = None
         return None
-    if path not in _imgcache:
-        try:
-            img = pygame.image.load(path)
-            _imgcache[path] = pygame.transform.smoothscale(img, (GIMG_W, GIMG_H))
-        except Exception:
-            _imgcache[path] = None
-    return _imgcache[path]
+    try:
+        img = pygame.image.load(path).convert_alpha()
+        w0, h0 = img.get_size()
+        if w0 <= 0 or h0 <= 0:
+            raise ValueError('imagen vacia')
+        escala = min(GIMG_W / w0, GIMG_H / h0)
+        an, al = max(1, int(w0 * escala)), max(1, int(h0 * escala))
+        peq = pygame.transform.smoothscale(img, (an, al))
+        if an == GIMG_W and al == GIMG_H:
+            _imgcache[clave] = peq
+        else:
+            lienzo = pygame.Surface((GIMG_W, GIMG_H), pygame.SRCALPHA)
+            lienzo.fill(TH.get('card', (20, 26, 44)))
+            lienzo.blit(peq, ((GIMG_W - an) // 2, (GIMG_H - al) // 2))
+            _imgcache[clave] = lienzo
+    except Exception:
+        _imgcache[clave] = None
+    return _imgcache[clave]
 
 def draw_grid():
     gx0 = LIST_X + max(0, (LIST_W - GCOLS * GCW) // 2) + (GCW - GIMG_W) // 2
@@ -1490,6 +1724,11 @@ def on_escape():
         parent = os.path.dirname(cur_path)
         if parent != cur_path:
             load_dir(parent)
+        else:
+            # Ya estamos en la raiz: no hay donde subir, asi que B cierra el
+            # navegador. Antes no hacia nada y daba la sensacion de que se
+            # habia quedado colgado.
+            running = False
     else:
         running = False
 
@@ -1499,9 +1738,15 @@ def _refilter():
     else:
         apply_filter()
 
-def filter_add(ch):
+def filter_add(ch, origen='?'):
+    # Se deja constancia de CADA letra que entra en la busqueda y de donde
+    # viene. Hubo un caso de un filtro que aparecia solo ("ij") y escondia los
+    # ficheros; sin esto no habia forma de saber si lo escribia el usuario, el
+    # teclado en pantalla o el propio mando.
     global FILTER
     FILTER += ch
+    sys.stderr.write('menu_pygame: busqueda += %r (%s) -> %r\n'
+                     % (ch, origen, FILTER))
     _refilter()
 
 def filter_back():
@@ -1523,7 +1768,7 @@ def kb_press():
         else:                       # LISTO
             kb_open = False
     else:
-        filter_add(KB_ROWS[kb_r][kb_c].lower())
+        filter_add(KB_ROWS[kb_r][kb_c].lower(), 'teclado en pantalla')
 
 def run_session():
     # Ejecuta UNA peticion (un menu, un teclado, una barra de progreso)
@@ -1553,7 +1798,7 @@ def run_session():
         status = ''
         misses = 0
         while True:
-            for ev in pygame.event.get():
+            for ev in eventos():
                 if ev.type == pygame.QUIT:
                     safe_quit(0)
             try:
@@ -1594,6 +1839,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clockC.tick(15)          # muy poco consumo: no compite con el juego
 
@@ -1602,7 +1848,7 @@ def run_session():
         bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
         clock2 = pygame.time.Clock()
         while True:
-            for ev in pygame.event.get():
+            for ev in eventos():
                 if ev.type == pygame.QUIT:
                     pygame.quit(); sys.exit(0)
             try:
@@ -1638,6 +1884,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clock2.tick(30)
         pygame.quit()
@@ -1681,7 +1928,7 @@ def run_session():
             return None
 
         while True:
-            for ev in pygame.event.get():
+            for ev in eventos():
                 if ev.type == pygame.QUIT:
                     safe_quit(1)
                 if ev.type != pygame.KEYDOWN:
@@ -1763,6 +2010,7 @@ def run_session():
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
             clockT.tick(30)
 
@@ -1775,10 +2023,13 @@ def run_session():
     _last_key = [None, 0.0]
     DEBOUNCE = 0.08
     while running:
-        for ev in pygame.event.get():
+        for ev in eventos():
             if ev.type == pygame.QUIT:
                 running = False
             elif ev.type == pygame.KEYDOWN:
+                if DEV and ev.key == pygame.K_F12:
+                    captura()
+                    continue
                 t_now = time.time()
                 if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
                     continue
@@ -1809,7 +2060,7 @@ def run_session():
                     else:
                         ch = getattr(ev, 'unicode', '')
                         if ch and ch.isprintable():
-                            filter_add(ch)
+                            filter_add(ch, 'tecla %s' % pygame.key.name(ev.key))
                 else:
                     if ev.key == pygame.K_ESCAPE:
                         if ready(): on_escape()
@@ -1837,6 +2088,12 @@ def run_session():
                         # L1: ficha del juego, sin pasar por configuracion
                         if ready() and ACTION_X and MODE in ('list', 'grid'):
                             action_sobre_juego('INFO')
+                    elif ev.key == pygame.K_F3:
+                        # L2: cambiar entre lista y rejilla. Se cierra el menu
+                        # y WProton lo reabre en la otra vista; con el servidor
+                        # de menus, el cambio se ve al momento.
+                        if ready() and ACTION_X and MODE in ('list', 'grid'):
+                            action_sobre_juego('VISTA')
                     elif ev.key == pygame.K_F2:
                         # R1: marcar o quitar favorito AQUI MISMO. Antes se
                         # cerraba el menu, lo aplicaba WProton y se volvia a
@@ -1858,7 +2115,8 @@ def run_session():
                         if MODE != 'check':
                             ch = getattr(ev, 'unicode', '')
                             if ch and ch.isprintable():
-                                filter_add(ch)
+                                filter_add(ch, 'type-ahead %s'
+                                           % pygame.key.name(ev.key))
 
         screen.blit(BGSURF, (0, 0))
         if PANEL_UI:
@@ -2000,6 +2258,7 @@ def run_session():
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
                           ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
                           ('R1', L('favorito', 'favourite')),
+                          ('Sel+X', L('vista', 'view')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('Dpad', L('moverse', 'move')), ('A', L('jugar', 'play')),
                           ('B', L('volver', 'back')), ('Y', L('buscar', 'search'))]
@@ -2007,6 +2266,7 @@ def run_session():
                 _chips = [('A', L('jugar', 'play')), ('X', L('config', 'config')),
                           ('Y', L('buscar', 'search')), ('L1', L('ficha', 'info')),
                           ('R1', L('favorito', 'favourite')),
+                          ('Sel+X', L('vista', 'view')),
                           ('B', L('volver', 'back'))] if ACTION_X else \
                          [('A', L('elegir', 'choose')), ('B', L('volver', 'back')),
                           ('Y', L('buscar', 'search')), ('Sel+A', L('pantalla', 'screen'))]
@@ -2017,6 +2277,7 @@ def run_session():
             screen.blit(SCANSURF, (0, 0))
         try:
             pygame.display.flip()
+            grabar_fotograma()
             _last_frame[0] = time.time()
         except Exception as _e:
             # El servidor X de gamescope puede desaparecer al cerrarse un juego
@@ -2075,6 +2336,7 @@ def draw_idle(status=''):
         screen.blit(SCANSURF, (0, 0))
     try:
         pygame.display.flip()
+        grabar_fotograma()
         _last_frame[0] = time.time()
     except Exception:
         pass
@@ -2111,7 +2373,7 @@ def serve(dirpath):
                 os.remove(ready)
             except Exception:
                 pass
-            while len(campos) < 9:
+            while len(campos) < 10:
                 campos.append('')
             # Los campos vienen con los saltos de linea escapados como \n:
             # el protocolo es una linea por campo y los titulos tienen varias.
@@ -2126,16 +2388,16 @@ def serve(dirpath):
                             out.append('\\'); i += 2; continue
                     out.append(v[i]); i += 1
                 return ''.join(out)
-            campos = [_desescapa(c) for c in campos[:9]]
+            campos = [_desescapa(c) for c in campos[:10]]
             (modo, titulo, salida, arg4, kind, ax,
-             manif, presel, favf) = campos
+             manif, presel, favf, aspec) = campos
             if modo == 'idle':
                 # sin menu: solo actualizar el texto del reposo
                 status = titulo
             elif modo:
                 set_request(modo, titulo, salida, arg4 or None,
                             kind or 'file', ax == '1', manif or None,
-                            presel or None, favf or None)
+                            presel or None, favf or None, aspec or None)
                 load_request_data()
                 compute_layout()
                 try:
@@ -2231,6 +2493,198 @@ def generar_imagenes(destino):
         print(r)
     return 0 if hechas else 1
 
+def ocultar_cursor():
+    # Esconde el puntero del raton mientras se juega.
+    #
+    # Al arrancar un juego se queda el puntero en medio de la pantalla hasta
+    # que lo mueves. Con la extension XFixes de las X se puede ocultar para
+    # toda la pantalla, y se restaura solo cuando este proceso termina, que es
+    # justo cuando acaba la partida.
+    #
+    # Se usa ctypes: nada que instalar. Si algo falla, se deja como estaba.
+    if os.environ.get('WP_OCULTAR_CURSOR') == '0':
+        return None
+    if not os.environ.get('DISPLAY'):
+        return None
+    try:
+        import ctypes, ctypes.util
+        x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+        fixes = ctypes.CDLL(ctypes.util.find_library('Xfixes') or 'libXfixes.so.3')
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        dpy = x11.XOpenDisplay(None)
+        if not dpy:
+            sys.stderr.write('menu_pygame: no se pudo abrir la pantalla para '
+                             'ocultar el cursor\n')
+            return None
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        raiz = x11.XDefaultRootWindow(ctypes.c_void_p(dpy))
+        fixes.XFixesHideCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        fixes.XFixesHideCursor(ctypes.c_void_p(dpy), raiz)
+        # Ademas se aparta el puntero a la esquina inferior derecha. XFixes
+        # solo lo oculta mientras esta conexion siga abierta, y algunos juegos
+        # vuelven a mostrarlo por su cuenta; apartado, al menos no molesta en
+        # medio de la pantalla.
+        try:
+            x11.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                         ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                                         ctypes.c_uint, ctypes.c_uint,
+                                         ctypes.c_int, ctypes.c_int]
+            x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            an = x11.XDisplayWidth(ctypes.c_void_p(dpy), 0)
+            al = x11.XDisplayHeight(ctypes.c_void_p(dpy), 0)
+            x11.XWarpPointer(ctypes.c_void_p(dpy), 0, raiz, 0, 0, 0, 0,
+                             int(an) - 1, int(al) - 1)
+        except Exception:
+            pass
+        x11.XFlush(ctypes.c_void_p(dpy))
+        sys.stderr.write('menu_pygame: cursor oculto en %s (si el juego corre en '
+                         'otra pantalla, p.ej. gamescope anidado, no le afecta)\n'
+                         % os.environ.get('DISPLAY'))
+        # se devuelve la conexion: mientras siga abierta, el cursor sigue
+        # oculto. Al morir este proceso, las X lo restauran solas.
+        return (x11, dpy)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo ocultar el cursor (%s)\n' % e)
+        return None
+
+def guardia(marca, segundos=5.0, combo='select'):
+    # Vigila los mandos DURANTE la partida esperando la combinacion de salida.
+    #
+    # Combinaciones (ajuste PAD_EXIT_COMBO):
+    #   select  - mantener Select 5 segundos (por defecto). Un solo boton,
+    #             sencillo de explicar y que nadie mantiene tanto sin querer.
+    #   l3r3    - los dos sticks a la vez
+    #   start   - Select + Start (OJO: en el escritorio de SteamOS, mantener
+    #             Start cambia el mando de modo)
+    #
+    # Solo LEE los dispositivos (no necesita uinput) y no interfiere con el
+    # juego: varios procesos pueden leer el mismo mando.
+    import struct
+    FMT = 'llHHi'
+    SZ = struct.calcsize(FMT)
+    SELECT, START, L3, R3 = 314, 315, 317, 318
+    if combo == 'l3r3':
+        REQ, nombre_combo = (L3, R3), 'L3+R3'
+    elif combo == 'start':
+        REQ, nombre_combo = (SELECT, START), 'Select+Start'
+    else:
+        REQ, nombre_combo = (SELECT,), 'Select'
+    # Los botones se cuentan POR DISPOSITIVO, no en un monton comun.
+    #
+    # Un mismo mando puede aparecer como varios dispositivos, y ademas Steam
+    # crea mandos virtuales con los botones remapeados. Si se juntaban todos,
+    # bastaba con que UNO mandara el codigo de Select para que la combinacion
+    # se cumpliera: pulsar L1 podia cerrar el juego. Ahora la combinacion
+    # tiene que venir entera del MISMO dispositivo.
+    fds = {}
+    pulsados = {}          # dispositivo -> botones pulsados en el
+    desde = None
+    avisado = set()
+    ultimo_escaneo = 0.0
+    sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para cerrar)\n'
+                     % (nombre_combo, segundos))
+    # El cursor se oculta aqui y se restaura solo al terminar este proceso,
+    # que es cuando acaba la partida.
+    # El cursor es lo MENOS importante del guardia: si algo va mal ahi, no
+    # puede llevarse por delante el cierre del juego.
+    try:
+        _cursor = ocultar_cursor()
+    except Exception as e:
+        sys.stderr.write('menu_pygame: fallo ocultando el cursor (%s)\n' % e)
+        _cursor = None
+    _t0 = time.time()
+    _vistos = [0]
+    while True:
+        ahora = time.time()
+        if ahora - ultimo_escaneo > 3:
+            ultimo_escaneo = ahora
+            for p in find_raw_pads():
+                if p not in fds:
+                    try:
+                        fds[p] = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+                        sys.stderr.write('menu_pygame: guardia vigilando %s\n' % p)
+                    except OSError as e:
+                        if p not in avisado:
+                            avisado.add(p)
+                            sys.stderr.write('menu_pygame: guardia no puede leer %s (%s)\n'
+                                             % (p, e))
+        if not fds:
+            if 'sin_mandos' not in avisado:
+                avisado.add('sin_mandos')
+                sys.stderr.write('menu_pygame: guardia SIN MANDOS que leer: '
+                                 'el cierre con el mando no funcionara\n')
+            time.sleep(1.0)
+            continue
+        for p, fd in list(fds.items()):
+            try:
+                datos = os.read(fd, SZ * 32)
+            except (BlockingIOError, OSError):
+                continue
+            if not datos:
+                continue
+            _vistos[0] += 1
+            aqui = pulsados.setdefault(p, set())
+            for i in range(0, len(datos) - SZ + 1, SZ):
+                _s, _us, t, c, v = struct.unpack(FMT, datos[i:i+SZ])
+                if t != 1:            # EV_KEY
+                    continue
+                if v == 1:
+                    aqui.add(c)
+                    # Los primeros botones se apuntan con su codigo: asi se
+                    # ve si el guardia recibe algo y si los codigos son los
+                    # esperados en ESTE mando. Sin esto habia que adivinar.
+                    if _vistos[0] <= 12:
+                        sys.stderr.write('menu_pygame: guardia: boton %d en %s '
+                                         '(la combinacion espera %s)\n'
+                                         % (c, p, list(REQ)))
+                elif v == 0:
+                    aqui.discard(c)
+        # Si a los 60 segundos no ha llegado NI UN evento, es que no se puede
+        # leer el mando (permisos), no que el usuario no pulse nada.
+        if _vistos[0] == 0 and 'mudo' not in avisado and time.time() - _t0 > 60:
+            avisado.add('mudo')
+            sys.stderr.write('menu_pygame: guardia: 60s sin recibir NADA de %d '
+                             'dispositivo(s). Revisa los permisos de '
+                             '/dev/input (Runners y herramientas -> Arreglar '
+                             'permisos del mando)\n' % len(fds))
+        # combinacion de cierre: entera en UN dispositivo
+        cual = None
+        for p, aqui in pulsados.items():
+            if all(b in aqui for b in REQ):
+                cual = p
+                break
+        if cual is not None:
+            if desde is None:
+                desde = time.time()
+            elif time.time() - desde >= segundos:
+                try:
+                    with open(marca, 'w') as fh:
+                        fh.write('salir\n')
+                except Exception:
+                    pass
+                sys.stderr.write('menu_pygame: %s mantenido en %s -> cerrar el juego\n'
+                                 % (nombre_combo, cual))
+                return 0
+        else:
+            # Diagnostico: si se mantiene algo mucho rato y NO es la
+            # combinacion, se apunta su codigo. Asi, si en algun mando los
+            # botones no son los estandar, el registro lo dice.
+            if desde is not None and time.time() - desde >= segundos:
+                for p, aqui in pulsados.items():
+                    if aqui:
+                        sys.stderr.write('menu_pygame: guardia: %s mantiene %s '
+                                         '(la combinacion espera %s)\n'
+                                         % (p, sorted(aqui), list(REQ)))
+            desde = None
+        time.sleep(0.05)
+
+if sys.argv[1] == 'guardia':
+    sys.exit(guardia(sys.argv[2],
+                     float(sys.argv[3]) if len(sys.argv) > 3 else 5.0,
+                     sys.argv[4] if len(sys.argv) > 4 else 'select'))
+
 if sys.argv[1] == 'logo':
     sys.exit(generar_imagenes(sys.argv[2]))
 
@@ -2243,7 +2697,8 @@ else:
                 os.environ.get('WP_ACTION_X') == '1',
                 os.environ.get('WP_LIST_INFO') or None,
                 os.environ.get('WP_PRESEL') or None,
-                os.environ.get('WP_FAV_FILE') or None)
+                os.environ.get('WP_FAV_FILE') or None,
+                os.environ.get('WP_GRID_BANNER') or None)
     load_request_data()
     compute_layout()
     rc = run_session()
