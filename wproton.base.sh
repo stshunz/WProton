@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.16"
+WPROTON_VERSION="1.18"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -64,7 +64,8 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 # --- Ajustes globales (settings.conf se crea con valores por defecto) ---
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
-GAMES_VIEW="list"                        # lista | grid (rejilla con carátulas)
+GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
+LIST_COVER=vertical                      # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
 THEME="moderno"                          # aspecto de los menus: clasico | moderno | arcade
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
@@ -86,6 +87,25 @@ FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
 save_settings() {
+    # RED DE SEGURIDAD para las carpetas de juegos.
+    #
+    # A un tester le desaparecio la carpeta de su disco externo de los ajustes
+    # sin haberla quitado el. Como save_settings reescribe el fichero entero,
+    # basta con que UNA llamada ocurra con la variable vacia para perderla.
+    #
+    # Aqui se compara con lo que ya habia guardado: si tenia carpetas y ahora
+    # no hay ninguna, se conservan y se apunta QUIEN lo intento. Para
+    # quitarlas de verdad esta la opcion "Quitar" del menu, que avisa con
+    # WP_BORRAR_CARPETAS=1.
+    if [ "${WP_BORRAR_CARPETAS:-0}" != 1 ] && [ -z "${GAMES_PATHS_EXTRA:-}" ] \
+       && [ -f "$SETTINGS_FILE" ]; then
+        local _antes
+        _antes="$(sed -n 's/^GAMES_PATHS_EXTRA="\(.*\)"$/\1/p' "$SETTINGS_FILE" 2>/dev/null)"
+        if [ -n "$_antes" ]; then
+            GAMES_PATHS_EXTRA="$_antes"
+            log "Ajustes: se iban a perder las carpetas extra desde ${FUNCNAME[1]:-?}; se conservan" WARN
+        fi
+    fi
     cat > "$SETTINGS_FILE" <<EOF
 # ============================================
 # Ajustes globales de WProton (editable a mano)
@@ -96,6 +116,9 @@ GAMES_PATH="$GAMES_PATH"
 LAST_GAME="$LAST_GAME"
 # Vista del selector de juegos: list | grid
 GAMES_VIEW="$GAMES_VIEW"
+# Forma de la caratula que se enseña en el panel de la vista de lista:
+#   vertical | wide (panoramica) | 43
+LIST_COVER="$LIST_COVER"
 # Última carpeta usada en el navegador de ficheros:
 LAST_BROWSE="$LAST_BROWSE"
 # Aspecto de los menus: clasico | moderno
@@ -1263,6 +1286,8 @@ find_keys_file() {
 }
 
 mapeador_start() {
+    # estilo de nombres del .keys (xbox | nintendo), para este juego
+    export WP_KEYS_ESTILO="${KEYS_ESTILO:-xbox}"
     # $1 = fichero .keys
     write_mapeador
     # evdev es imprescindible: probar el import y avisar CLARO si falta
@@ -1275,9 +1300,24 @@ rt=os.environ["WP_RT"]; base=os.path.dirname(rt)
 sys.path.insert(0, os.path.join(rt, "libs_py%d.%d" % sys.version_info[:2]))
 [sys.path.insert(0, d) for d in (os.path.join(base,"evmapy"), os.path.join(rt,"evmapy")) if os.path.isdir(d)]
 import evdev' >> "$LOG_FILE" 2>&1; then
-        say "AVISO: mapeador .keys NO activado: falta el modulo python evdev"
-        say "       Arreglalo en: Runners y herramientas -> Instalar evdev"
-        return 1
+        # Falta evdev y este juego SI tiene .keys: se intenta instalar aqui
+        # mismo. Si la instalacion inicial fallo (un fallo de red, por
+        # ejemplo), quien pusiera un .keys se encontraba con que "no
+        # funciona" y sin saber por que.
+        say "Falta el modulo evdev para el .keys; intentando instalarlo..."
+        loading_say "Preparando el mapeador de mando..."
+        instalar_evdev >/dev/null 2>&1
+        loading_clear
+        if ! WP_RT="$RUNTIME_DIR" "$PY_BIN" -c 'import sys,os
+rt=os.environ["WP_RT"]; base=os.path.dirname(rt)
+sys.path.insert(0, os.path.join(rt, "libs_py%d.%d" % sys.version_info[:2]))
+[sys.path.insert(0, d) for d in (os.path.join(base,"evmapy"), os.path.join(rt,"evmapy")) if os.path.isdir(d)]
+import evdev' >> "$LOG_FILE" 2>&1; then
+            say "AVISO: mapeador .keys NO activado: falta el modulo python evdev"
+            say "       Arreglalo en: Runners y herramientas -> Instalar evdev"
+            return 1
+        fi
+        say "[+] evdev instalado; el .keys ya puede funcionar"
     fi
     say "[+] Engranando mapeador para: $(basename "$1")"
     # -u: sin el, Python guarda su salida en un bufer y el registro se queda
@@ -1301,9 +1341,31 @@ import evdev' >> "$LOG_FILE" 2>&1; then
 }
 
 mapeador_stop() {
-    [ -n "$MAPEADOR_PID" ] && kill "$MAPEADOR_PID" 2>/dev/null
+    # Parar el mapeador DE VERDAD, y comprobarlo.
+    #
+    # El identificador que guardabamos era el del "setsid" que lo lanza, y ese
+    # muere en cuanto arranca al python: matarlo no servia de nada. El python
+    # quedaba vivo con otro identificador, convirtiendo los botones del mando
+    # en teclas mientras navegabas por los menus.
+    [ -n "${MAPEADOR_PID:-}" ] && {
+        kill "$MAPEADOR_PID" 2>/dev/null
+        kill -- "-$MAPEADOR_PID" 2>/dev/null   # y su grupo (lo crea setsid)
+    }
     MAPEADOR_PID=""
-    pkill -f "$MAPEADOR_PY" 2>/dev/null
+    # Se busca por el NOMBRE del script, no por su ruta completa: un mapeador
+    # huerfano puede venir de OTRA copia de WProton (otra carpeta, una version
+    # de pruebas, la del disco externo...) y entonces la ruta no coincide y
+    # seguia vivo mandando teclas.
+    pkill -f 'mapeador\.py' 2>/dev/null
+    local i
+    for i in 1 2 3; do
+        pgrep -f 'mapeador\.py' >/dev/null 2>&1 || { log "Mapeador detenido"; return 0; }
+        sleep 0.3
+        pkill -9 -f 'mapeador\.py' 2>/dev/null
+    done
+    pgrep -f 'mapeador\.py' >/dev/null 2>&1 \
+        && log "AVISO: el mapeador sigue vivo; seguira mandando teclas" WARN \
+        || log "Mapeador detenido"
     return 0
 }
 
@@ -1418,7 +1480,8 @@ menu() {
         # Primero el servidor de menus (una sola ventana para toda la sesion);
         # si no esta disponible, un proceso por menu como siempre.
         menu_server_request list "$title" "$tmpsel" "$tmpopt" "" "${WP_ACTION_X:-}" \
-            "${WP_LIST_INFO:-}" "${WP_PRESEL:-}" "${WP_FAV_FILE:-}"
+            "${WP_LIST_INFO:-}" "${WP_PRESEL:-}" "${WP_FAV_FILE:-}" \
+            "${WP_GRID_BANNER:-vertical}"
         hrc=$?
         if [ "$hrc" = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
@@ -2683,6 +2746,8 @@ profile_defaults() {
     # de los mandos estaba en los permisos y en un proceso nuestro que se
     # mataba solo. Se deja en tres estados, como el resto de opciones.
     PAD_SONY=auto
+    # Nombres de los botones dentro del .keys: xbox | nintendo (Batocera)
+    KEYS_ESTILO=xbox
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
     NOTAS=""                 # apunte libre ("necesita -novr", "usar GE 9-27"...)
@@ -2732,6 +2797,7 @@ PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_SONY=${PAD_SONY:-auto}
+KEYS_ESTILO=${KEYS_ESTILO:-xbox}
 PAD_STEAMFIX=$PAD_STEAMFIX
 NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
@@ -3413,6 +3479,13 @@ EOFRA
     )
     local rc=$?
     guardia_salida_stop
+    # El mapeador tiene que parar AQUI, al terminar el juego, no al cerrar
+    # WProton. Mientras siga vivo convierte los botones del mando en teclas
+    # del sistema, y esas teclas se las come el menu: con un .keys que asigne
+    # A a la letra "i", entrar en una carpeta escribia "i" en el buscador.
+    # Antes solo se paraba en la limpieza final, asi que seguia actuando
+    # durante todo el rato que estuvieras navegando despues de jugar.
+    mapeador_stop
     WP_JUGANDO=0
     trap cleanup_all INT TERM        # se vuelve a atender las senales
     local dur=$(( $(date +%s) - t0 ))
@@ -3686,7 +3759,10 @@ umudb_update() {
     fi
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     say "Actualizando la base de datos de umu..."
-    if curl -fsSL --max-time 30 "$UMUDB_URL" -o "$f.tmp" 2>/dev/null \
+    # Limite corto a proposito: esto solo sirve para PROPONER datos. Si la
+    # red va lenta, se sigue sin ella; lo contrario es dejar al usuario
+    # mirando una pantalla quieta sin saber cuanto falta.
+    if curl -fsSL --max-time 8 "$UMUDB_URL" -o "$f.tmp" 2>/dev/null \
        && [ -s "$f.tmp" ] && grep -qi 'umu' "$f.tmp"; then
         mv -f "$f.tmp" "$f"
         rm -f "$(umudb_titles)"      # el indice se rehace
@@ -3852,7 +3928,7 @@ Con él, umu aplica los arreglos conocidos de este juego.
 #   Si no hay red o el juego no esta, la ficha muestra igualmente lo que
 #   sabemos por nosotros mismos: tamaño, veces jugado y tiempo total.
 # ---------------------------------------------------------------------------
-ficha_file() { printf '%s' "$COVERS_DIR/${1}.info.json"; }
+ficha_file() { printf '%s' "$DATOS_DIR/${1}.info.json"; }
 
 ficha_appid() {
     # Busca el juego en la tienda de Steam y devuelve "appid|nombre".
@@ -3918,7 +3994,7 @@ ficha_descargar() {
     [ -n "$appid" ] || return 1
     out="$(ficha_file "$gid")"
     mkdir -p "$COVERS_DIR"
-    curl -fsSL --max-time 20 \
+    curl -fsSL --max-time 8 \
         "https://store.steampowered.com/api/appdetails?appids=$appid&l=spanish" \
         -o "$out.tmp" 2>/dev/null || { rm -f "$out.tmp"; return 1; }
     if grep -q '"success"[^t]*true' "$out.tmp" 2>/dev/null; then
@@ -4062,11 +4138,12 @@ Metacritic:   $mc / 100"
     # tambien sin duracion aunque HowLongToBeat si lo tuviera.
     local dur hist todo nombre_busqueda
     nombre_busqueda="${nom:-$(printf '%s' "$gid" | tr '_' ' ')}"
-    dur="$(cat "$COVERS_DIR/${gid}.hltb" 2>/dev/null)" || dur=""
+    dur="$(cat "$DATOS_DIR/${gid}.hltb" 2>/dev/null)" || dur=""
     if [ -z "$dur" ] && hltb_disponible; then
         loading_say "Consultando la duración de $nombre_busqueda..."
         dur="$(hltb_duracion "$nombre_busqueda")" || dur=""
-        [ -n "$dur" ] && printf '%s' "$dur" > "$COVERS_DIR/${gid}.hltb"
+        [ -n "$dur" ] && { mkdir -p "$DATOS_DIR" 2>/dev/null
+                           printf '%s' "$dur" > "$DATOS_DIR/${gid}.hltb"; }
         loading_clear
     fi
     if [ -n "$dur" ]; then
@@ -5351,8 +5428,18 @@ package_dir() {
     local dir="$1" launcher name exe out
     lanzar_script_si_existe "$dir" && return 0
     name="$(basename "$dir")"
-    exe="$(resolver_exe_carpeta "$dir")" \
-        || die "No se encontro ejecutable en la carpeta"
+    # OJO: aqui NO se puede usar "die", que cierra WProton entero. Esto
+    # ocurre dentro de un menu: si la carpeta elegida no sirve, se avisa y se
+    # vuelve al menu, como cualquier otro error recuperable.
+    if ! exe="$(resolver_exe_carpeta "$dir")" || [ -z "$exe" ]; then
+        ui_error "No se encontro ningun ejecutable en esa carpeta.
+
+$dir
+
+Elige la carpeta que contiene el .exe del juego, o importa
+directamente el ejecutable."
+        return 1
+    fi
     write_autorun "$dir" "$exe"
     if offer_test_then_pack "$dir" "$exe" "$name"; then
         ui_ask "Lanzar '$name' desde el wsquashfs ahora?" \
@@ -5551,8 +5638,14 @@ play_folder() {
     if [ -n "$EXE_OVERRIDE" ] && [ -f "$dir/$EXE_OVERRIDE" ]; then
         exe="$dir/$EXE_OVERRIDE"
     else
-        exe="$(resolver_exe_carpeta "$dir")" \
-            || die "No se encontro ejecutable en la carpeta"
+        if ! exe="$(resolver_exe_carpeta "$dir")" || [ -z "$exe" ]; then
+            ui_error "No se encontro ningun ejecutable en esa carpeta.
+
+$dir
+
+Elige la carpeta que contiene el .exe del juego."
+            return 1
+        fi
     fi
     launch_loose_exe "$name" "$exe"
 }
@@ -5605,7 +5698,7 @@ play_any() {
         *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
             launch_game "$p" "auto" ;;
         *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
-            [ -f "$p" ] || die "No existe: $p"
+            [ -f "$p" ] || { ui_error "Ya no existe:\n$p"; return 1; }
             local nm; nm="$(game_id "$(dirname "$p")")"
             launch_loose_exe "$nm" "$(realpath "$p")" ;;
         *)
@@ -5614,7 +5707,7 @@ play_any() {
             elif [ -f "$p" ]; then
                 launch_game "$p" "auto"
             else
-                die "No existe: $p"
+                ui_error "Ya no existe:\n$p"; return 1
             fi ;;
     esac
 }
@@ -5978,16 +6071,17 @@ menusrv_escapa() {
 menu_server_request() {
     # $1=modo $2=titulo $3=salida $4=arg4 $5=tipo $6=accion_x $7=manifiesto
     # $8=preseleccion (juego sobre el que abrir la lista)
+    # $10=proporcion de la caratula (vertical | wide | 43)
     # Manda la peticion al servidor y espera su respuesta. Devuelve el codigo
     # de la sesion, o 9 si el servidor se ha caido (para que el llamador use
     # el camino de siempre, un proceso por menu).
     menu_server_alive || return 9
     rm -f "$(menusrv_dir)/resp" 2>/dev/null
-    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         "$(menusrv_escapa "$1")" "$(menusrv_escapa "$2")" "$(menusrv_escapa "$3")" \
         "$(menusrv_escapa "${4:-}")" "$(menusrv_escapa "${5:-}")" "${6:-}" \
         "$(menusrv_escapa "${7:-}")" "$(menusrv_escapa "${8:-}")" \
-        "$(menusrv_escapa "${9:-}")" \
+        "$(menusrv_escapa "${9:-}")" "${10:-}" \
         > "$(menusrv_dir)/req"
     : > "$(menusrv_dir)/req.ready"
     local i=0
@@ -6732,6 +6826,21 @@ config_export() {
         mkdir -p "$tmp/wproton_config/covers"
         cp -a "$COVERS_DIR/." "$tmp/wproton_config/covers/" 2>/dev/null
     fi
+    if [ -d "$COVERS_WIDE_DIR" ] && \
+       [ -n "$(find "$COVERS_WIDE_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/covers_wide"
+        cp -a "$COVERS_WIDE_DIR/." "$tmp/wproton_config/covers_wide/" 2>/dev/null
+    fi
+    if [ -d "$DATOS_DIR" ] && \
+       [ -n "$(find "$DATOS_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/datos"
+        cp -a "$DATOS_DIR/." "$tmp/wproton_config/datos/" 2>/dev/null
+    fi
+    if [ -d "$COVERS_43_DIR" ] && \
+       [ -n "$(find "$COVERS_43_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/covers_43"
+        cp -a "$COVERS_43_DIR/." "$tmp/wproton_config/covers_43/" 2>/dev/null
+    fi
     if [ -d "$LANG_DIR" ]; then
         mkdir -p "$tmp/wproton_config/lang"
         cp -a "$LANG_DIR/." "$tmp/wproton_config/lang/" 2>/dev/null
@@ -6804,6 +6913,9 @@ por los del zip. Se guardara antes una copia en backups/." || { rm -rf "$tmp"; r
                 cp -a "$base/profiles/." "$PROFILE_DIR/" 2>/dev/null
             fi
             [ -d "$base/covers" ] && { mkdir -p "$COVERS_DIR"; cp -a "$base/covers/." "$COVERS_DIR/" 2>/dev/null; }
+            [ -d "$base/covers_wide" ] && { mkdir -p "$COVERS_WIDE_DIR"; cp -a "$base/covers_wide/." "$COVERS_WIDE_DIR/" 2>/dev/null; }
+            [ -d "$base/covers_43" ] && { mkdir -p "$COVERS_43_DIR"; cp -a "$base/covers_43/." "$COVERS_43_DIR/" 2>/dev/null; }
+            [ -d "$base/datos" ] && { mkdir -p "$DATOS_DIR"; cp -a "$base/datos/." "$DATOS_DIR/" 2>/dev/null; }
             [ -d "$base/lang" ] && { mkdir -p "$LANG_DIR"; cp -a "$base/lang/." "$LANG_DIR/" 2>/dev/null; }
             rm -rf "$tmp"
             load_settings
@@ -6990,19 +7102,19 @@ import_input() {
             pad_bridge_stop
             bash "$input" ;;
         *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
-            [ -f "$input" ] || die "No existe: $input"
+            [ -f "$input" ] || { ui_error "Ya no existe:\n$input"; return 1; }
             play_any "$input" ;;
         *)
             if [ -d "$input" ]; then
                 play_folder "$input"
             elif printf '%s' "$input" | grep -qiE "$ARCHIVE_REGEX"; then
-                [ -f "$input" ] || die "No existe: $input"
+                [ -f "$input" ] || { ui_error "Ya no existe:\n$input"; return 1; }
                 import_archive "$input"
             elif [ -f "$input" ]; then
                 # extension desconocida: intentar como squash
                 launch_game "$input" "auto"
             else
-                die "No existe el fichero: $input"
+                ui_error "No existe el fichero:\n$input"; return 1
             fi ;;
     esac
 }
@@ -7371,6 +7483,52 @@ pad_sdl_label() {
 }
 
 COVERS_DIR="$BASE_DIR/covers"
+# Las horizontales van en SU PROPIA carpeta, no con un sufijo en el nombre:
+# asi quien ya tenga una coleccion de caratulas anchas puede copiarla tal
+# cual, con los ficheros llamados como el juego.
+COVERS_WIDE_DIR="$BASE_DIR/covers_wide"   # panoramica (cabecera de Steam)
+COVERS_43_DIR="$BASE_DIR/covers_43"       # 4:3 (640x480)
+# Datos de los juegos (ficha de Steam, duracion de HowLongToBeat). Antes
+# vivian mezclados con las caratulas; con tres carpetas de caratulas, esto
+# pide su propio sitio.
+DATOS_DIR="$BASE_DIR/datos"
+
+datos_preparar() {
+    # Crea la carpeta y traslada lo que estuviera en covers/. Una sola vez.
+    mkdir -p "$DATOS_DIR" 2>/dev/null
+    local f n=0
+    for f in "$COVERS_DIR"/*.info.json "$COVERS_DIR"/*.hltb; do
+        [ -f "$f" ] || continue
+        mv -f "$f" "$DATOS_DIR/" 2>/dev/null && n=$((n+1))
+    done
+    [ "$n" -gt 0 ] && log "Datos de juegos movidos a datos/: $n fichero(s)"
+    return 0
+}
+
+covers_dir_de() {
+    # Carpeta que corresponde a cada forma de caratula.
+    case "${1:-vertical}" in
+        wide) printf '%s' "$COVERS_WIDE_DIR" ;;
+        43)   printf '%s' "$COVERS_43_DIR" ;;
+        *)    printf '%s' "$COVERS_DIR" ;;
+    esac
+}
+
+covers_wide_preparar() {
+    # Crea la carpeta y traslada lo que se hubiera guardado con el nombre
+    # anterior (covers/<juego>.wide.png). Se hace una sola vez y en silencio.
+    mkdir -p "$COVERS_WIDE_DIR" "$COVERS_43_DIR" 2>/dev/null
+    local f base
+    for f in "$COVERS_DIR"/*.wide.png "$COVERS_DIR"/*.wide.jpg \
+             "$COVERS_DIR"/*.wide.jpeg "$COVERS_DIR"/*.wide.webp; do
+        [ -f "$f" ] || continue
+        base="$(basename "$f")"
+        # "Doom.wide.png" -> "Doom.png"
+        mv -f "$f" "$COVERS_WIDE_DIR/${base%.wide.*}.${base##*.}" 2>/dev/null \
+            && log "Caratula ancha movida a covers_wide/: $base"
+    done
+    return 0
+}
 PROGRESS_PID=""
 
 progress_start() {
@@ -7417,12 +7575,82 @@ profile_get() {
     sed -n "s/^$2=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$f" | head -n1
 }
 
+cover_nombres() {
+    # Nombres con los que puede estar guardada la caratula de un juego.
+    #
+    # El identificador cambia los espacios por guiones bajos ("Blade Arcus"
+    # -> "Blade_Arcus"), que es como las guarda la descarga automatica. Pero
+    # quien copia su propia coleccion conserva los espacios, y asi no casaba
+    # ninguna. Se prueban las dos formas.
+    local gid="$1"
+    printf '%s\n' "$gid"
+    case "$gid" in
+        *_*) printf '%s\n' "$(printf '%s' "$gid" | tr '_' ' ')" ;;
+    esac
+}
+
+cover_tipo_real() {
+    # ¿Existe la caratula de ESA forma, de verdad? ($1 = gid, $2 = forma)
+    #
+    # Hace falta aparte de cover_for porque aquella, si no encuentra la forma
+    # pedida, devuelve la vertical como respaldo: muy comodo para dibujar,
+    # pero traicionero para decidir si hay que descargar algo (siempre
+    # parecia que ya estaba).
+    local e d nom; d="$(covers_dir_de "${2:-vertical}")"
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            [ -f "$d/$nom.$e" ] && { printf '%s' "$d/$nom.$e"; return 0; }
+        done
+    done <<EOFCN
+$(cover_nombres "$1")
+EOFCN
+    if [ "${2:-}" = wide ]; then       # nomenclatura anterior
+        for e in png jpg jpeg webp; do
+            [ -f "$COVERS_DIR/$1.wide.$e" ] && { printf '%s' "$COVERS_DIR/$1.wide.$e"; return 0; }
+        done
+    fi
+    return 1
+}
+
 cover_for() {
-    # $1 = gid -> ruta de la carátula si existe
-    local e
-    for e in png jpg jpeg webp; do
-        [ -f "$COVERS_DIR/$1.$e" ] && { printf '%s' "$COVERS_DIR/$1.$e"; return 0; }
-    done
+    # $1 = gid, $2 = "wide" para la carátula horizontal (opcional).
+    #
+    # Se guardan en carpetas distintas, con el MISMO nombre de fichero:
+    #   covers/<juego>.png         vertical (2:3), la de siempre
+    #   covers_wide/<juego>.png    panoramica, tipo cabecera de Steam
+    #   covers_43/<juego>.png      4:3 (640x480)
+    #
+    # Si se pide la horizontal y no la hay, se usa la vertical: mejor una
+    # caratula deformada que un hueco vacio.
+    local e d nom
+    if [ -n "${2:-}" ] && [ "${2:-}" != vertical ]; then
+        d="$(covers_dir_de "$2")"
+        while IFS= read -r nom; do
+            [ -n "$nom" ] || continue
+            for e in png jpg jpeg webp; do
+                [ -f "$d/$nom.$e" ] && { printf '%s' "$d/$nom.$e"; return 0; }
+            done
+        done <<EOFC2
+$(cover_nombres "$1")
+EOFC2
+        # compatibilidad con la nomenclatura anterior (covers/<juego>.wide.*)
+        if [ "$2" = wide ]; then
+            for e in png jpg jpeg webp; do
+                [ -f "$COVERS_DIR/$1.wide.$e" ] && \
+                    { printf '%s' "$COVERS_DIR/$1.wide.$e"; return 0; }
+            done
+        fi
+    fi
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            [ -f "$COVERS_DIR/$nom.$e" ] && \
+                { printf '%s' "$COVERS_DIR/$nom.$e"; return 0; }
+        done
+    done <<EOFC3
+$(cover_nombres "$1")
+EOFC3
     return 1
 }
 
@@ -7430,8 +7658,150 @@ urlencode_py() {
     "$PY_BIN" -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null
 }
 
+caratula_manual() {
+    # Elegir una imagen del disco como caratula. $1 = gid.
+    #
+    # Se puede poner la vertical (rejilla clasica) o la horizontal (rejilla
+    # de caratulas anchas), y se guardan por separado.
+    local gid="$1" tipo destino img ext
+    tipo="$(menu "Carátula de $gid" \
+        "Vertical (2:3, como las tiendas)" \
+        "Panorámica (ancha, tipo Steam)" \
+        "Cuadrada 4:3 (640x480)" \
+        "<< Volver")" || return 0
+    case "$tipo" in
+        "Vertical"*)   destino="$(covers_dir_de vertical)" ;;
+        "Panorámica"*) destino="$(covers_dir_de wide)" ;;
+        "Cuadrada"*)   destino="$(covers_dir_de 43)" ;;
+        *) return 0 ;;
+    esac
+    img="$(browse_for_path "Elige una imagen" "$(browse_start "$HOME")" "image")" || return 0
+    [ -f "$img" ] || return 1
+    ext="${img##*.}"
+    case "$(printf '%s' "$ext" | tr 'A-Z' 'a-z')" in
+        png|jpg|jpeg|webp) ext="$(printf '%s' "$ext" | tr 'A-Z' 'a-z')" ;;
+        *) ui_error "Eso no parece una imagen (png, jpg o webp)."; return 1 ;;
+    esac
+    mkdir -p "$destino" 2>/dev/null
+    # se quitan las que hubiera de ese tipo, para no dejar dos con distinta
+    # extension y que gane la que no toca
+    local e
+    for e in png jpg jpeg webp; do rm -f "$destino/$gid.$e" 2>/dev/null; done
+    if cp -f "$img" "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+        say "[+] Caratula guardada: $(basename "$destino")/$gid.$ext"
+        ui_info "Carátula guardada.
+
+Se vera en la biblioteca al volver a la lista."
+        return 0
+    fi
+    ui_error "No se pudo copiar la imagen."
+    return 1
+}
+
+sgdb_buscar_manual() {
+    # Buscar la caratula de UN juego escribiendo el nombre a mano.
+    #
+    # La busqueda automatica usa el nombre del fichero, que muchas veces trae
+    # version, region o el nombre del grupo, y entonces no encuentra nada.
+    # Aqui se escribe el titulo de verdad y se elige entre los resultados.
+    local gid="$1"
+    SGDB_KEY="$(sgdb_key_leer)"
+    [ -n "$SGDB_KEY" ] || { ui_error "Falta la API key de SteamGridDB.
+
+Descarga carátulas una vez desde el menú y te la pedirá, o deja
+un fichero de texto con la clave junto a wproton.sh."; return 1; }
+
+    local tipo destino dims
+    tipo="$(menu "Buscar carátula de: $gid" \
+        "Vertical (2:3)" \
+        "Panorámica (tipo Steam)" \
+        "Cuadrada 4:3" \
+        "<< Volver")" || return 0
+    case "$tipo" in
+        "Vertical"*)   destino="$(covers_dir_de vertical)"; dims="600x900" ;;
+        "Panorámica"*) destino="$(covers_dir_de wide)";     dims="920x430,460x215" ;;
+        "Cuadrada"*)   destino="$(covers_dir_de 43)";       dims="640x480,512x384" ;;
+        *) return 0 ;;
+    esac
+
+    local busca; busca="$(ask_text "Nombre del juego para buscar en SteamGridDB" \
+                          "$(printf '%s' "$gid" | tr '._' '  ')")"
+    [ -n "$busca" ] || return 0
+
+    loading_say "Buscando \"$busca\"..."
+    local q; q="$(urlencode_py "$busca")"
+    local gjson; gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
+    loading_clear
+    # nombres e identificadores de los resultados, en paralelo
+    local ids nombres
+    ids="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | grep -o '[0-9]*')"
+    nombres="$(printf '%s' "$gjson" | grep -o '"name": *"[^"]*"' | cut -d'"' -f4)"
+    [ -n "$ids" ] || { ui_error "Sin resultados para: $busca"; return 1; }
+
+    # menu con los titulos encontrados
+    local opciones="" n=0 nom
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        n=$((n+1)); opciones="$opciones$n. $nom
+"
+        [ "$n" -ge 12 ] && break
+    done <<EOFN
+$nombres
+EOFN
+    local elegido
+    # shellcheck disable=SC2046
+    elegido="$(IFS=$'\n'; set -f; menu "¿Cuál es?" $opciones "<< Volver")" || return 0
+    [ "$elegido" = "<< Volver" ] && return 0
+    local pos="${elegido%%.*}"
+    local gameid; gameid="$(printf '%s' "$ids" | sed -n "${pos}p")"
+    [ -n "$gameid" ] || return 1
+
+    loading_say "Descargando carátula..."
+    local ujson url ext
+    ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+        2>>"$LOG_FILE")"
+    url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+    loading_clear
+    [ -n "$url" ] || { ui_error "Ese juego no tiene carátula de ese tipo en SteamGridDB.
+
+Prueba con el otro tipo, o pon una imagen tuya desde
+'Carátula: elegir una imagen'."; return 1; }
+    ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+    mkdir -p "$destino" 2>/dev/null
+    local e
+    for e in png jpg jpeg webp; do rm -f "$destino/$gid.$e" 2>/dev/null; done
+    if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+        say "[+] Caratula guardada: $(basename "$destino")/$gid.$ext"
+        ui_info "Carátula guardada.
+
+Se vera al volver a la lista."
+        return 0
+    fi
+    ui_error "No se pudo descargar la imagen."
+    return 1
+}
+
 sgdb_download_covers() {
-    # Descarga carátulas 600x900 de SteamGridDB para los juegos sin carátula
+    # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
+    # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
+    # vista.
+    local quiere
+    quiere="$(menu "¿Qué carátulas quieres descargar?" \
+        "Solo verticales (2:3)" \
+        "Solo panorámicas (tipo Steam)" \
+        "Solo cuadradas (4:3)" \
+        "Todas (las tres formas)" \
+        "<< Volver")" || return 0
+    local tipos
+    case "$quiere" in
+        "Solo vert"*) tipos="vertical" ;;
+        "Solo pano"*) tipos="wide" ;;
+        "Solo cuad"*) tipos="43" ;;
+        "Todas"*)     tipos="vertical wide 43" ;;
+        *) return 0 ;;
+    esac
     # la clave puede venir de un fichero aparte
     SGDB_KEY="$(sgdb_key_leer)"
     if [ -z "$SGDB_KEY" ]; then
@@ -7455,18 +7825,33 @@ settings.conf (que se comparte al pedir ayuda)." "")"
     local list total=0 got=0 pend=0 idx=0
     list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
-    local f gid title q gjson gameid ujson url ext
+    local f gid title q gjson gameid ujson url ext _falta _t
     while IFS= read -r f; do
         [ -n "$f" ] || continue
-        cover_for "$(game_id "$f")" >/dev/null || pend=$((pend+1))
+        # Pendiente si le falta alguna de las que se han pedido
+        local _g _falta=0; _g="$(game_id "$f")"
+        local _t
+        for _t in $tipos; do
+            cover_tipo_real "$_g" "$_t" >/dev/null 2>&1 || _falta=1
+        done
+        [ "$_falta" = 1 ] && pend=$((pend+1))
     done <<EOF0
 $list
 EOF0
-    [ "$pend" -eq 0 ] && { ui_info "Todos los juegos ya tienen carátula en covers/"; return 0; }
+    [ "$pend" -eq 0 ] && { ui_info "No falta ninguna carátula de las pedidas."; return 0; }
     progress_start "Descargando carátulas de SteamGridDB"
     while IFS= read -r f; do
         gid="$(game_id "$f")"
-        cover_for "$gid" >/dev/null && continue
+        # Saltar el juego SOLO si ya tiene todas las que se han pedido.
+        #
+        # Antes se descartaba con solo tener la vertical, asi que al pedir
+        # "solo anchas" se ignoraban justamente los juegos que ya tenian
+        # caratula: se buscaba unicamente en los que no tenian ninguna.
+        _falta=0
+        for _t in $tipos; do
+            cover_tipo_real "$gid" "$_t" >/dev/null 2>&1 || _falta=1
+        done
+        [ "$_falta" = 0 ] && continue
         total=$((total+1)); idx=$((idx+1))
         title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
         progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $title"
@@ -7480,14 +7865,37 @@ EOF0
         fi
         gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
         [ -z "$gameid" ] && { say "[SGDB]   sin resultados para: $title"; continue; }
-        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=600x900&types=static" 2>>"$LOG_FILE")"
-        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-        [ -z "$url" ] && { say "[SGDB]   sin grids 600x900 para: $title"; continue; }
-        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-        if curl -fsSL "$url" -o "$COVERS_DIR/$gid.$ext" 2>>"$LOG_FILE"; then
-            got=$((got+1)); say "[SGDB]   OK -> covers/$gid.$ext"
-        fi
+        # Se piden las DOS: la vertical para la rejilla clasica y la
+        # horizontal para la vista de carátulas anchas. Cada una se guarda
+        # con su nombre, asi que no se pisan.
+        local destino dims bajada=0
+        for tipo in $tipos; do
+            destino="$(covers_dir_de "$tipo")"
+            case "$tipo" in
+                vertical) dims="600x900" ;;
+                wide)     dims="920x430,460x215" ;;
+                43)       dims="640x480,512x384" ;;
+            esac
+            mkdir -p "$destino" 2>/dev/null
+            # si ya la tenemos, no se vuelve a pedir
+            # No se vuelve a descargar lo que ya hay: la vertical podria ser
+            # una que el usuario eligio a mano.
+            cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+            ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+                2>>"$LOG_FILE")"
+            url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+            if [ -z "$url" ]; then
+                say "[SGDB]   sin carátula $tipo ($dims) para: $title"
+                continue
+            fi
+            ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+            if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+                bajada=1
+                say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+            fi
+        done
+        [ "$bajada" = 1 ] && got=$((got+1))
     done <<EOF2
 $list
 EOF2
@@ -7742,22 +8150,94 @@ montar_discos_recordados() {
     #
     # Solo se monta lo que ya estaba configurado como carpeta de juegos: no se
     # toca ningun otro disco del sistema.
-    local p faltan=0 dev etq tipo tam mp montados=0
+    local p faltan="" dev etq tipo tam mp montados=0
+    # Se apunta CADA carpeta y si esta o no: sin esto, "todas disponibles"
+    # no permitia distinguir entre "el disco ya estaba montado" y "la carpeta
+    # del disco externo ni siquiera esta configurada".
     while IFS= read -r p; do
-        [ -n "$p" ] && [ ! -d "$p" ] && faltan=1
+        [ -n "$p" ] || continue
+        if [ -d "$p" ]; then
+            log "Automontaje: OK  $p"
+        else
+            log "Automontaje: FALTA  $p"
+            faltan="$faltan$p
+"
+        fi
     done <<EOFCR
 $(games_paths)
 EOFCR
-    [ "$faltan" = 1 ] || return 0
-    local discos; discos="$(discos_sin_montar)" || return 0
-    [ -n "$discos" ] || return 0
+    if [ -z "$faltan" ]; then
+        log "Automontaje: todas las carpetas de juegos estan disponibles"
+        return 0
+    fi
+    log "Automontaje: faltan estas carpetas: $(printf '%s' "$faltan" | tr '\n' ' ')"
+    local discos; discos="$(discos_sin_montar)" || discos=""
+    if [ -z "$discos" ]; then
+        log "Automontaje: no hay ningun disco sin montar que probar" WARN
+        return 0
+    fi
+    log "Automontaje: discos por probar: $(printf '%s' "$discos" | grep -c . || true)"
+
+    # Se prueba a montar y se mira SI APARECE la carpeta que faltaba.
+    #
+    # Antes se comparaba la etiqueta del disco con la ruta de la carpeta, y
+    # eso fallaba en cuanto el disco no tenia etiqueta o se montaba en una
+    # ruta que no la incluia. Comprobar el resultado no depende de nombres:
+    # o la carpeta aparece, o no.
     while IFS='|' read -r dev etq tipo tam; do
         [ -n "$dev" ] || continue
-        # ¿alguna carpeta que falta menciona la etiqueta de este disco?
-        printf '%s' "$(games_paths)" | grep -qF "${etq:-__nada__}" || continue
-        if mp="$(montar_disco "$dev")" && [ -n "$mp" ]; then
-            say "[+] Disco '$etq' montado solo en $mp"
+        mp="$(montar_disco "$dev")" || continue
+        [ -n "$mp" ] || continue
+        local sirve=0
+        while IFS= read -r p; do
+            [ -n "$p" ] && [ -d "$p" ] && sirve=1
+        done <<EOFCF
+$faltan
+EOFCF
+        if [ "$sirve" = 1 ]; then
+            say "[+] Disco ${etq:-$dev} montado solo en $mp"
             montados=$((montados+1))
+            # ¿queda alguna carpeta por aparecer? si no, se acabo
+            local pendientes=""
+            while IFS= read -r p; do
+                [ -n "$p" ] && [ ! -d "$p" ] && pendientes="$pendientes$p
+"
+            done <<EOFCP
+$faltan
+EOFCP
+            faltan="$pendientes"
+            [ -n "$faltan" ] || break
+        else
+            # La carpeta no aparecio, pero puede que el disco SI sea el bueno
+            # y udisks lo haya montado en otro sitio que la vez anterior
+            # (pasa con NTFS y con etiquetas repetidas). Se busca dentro una
+            # carpeta con el mismo nombre y se corrige la ruta guardada.
+            local arreglado=0 base nueva
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                base="${p##*/}"
+                nueva="$(find "$mp" -maxdepth 2 -type d -name "$base" 2>/dev/null | head -n1)"
+                if [ -n "$nueva" ]; then
+                    log "Automontaje: la carpeta '$base' ahora esta en $nueva (antes $p)"
+                    GAMES_PATHS_EXTRA="$(printf '%s' "${GAMES_PATHS_EXTRA:-}" \
+                        | grep -vxF "$p" || true)"
+                    [ "$GAMES_PATH" = "$p" ] && GAMES_PATH="$nueva" \
+                        || GAMES_PATHS_EXTRA="${GAMES_PATHS_EXTRA:+$GAMES_PATHS_EXTRA
+}$nueva"
+                    save_settings
+                    arreglado=1
+                fi
+            done <<EOFCA
+$faltan
+EOFCA
+            if [ "$arreglado" = 1 ]; then
+                say "[+] Disco ${etq:-$dev} montado en $mp (ruta actualizada)"
+                montados=$((montados+1))
+                faltan=""
+                break
+            fi
+            log "Automontaje: $dev no contenia ninguna carpeta de juegos; se desmonta"
+            udisksctl unmount -b "$dev" --no-user-interaction >/dev/null 2>&1
         fi
     done <<EOFCD
 $discos
@@ -7923,6 +8403,12 @@ juego_etiqueta() {
     # contaban las carpetas por cada juego, con varios procesos cada vez.
     local ruta="$1" nom raiz base
     nom="${ruta##*/}"
+    # Sin la extension: al usuario le interesa el nombre del juego, no si es
+    # un .wsquashfs o un .dwarfs. Las carpetas .pc se dejan como estan, que
+    # ahi el ".pc" forma parte del nombre.
+    case "$nom" in
+        *.wsquashfs|*.squashfs|*.dwarfs) nom="${nom%.*}" ;;
+    esac
     if [ "${WP_N_RAICES:-$(games_paths | grep -c .)}" -gt 1 ]; then
         raiz="$(games_paths | while IFS= read -r r; do
                     case "$ruta/" in "$r"/*) printf '%s' "$r"; break ;; esac
@@ -7943,9 +8429,12 @@ pick_squash() {
         elegido="$(pick_squash_una_vez)" || return $?
         case "$elegido" in
             "WPACT:VISTA|"*)
+                # Tres vistas: lista -> rejilla vertical -> rejilla horizontal
                 case "${GAMES_VIEW:-list}" in
-                    grid) GAMES_VIEW=list ;;
-                    *)    GAMES_VIEW=grid ;;
+                    list)   GAMES_VIEW=grid ;;
+                    grid)   GAMES_VIEW=banner ;;
+                    banner) GAMES_VIEW=cuadro ;;
+                    *)      GAMES_VIEW=list ;;
                 esac
                 save_settings
                 say "[+] Vista: $GAMES_VIEW"
@@ -7996,17 +8485,27 @@ Tienes tres formas de añadir juegos:
     fi
     local sel
     export WP_ACTION_X=1                 # X = configurar el juego resaltado
-    if [ "$GAMES_VIEW" = "grid" ] && pygame_available && [ -n "$list" ]; then
+    # "banner" es la misma rejilla con las caratulas horizontales
+    # El proceso de menus lee la proporcion de la caratula al arrancar, y es
+    # persistente: si solo se cambia la variable, la rejilla sigue saliendo
+    # como antes. Al cambiar de/hacia la vista ancha hay que reiniciarlo.
+    # La proporcion viaja en la peticion, asi que no hace falta reiniciar el
+    # proceso de menus al cambiar de vista.
+    local _aspecto _es_rejilla; _aspecto="$(vista_forma)"
+    export WP_GRID_BANNER="$_aspecto"
+    case "${GAMES_VIEW:-list}" in grid|banner|cuadro) _es_rejilla=1 ;; *) _es_rejilla=0 ;; esac
+    if [ "$_es_rejilla" = 1 ] && pygame_available && [ -n "$list" ]; then
         pad_bridge_stop
         write_menu_pygame
         local man tmpsel rel gid2 t2 cov
         man="$(mktemp)"; tmpsel="$(mktemp)"
-        printf '%s\n' "(juego suelto: carpeta o exe)||__LOOSE__" >> "$man"
         while IFS= read -r rel; do
             gid2="$(game_id "$rel")"
             t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
             t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
-            cov="$(cover_for "$gid2")" || cov=""
+            # con la vista de caratulas anchas se pide la horizontal; si el
+            # juego no la tiene, cover_for devuelve la vertical
+            cov="$(cover_for "$gid2" "$_aspecto")" || cov=""
             local mt fv sc lp info=""
             mt="$(game_meta "$rel")"
             fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
@@ -8026,7 +8525,7 @@ EOF2
         # porque el fichero de favoritos viaja en la peticion.
         local favfileg; favfileg="$(mktemp)"
         menu_server_request grid "Elige un juego  [$GAMES_PATH]" "$tmpsel" "$man" \
-            "" "${WP_ACTION_X:-}" "" "" "$favfileg"
+            "" "${WP_ACTION_X:-}" "" "" "$favfileg" "$_aspecto"
         if [ $? = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
                 WP_FAV_FILE="$favfileg" \
@@ -8081,16 +8580,23 @@ EOF2
     while IFS= read -r rel3; do
         [ -n "$rel3" ] || continue
         etq="$(juego_etiqueta "$rel3")"
+        # La etiqueta es la clave para volver a la ruta. Al quitar la
+        # extension pueden coincidir dos juegos (el mismo nombre en
+        # .wsquashfs y en .dwarfs, por ejemplo): en ese caso se deja el
+        # nombre completo del segundo, para no perder ninguno.
+        if cut -f1 "$mapfile" 2>/dev/null | grep -qxF "$etq"; then
+            etq="${rel3##*/}"
+        fi
         printf '%s\t%s\n' "$etq" "$rel3" >> "$mapfile"
         etiquetas="$etiquetas$etq
 "
         gid3="$(game_id "$rel3")"
-        cov3="$(cover_for "$gid3")" || cov3=""
+        cov3="$(cover_for "$gid3" "${LIST_COVER:-vertical}")" || cov3=""
         mt3="$(game_meta "$rel3")"
         fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
-        fjson="$COVERS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
-        fhltb="$COVERS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
+        fjson="$DATOS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
+        fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
         printf '%s|%s|%s|%s|%s|%s|%s\n' \
             "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
             >> "$infofile"
@@ -8272,6 +8778,8 @@ cfg_aplicar() {
             esac ;;
         "Carátula: elegir"*)
             caratula_manual "$gid" ;;
+        "Carátula: buscar en SteamGridDB"*)
+            sgdb_buscar_manual "$gid" || true ;;
         "Ficha del juego"*)
             ficha_mostrar "$gid" "$squash" ;;
         "Borrar la configuración de este juego"*)
@@ -8426,8 +8934,26 @@ Poner el contador a cero?" && {
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
+                "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Nintendo / Batocera' || printf 'Xbox')" \
                 "<< Volver")" || kmenu=""
             case "$kmenu" in
+                "Estilo de botones:"*)
+                    # Los .keys hechos en Batocera nombran los botones al
+                    # estilo Nintendo: su "A" es el de la derecha y su "B" el
+                    # de abajo, al reves que en el estilo Xbox. Si en el juego
+                    # los botones salen cambiados, se cambia aqui.
+                    if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
+                        KEYS_ESTILO=xbox
+                    else
+                        KEYS_ESTILO=nintendo
+                    fi
+                    write_full_profile "$gid"
+                    ui_info "Estilo de botones: $KEYS_ESTILO
+
+  Xbox      A abajo, B derecha (mandos de PC)
+  Nintendo  A derecha, B abajo (Batocera y consolas portatiles)
+
+Si los botones salen cambiados en el juego, prueba el otro." ;;
                 "Asignar"*)
                     local kfsel
                     kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
@@ -8478,9 +9004,13 @@ game_config_menu() {
     # Juego nuevo: mirar si la base de umu conoce este juego. Su identificador
     # es lo que permite a protonfixes aplicar los arreglos concretos, asi que
     # conviene proponerlo antes que nada.
-    if ! profile_exists "$gid"; then
-        umudb_sugerir "$gid" "${EXE_PATH:-}" && write_full_profile "$gid"
-    fi
+    # La base de umu YA NO se consulta al abrir la configuracion.
+    #
+    # Se hacia para proponer el identificador del juego, pero va por red y era
+    # lo que hacia que pulsar X sobre un juego nuevo tardara una eternidad. En
+    # la practica no acerto ni una vez en las pruebas: los juegos que hacian
+    # falta no estaban en la base. Sigue disponible cuando se quiera, en
+    # "Buscar en la base de umu" dentro de los ajustes del juego.
     # Si nunca se configuro: mirar si la comunidad ya tiene una configuracion
     # para este juego antes de preguntarle nada al usuario.
     #
@@ -8489,7 +9019,11 @@ game_config_menu() {
     # encontraba de vuelta en el menu principal. Ahora se sigue adelante y se
     # muestra la configuracion, ya con el perfil de la comunidad cargado.
     if ! profile_exists "$gid"; then
+        local _t1; _t1="$(date +%s)"
+        loading_say "Buscando un perfil de la comunidad para '$gid'..."
         community_offer_for "$gid" || true
+        loading_clear
+        log "Configurar $gid: perfiles de la comunidad tardaron $(( $(date +%s) - _t1 ))s"
     fi
     # Si nunca se configuro, pasar por el asistente primero.
     #
@@ -8532,7 +9066,8 @@ game_config_menu() {
             "Prefijo: $(prefix_label)" \
             "GAMEID (protonfixes): $GAMEID" \
             "Buscar en la base de umu (identificador automático)" \
-            "Carátula: elegir una imagen del sistema" \
+            "Carátula: elegir una imagen (vertical u horizontal)" \
+            "Carátula: buscar en SteamGridDB por nombre" \
             "Ficha del juego (año, editor, notas de la crítica)" \
             "Empaquetar con su prefijo (archivo autosuficiente)" \
             "Acceso directo en el escritorio" \
@@ -8608,7 +9143,7 @@ main_dispatch() {
         "Añadir un juego"*)
             local imp=""
             if pygame_available; then
-                imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "file")" || imp=""
+                imp="$(browse_for_path "Importar juego (A: entrar/elegir, B: volver)" "$(browse_start "$HOME")" "importar")" || imp=""
             elif [ "$HAS_ZENITY" = 1 ]; then
                 pad_bridge_start
                 imp="$(zenity --file-selection --title="Elige zip/7z/rar/exe o entra en la carpeta" 2>/dev/null)"
@@ -8795,8 +9330,20 @@ Los wsquashfs que ya tienes se siguen usando igual."
                     GAMES_SORT="${so%% *}"; save_settings
                     ui_info "Orden: $GAMES_SORT (los favoritos van siempre primero)" ;;
             esac ;;
+        "Carátula en la vista de lista:"*)
+            case "${LIST_COVER:-vertical}" in
+                vertical) LIST_COVER=wide ;;
+                wide)     LIST_COVER=43 ;;
+                *)        LIST_COVER=vertical ;;
+            esac
+            save_settings ;;
         "Vista de juegos:"*)
-            [ "$GAMES_VIEW" = grid ] && GAMES_VIEW=list || GAMES_VIEW=grid
+            case "${GAMES_VIEW:-list}" in
+                list)   GAMES_VIEW=grid ;;
+                grid)   GAMES_VIEW=banner ;;
+                banner) GAMES_VIEW=cuadro ;;
+                *)      GAMES_VIEW=list ;;
+            esac
             save_settings ;;
         "Perfiles de la comunidad"*) community_menu ;;
         "Perfiles guardados"*)       perfiles_menu ;;
@@ -8870,11 +9417,39 @@ $(find "$p" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
    -o -iname '*.dwarfs' \) 2>/dev/null | wc -l) juego(s) empaquetado(s) encontrado(s)." ;;
             "Quitar: "*)
                 p="${sel#Quitar: }"
-                GAMES_PATHS_EXTRA="$(printf '%s' "$GAMES_PATHS_EXTRA" | grep -vxF "$p")"
-                save_settings
+                GAMES_PATHS_EXTRA="$(printf '%s' "$GAMES_PATHS_EXTRA" | grep -vxF "$p" || true)"
+                WP_BORRAR_CARPETAS=1 save_settings
+                unset WP_BORRAR_CARPETAS
                 say "[+] Carpeta quitada de la lista: $p" ;;
         esac
     done
+}
+
+list_cover_label() {
+    case "${LIST_COVER:-vertical}" in
+        wide) printf 'panorámica' ;;
+        43)   printf '4:3' ;;
+        *)    printf 'vertical (2:3)' ;;
+    esac
+}
+
+vista_label() {
+    case "${GAMES_VIEW:-list}" in
+        grid)   printf 'rejilla vertical (2:3)' ;;
+        banner) printf 'rejilla panorámica' ;;
+        cuadro) printf 'rejilla 4:3' ;;
+        *)      printf 'lista' ;;
+    esac
+}
+
+vista_forma() {
+    # Que forma de caratula usa cada vista
+    case "${GAMES_VIEW:-list}" in
+        banner) printf 'wide' ;;
+        cuadro) printf '43' ;;
+        grid)   printf 'vertical' ;;
+        *)      printf '%s' "${LIST_COVER:-vertical}" ;;
+    esac
 }
 
 library_menu() {
@@ -8884,7 +9459,8 @@ library_menu() {
         sel="$(menu "Biblioteca y preferencias" \
             "Carpetas de juegos ($(games_paths | wc -l))" \
             "Montar un disco (USB, disco externo...)" \
-            "Vista de juegos: $([ "$GAMES_VIEW" = grid ] && printf 'rejilla (carátulas)' || printf 'lista')" \
+            "Vista de juegos: $(vista_label)" \
+            "Carátula en la vista de lista: $(list_cover_label)" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
@@ -9280,6 +9856,8 @@ if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MA
     install_notice_start
 fi
 
+covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
+datos_preparar          # crea datos/ y traslada las fichas que hubiera
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
@@ -9296,6 +9874,18 @@ if [ -f "$RUNTIME_DIR/.menusrv.pid" ]; then
 fi
 unset _viejo
 pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
+# Y mapeadores .keys huerfanos de una sesion anterior.
+#
+# El mapeador convierte los botones del mando en TECLAS del sistema. Si
+# sobrevive a la partida, sigue haciendolo dentro de los menus de WProton: con
+# un .keys que asigne A a la letra "i" y B a la "j", entrar en una carpeta
+# escribia "i" en el buscador y volver escribia "j". La pantalla se filtraba
+# sola y parecia que los ficheros habian desaparecido.
+# Por NOMBRE, no por ruta: puede venir de otra copia de WProton
+_huerf="$(pgrep -f 'mapeador\.py' 2>/dev/null | grep -c . || true)"
+[ "${_huerf:-0}" -gt 0 ] && log "Arranque: $_huerf mapeador(es) huerfano(s); se cierran" WARN
+pkill -f 'mapeador\.py' 2>/dev/null
+unset _huerf
 
 case "${1:-}" in
     --setup)

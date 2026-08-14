@@ -1,328 +1,250 @@
-## v1.08
+# Novedades
 
-**El menú de ajustes de un juego pasa de 42 opciones a 24.** Se había vuelto
-incómodo de recorrer con el mando, así que lo que casi nunca se toca se ha
-agrupado en dos submenús:
+## v1.18
 
-- **Rendimiento y compatibilidad** (17): MangoHud, GameMode, Fsync, Esync,
-  DXVK Async, WineD3D, FSR, LAA, NTsync, arreglo del mando de SteamOS, Wayland,
-  gamescope, DLL overrides, idioma del juego y variables extra.
-- **Herramientas del prefijo** (7): winecfg, winetricks, dgVoodoo2, OptiScaler
-  y borrar el prefijo.
+- **Los datos de los juegos tienen su propia carpeta.** La ficha (año, estudio,
+  géneros, notas) y la duración de HowLongToBeat estaban mezcladas con las
+  carátulas; ahora viven en `datos/`. Los ficheros que ya tuvieras se trasladan
+  solos la primera vez.
+- **El mapeador `.keys` se prepara solo si hace falta.** Si al lanzar un juego
+  con `.keys` falta el módulo que necesita, WProton lo instala en ese momento
+  en vez de limitarse a avisar de que no funciona.
 
-Arriba se queda lo del día a día: jugar, runner, ejecutable, argumentos,
-prefijo, mando, ficha, carátula, favorito, notas, partidas guardadas y
-empaquetado.
+## v1.17
 
-Por dentro, los tres menús comparten un único manejador (`cfg_aplicar`), así
-que no hay lógica duplicada y los ajustes se guardan igual desde cualquiera de
-ellos.
+- **Carátulas verticales y horizontales, cada una en su carpeta.** Las
+  verticales siguen en `covers/` y las anchas van en `covers_wide/`, con el
+  **mismo nombre de fichero**: así puedes copiar una colección tal cual, sin
+  renombrar nada. Al descargar de SteamGridDB se traen **ambas** de una vez, y
+  si un juego solo tiene una, se usa esa en las dos vistas.
+- **Corregido: elegir una carátula a mano no hacía nada.** La opción estaba en
+  el menú pero la función nunca llegó a escribirse. Ahora funciona, y permite
+  elegir si la imagen es la vertical o la horizontal.
+- **Buscar la carátula de un juego a mano**, desde sus ajustes: escribes el
+  nombre real, eliges entre los resultados de SteamGridDB y se descarga. Útil
+  cuando el fichero se llama con la versión o el grupo y la búsqueda
+  automática no encuentra nada.
+- Corregido: al volver de la vista de carátulas anchas a la vertical, las
+  casillas se quedaban con la forma ancha.
+- **Al descargar carátulas se elige qué forma**: solo verticales, solo
+  panorámicas, solo 4:3, o las tres. Bajarlas todas gasta el triple de tiempo
+  y de peticiones, y casi nadie usa las tres vistas.
+- **Las carátulas ya no se deforman.** Se ajustan a su casilla manteniendo la
+  proporción: una carátula vertical en la vista ancha se ve entera y centrada,
+  en vez de achatada.
+- **Las carátulas con espacios en el nombre ya se encuentran.** WProton
+  identifica los juegos cambiando los espacios por guiones bajos, así que una
+  colección copiada a mano —con los nombres tal cual— no casaba. Ahora se
+  prueban las dos formas, así que da igual cómo estén nombrados los ficheros.
+- **Tres formas de carátula, cada una con su carpeta**: `covers/` (vertical
+  2:3), `covers_wide/` (panorámica) y `covers_43/` (4:3). Los ficheros se
+  llaman igual en las tres, así que puedes copiar una colección tal cual.
+- **En la biblioteca ya no se ve la extensión** de los juegos: solo el nombre.
+  Si dos ficheros distintos comparten nombre, el segundo la conserva para
+  poder distinguirlos.
+- **Estilo de botones para los `.keys`.** Los ficheros hechos en Batocera
+  nombran los botones al estilo Nintendo —su "A" es el de la derecha y su "B"
+  el de abajo—, al revés que el estilo Xbox. Con el estilo equivocado, los
+  botones salen cambiados en el juego. Se elige por juego, en *Ajustes →
+  Mapeador .keys → Estilo de botones*.
+- **Corregido: los gatillos L2 y R2 no funcionaban con los `.keys`.** En casi
+  todos los mandos no mandan una pulsación, sino un eje según lo apretados que
+  estén, y WProton solo esperaba la pulsación. Ahora se traducen, con el
+  recorrido que declare cada mando.
+- **Corregido: la cruceta no funcionaba con los ficheros `.keys`.** Se
+  comparaba con el mismo umbral que los sticks analógicos, y como la cruceta
+  solo manda −1, 0 o +1, no llegaba a activarse nunca. Ahora funciona, y
+  también en los mandos cuya cruceta llega como botones sueltos (Anbernic y
+  similares).
+- **Corregido: importar una carpeta sin ejecutable cerraba WProton.** El aviso
+  se mostraba y, al aceptarlo, el programa se cerraba entero en vez de volver
+  al menú. Lo mismo si un juego de la lista ya no existe en el disco.
+- **Corregido: los mapeadores huérfanos de otra copia de WProton.** Se
+  buscaban por la ruta exacta del programa, así que uno lanzado desde otra
+  carpeta —una versión de pruebas, la del disco externo— no se encontraba y
+  seguía mandando teclas. Ahora se buscan por nombre y se avisa en el registro
+  de cuántos se cierran al arrancar.
+- **Corregido: el mapeador `.keys` no llegaba a pararse.** Se guardaba el
+  identificador de un proceso intermedio que muere al instante, así que la
+  orden de parada no alcanzaba al proceso real. Ahora se para de verdad y
+  WProton lo comprueba, dejando aviso en el registro si algo sobreviviera.
+- **Corregido: el mapeador `.keys` seguía activo después de jugar.** Solo se
+  paraba al cerrar WProton, así que durante todo el rato que navegaras por los
+  menús tras una partida seguía convirtiendo los botones del mando en teclas
+  del sistema. Ahora se para en cuanto termina el juego.
+- **Corregido: un mapeador `.keys` de una sesión anterior escribía dentro de
+  los menús.** Ese componente convierte los botones del mando en teclas del
+  sistema. Si sobrevivía a la partida —por un cierre brusco—, seguía haciéndolo
+  dentro de WProton: con un `.keys` que asigne A a la letra «i» y B a la «j»,
+  entrar en una carpeta escribía «i» en el buscador y volver escribía «j». La
+  pantalla se filtraba sola y parecía que los ficheros habían desaparecido.
+  Ahora se eliminan al arrancar, como ya se hacía con los puentes de mando.
+- **Corregido: la búsqueda se quedaba pegada de una pantalla a otra.** Lo que
+  hubieras escrito en un buscador seguía filtrando la pantalla siguiente, así
+  que al añadir un juego aparecían cuatro ficheros de cien y parecía que
+  faltaban. El teclado en pantalla salía además con el texto anterior, al que
+  se le iban sumando letras.
+- Al navegar por las carpetas, **B en la carpeta raíz cierra el navegador** en
+  vez de no hacer nada.
+- **Al añadir un juego ya no aparecen los `.wsquashfs` ni los `.dwarfs`.** Esos
+  ya salen solos en la biblioteca, y verlos ahí hacía pensar que había que
+  añadirlos otra vez. Quedan las carpetas, los `.zip`, `.rar`, `.7z` y los
+  ejecutables, que es lo que sí hay que importar.
+- **Cuatro vistas**, que se recorren con Select + X: lista, rejilla vertical,
+  rejilla panorámica y rejilla 4:3.
+- **En la vista de lista puedes elegir qué carátula se ve** en el panel:
+  vertical, panorámica o 4:3. Las panorámicas y las 4:3 se ven ahora bastante
+  más grandes, porque ocupan el ancho del panel.
+- Quitada la entrada *"juego suelto"* también de la rejilla: ya salían las
+  carpetas por su cuenta.
+- Corregido: la vista de carátulas horizontales no llegaba a aplicarse, y la
+  descarga de SteamGridDB nunca pedía las anchas para los juegos que ya tenían
+  la vertical.
+- **Tercera forma de ver la biblioteca: carátulas horizontales.** Además de la
+  lista y la rejilla de carátulas verticales, ahora hay una rejilla con
+  portadas anchas —las que trae Steam de serie—, que se ven bastante más
+  grandes. Se pasa de una a otra con **Select + X** o desde *Biblioteca y
+  preferencias*.
+- En la vista de lista, la carátula del panel lateral se ve más grande.
+- **Las carpetas de juegos ya no se pueden perder solas.** A un tester le
+  desapareció de los ajustes la carpeta de su disco externo sin haberla
+  quitado. Ahora, si algo intenta guardar los ajustes sin ellas, se conservan
+  y queda anotado en el registro. Para quitarlas sigue estando la opción del
+  menú.
+- **Los discos configurados se montan solos.** Si tienes una carpeta de juegos
+  en un disco externo y al arrancar no está montado, WProton lo monta sin
+  preguntar. Comprueba que la carpeta aparezca de verdad; si el disco no era
+  el que hacía falta, lo deja como estaba. Funciona también con discos sin
+  etiqueta, y **si el sistema lo monta en una ruta distinta a la de la vez
+  anterior, corrige la ruta guardada** en vez de dar la carpeta por perdida.
+- **Configurar el último juego sin abrir la lista**: ponte encima de *Jugar al
+  último* en el menú principal y pulsa **X**.
+- **Las copias de seguridad ya no incluyen la caché de shaders.** Se colaba la
+  carpeta `dxvk` del prefijo, que puede ocupar bastante y se regenera sola: no
+  es una partida guardada. Se descarta también en los perfiles que ya la
+  hubieran aprendido, sin tener que borrarlos ni volver a jugar.
+- **WProton ya no se queda colgado al salir.** Si al cerrar creía que aún
+  había un juego en marcha, esperaba **hasta diez minutos en silencio** a que
+  soltara sus procesos: desde fuera parecía que se había bloqueado y no
+  quedaba más remedio que matarlo. Ahora espera veinte segundos como mucho y
+  se cierra igualmente.
+- **Configurar un juego es inmediato.** La primera vez que abrías la
+  configuración de un juego, WProton consultaba por red la base de umu para
+  proponerte su identificador, y eso se hacía **en silencio**: pulsar X sobre
+  un juego nuevo podía tardar una eternidad y parecía que se había colgado.
+  Esa consulta ya no se hace sola — sigue disponible cuando la quieras, en
+  *Buscar en la base de umu* dentro de los ajustes del juego. La búsqueda de
+  perfiles de la comunidad sí se mantiene, ahora avisando en pantalla y con
+  mucha menos espera antes de rendirse.
+- **Abrir la lista de juegos es más rápido** con bibliotecas grandes: se
+  acotaron las búsquedas dentro de las carpetas y se dejaron de repetir
+  comprobaciones que se hacían una vez por juego.
+
+- **Dos runners nuevos para descargar**: **Soda** y **Caffe**, los de Bottles.
+  Soda está basado en el Wine de Valve y Caffe es una compilación estable;
+  ambos son alternativas a Wine-GE para juegos que no van bien con Proton.
+- **Mando via SDL vuelve a funcionar** con GE-Proton 11-4 y posteriores. Se
+  usaba un nombre de opción antiguo, así que la opción no tenía efecto; y con
+  esas versiones se ignoraba aunque la activaras a mano. Si un juego iba bien
+  con una versión anterior de GE-Proton, ponerla en ON suele recuperar ese
+  comportamiento.
+- Corregido: al salir de WProton podía quedarse la pantalla en negro.
+
+## v1.15
+
+- **Cambiar entre lista y rejilla con el mando**, con Select + X.
+- **La clave de SteamGridDB, sin teclearla**: deja un fichero de texto con la
+  clave junto a `wproton.sh` y WProton la recoge y la guarda a buen recaudo.
+- Corregido: cambiar el tema, el idioma o el tamaño de letra no se notaba
+  hasta reiniciar WProton.
+- Menos opciones que entender: *Mando Sony* pasa a tres estados
+  (AUTO / ON / OFF) y el registro deja de llenarse de información de
+  diagnóstico salvo que la pidas.
+
+## v1.14
+
+- **WProton se añade a Steam con su propia imagen** y aparece en la biblioteca
+  como un juego más. Desde el modo Juego se abre sin salir al escritorio.
+- **Accesos directos en el escritorio**, tanto de WProton como de cada juego,
+  con su carátula de icono.
+- **Cerrar un juego con el mando**: mantén Select unos segundos. Útil en el
+  escritorio, donde no hay botón de Steam.
+- **El puntero del ratón deja de estorbar** mientras juegas.
+- **Runner propio de WProton (GE-Custom)**, que se instala de serie.
+- **Montar discos desde WProton**: si tus juegos están en un disco externo, se
+  detecta, se monta y se añade a la biblioteca de una vez.
+- **Más librerías de Windows** para instalar: `d3dcompiler_43`, `d3dx11_43`,
+  `xna40`, `corefonts` y varias más, además de un pack que instala de golpe
+  todo lo de DirectX.
+- **Borrar la configuración de un juego** y empezar de cero, desde sus ajustes
+  o desde la lista de perfiles guardados.
+- **Dos asistentes para los problemas de mando**: uno prueba el mando y dice
+  qué botones llegan; otro prepara los permisos que hacen falta en algunas
+  distribuciones.
+- Con GE-Proton 11-4 o más nuevo, WProton **no toca la configuración de los
+  mandos**: esa versión los maneja mejor por su cuenta.
+
+**Correcciones destacadas**
+
+- Los juegos no arrancaban en el modo Juego de SteamOS.
+- Los perfiles de la comunidad se descargaban pero no llegaban a aplicarse.
+- Entrar en los ajustes de un juego recién añadido devolvía al menú principal.
+- En algunos mandos, cada pulsación contaba dos veces.
+- El menú se cerraba solo al volver a abrirse Steam.
+- Con la biblioteca vacía, *Jugar* y *Ajustes de un juego* no decían nada.
+
+## v1.11
+
+- **Varias carpetas de juegos**, para quien los tenga repartidos entre discos.
+- **Las carpetas cuentan como juegos**: un juego descomprimido aparece en la
+  lista sin tener que empaquetarlo.
+- **Las actualizaciones miran también la fecha**, así que una corrección
+  publicada con el mismo número de versión ya no pasa desapercibida.
+
+## v1.10
+
+Limpieza interna. Nada cambia al usarlo, pero se eliminó código repetido que
+era fuente de errores difíciles de encontrar.
+
+## v1.09
+
+- El menú de ajustes de un juego pasa de 42 opciones a 24, agrupando en dos
+  submenús lo que casi nunca se toca.
+- Corregido: pulsar B para salir de la lista de juegos daba un error y cerraba
+  WProton.
 
 ## v1.07
 
-**Empaquetar un juego con su prefijo.** Nueva opción en *Ajustes de un juego*:
-crea un `.wsquashfs` (o `.dwarfs`) **autosuficiente**, al estilo de los de
-Batocera. Dentro lleva un `drive_c` completo con el juego dentro y un
-`autorun.cmd` que indica qué ejecutar: se copia a otro equipo y funciona sin
-instalar dependencias ni configurar nada.
-
-Antes de comprimir, WProton **limpia el prefijo**:
-
-- **Quita los enlaces del perfil de usuario.** Wine crea enlaces de Escritorio,
-  Documentos o Descargas hacia tu carpeta personal; dentro del archivo
-  apuntarían a ninguna parte y, al copiarlos, podrían llevarse por delante
-  ficheros ajenos al juego. Se sustituyen por carpetas normales.
-- **Borra cachés de shaders, temporales y registros**, que son gigas que se
-  regeneran solos.
-
-Comprobaciones antes de empezar: que el prefijo sea **propio del juego** (con
-el compartido el archivo llevaría dentro las librerías y los datos del resto),
-que haya sitio en disco, y aviso del tamaño total antes de comprimir. **El
-juego y el prefijo originales no se tocan**, así que se puede probar el
-resultado con tranquilidad.
-
-Si el archivo va a ser grande, conviene el formato **DwarFS**, que comprime
-bastante más (se elige en *Biblioteca y preferencias*).
+- **Empaquetar un juego con su prefijo**: crea un archivo autosuficiente que se
+  copia a otro equipo y funciona sin instalar nada.
 
 ## v1.06
 
-- **Corregido un fallo importante en los diálogos.** El protocolo entre WProton
-  y su proceso de menús usa una línea por campo, pero los títulos suelen tener
-  varias líneas. Eso desplazaba todos los campos: el menú tomaba **el texto del
-  diálogo como nombre del fichero de respuesta** y lo creaba en la carpeta de
-  WProton (de ahí ficheros como *"Descargar y actualizar ahora?.done"*), y la
-  respuesta del usuario se perdía. Por eso la actualización preguntaba y no
-  hacía nada. Ahora los saltos de línea se escapan al enviarlos.
-
-- **Corregido**: al pulsar B para salir de la lista de juegos, WProton daba el
-  error *"No se encontró ejecutable en la carpeta"* y se cerraba. El código de
-  salida del menú se leía **después** de borrar un fichero temporal, así que en
-  realidad se estaba comprobando el resultado del borrado: cancelar parecía una
-  elección válida.
-- **Corregido**: faltaba el botón **Y (buscar)** en la leyenda de la lista.
-
-**La lista de juegos ahora enseña la carátula.** En el panel de la derecha, al
-moverte por la lista, aparece la carátula del juego resaltado y sus datos:
-
-```
-  SELECCION
-  ┌──────────┐
-  │ carátula │
-  └──────────┘
-  Doom Eternal
-
-  Favorito              *
-  Año                2020
-  Nota             88/100
-  Jugado          7 veces
-  Tiempo       2 h 35 min
-```
-
-Sale todo lo que haya: año, desarrollador, editor, géneros y nota de Steam,
-duración de HowLongToBeat si lo tienes instalado, y lo que sabe WProton por sí
-mismo (favorito, veces jugado y tiempo total). Los datos de Steam aparecen en
-cuanto hayas consultado la ficha del juego una vez con **L1**.
-
-En el panel se muestra el **nombre del juego**, no el del fichero, y los
-valores largos se recortan para que no se salgan del panel. La carátula se ajusta para no ocupar más de la
-mitad del panel, así que el nombre y los datos siempre se ven, y se guarda en
-memoria para que moverse por la lista siga siendo instantáneo.
-
-**Marcar favoritos al instante.** **R1** marca o desmarca sin cerrar el menú:
-el cambio se ve en el mismo momento, sin parpadeo. Los favoritos llevan una
-estrella dibujada a la derecha de su fila en la lista. Se dibuja a mano porque
-la fuente por defecto no trae ese símbolo y en algunos sistemas saldría un
-cuadrado vacío.
-
-Por dentro: el menú apunta cada pulsación y WProton guarda los cambios en los
-perfiles al salir de la lista, así que lo que ves en pantalla y lo que queda
-guardado siempre coinciden.
-
-Con esto, la vista de lista deja de ser una columna de nombres sin perder lo
-que la hace útil: ver muchos juegos de un vistazo y buscar escribiendo.
-
-## v1.05.1
-
-- **Corregido: WProton no volvía al menú al cerrar el juego.** La espera a que
-  el juego terminara contaba también a *nuestras propias* herramientas
-  (squashfuse, fuse-overlayfs, el mapeador), que llevan la ruta del montaje en
-  su línea de órdenes y no mueren hasta que WProton desmonta... lo que ocurre
-  después de esa espera. Resultado: se esperaba a sí mismo para siempre.
-- **Corregido: el mando no llegaba al juego con ficheros `.keys`.** La ventana
-  de WProton se quedaba viva unos segundos tras lanzar (era un intento de tapar
-  el hueco de escritorio mientras el juego arranca). Al estar a pantalla
-  completa por delante, **se quedaba con el foco del teclado**: el mapeador
-  enviaba las teclas correctamente pero no llegaban al juego, y los juegos en
-  ventana parecían esconderse detrás. Ahora la ventana se cierra antes de
-  lanzar, sin retrasos. Se ve un parpadeo de escritorio, que es mucho menos
-  grave que un mando que no responde.
-- **El mapeador ya no elige mando: los escucha todos.** Antes había que
-  acertar con uno —esperando una pulsación y, si no llegaba, adivinando—, y con
-  mandos que exponen varios nodos de entrada (el de Xbox 360 aparece como
-  *"pad"* y *"pad 0"*) se podía acabar escuchando el que no recibe eventos: el
-  mando no respondía a nada. Escuchando todos no hay nada que acertar, no hay
-  espera, y si tienes dos mandos de verdad, funcionan los dos.
-  Además se agrupan los nodos del mismo aparato físico, el perfil de botones se
-  toma del mando reconocible, y si uno se desconecta a mitad se descarta ese
-  sin tumbar el mapeador.
-- **Corregido: el juego se quedaba detrás de WProton.** Al terminar el proceso
-  que WProton lanza, muchos juegos de Windows siguen corriendo en otro proceso.
-  La espera anterior se rendía a los 5 segundos y reabría el menú **a pantalla
-  completa encima del juego**, que parecía esconderse. Ahora se espera a que no
-  quede ningún proceso del juego, comprobando el wineserver y lo que cuelga del
-  montaje, con un tope alto por si algo se queda colgado.
-- La pantalla de carga se cierra 4 segundos después de lanzar (antes 8): con
-  juegos que arrancan en ventana, tanto tiempo la dejaba por delante.
-- **Corregido: el mapeador de mando tardaba en responder.** Antes de empezar a
-  traducir botones esperaba **hasta 30 segundos** a que el usuario pulsara algo
-  para saber qué mando usar. En una partida corta, eso significaba que el mando
-  no hacía nada durante casi toda la sesión. Ahora, si solo hay un mando
-  conectado —lo normal— se usa **al instante**; con varios, se pregunta cuál
-  con una espera de 5 segundos.
-- El mapeador escribe ya su actividad en el registro según ocurre (antes se
-  quedaba en el búfer de Python y el registro aparecía vacío), y WProton avisa
-  si el proceso se cierra nada más arrancar.
-- **Corregido: no detectaba las versiones nuevas.** Si la etiqueta de la
-  release llevaba la V en mayúscula (`V1.02`), WProton solo quitaba la `v`
-  minúscula: la comparación numérica trataba `V1.02` como cero y decía que
-  estaba al día teniendo una versión más nueva delante. Además la descarga
-  habría fallado, porque la URL se construía con `v` + número en vez de con la
-  etiqueta real. Ahora se admiten `v1.02`, `V1.02` y `1.02`, y si la etiqueta
-  no se entiende lo dice en vez de callarse.
-- **Corregido**: la ficha del juego no descargaba nada. La búsqueda en Steam
-  hacía `return` dentro de una tubería, y eso solo termina el subshell: la
-  función seguía hasta su salida de error, así que daba fallo aunque hubiera
-  encontrado el juego. La consulta se ha reescrito en Python, que además
-  analiza el JSON de verdad en vez de con expresiones regulares.
-- **Corregido**: la duración solo se consultaba si Steam conocía el juego. Un
-  juego que no esté en Steam pero sí en HowLongToBeat se quedaba sin ninguna
-  de las dos cosas; ahora son independientes.
-- La auditoría detecta desde ahora los `return` dentro de tuberías.
+- **La lista de juegos enseña la carátula** y los datos del juego resaltado:
+  año, estudio, géneros, nota de la crítica y cuánto llevas jugado.
+- **Marcar favoritos al instante** con R1, sin salir de la lista.
 
 ## v1.05
 
-**Botones dedicados en la lista de juegos.** El menú de configuración ya tenía
-demasiadas opciones, así que las dos más usadas salen de ahí:
-
-| Botón | |
-|---|---|
-| **L1** | Ficha del juego |
-| **R1** | Marcar o quitar favorito |
-
-Funcionan igual en la lista y en la rejilla de carátulas, y la ayuda de abajo
-los indica. Con teclado son **F1** y **F2**.
-
-**Ficha del juego.** Con **L1** sobre el juego, o en *Ajustes de un juego*: año de
-publicación, desarrollador, editor, géneros y **nota de Metacritic**, con los
-datos de la tienda de Steam. No necesita clave ni cuenta. La ficha se guarda en
-`covers/<juego>.info.json`, así que solo se consulta una vez.
-
-Debajo va siempre **lo que sabe WProton de tu partida** —tamaño, veces jugado,
-tiempo total, última vez y tus notas—, que se muestra igual sin red o si el
-juego no está en Steam.
-
-**Duración de partida (opcional).** Con la biblioteca
-[howlongtobeatpy](https://pypi.org/project/howlongtobeatpy/) instalada, la
-ficha añade cuánto se tarda en terminar el juego (historia y al 100%). Se
-instala desde *Runners y herramientas → Datos de duración de partida*; ocupa
-unos 100 KB. Si no se instala, el resto de la ficha funciona igual.
-
-Solo se acepta el dato si el nombre encontrado se parece de verdad al del juego
-(similitud 0,7 o más): antes que dar la duración de otro juego, no se muestra
-ninguna.
-
-Para dar con el juego correcto se usa el mismo resolutor de nombres que la base
-de umu: de los candidatos que devuelve Steam se coge **el que casa por nombre**,
-no el primero de la lista.
-
-**Añadir a Steam, sin ficheros corruptos.** Steam reescribe sus accesos
-directos al salir, así que modificarlos con Steam abierto podía perder el
-cambio o dejar el fichero mal. Ahora WProton se ofrece a **cerrar Steam, añadir
-el juego y volver a abrirlo**, con espera ordenada (`steam -shutdown`) y aviso
-si no llega a cerrarse.
-
-**Y en el modo Juego de SteamOS no se puede usar**, por un motivo de peso: en
-esa sesión Steam *es* el escritorio, y cerrarlo cerraría la sesión del usuario.
-La opción se muestra como *"Añadir este juego a Steam (solo en modo
-Escritorio)"* y, si se pulsa, explica por qué y no toca nada.
+- **Ficha del juego** (L1): año, desarrollador, editor, géneros y notas de la
+  crítica, con la duración aproximada si instalas los datos de HowLongToBeat.
+- **Botones dedicados** en la lista: L1 para la ficha, R1 para favoritos.
+- Añadir a Steam más fiable: WProton lo cierra y lo reabre él mismo.
 
 ## v1.04
 
-**Base de datos de umu.** Al añadir un juego nuevo, WProton consulta la base de
-[umu-database](https://github.com/Open-Wine-Components/umu-database) y, si lo
-encuentra, propone su identificador. Ese identificador es lo que permite a
-protonfixes aplicar los arreglos concretos del juego, así que puede ser la
-diferencia entre que arranque o no. La base (~1.200 entradas, 90 KB) se
-descarga una vez y se guarda una semana; también se puede consultar a mano
-desde *Ajustes de un juego → Buscar en la base de umu*.
+- **Base de datos de umu**: identifica el juego y aplica los arreglos que
+  necesita, sin tener que buscarlos a mano.
+- **Elegir el ejecutable** de una lista ordenada, con el tamaño de cada uno
+  para distinguir el juego del instalador.
+- **Carátula manual**: elige cualquier imagen de tu disco.
 
-La búsqueda usa tres pistas, en este orden: el **nombre del ejecutable** (la
-más fiable, porque no depende de cómo se llame la carpeta), el nombre del
-juego, y el acrónimo común (`aow` → Age of Wonders). El índice se precalcula,
-así que una consulta tarda milisegundos.
+## v1.02 – v1.03
 
-**Elegir el ejecutable entre todos.** Al configurar un juego en carpeta ahora
-se muestran **todos** los `.exe`, `.bat` y `.cmd` de la carpeta y subcarpetas,
-no solo los que pasaban el filtro. Ordenados por probabilidad —el sugerido
-arriba, después los de la raíz, luego los de subcarpetas y al final los
-sospechosos (instaladores, desinstaladores, redistribuibles)— y con su tamaño
-al lado, que distingue de un vistazo el juego del instalador de DirectX.
-
-**Carátula desde el sistema.** *Ajustes de un juego → Carátula: elegir una
-imagen del sistema*, sin depender de SteamGridDB. La imagen se copia a
-`covers/`, así que puedes mover o borrar el original sin romper nada. Si la
-imagen no es vertical, avisa de que en la rejilla se verá recortada.
-
-**Por dentro**: un resolutor de nombres común a todas las búsquedas (umu,
-perfiles de la comunidad y, más adelante, la ficha del juego). Compara
-ignorando mayúsculas y separadores, admite la coletilla de versión o grupo
-(`v1.0.2`, `-GOG`, `-P2P`, `REPACK`) y, cuando no hay una coincidencia clara,
-**pregunta en vez de adivinar**: mostrar los datos de otro juego sería peor que
-no mostrar ninguno.
-
-## v1.03
-
-Versión de mantenimiento: sin cambios visibles, pero con una red de seguridad
-que antes no existía.
-
-**Auditoría automática** (`auditar.py`), que se ejecuta en cada construcción y
-la detiene si encuentra algo. Cada comprobación nació de un fallo real que nos
-costó una sesión entera de depuración:
-
-| Comprobación | El fallo que la motivó |
-|---|---|
-| Opciones de menú sin acción | "Añadir un juego" dejó de funcionar al renombrar el texto sin tocar su `case` |
-| Declaraciones `local` que se usan a sí mismas | Descargar un perfil de la comunidad cerraba WProton de golpe, sin mensaje |
-| Tildes dentro de código | `--disable-pip-versión-check` rompía la instalación de pygame en todos los equipos nuevos |
-| Asignaciones dentro de subshells | Cuatro fallos distintos: ventanas duplicadas, servidor que no se paraba, WProton que no se cerraba |
-| Procesos de fondo sin soltar el terminal | La ventana de Konsole no se cerraba al salir |
-| Traducciones desincronizadas | Cadenas nuevas sin traducir o plantilla desfasada |
-| Sintaxis de bash y Python, y `shellcheck` | |
-
-Las comprobaciones usan las mismas reglas que bash (los patrones de `case` son
-comodines), así que no dan falsos positivos, y las excepciones legítimas están
-documentadas en el propio script.
-
-Uso: `./auditar.py`, o `./build.sh --sin-auditar` para saltarla en pruebas.
-
-## v1.02
-
-**Menús persistentes.** Hasta ahora cada menú abría su propia ventana y la
-cerraba al elegir. Eso provocaba el parpadeo al pasar de un menú a otro y,
-en el modo Juego de SteamOS, dejaba al compositor sin ninguna ventana nuestra
-a la que volver al salir de un juego.
-
-Ahora **todos los menús se dibujan en un mismo proceso, que no se cierra entre
-uno y otro**:
-
-- Al cambiar de menú no hay ventana nueva: el contenido cambia y ya está.
-- Entre menú y menú se ve una pantalla de reposo con la marca WProton, así que
-  nunca aparece el escritorio de por medio.
-- Mientras juegas, la ventana **se cierra** (mantener una conexión gráfica
-  abierta durante la partida es lo que acababa en `XIO: fatal IO error` cuando
-  gamescope reconfigura su XWayland) y se vuelve a abrir al terminar, una vez
-  la pantalla se ha estabilizado.
-- Si el proceso no arranca o se cierra por lo que sea, WProton lo detecta y
-  vuelve al comportamiento antiguo —una ventana por menú— sin que se note.
-
-**Pantalla de carga al abrir un juego**: los segundos que tarda en montarse y
-prepararse ya no son una pantalla muda. Se ve qué está haciendo —*Montando el
-juego...*, *Preparando el entorno de Windows...*, *Iniciando <juego>...*— y lo
-mismo en las esperas largas, como descomprimir un archivo al importarlo.
-
-Se puede desactivar con `MENU_SERVER=0` en `settings.conf`.
-
-Corregido también: al salir, WProton dejaba procesos enganchados al terminal
-desde el que se había lanzado, así que la ventana de la consola no se cerraba.
-Ahora todos los procesos de fondo se lanzan desenganchados y cualquier cierre
-pendiente se cancela al salir.
-
-Corregido durante las pruebas: el fondo antiguo seguía levantándose junto al
-proceso de menús, así que había **dos ventanas peleándose por el foco** y una
-de ellas se recreaba en cada movimiento (de ahí el parpadeo y tener que
-recuperar el foco a mano). Con el proceso de menús activo, ese fondo ya no se
-usa: hace lo mismo y mejor.
-
-**Por dentro**: el helper de menús se ha reorganizado en `set_request()`,
-`load_request_data()`, `compute_layout()` y `run_session()`, de forma que una
-sesión se puede ejecutar muchas veces sobre la misma ventana. El protocolo
-entre bash y el proceso de menús es de ficheros, sin dependencias nuevas.
+- **Los menús ya no parpadean** entre pantalla y pantalla.
+- Comprobaciones automáticas al construir el programa, para que ciertos fallos
+  no puedan repetirse.
 
 ## v1.01
 
-Reestructuración interna. **Para el usuario no cambia nada**: se sigue
-descargando un único `wproton.sh` que funciona exactamente igual.
-
-- El código Python (2.418 líneas: menús, mapeador, accesos de Steam y menús de
-  respaldo) **deja de vivir dentro del bash como texto** y pasa a ficheros
-  reales en `src/`. Ahora se puede editar con resaltado de sintaxis, linter y
-  depurador, y los cambios se ven en los diffs de Git.
-- Nuevo `build.sh`, que genera el `wproton.sh` de siempre a partir de
-  `wproton.base.sh` y `src/`. Comprueba la sintaxis de todo el Python, de los
-  JSON y del script resultante: si algo falla, no genera nada.
-- **Las marcas de versión de los helpers se calculan del contenido**. Antes se
-  escribían a mano y más de una vez se olvidó: el usuario se quedaba con un
-  helper viejo sin enterarse.
-- El `en.json` embebido se genera desde `src/lang/en.json`: una sola fuente.
-
-Verificado: el `wproton.sh` generado es **idéntico** al publicado en la 1.0.
+Reorganización interna del código. Sin cambios visibles.

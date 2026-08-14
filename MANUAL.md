@@ -134,6 +134,7 @@ dos, y cada una vive en su carpeta con el nombre del juego:
 | `covers/` | Vertical (2:3), para la lista y la rejilla clásica |
 | `covers_wide/` | Panorámica, tipo cabecera de Steam |
 | `covers_43/` | Cuadrada 4:3 (640x480) |
+| `datos/` | Ficha del juego y duración (no son imágenes) |
 
 Cada vista usa su carpeta, y en la vista de lista puedes elegir cuál se
 enseña en el panel (*Biblioteca y preferencias → Carátula en la vista de
@@ -141,7 +142,8 @@ lista*). Si un juego no tiene la de esa forma, se usa la vertical. Las
 imágenes nunca se deforman: se centran en su casilla.
 
 Si ya tienes una colección de carátulas, cópiala en la carpeta que
-corresponda: los ficheros se llaman igual que el juego.
+corresponda: los ficheros se llaman igual que el juego, con espacios o con
+guiones bajos — las dos formas valen.
 
 > Para las descargas de SteamGridDB hace falta una clave gratuita
 > (steamgriddb.com → Profile → Preferences → API). En vez de teclearla con el
@@ -309,6 +311,11 @@ sudo steamos-readonly enable
 
 Después, desconecta y vuelve a conectar el mando.
 
+**Con un `.keys` los botones salen cambiados (disparo en B en vez de en A).**
+Ese fichero se escribió con la convención de Batocera, que nombra los botones
+al estilo Nintendo. En *Ajustes del juego → Mapeador .keys → Estilo de
+botones*, cámbialo a **Nintendo / Batocera**.
+
 **Mi mando iba bien con una versión anterior de GE-Proton.**
 Prueba a poner *Mando via SDL* en **ON** en los ajustes de ese juego: hace que
 el juego reciba el mando por SDL en vez de por la vía nueva, que es como
@@ -369,6 +376,12 @@ Si prefieres otra combinación, en `settings.conf`:
 | `start` | Select + Start (en SteamOS choca con el cambio de modo del mando) |
 
 Y `PAD_EXIT_SEGUNDOS` cambia cuánto hay que mantenerlo.
+
+**Al moverme por los menús aparecen letras solas en el buscador.**
+Es un mapeador `.keys` de una partida anterior que se quedó vivo y sigue
+convirtiendo los botones del mando en teclas. Cierra WProton y vuelve a
+abrirlo: al arrancar se limpian esos procesos. Mientras tanto, **B** borra lo
+que se haya escrito.
 
 **WProton se ha quedado en "Volviendo al menú..." y no reacciona.**
 Algunos juegos dejan procesos colgados al cerrarse y WProton espera a que

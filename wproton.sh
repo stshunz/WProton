@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.17"
+WPROTON_VERSION="1.18"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -87,6 +87,25 @@ FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
 save_settings() {
+    # RED DE SEGURIDAD para las carpetas de juegos.
+    #
+    # A un tester le desaparecio la carpeta de su disco externo de los ajustes
+    # sin haberla quitado el. Como save_settings reescribe el fichero entero,
+    # basta con que UNA llamada ocurra con la variable vacia para perderla.
+    #
+    # Aqui se compara con lo que ya habia guardado: si tenia carpetas y ahora
+    # no hay ninguna, se conservan y se apunta QUIEN lo intento. Para
+    # quitarlas de verdad esta la opcion "Quitar" del menu, que avisa con
+    # WP_BORRAR_CARPETAS=1.
+    if [ "${WP_BORRAR_CARPETAS:-0}" != 1 ] && [ -z "${GAMES_PATHS_EXTRA:-}" ] \
+       && [ -f "$SETTINGS_FILE" ]; then
+        local _antes
+        _antes="$(sed -n 's/^GAMES_PATHS_EXTRA="\(.*\)"$/\1/p' "$SETTINGS_FILE" 2>/dev/null)"
+        if [ -n "$_antes" ]; then
+            GAMES_PATHS_EXTRA="$_antes"
+            log "Ajustes: se iban a perder las carpetas extra desde ${FUNCNAME[1]:-?}; se conservan" WARN
+        fi
+    fi
     cat > "$SETTINGS_FILE" <<EOF
 # ============================================
 # Ajustes globales de WProton (editable a mano)
@@ -391,6 +410,7 @@ write_lang_en() {
  "Muy grande": "Very large",
  "NTsync (sincronizacion por kernel)": "NTsync (kernel synchronization)",
  "Ninguno": "None",
+ "Nintendo / Batocera": "Nintendo / Batocera",
  "No": "No",
  "No montar nada": "Do not mount anything",
  "Normal": "Normal",
@@ -462,6 +482,7 @@ write_lang_en() {
  "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam": "Wine-GE [wine] - GloriousEggroll, non-Steam games",
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
+ "Xbox": "Xbox",
  "__version__": "1",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
@@ -1629,9 +1650,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 23161d07dada" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py d42966c84466" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 23161d07dada
+# WPROTON_HELPER mapeador.py d42966c84466
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
@@ -2076,6 +2097,21 @@ def main():
     ]
     map_dirs = {k: [] for k in DIR_KEYS}
 
+    # Estilo de nombres del fichero .keys.
+    #
+    # Hay dos convenciones para los mismos botones fisicos:
+    #   Xbox     -> A es el de abajo,  B el de la derecha
+    #   Nintendo -> A es el de la derecha, B el de abajo  (lo que usa
+    #               Batocera, y por tanto los .keys hechos alli)
+    # Con el estilo equivocado, A y B (y a menudo X e Y) salen cruzados.
+    # No se puede adivinar mirando el fichero, asi que se elige por juego.
+    if os.environ.get('WP_KEYS_ESTILO') == 'nintendo':
+        for _p, _q in (('a', 'b'), ('x', 'y')):
+            if _p in ids and _q in ids:
+                ids[_p], ids[_q] = ids[_q], ids[_p]
+        print("[keys] Estilo de botones: Nintendo/Batocera (A y B cambiados)",
+              flush=True)
+
     for act in data.get('actions_player1', []):
         trig, target = act['trigger'], act['target']
         is_kb = (target == "TECLADO_VIRTUAL")
@@ -2087,6 +2123,13 @@ def main():
                                "active": False, "kb": is_kb})
         elif trig in map_dirs:
             map_dirs[trig] = t_codes
+            # Hay mandos (Anbernic, Decktroid y similares) cuya cruceta llega
+            # como BOTONES sueltos en vez de como eje. El helper de menus ya
+            # los contemplaba; aqui no, y en esos mandos la cruceta no hacia
+            # nada. Se registran tambien como botones normales.
+            _btn_cruceta = {"up": 544, "down": 545, "left": 546, "right": 547}
+            if trig in _btn_cruceta:
+                map_normal[_btn_cruceta[trig]] = t_codes
         elif trig in ids:
             map_normal[ids[trig]] = t_codes
 
@@ -2110,6 +2153,26 @@ def main():
     }
     _mclick_abs = _TRIG_ABS.get(_mclick, ()) if _mclick else ()
     _mclick_pressed = False  # Estado previo del trigger analógico
+
+    # Gatillos L2/R2 como EJE, no como boton.
+    #
+    # En casi todos los mandos (Xbox, Steam Deck, DualSense) los gatillos no
+    # mandan una pulsacion: mandan un eje de 0 al maximo segun lo apretados
+    # que esten. Los codigos de boton 312 y 313 no llegan nunca, asi que un
+    # .keys con "l2" o "r2" no hacia nada. Aqui se traduce el eje a
+    # pulsacion, con un umbral de la cuarta parte del recorrido.
+    _gatillo_teclas = {}
+    for _n, _ejes in (("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE)),
+                      ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS))):
+        _cod = ids.get(_n)
+        if _cod is not None and map_normal.get(_cod):
+            for _e in _ejes:
+                _gatillo_teclas[_e] = map_normal[_cod]
+    _gatillo_on = {}     # eje -> si esta pulsado ahora
+    _gatillo_umbral = {} # eje -> a partir de que valor cuenta como pulsado
+    if _gatillo_teclas:
+        print("[keys] Gatillos analogicos activos para %d eje(s)"
+              % len(_gatillo_teclas), flush=True)
     ui_mouse=None
     if _mcfg:
         try:
@@ -2186,12 +2249,42 @@ def main():
                                     ui_mouse.write(ecodes.EV_KEY, ecodes.BTN_LEFT,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
+                            # Gatillo analogico -> pulsacion de tecla
+                            if event.code in _gatillo_teclas:
+                                _um = _gatillo_umbral.get(event.code)
+                                if _um is None:
+                                    # El recorrido cambia entre mandos (0-255,
+                                    # 0-1023, 0-32767): se pregunta al propio
+                                    # mando en vez de suponer un valor.
+                                    try:
+                                        _um = max(8, _dev.absinfo(event.code).max // 4)
+                                    except Exception:
+                                        _um = 64
+                                    _gatillo_umbral[event.code] = _um
+                                _pulsado = event.value > _um
+                                if _pulsado != _gatillo_on.get(event.code, False):
+                                    _gatillo_on[event.code] = _pulsado
+                                    for _t in _gatillo_teclas[event.code]:
+                                        ui.write(ecodes.EV_KEY, _t, 1 if _pulsado else 0)
+                                    ui.syn()
                             # Mapeo de dirección → teclado
                             if event.code in abs_map_actual:
                                 neg_dir, pos_dir = abs_map_actual[event.code]
-                                val = event.value - center
-                                neg_active = val < -threshold
-                                pos_active = val > threshold
+                                # La CRUCETA no es analogica: solo manda -1, 0
+                                # o +1. Compararla con el umbral de los sticks
+                                # (16000, para no detectar el roce) hacia que
+                                # no se activara NUNCA. Para los ejes de
+                                # cruceta el centro es 0 y basta con el signo.
+                                if event.code in (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y,
+                                                  ecodes.ABS_HAT1X, ecodes.ABS_HAT1Y,
+                                                  ecodes.ABS_HAT2X, ecodes.ABS_HAT2Y):
+                                    val = event.value
+                                    neg_active = val < 0
+                                    pos_active = val > 0
+                                else:
+                                    val = event.value - center
+                                    neg_active = val < -threshold
+                                    pos_active = val > threshold
                                 for direction, active in ((neg_dir, neg_active), (pos_dir, pos_active)):
                                     if active != ejes_on[direction]:
                                         ejes_on[direction] = active
@@ -2246,6 +2339,8 @@ find_keys_file() {
 }
 
 mapeador_start() {
+    # estilo de nombres del .keys (xbox | nintendo), para este juego
+    export WP_KEYS_ESTILO="${KEYS_ESTILO:-xbox}"
     # $1 = fichero .keys
     write_mapeador
     # evdev es imprescindible: probar el import y avisar CLARO si falta
@@ -2258,9 +2353,24 @@ rt=os.environ["WP_RT"]; base=os.path.dirname(rt)
 sys.path.insert(0, os.path.join(rt, "libs_py%d.%d" % sys.version_info[:2]))
 [sys.path.insert(0, d) for d in (os.path.join(base,"evmapy"), os.path.join(rt,"evmapy")) if os.path.isdir(d)]
 import evdev' >> "$LOG_FILE" 2>&1; then
-        say "AVISO: mapeador .keys NO activado: falta el modulo python evdev"
-        say "       Arreglalo en: Runners y herramientas -> Instalar evdev"
-        return 1
+        # Falta evdev y este juego SI tiene .keys: se intenta instalar aqui
+        # mismo. Si la instalacion inicial fallo (un fallo de red, por
+        # ejemplo), quien pusiera un .keys se encontraba con que "no
+        # funciona" y sin saber por que.
+        say "Falta el modulo evdev para el .keys; intentando instalarlo..."
+        loading_say "Preparando el mapeador de mando..."
+        instalar_evdev >/dev/null 2>&1
+        loading_clear
+        if ! WP_RT="$RUNTIME_DIR" "$PY_BIN" -c 'import sys,os
+rt=os.environ["WP_RT"]; base=os.path.dirname(rt)
+sys.path.insert(0, os.path.join(rt, "libs_py%d.%d" % sys.version_info[:2]))
+[sys.path.insert(0, d) for d in (os.path.join(base,"evmapy"), os.path.join(rt,"evmapy")) if os.path.isdir(d)]
+import evdev' >> "$LOG_FILE" 2>&1; then
+            say "AVISO: mapeador .keys NO activado: falta el modulo python evdev"
+            say "       Arreglalo en: Runners y herramientas -> Instalar evdev"
+            return 1
+        fi
+        say "[+] evdev instalado; el .keys ya puede funcionar"
     fi
     say "[+] Engranando mapeador para: $(basename "$1")"
     # -u: sin el, Python guarda su salida en un bufer y el registro se queda
@@ -2284,9 +2394,31 @@ import evdev' >> "$LOG_FILE" 2>&1; then
 }
 
 mapeador_stop() {
-    [ -n "$MAPEADOR_PID" ] && kill "$MAPEADOR_PID" 2>/dev/null
+    # Parar el mapeador DE VERDAD, y comprobarlo.
+    #
+    # El identificador que guardabamos era el del "setsid" que lo lanza, y ese
+    # muere en cuanto arranca al python: matarlo no servia de nada. El python
+    # quedaba vivo con otro identificador, convirtiendo los botones del mando
+    # en teclas mientras navegabas por los menus.
+    [ -n "${MAPEADOR_PID:-}" ] && {
+        kill "$MAPEADOR_PID" 2>/dev/null
+        kill -- "-$MAPEADOR_PID" 2>/dev/null   # y su grupo (lo crea setsid)
+    }
     MAPEADOR_PID=""
-    pkill -f "$MAPEADOR_PY" 2>/dev/null
+    # Se busca por el NOMBRE del script, no por su ruta completa: un mapeador
+    # huerfano puede venir de OTRA copia de WProton (otra carpeta, una version
+    # de pruebas, la del disco externo...) y entonces la ruta no coincide y
+    # seguia vivo mandando teclas.
+    pkill -f 'mapeador\.py' 2>/dev/null
+    local i
+    for i in 1 2 3; do
+        pgrep -f 'mapeador\.py' >/dev/null 2>&1 || { log "Mapeador detenido"; return 0; }
+        sleep 0.3
+        pkill -9 -f 'mapeador\.py' 2>/dev/null
+    done
+    pgrep -f 'mapeador\.py' >/dev/null 2>&1 \
+        && log "AVISO: el mapeador sigue vivo; seguira mandando teclas" WARN \
+        || log "Mapeador detenido"
     return 0
 }
 
@@ -2336,9 +2468,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py fb349cbe73be" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 5c67ea9e1b2f" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py fb349cbe73be
+# WPROTON_HELPER menu_pygame.py 5c67ea9e1b2f
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2468,7 +2600,17 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
                 manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
     set_aspecto(aspecto)
     global MODE, TITLE, OUTFILE, ARG4, BROWSE_KIND, BROWSE_EXTS, ACTION_X
-    global LIST_INFO, PRESEL, FAV_FILE
+    global LIST_INFO, PRESEL, FAV_FILE, FILTER, kb_open, kb_r, kb_c
+    # El proceso de menus es persistente: sin esto, lo escrito en una busqueda
+    # anterior seguia filtrando la pantalla siguiente. Se veian cuatro
+    # ficheros de cien y parecia que faltaban; y el teclado en pantalla salia
+    # con el texto de antes, al que se le iban sumando letras.
+    if FILTER:
+        sys.stderr.write('menu_pygame: se limpia la busqueda %r al abrir '
+                         'una pantalla nueva\n' % FILTER)
+    FILTER = ''
+    kb_open = False
+    kb_r = kb_c = 0
     PRESEL = preseleccion or ''
     FAV_FILE = fav_file or ''
     LIST_INFO = {}
@@ -3471,6 +3613,15 @@ def draw_side_panel():
     if FILTER:
         py += 10
         screen.blit(f_sm.render('BUSCANDO: %s' % FILTER, True, WARN), (px, py))
+        py += 20
+        # Si la busqueda no deja ver nada, hay que decirlo Y decir como
+        # quitarla. Una pantalla vacia con un filtro puesto parece que no hay
+        # ficheros, y no que estan escondidos.
+        if not view:
+            for _ln in wrap_title('Nada coincide con esa busqueda. '
+                                  'Pulsa B para quitarla.', f_sm, SIDE_W - 34, 3):
+                screen.blit(rtext(f_sm, _ln, WARN), (px, py))
+                py += 20
 
 def draw_footer(chips):
     fy = H - 46
@@ -4060,9 +4211,15 @@ def _refilter():
     else:
         apply_filter()
 
-def filter_add(ch):
+def filter_add(ch, origen='?'):
+    # Se deja constancia de CADA letra que entra en la busqueda y de donde
+    # viene. Hubo un caso de un filtro que aparecia solo ("ij") y escondia los
+    # ficheros; sin esto no habia forma de saber si lo escribia el usuario, el
+    # teclado en pantalla o el propio mando.
     global FILTER
     FILTER += ch
+    sys.stderr.write('menu_pygame: busqueda += %r (%s) -> %r\n'
+                     % (ch, origen, FILTER))
     _refilter()
 
 def filter_back():
@@ -4084,7 +4241,7 @@ def kb_press():
         else:                       # LISTO
             kb_open = False
     else:
-        filter_add(KB_ROWS[kb_r][kb_c].lower())
+        filter_add(KB_ROWS[kb_r][kb_c].lower(), 'teclado en pantalla')
 
 def run_session():
     # Ejecuta UNA peticion (un menu, un teclado, una barra de progreso)
@@ -4376,7 +4533,7 @@ def run_session():
                     else:
                         ch = getattr(ev, 'unicode', '')
                         if ch and ch.isprintable():
-                            filter_add(ch)
+                            filter_add(ch, 'tecla %s' % pygame.key.name(ev.key))
                 else:
                     if ev.key == pygame.K_ESCAPE:
                         if ready(): on_escape()
@@ -4431,7 +4588,8 @@ def run_session():
                         if MODE != 'check':
                             ch = getattr(ev, 'unicode', '')
                             if ch and ch.isprintable():
-                                filter_add(ch)
+                                filter_add(ch, 'type-ahead %s'
+                                           % pygame.key.name(ev.key))
 
         screen.blit(BGSURF, (0, 0))
         if PANEL_UI:
@@ -6448,6 +6606,8 @@ profile_defaults() {
     # de los mandos estaba en los permisos y en un proceso nuestro que se
     # mataba solo. Se deja en tres estados, como el resto de opciones.
     PAD_SONY=auto
+    # Nombres de los botones dentro del .keys: xbox | nintendo (Batocera)
+    KEYS_ESTILO=xbox
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
     NOTAS=""                 # apunte libre ("necesita -novr", "usar GE 9-27"...)
@@ -6497,6 +6657,7 @@ PREFIX_MODE="$PREFIX_MODE"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_SONY=${PAD_SONY:-auto}
+KEYS_ESTILO=${KEYS_ESTILO:-xbox}
 PAD_STEAMFIX=$PAD_STEAMFIX
 NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
@@ -7178,6 +7339,13 @@ EOFRA
     )
     local rc=$?
     guardia_salida_stop
+    # El mapeador tiene que parar AQUI, al terminar el juego, no al cerrar
+    # WProton. Mientras siga vivo convierte los botones del mando en teclas
+    # del sistema, y esas teclas se las come el menu: con un .keys que asigne
+    # A a la letra "i", entrar en una carpeta escribia "i" en el buscador.
+    # Antes solo se paraba en la limpieza final, asi que seguia actuando
+    # durante todo el rato que estuvieras navegando despues de jugar.
+    mapeador_stop
     WP_JUGANDO=0
     trap cleanup_all INT TERM        # se vuelve a atender las senales
     local dur=$(( $(date +%s) - t0 ))
@@ -7451,7 +7619,10 @@ umudb_update() {
     fi
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     say "Actualizando la base de datos de umu..."
-    if curl -fsSL --max-time 30 "$UMUDB_URL" -o "$f.tmp" 2>/dev/null \
+    # Limite corto a proposito: esto solo sirve para PROPONER datos. Si la
+    # red va lenta, se sigue sin ella; lo contrario es dejar al usuario
+    # mirando una pantalla quieta sin saber cuanto falta.
+    if curl -fsSL --max-time 8 "$UMUDB_URL" -o "$f.tmp" 2>/dev/null \
        && [ -s "$f.tmp" ] && grep -qi 'umu' "$f.tmp"; then
         mv -f "$f.tmp" "$f"
         rm -f "$(umudb_titles)"      # el indice se rehace
@@ -7617,7 +7788,7 @@ Con él, umu aplica los arreglos conocidos de este juego.
 #   Si no hay red o el juego no esta, la ficha muestra igualmente lo que
 #   sabemos por nosotros mismos: tamaño, veces jugado y tiempo total.
 # ---------------------------------------------------------------------------
-ficha_file() { printf '%s' "$COVERS_DIR/${1}.info.json"; }
+ficha_file() { printf '%s' "$DATOS_DIR/${1}.info.json"; }
 
 ficha_appid() {
     # Busca el juego en la tienda de Steam y devuelve "appid|nombre".
@@ -7683,7 +7854,7 @@ ficha_descargar() {
     [ -n "$appid" ] || return 1
     out="$(ficha_file "$gid")"
     mkdir -p "$COVERS_DIR"
-    curl -fsSL --max-time 20 \
+    curl -fsSL --max-time 8 \
         "https://store.steampowered.com/api/appdetails?appids=$appid&l=spanish" \
         -o "$out.tmp" 2>/dev/null || { rm -f "$out.tmp"; return 1; }
     if grep -q '"success"[^t]*true' "$out.tmp" 2>/dev/null; then
@@ -7827,11 +7998,12 @@ Metacritic:   $mc / 100"
     # tambien sin duracion aunque HowLongToBeat si lo tuviera.
     local dur hist todo nombre_busqueda
     nombre_busqueda="${nom:-$(printf '%s' "$gid" | tr '_' ' ')}"
-    dur="$(cat "$COVERS_DIR/${gid}.hltb" 2>/dev/null)" || dur=""
+    dur="$(cat "$DATOS_DIR/${gid}.hltb" 2>/dev/null)" || dur=""
     if [ -z "$dur" ] && hltb_disponible; then
         loading_say "Consultando la duración de $nombre_busqueda..."
         dur="$(hltb_duracion "$nombre_busqueda")" || dur=""
-        [ -n "$dur" ] && printf '%s' "$dur" > "$COVERS_DIR/${gid}.hltb"
+        [ -n "$dur" ] && { mkdir -p "$DATOS_DIR" 2>/dev/null
+                           printf '%s' "$dur" > "$DATOS_DIR/${gid}.hltb"; }
         loading_clear
     fi
     if [ -n "$dur" ]; then
@@ -9116,8 +9288,18 @@ package_dir() {
     local dir="$1" launcher name exe out
     lanzar_script_si_existe "$dir" && return 0
     name="$(basename "$dir")"
-    exe="$(resolver_exe_carpeta "$dir")" \
-        || die "No se encontro ejecutable en la carpeta"
+    # OJO: aqui NO se puede usar "die", que cierra WProton entero. Esto
+    # ocurre dentro de un menu: si la carpeta elegida no sirve, se avisa y se
+    # vuelve al menu, como cualquier otro error recuperable.
+    if ! exe="$(resolver_exe_carpeta "$dir")" || [ -z "$exe" ]; then
+        ui_error "No se encontro ningun ejecutable en esa carpeta.
+
+$dir
+
+Elige la carpeta que contiene el .exe del juego, o importa
+directamente el ejecutable."
+        return 1
+    fi
     write_autorun "$dir" "$exe"
     if offer_test_then_pack "$dir" "$exe" "$name"; then
         ui_ask "Lanzar '$name' desde el wsquashfs ahora?" \
@@ -9316,8 +9498,14 @@ play_folder() {
     if [ -n "$EXE_OVERRIDE" ] && [ -f "$dir/$EXE_OVERRIDE" ]; then
         exe="$dir/$EXE_OVERRIDE"
     else
-        exe="$(resolver_exe_carpeta "$dir")" \
-            || die "No se encontro ejecutable en la carpeta"
+        if ! exe="$(resolver_exe_carpeta "$dir")" || [ -z "$exe" ]; then
+            ui_error "No se encontro ningun ejecutable en esa carpeta.
+
+$dir
+
+Elige la carpeta que contiene el .exe del juego."
+            return 1
+        fi
     fi
     launch_loose_exe "$name" "$exe"
 }
@@ -9370,7 +9558,7 @@ play_any() {
         *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
             launch_game "$p" "auto" ;;
         *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
-            [ -f "$p" ] || die "No existe: $p"
+            [ -f "$p" ] || { ui_error "Ya no existe:\n$p"; return 1; }
             local nm; nm="$(game_id "$(dirname "$p")")"
             launch_loose_exe "$nm" "$(realpath "$p")" ;;
         *)
@@ -9379,7 +9567,7 @@ play_any() {
             elif [ -f "$p" ]; then
                 launch_game "$p" "auto"
             else
-                die "No existe: $p"
+                ui_error "Ya no existe:\n$p"; return 1
             fi ;;
     esac
 }
@@ -10503,6 +10691,11 @@ config_export() {
         mkdir -p "$tmp/wproton_config/covers_wide"
         cp -a "$COVERS_WIDE_DIR/." "$tmp/wproton_config/covers_wide/" 2>/dev/null
     fi
+    if [ -d "$DATOS_DIR" ] && \
+       [ -n "$(find "$DATOS_DIR" -type f 2>/dev/null | head -n1)" ]; then
+        mkdir -p "$tmp/wproton_config/datos"
+        cp -a "$DATOS_DIR/." "$tmp/wproton_config/datos/" 2>/dev/null
+    fi
     if [ -d "$COVERS_43_DIR" ] && \
        [ -n "$(find "$COVERS_43_DIR" -type f 2>/dev/null | head -n1)" ]; then
         mkdir -p "$tmp/wproton_config/covers_43"
@@ -10582,6 +10775,7 @@ por los del zip. Se guardara antes una copia en backups/." || { rm -rf "$tmp"; r
             [ -d "$base/covers" ] && { mkdir -p "$COVERS_DIR"; cp -a "$base/covers/." "$COVERS_DIR/" 2>/dev/null; }
             [ -d "$base/covers_wide" ] && { mkdir -p "$COVERS_WIDE_DIR"; cp -a "$base/covers_wide/." "$COVERS_WIDE_DIR/" 2>/dev/null; }
             [ -d "$base/covers_43" ] && { mkdir -p "$COVERS_43_DIR"; cp -a "$base/covers_43/." "$COVERS_43_DIR/" 2>/dev/null; }
+            [ -d "$base/datos" ] && { mkdir -p "$DATOS_DIR"; cp -a "$base/datos/." "$DATOS_DIR/" 2>/dev/null; }
             [ -d "$base/lang" ] && { mkdir -p "$LANG_DIR"; cp -a "$base/lang/." "$LANG_DIR/" 2>/dev/null; }
             rm -rf "$tmp"
             load_settings
@@ -10768,19 +10962,19 @@ import_input() {
             pad_bridge_stop
             bash "$input" ;;
         *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD)
-            [ -f "$input" ] || die "No existe: $input"
+            [ -f "$input" ] || { ui_error "Ya no existe:\n$input"; return 1; }
             play_any "$input" ;;
         *)
             if [ -d "$input" ]; then
                 play_folder "$input"
             elif printf '%s' "$input" | grep -qiE "$ARCHIVE_REGEX"; then
-                [ -f "$input" ] || die "No existe: $input"
+                [ -f "$input" ] || { ui_error "Ya no existe:\n$input"; return 1; }
                 import_archive "$input"
             elif [ -f "$input" ]; then
                 # extension desconocida: intentar como squash
                 launch_game "$input" "auto"
             else
-                die "No existe el fichero: $input"
+                ui_error "No existe el fichero:\n$input"; return 1
             fi ;;
     esac
 }
@@ -11154,6 +11348,22 @@ COVERS_DIR="$BASE_DIR/covers"
 # cual, con los ficheros llamados como el juego.
 COVERS_WIDE_DIR="$BASE_DIR/covers_wide"   # panoramica (cabecera de Steam)
 COVERS_43_DIR="$BASE_DIR/covers_43"       # 4:3 (640x480)
+# Datos de los juegos (ficha de Steam, duracion de HowLongToBeat). Antes
+# vivian mezclados con las caratulas; con tres carpetas de caratulas, esto
+# pide su propio sitio.
+DATOS_DIR="$BASE_DIR/datos"
+
+datos_preparar() {
+    # Crea la carpeta y traslada lo que estuviera en covers/. Una sola vez.
+    mkdir -p "$DATOS_DIR" 2>/dev/null
+    local f n=0
+    for f in "$COVERS_DIR"/*.info.json "$COVERS_DIR"/*.hltb; do
+        [ -f "$f" ] || continue
+        mv -f "$f" "$DATOS_DIR/" 2>/dev/null && n=$((n+1))
+    done
+    [ "$n" -gt 0 ] && log "Datos de juegos movidos a datos/: $n fichero(s)"
+    return 0
+}
 
 covers_dir_de() {
     # Carpeta que corresponde a cada forma de caratula.
@@ -11225,6 +11435,20 @@ profile_get() {
     sed -n "s/^$2=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$f" | head -n1
 }
 
+cover_nombres() {
+    # Nombres con los que puede estar guardada la caratula de un juego.
+    #
+    # El identificador cambia los espacios por guiones bajos ("Blade Arcus"
+    # -> "Blade_Arcus"), que es como las guarda la descarga automatica. Pero
+    # quien copia su propia coleccion conserva los espacios, y asi no casaba
+    # ninguna. Se prueban las dos formas.
+    local gid="$1"
+    printf '%s\n' "$gid"
+    case "$gid" in
+        *_*) printf '%s\n' "$(printf '%s' "$gid" | tr '_' ' ')" ;;
+    esac
+}
+
 cover_tipo_real() {
     # ¿Existe la caratula de ESA forma, de verdad? ($1 = gid, $2 = forma)
     #
@@ -11232,10 +11456,15 @@ cover_tipo_real() {
     # pedida, devuelve la vertical como respaldo: muy comodo para dibujar,
     # pero traicionero para decidir si hay que descargar algo (siempre
     # parecia que ya estaba).
-    local e d; d="$(covers_dir_de "${2:-vertical}")"
-    for e in png jpg jpeg webp; do
-        [ -f "$d/$1.$e" ] && { printf '%s' "$d/$1.$e"; return 0; }
-    done
+    local e d nom; d="$(covers_dir_de "${2:-vertical}")"
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            [ -f "$d/$nom.$e" ] && { printf '%s' "$d/$nom.$e"; return 0; }
+        done
+    done <<EOFCN
+$(cover_nombres "$1")
+EOFCN
     if [ "${2:-}" = wide ]; then       # nomenclatura anterior
         for e in png jpg jpeg webp; do
             [ -f "$COVERS_DIR/$1.wide.$e" ] && { printf '%s' "$COVERS_DIR/$1.wide.$e"; return 0; }
@@ -11254,12 +11483,17 @@ cover_for() {
     #
     # Si se pide la horizontal y no la hay, se usa la vertical: mejor una
     # caratula deformada que un hueco vacio.
-    local e d
+    local e d nom
     if [ -n "${2:-}" ] && [ "${2:-}" != vertical ]; then
         d="$(covers_dir_de "$2")"
-        for e in png jpg jpeg webp; do
-            [ -f "$d/$1.$e" ] && { printf '%s' "$d/$1.$e"; return 0; }
-        done
+        while IFS= read -r nom; do
+            [ -n "$nom" ] || continue
+            for e in png jpg jpeg webp; do
+                [ -f "$d/$nom.$e" ] && { printf '%s' "$d/$nom.$e"; return 0; }
+            done
+        done <<EOFC2
+$(cover_nombres "$1")
+EOFC2
         # compatibilidad con la nomenclatura anterior (covers/<juego>.wide.*)
         if [ "$2" = wide ]; then
             for e in png jpg jpeg webp; do
@@ -11268,9 +11502,15 @@ cover_for() {
             done
         fi
     fi
-    for e in png jpg jpeg webp; do
-        [ -f "$COVERS_DIR/$1.$e" ] && { printf '%s' "$COVERS_DIR/$1.$e"; return 0; }
-    done
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            [ -f "$COVERS_DIR/$nom.$e" ] && \
+                { printf '%s' "$COVERS_DIR/$nom.$e"; return 0; }
+        done
+    done <<EOFC3
+$(cover_nombres "$1")
+EOFC3
     return 1
 }
 
@@ -11770,22 +12010,94 @@ montar_discos_recordados() {
     #
     # Solo se monta lo que ya estaba configurado como carpeta de juegos: no se
     # toca ningun otro disco del sistema.
-    local p faltan=0 dev etq tipo tam mp montados=0
+    local p faltan="" dev etq tipo tam mp montados=0
+    # Se apunta CADA carpeta y si esta o no: sin esto, "todas disponibles"
+    # no permitia distinguir entre "el disco ya estaba montado" y "la carpeta
+    # del disco externo ni siquiera esta configurada".
     while IFS= read -r p; do
-        [ -n "$p" ] && [ ! -d "$p" ] && faltan=1
+        [ -n "$p" ] || continue
+        if [ -d "$p" ]; then
+            log "Automontaje: OK  $p"
+        else
+            log "Automontaje: FALTA  $p"
+            faltan="$faltan$p
+"
+        fi
     done <<EOFCR
 $(games_paths)
 EOFCR
-    [ "$faltan" = 1 ] || return 0
-    local discos; discos="$(discos_sin_montar)" || return 0
-    [ -n "$discos" ] || return 0
+    if [ -z "$faltan" ]; then
+        log "Automontaje: todas las carpetas de juegos estan disponibles"
+        return 0
+    fi
+    log "Automontaje: faltan estas carpetas: $(printf '%s' "$faltan" | tr '\n' ' ')"
+    local discos; discos="$(discos_sin_montar)" || discos=""
+    if [ -z "$discos" ]; then
+        log "Automontaje: no hay ningun disco sin montar que probar" WARN
+        return 0
+    fi
+    log "Automontaje: discos por probar: $(printf '%s' "$discos" | grep -c . || true)"
+
+    # Se prueba a montar y se mira SI APARECE la carpeta que faltaba.
+    #
+    # Antes se comparaba la etiqueta del disco con la ruta de la carpeta, y
+    # eso fallaba en cuanto el disco no tenia etiqueta o se montaba en una
+    # ruta que no la incluia. Comprobar el resultado no depende de nombres:
+    # o la carpeta aparece, o no.
     while IFS='|' read -r dev etq tipo tam; do
         [ -n "$dev" ] || continue
-        # ¿alguna carpeta que falta menciona la etiqueta de este disco?
-        printf '%s' "$(games_paths)" | grep -qF "${etq:-__nada__}" || continue
-        if mp="$(montar_disco "$dev")" && [ -n "$mp" ]; then
-            say "[+] Disco '$etq' montado solo en $mp"
+        mp="$(montar_disco "$dev")" || continue
+        [ -n "$mp" ] || continue
+        local sirve=0
+        while IFS= read -r p; do
+            [ -n "$p" ] && [ -d "$p" ] && sirve=1
+        done <<EOFCF
+$faltan
+EOFCF
+        if [ "$sirve" = 1 ]; then
+            say "[+] Disco ${etq:-$dev} montado solo en $mp"
             montados=$((montados+1))
+            # ¿queda alguna carpeta por aparecer? si no, se acabo
+            local pendientes=""
+            while IFS= read -r p; do
+                [ -n "$p" ] && [ ! -d "$p" ] && pendientes="$pendientes$p
+"
+            done <<EOFCP
+$faltan
+EOFCP
+            faltan="$pendientes"
+            [ -n "$faltan" ] || break
+        else
+            # La carpeta no aparecio, pero puede que el disco SI sea el bueno
+            # y udisks lo haya montado en otro sitio que la vez anterior
+            # (pasa con NTFS y con etiquetas repetidas). Se busca dentro una
+            # carpeta con el mismo nombre y se corrige la ruta guardada.
+            local arreglado=0 base nueva
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                base="${p##*/}"
+                nueva="$(find "$mp" -maxdepth 2 -type d -name "$base" 2>/dev/null | head -n1)"
+                if [ -n "$nueva" ]; then
+                    log "Automontaje: la carpeta '$base' ahora esta en $nueva (antes $p)"
+                    GAMES_PATHS_EXTRA="$(printf '%s' "${GAMES_PATHS_EXTRA:-}" \
+                        | grep -vxF "$p" || true)"
+                    [ "$GAMES_PATH" = "$p" ] && GAMES_PATH="$nueva" \
+                        || GAMES_PATHS_EXTRA="${GAMES_PATHS_EXTRA:+$GAMES_PATHS_EXTRA
+}$nueva"
+                    save_settings
+                    arreglado=1
+                fi
+            done <<EOFCA
+$faltan
+EOFCA
+            if [ "$arreglado" = 1 ]; then
+                say "[+] Disco ${etq:-$dev} montado en $mp (ruta actualizada)"
+                montados=$((montados+1))
+                faltan=""
+                break
+            fi
+            log "Automontaje: $dev no contenia ninguna carpeta de juegos; se desmonta"
+            udisksctl unmount -b "$dev" --no-user-interaction >/dev/null 2>&1
         fi
     done <<EOFCD
 $discos
@@ -12143,8 +12455,8 @@ EOF2
         mt3="$(game_meta "$rel3")"
         fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
-        fjson="$COVERS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
-        fhltb="$COVERS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
+        fjson="$DATOS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
+        fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
         printf '%s|%s|%s|%s|%s|%s|%s\n' \
             "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
             >> "$infofile"
@@ -12482,8 +12794,26 @@ Poner el contador a cero?" && {
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
+                "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Nintendo / Batocera' || printf 'Xbox')" \
                 "<< Volver")" || kmenu=""
             case "$kmenu" in
+                "Estilo de botones:"*)
+                    # Los .keys hechos en Batocera nombran los botones al
+                    # estilo Nintendo: su "A" es el de la derecha y su "B" el
+                    # de abajo, al reves que en el estilo Xbox. Si en el juego
+                    # los botones salen cambiados, se cambia aqui.
+                    if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
+                        KEYS_ESTILO=xbox
+                    else
+                        KEYS_ESTILO=nintendo
+                    fi
+                    write_full_profile "$gid"
+                    ui_info "Estilo de botones: $KEYS_ESTILO
+
+  Xbox      A abajo, B derecha (mandos de PC)
+  Nintendo  A derecha, B abajo (Batocera y consolas portatiles)
+
+Si los botones salen cambiados en el juego, prueba el otro." ;;
                 "Asignar"*)
                     local kfsel
                     kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
@@ -12534,9 +12864,13 @@ game_config_menu() {
     # Juego nuevo: mirar si la base de umu conoce este juego. Su identificador
     # es lo que permite a protonfixes aplicar los arreglos concretos, asi que
     # conviene proponerlo antes que nada.
-    if ! profile_exists "$gid"; then
-        umudb_sugerir "$gid" "${EXE_PATH:-}" && write_full_profile "$gid"
-    fi
+    # La base de umu YA NO se consulta al abrir la configuracion.
+    #
+    # Se hacia para proponer el identificador del juego, pero va por red y era
+    # lo que hacia que pulsar X sobre un juego nuevo tardara una eternidad. En
+    # la practica no acerto ni una vez en las pruebas: los juegos que hacian
+    # falta no estaban en la base. Sigue disponible cuando se quiera, en
+    # "Buscar en la base de umu" dentro de los ajustes del juego.
     # Si nunca se configuro: mirar si la comunidad ya tiene una configuracion
     # para este juego antes de preguntarle nada al usuario.
     #
@@ -12545,7 +12879,11 @@ game_config_menu() {
     # encontraba de vuelta en el menu principal. Ahora se sigue adelante y se
     # muestra la configuracion, ya con el perfil de la comunidad cargado.
     if ! profile_exists "$gid"; then
+        local _t1; _t1="$(date +%s)"
+        loading_say "Buscando un perfil de la comunidad para '$gid'..."
         community_offer_for "$gid" || true
+        loading_clear
+        log "Configurar $gid: perfiles de la comunidad tardaron $(( $(date +%s) - _t1 ))s"
     fi
     # Si nunca se configuro, pasar por el asistente primero.
     #
@@ -12939,8 +13277,9 @@ $(find "$p" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
    -o -iname '*.dwarfs' \) 2>/dev/null | wc -l) juego(s) empaquetado(s) encontrado(s)." ;;
             "Quitar: "*)
                 p="${sel#Quitar: }"
-                GAMES_PATHS_EXTRA="$(printf '%s' "$GAMES_PATHS_EXTRA" | grep -vxF "$p")"
-                save_settings
+                GAMES_PATHS_EXTRA="$(printf '%s' "$GAMES_PATHS_EXTRA" | grep -vxF "$p" || true)"
+                WP_BORRAR_CARPETAS=1 save_settings
+                unset WP_BORRAR_CARPETAS
                 say "[+] Carpeta quitada de la lista: $p" ;;
         esac
     done
@@ -13378,6 +13717,7 @@ if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MA
 fi
 
 covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
+datos_preparar          # crea datos/ y traslada las fichas que hubiera
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
@@ -13394,6 +13734,18 @@ if [ -f "$RUNTIME_DIR/.menusrv.pid" ]; then
 fi
 unset _viejo
 pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
+# Y mapeadores .keys huerfanos de una sesion anterior.
+#
+# El mapeador convierte los botones del mando en TECLAS del sistema. Si
+# sobrevive a la partida, sigue haciendolo dentro de los menus de WProton: con
+# un .keys que asigne A a la letra "i" y B a la "j", entrar en una carpeta
+# escribia "i" en el buscador y volver escribia "j". La pantalla se filtraba
+# sola y parecia que los ficheros habian desaparecido.
+# Por NOMBRE, no por ruta: puede venir de otra copia de WProton
+_huerf="$(pgrep -f 'mapeador\.py' 2>/dev/null | grep -c . || true)"
+[ "${_huerf:-0}" -gt 0 ] && log "Arranque: $_huerf mapeador(es) huerfano(s); se cierran" WARN
+pkill -f 'mapeador\.py' 2>/dev/null
+unset _huerf
 
 case "${1:-}" in
     --setup)
