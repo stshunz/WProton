@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.18"
+WPROTON_VERSION="1.19"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -305,6 +305,7 @@ write_lang_en() {
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
+ "Comprobar lo descargado (huellas SHA-256)": "Check downloads (SHA-256 hashes)",
  "Configuración de": "Settings for",
  "Configurar (runner, prefijo, opciones)": "Configure (runner, prefix, options)",
  "Configurar dgVoodoo (Cpl)": "Configure dgVoodoo (Cpl)",
@@ -5533,13 +5534,92 @@ ge_tags_curated() {
     } | sort -Vr | awk '!seen[$0]++'
 }
 
+SHA_MANIFIESTO=""     # se fija en cuanto se conoce RUNTIME_DIR
+
+sha256_de() {
+    # Huella de un fichero. Se usa lo que haya: sha256sum viene de serie en
+    # casi todo, y si no, el Python portable que ya instalamos.
+    [ -f "$1" ] || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+        return 0
+    fi
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" - "$1" <<'PYSHA' 2>/dev/null
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], 'rb') as f:
+    for trozo in iter(lambda: f.read(1 << 20), b''):
+        h.update(trozo)
+print(h.hexdigest())
+PYSHA
+}
+
+sha_apuntar() {
+    # Deja constancia de QUE se descargo y con que huella.
+    #
+    # No protege contra un servidor comprometido -eso lo cubre HTTPS-, pero
+    # sirve para lo que de verdad pasa: detectar descargas corruptas y poder
+    # comprobar mas adelante que lo instalado sigue siendo lo mismo.
+    local f="$1" h
+    [ -n "${RUNTIME_DIR:-}" ] || return 0
+    SHA_MANIFIESTO="$RUNTIME_DIR/descargas.sha256"
+    h="$(sha256_de "$f")" || return 0
+    [ -n "$h" ] || return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    # una linea por fichero; si se vuelve a bajar, se sustituye
+    if [ -f "$SHA_MANIFIESTO" ]; then
+        grep -v "  $f$" "$SHA_MANIFIESTO" > "$SHA_MANIFIESTO.tmp" 2>/dev/null || true
+        mv -f "$SHA_MANIFIESTO.tmp" "$SHA_MANIFIESTO" 2>/dev/null
+    fi
+    printf '%s  %s\n' "$h" "$f" >> "$SHA_MANIFIESTO"
+    return 0
+}
+
+sha_comprobar() {
+    # $1 = fichero, $2 = huella esperada (con o sin el prefijo "sha256:")
+    local esperada="${2#sha256:}" real
+    [ -n "$esperada" ] || return 0        # sin huella que comparar: se acepta
+    real="$(sha256_de "$1")" || return 0  # sin forma de calcularla: se acepta
+    [ "$real" = "$esperada" ] && return 0
+    log "Huella distinta en $(basename "$1"): esperada $esperada, obtenida $real" WARN
+    return 1
+}
+
+gh_digest() {
+    # Huella que publica GitHub para un fichero de una release.
+    # $1 = json de la release, $2 = nombre del fichero
+    [ -n "$1" ] || return 1
+    printf '%s' "$1" | tr ',' '\n' \
+        | grep -A2 -F "\"$2\"" 2>/dev/null \
+        | grep -o '"digest": *"[^"]*"' | head -n1 | cut -d'"' -f4
+}
+
 dl() {
+    # Descarga y comprueba. $1 = url, $2 = destino, $3 = huella esperada
+    # (opcional; GitHub la publica junto a cada fichero de sus releases).
+    #
+    # Envuelve a la descarga de siempre para no tocar sus varias salidas: se
+    # comprueba UNA vez, al final, y se deja constancia de lo descargado.
+    dl_bruto "$@" || return $?
+    [ -s "$2" ] || return 1
+    if [ -n "${3:-}" ] && ! sha_comprobar "$2" "$3"; then
+        rm -f "$2"
+        say "AVISO: '$(basename "$2")' no coincide con la huella publicada; se descarta"
+        return 1
+    fi
+    sha_apuntar "$2"
+    return 0
+}
+
+dl_bruto() {
     # $1 = url, $2 = destino.
     #
     # La barra es la NUESTRA (pygame). Con curl se puede saber el porcentaje
     # real, asi que la barra avanza de verdad en vez de ir "pulsando".
     local nombre; nombre="$(basename "$2")"
     say "Descargando $nombre..."
+    local _sha_esperada="${3:-}"
     # Si ya hay una ventana en pantalla, NO abrir otra encima: se solapaban.
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
         curl -fL --retry 3 -s -o "$2" "$1"
@@ -5579,6 +5659,42 @@ dl() {
     else
         curl -fL --retry 3 -o "$2" "$1"
     fi
+}
+
+run_con_porcentaje() {
+    # Barra de progreso DE VERDAD, leyendo el porcentaje que va soltando la
+    # herramienta. $1 = texto, resto = orden.
+    #
+    # Antes la barra iba y venia sin significar nada, asi que en un
+    # empaquetado de varios minutos no se sabia si quedaba mucho o poco.
+    local texto="$1"; shift
+    pygame_available || { run_with_progress "$texto" "$@"; return $?; }
+    write_menu_pygame
+    progress_start "WProton"
+    progress_set 0 "$texto"
+    local salida; salida="$(mktemp)"
+    ( "$@" > "$salida" 2>&1; printf '%s' "$?" > "$salida.rc" ) &
+    local pid=$! ultimo=0 pct
+    while kill -0 $pid 2>/dev/null; do
+        sleep 0.4
+        # el ultimo numero suelto que haya escrito la herramienta
+        pct="$(tr -c '0-9\n' ' ' < "$salida" 2>/dev/null | tr -s ' ' '\n' \
+               | grep -E '^[0-9]{1,3}$' | tail -n1)"
+        if [ -n "$pct" ] && [ "$pct" -ge 0 ] 2>/dev/null && [ "$pct" -le 100 ] 2>/dev/null; then
+            # nunca hacia atras: algunas herramientas reinician la cuenta por
+            # cada fichero y la barra daba saltos
+            [ "$pct" -gt "$ultimo" ] && ultimo="$pct"
+        fi
+        progress_set "$ultimo" "$texto"
+    done
+    wait $pid
+    local rc; rc="$(cat "$salida.rc" 2>/dev/null || echo 1)"
+    cat "$salida" >> "$LOG_FILE" 2>/dev/null
+    rm -f "$salida" "$salida.rc"
+    progress_set 100 "Listo"
+    progress_stop
+    loading_clear
+    return "${rc:-1}"
 }
 
 run_with_progress() {
@@ -8799,13 +8915,16 @@ build_wsquashfs() {
     fi
     if [ "$fmt" = "dwarfs" ]; then
         # -l7: buen equilibrio; zstd por defecto = montaje y lectura rapidos
-        run_with_progress "Empaquetando '$name' a DwarFS (puede tardar)..." \
+        run_con_porcentaje "Empaquetando '$name' a DwarFS..." \
             "$MKDWARFS_BIN" -i "$src" -o "$out" -l7 --log-level=warn \
+            --progress=simple \
             || { rm -f "$out"; die "mkdwarfs fallo"; }
     else
         need_mksquashfs
-        run_with_progress "Empaquetando '$name' a wsquashfs (zstd, puede tardar)..." \
-            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
+        # -percentage: mksquashfs va escribiendo solo el numero, pensado
+        # justo para alimentar una barra de progreso.
+        run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
+            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage \
             || { rm -f "$out"; die "mksquashfs fallo"; }
     fi
     rm -rf "${OVERLAY_BASE:?}/${name}"
@@ -9372,7 +9491,9 @@ CachyOS: sudo pacman -S p7zip"
                 tar -xzf "$input" -C "$extract_dir" || ext_ok=0 ;;
         *)
             run_with_progress "Descomprimiendo fichero: $name_raw ..." \
-                7z x "$input" -o"$extract_dir" -y || ext_ok=0 ;;
+                # -bsp1: 7z escribe el porcentaje, para la barra
+                run_con_porcentaje "Extrayendo $(basename "$input")..." \
+                    7z x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
     esac
     if [ "$ext_ok" = 1 ]; then
         say "[+] Extraccion completada."
@@ -11197,6 +11318,48 @@ $(ls -1t "$(dev_dir)" 2>/dev/null | head -n 10 | sed 's/^/  /')
 Dentro de los menus, F12 guarda la pantalla al momento." ;;
         esac
     done
+}
+
+descargas_revisar() {
+    # Vuelve a calcular la huella de todo lo descargado y avisa de lo que haya
+    # cambiado. Util para detectar una descarga que se corrompio o un fichero
+    # que alguien ha tocado despues.
+    local man="$RUNTIME_DIR/descargas.sha256"
+    if [ ! -s "$man" ]; then
+        ui_info "Todavia no hay nada apuntado.
+
+Se va anotando segun WProton descarga runners y herramientas."
+        return 0
+    fi
+    loading_say "Comprobando lo descargado..."
+    local h f real ok=0 mal=0 falta=0 lista=""
+    while read -r h f; do
+        [ -n "$f" ] || continue
+        if [ ! -f "$f" ]; then
+            falta=$((falta+1)); continue
+        fi
+        real="$(sha256_de "$f")" || real=""
+        if [ "$real" = "$h" ]; then
+            ok=$((ok+1))
+        else
+            mal=$((mal+1)); lista="$lista  $(basename "$f")
+"
+        fi
+    done < "$man"
+    loading_clear
+    if [ "$mal" = 0 ]; then
+        ui_info "Todo correcto.
+
+  $ok fichero(s) comprobados
+  $falta ya no estan (borrados o reinstalados)"
+    else
+        ui_error "$mal fichero(s) han cambiado desde que se descargaron:
+
+$lista
+Puede ser una descarga que se corrompio. Vuelve a descargarlos
+desde Runners y herramientas."
+    fi
+    return 0
 }
 
 probar_mando() {
@@ -13125,6 +13288,7 @@ mkdwarfs para empaquetar y dwarfs para montar."
         "Añadir WProton a Steam"*) anadir_wproton_a_steam || true ;;
         "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Probar el mando"*) probar_mando ;;
+        "Comprobar lo descargado"*) descargas_revisar ;;
         "Crear un .keys de ejemplo"*)
             ui_info "Ejemplo creado en:
 $(keys_ejemplo_crear)
@@ -13442,6 +13606,7 @@ tools_menu() {
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
             "Probar el mando (ver que botones llegan)" \
+            "Comprobar lo descargado (huellas SHA-256)" \
             "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)" \
             "Arreglar permisos del mando (hidraw)" \
             "Instalar evdev (para los ficheros .keys)" \
