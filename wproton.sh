@@ -6393,6 +6393,20 @@ cleanup_all() {
     canvas_stop
     log "Cierre: parando el servidor de menus"
     menu_server_stop
+    # Y comprobarlo: un proceso de menus que sobreviva deja su ventana a
+    # pantalla completa ocupando el monitor, y desde fuera parece que el
+    # equipo se ha quedado en negro. Se busca por NOMBRE, no por ruta: puede
+    # venir de otra copia de WProton.
+    local _i
+    for _i in 1 2 3; do
+        pgrep -f 'menu_pygame\.py' >/dev/null 2>&1 || break
+        pkill -f 'menu_pygame\.py' 2>/dev/null
+        sleep 0.3
+    done
+    pgrep -f 'menu_pygame\.py' >/dev/null 2>&1 && {
+        pkill -9 -f 'menu_pygame\.py' 2>/dev/null
+        log "Cierre: habia menus vivos; se han cerrado a la fuerza" WARN
+    }
     log "Cierre: completado"
 }
 trap cleanup_all EXIT INT TERM
@@ -6585,9 +6599,12 @@ find_exe() {
 # 11. PERFILES POR JUEGO (estilo TeknoParrot): profiles/<id>.conf
 # ----------------------------------------------------------------------------
 game_id() {
-    local gid; gid="$(basename "$1")"
+    # Sin procesos externos: se llama una vez por juego en cada pasada, y con
+    # bibliotecas grandes el coste de lanzar "basename" y "tr" se notaba.
+    local gid="${1##*/}"
     [ -d "$1" ] || gid="${gid%.*}"
-    printf '%s' "$gid" | tr ' /' '__'
+    gid="${gid// /_}"
+    printf '%s' "${gid//\//_}"
 }
 
 profile_defaults() {
@@ -7349,6 +7366,9 @@ EOFRA
     WP_JUGANDO=0
     trap cleanup_all INT TERM        # se vuelve a atender las senales
     local dur=$(( $(date +%s) - t0 ))
+    # 241 y 255 los produce nuestro propio cierre con el mando: el juego se
+    # corta a proposito, asi que no es un fallo del que haya que avisar.
+    case "$rc" in 241|255) [ "$dur" -ge 10 ] && rc=0 ;; esac
     if [ $rc -ne 0 ] && [ $dur -lt 10 ]; then
         ui_error "El juego fallo al arrancar (rc=$rc en ${dur}s).
 Últimas lineas del log:
@@ -11852,11 +11872,63 @@ browse_for_path() {
     done
 }
 
+declare -A META_CACHE 2>/dev/null || true
+META_CACHE_OK=0
+
+metas_cargar() {
+    # Lee de UNA vez los datos de todos los perfiles.
+    #
+    # Antes se abria el perfil de cada juego con tres busquedas, y ademas dos
+    # veces: al ordenar la lista y al construirla. Con 37 juegos eran 20
+    # segundos de espera en una Steam Deck; con 141, minutos. Ahora es un solo
+    # proceso para toda la biblioteca.
+    #
+    # El resultado se deja en un fichero temporal y se lee desde ahi: anidar
+    # el python dentro del propio bucle salia vacio sin dar ningun error.
+    META_CACHE=()
+    META_CACHE_OK=0
+    [ -d "$PROFILE_DIR" ] || return 0
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 0
+    local tmp; tmp="$(mktemp)" || return 0
+    "$PY_BIN" - "$PROFILE_DIR" > "$tmp" 2>/dev/null <<'PYMETA'
+import os, sys
+d = sys.argv[1]
+try:
+    ficheros = [f for f in os.listdir(d) if f.endswith('.conf')]
+except OSError:
+    sys.exit(0)
+for f in ficheros:
+    fav, last, secs = '0', '', '0'
+    try:
+        with open(os.path.join(d, f), encoding='utf-8', errors='replace') as fh:
+            for l in fh:
+                if l.startswith('FAVORITO='):       fav  = l.split('=', 1)[1].strip().strip('"')
+                elif l.startswith('LAST_PLAYED='):  last = l.split('=', 1)[1].strip().strip('"')
+                elif l.startswith('PLAY_SECONDS='): secs = l.split('=', 1)[1].strip().strip('"')
+    except OSError:
+        continue
+    print('%s\t%s|%s|%s' % (f[:-5], fav or '0', last, secs or '0'))
+PYMETA
+    local gid resto n=0
+    while IFS=$'\t' read -r gid resto; do
+        [ -n "$gid" ] || continue
+        META_CACHE["$gid"]="$resto"
+        n=$((n+1))
+    done < "$tmp"
+    rm -f "$tmp"
+    [ "$n" -gt 0 ] && META_CACHE_OK=1     # si no se leyo nada, se usa la via de siempre
+    log "Biblioteca: datos de $n perfil(es) leidos de una vez"
+    return 0
+}
+
 game_meta() {
-    # $1 = ruta del juego -> "fav|last_played|play_seconds" leidos de su perfil
-    local gid f fav=0 last="" secs=0
-    gid="$(game_id "$1")"
-    f="$PROFILE_DIR/$gid.conf"
+    # $1 = ruta del juego -> "fav|last_played|play_seconds"
+    local gid; gid="$(game_id "$1")"
+    if [ "${META_CACHE_OK:-0}" = 1 ]; then
+        printf '%s' "${META_CACHE[$gid]:-0||0}"
+        return 0
+    fi
+    local f="$PROFILE_DIR/$gid.conf" fav=0 last="" secs=0
     if [ -f "$f" ]; then
         fav="$(grep -m1 '^FAVORITO=' "$f" | cut -d= -f2 | tr -d '"')"
         last="$(grep -m1 '^LAST_PLAYED=' "$f" | cut -d= -f2- | tr -d '"')"
@@ -11982,10 +12054,26 @@ $mp
 Se han encontrado $cuantos juego(s) empaquetado(s).
 
 Quieres añadirlo como carpeta de juegos?"; then
+        # Se apunta la carpeta donde estan los juegos DE VERDAD, no la raiz
+        # del disco. Guardar la raiz obliga a recorrer la unidad entera cada
+        # vez que se abre la biblioteca, y con un disco lleno eso son minutos.
         local destino="$mp"
-        # si los juegos estan en una subcarpeta, dejar elegirla
         if [ "$cuantos" = 0 ]; then
             destino="$(pick_dir "Carpeta con los juegos dentro del disco" "$mp")" || destino="$mp"
+        else
+            local carpetas
+            carpetas="$(find "$mp" -maxdepth 3 \( -iname '*.wsquashfs' \
+                        -o -iname '*.squashfs' -o -iname '*.dwarfs' \) \
+                        -printf '%h\n' 2>/dev/null | sort -u)"
+            local n_carp; n_carp="$(printf '%s' "$carpetas" | grep -c . || true)"
+            if [ "$n_carp" = 1 ]; then
+                destino="$carpetas"
+            elif [ "$n_carp" -gt 1 ]; then
+                # varias carpetas: se queda el tronco comun, que suele ser la
+                # carpeta de juegos con subcarpetas por sistema o por letra
+                destino="$(printf '%s\n' "$carpetas" | sed 's|/[^/]*$||' | sort -u | head -n1)"
+                [ -d "$destino" ] || destino="$mp"
+            fi
         fi
         destino="$(abs_path "$destino")"
         if games_paths | grep -qxF "$destino"; then
@@ -12317,6 +12405,7 @@ pick_squash_una_vez() {
     local _t0 _t1 _n
     WP_N_RAICES="$(games_paths | grep -c . || echo 1)"
     export WP_N_RAICES
+    metas_cargar        # una sola lectura de todos los perfiles
     _t0="$(date +%s)"
     local _crudo; _crudo="$(lista_juegos)"
     _t1="$(date +%s)"
@@ -13412,7 +13501,13 @@ main_menu() {
             sleep 1
             continue
         fi
-        [ "$mrc" != 0 ] && exit 0
+        if [ "$mrc" != 0 ]; then
+            # B en el menu principal cerraba WProton al momento. Con dos
+            # pulsaciones rapidas (volver de un submenu y una de mas) se
+            # salia sin querer. Ahora se pregunta.
+            ui_ask "¿Salir de WProton?" && exit 0
+            continue
+        fi
 
         main_dispatch "$sel"
     done
@@ -13746,6 +13841,15 @@ _huerf="$(pgrep -f 'mapeador\.py' 2>/dev/null | grep -c . || true)"
 [ "${_huerf:-0}" -gt 0 ] && log "Arranque: $_huerf mapeador(es) huerfano(s); se cierran" WARN
 pkill -f 'mapeador\.py' 2>/dev/null
 unset _huerf
+# Menus huerfanos de una sesion anterior: su ventana a pantalla completa deja
+# el monitor en negro y parece que el equipo se ha colgado.
+_hmenu="$(pgrep -f 'menu_pygame\.py' 2>/dev/null | grep -c . || true)"
+if [ "${_hmenu:-0}" -gt 0 ]; then
+    log "Arranque: $_hmenu proceso(s) de menus huerfano(s); se cierran" WARN
+    pkill -f 'menu_pygame\.py' 2>/dev/null
+    sleep 0.3
+fi
+unset _hmenu
 
 case "${1:-}" in
     --setup)
