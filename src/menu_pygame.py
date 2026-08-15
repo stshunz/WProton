@@ -1354,7 +1354,10 @@ def grid_metrics():
     # 1 fila grande en consolas portatiles). Antes solo se repartia el ancho
     # y en un monitor de sobremesa salian gigantes.
     global GCOLS, GCW, GCH, GIMG_W, GIMG_H
-    avail_w = (LIST_W if PANEL_UI else (W - 40))
+    # Se reserva un margen a la derecha para el indicador de desplazamiento.
+    # Sin el, las caratulas anchas de la ultima columna se metian debajo de la
+    # barra y parecia que se salian de la pantalla.
+    avail_w = (LIST_W if PANEL_UI else (W - 40)) - 18
     avail_h = max(120, LIST_H - 16)
     forced = 0
     try:
@@ -1428,6 +1431,12 @@ def row_segments(label, base_color):
     k, _, v = label.partition(':')
     # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
     if ' - ' in k or len(k) > 36:
+        return [(label, base_color)]
+    # Unos dos puntos DENTRO de un parentesis no separan etiqueta y valor:
+    # son parte del texto, como la proporcion "(2:3)". Sin esto, "Solo
+    # verticales (2:3)" se pintaba como si "Solo verticales (2" fuera la
+    # etiqueta, y los numeros salian de otro color.
+    if k.count('(') > k.count(')'):
         return [(label, base_color)]
     segs = [(k + ':', TH.get('acc2', ACC))]
     v = v.strip()
