@@ -77,6 +77,7 @@ GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escri
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
 DIAG_MANDO=0                             # 1 = registro detallado del mando
+DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 PAD_EXIT=1                               # cerrar el juego con el mando
 PAD_EXIT_COMBO=select                    # select | l3r3 | start
 PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacion
@@ -177,6 +178,8 @@ OCULTAR_CURSOR="$OCULTAR_CURSOR"
 #   normal alarga el registro sin aportar nada.
 # --------------------------------------------------------------------------
 DIAG_MANDO="$DIAG_MANDO"
+# Vigilar que queda en pantalla tras cerrar (para depurar): 0 = no, 1 = si
+DIAG_CIERRE="$DIAG_CIERRE"
 PAD_EXIT="$PAD_EXIT"
 PAD_EXIT_COMBO="$PAD_EXIT_COMBO"
 PAD_EXIT_SEGUNDOS="$PAD_EXIT_SEGUNDOS"
@@ -1326,11 +1329,29 @@ pad_bridge_start() {
 }
 
 pad_bridge_stop() {
-    [ -n "$PAD_BRIDGE_PID" ] && kill "$PAD_BRIDGE_PID" 2>/dev/null
+    # Tercer sitio con el mismo fallo: el puente se lanza con "lanzar_suelto",
+    # que usa setsid, y setsid muere en cuanto arranca al python. El
+    # identificador guardado apunta a algo que ya no existe, asi que el kill
+    # no alcanzaba al puente de verdad.
+    #
+    # Se busca por NOMBRE (no por ruta, que puede venir de otra copia) y se
+    # COMPRUEBA. Mientras siga vivo, Steam da el juego por abierto.
+    [ -n "$PAD_BRIDGE_PID" ] && {
+        kill "$PAD_BRIDGE_PID" 2>/dev/null
+        kill -- "-$PAD_BRIDGE_PID" 2>/dev/null      # y su grupo
+    }
     PAD_BRIDGE_PID=""
     # zombis de sesiones anteriores (script matado sin pasar por el trap):
     # seguian traduciendo mando->teclado y provocaban MOVIMIENTOS DOBLES
-    pkill -f "$PAD_BRIDGE_PY" 2>/dev/null
+    pkill -f 'pad_bridge\.py' 2>/dev/null
+    local i
+    for i in 1 2 3; do
+        proceso_vivo 'pad_bridge\.py' || { return 0; }
+        sleep 0.2
+        pkill -9 -f 'pad_bridge\.py' 2>/dev/null
+    done
+    proceso_vivo 'pad_bridge\.py' \
+        && log "El puente del mando no se ha cerrado" WARN
     return 0
 }
 
@@ -1564,6 +1585,46 @@ steam_poner_imagenes() {
     return 0
 }
 
+steam_arte_juego() {
+    # Pone en Steam las caratulas que ya tenemos del juego.
+    # $1 = carpeta userdata/<id>/config, $2 = appid, $3 = gid del juego
+    #
+    # Steam espera cada formato con un nombre concreto:
+    #   <appid>p.png      vertical  (la de la biblioteca)
+    #   <appid>.png       apaisada  (la de la cabecera)
+    #   <appid>_hero.png  fondo grande
+    #
+    # Se aprovecha lo que ya hay: la vertical de covers/ y la panoramica de
+    # covers_wide/. Si falta alguna, simplemente no se pone esa.
+    local cfg="$1" appid="$2" gid="$3" grid puestas=0 f
+    [ -n "$appid" ] && [ -n "$gid" ] || return 1
+    grid="$cfg/grid"
+    mkdir -p "$grid" 2>/dev/null || return 1
+
+    f="$(cover_tipo_real "$gid" vertical 2>/dev/null)" || f=""
+    [ -n "$f" ] && cp -f "$f" "$grid/${appid}p.png" 2>/dev/null && puestas=$((puestas+1))
+
+    f="$(cover_tipo_real "$gid" wide 2>/dev/null)" || f=""
+    if [ -n "$f" ]; then
+        cp -f "$f" "$grid/${appid}.png" 2>/dev/null && puestas=$((puestas+1))
+        # la panoramica sirve tambien de fondo: mejor eso que un hueco gris
+        cp -f "$f" "$grid/${appid}_hero.png" 2>/dev/null
+    fi
+    # si no hay panoramica pero si la 4:3, se usa esa como apaisada
+    if [ -z "$f" ]; then
+        f="$(cover_tipo_real "$gid" 43 2>/dev/null)" || f=""
+        [ -n "$f" ] && cp -f "$f" "$grid/${appid}.png" 2>/dev/null \
+                    && puestas=$((puestas+1))
+    fi
+
+    if [ "$puestas" -gt 0 ]; then
+        say "[+] $puestas carátula(s) puestas en Steam para $gid"
+    else
+        log "Sin carátulas para $gid: Steam mostrara un cuadro con el nombre"
+    fi
+    return 0
+}
+
 anadir_wproton_a_steam() {
     # Añade el propio WProton a Steam como juego no-Steam, con sus imagenes.
     # Asi se puede entrar en la biblioteca desde el modo Juego sin salir al
@@ -1646,6 +1707,11 @@ sus accesos directos al salir y se perdería el cambio.
     [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
     if "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "$name" "$SELF" "$(dirname "$SELF")" \
         "\"$(readlink -f "$game")\"" "$icon" >> "$LOG_FILE" 2>&1; then
+        # las caratulas que ya tenemos, a la biblioteca de Steam
+        local _appid _gid
+        _appid="$(grep -o 'appid=[0-9]*' "$LOG_FILE" | tail -n1 | cut -d= -f2)"
+        _gid="$(game_id "$game")"
+        [ -n "$_appid" ] && steam_arte_juego "$(dirname "$vdf")" "$_appid" "$_gid"
         [ "$reabrir" = 1 ] && steam_abrir
         ui_info "'$name' añadido a Steam como juego no-Steam.
 
@@ -2428,11 +2494,11 @@ mapeador_stop() {
     pkill -f 'mapeador\.py' 2>/dev/null
     local i
     for i in 1 2 3; do
-        pgrep -f 'mapeador\.py' >/dev/null 2>&1 || { log "Mapeador detenido"; return 0; }
+        proceso_vivo 'mapeador\.py' || { log "Mapeador detenido"; return 0; }
         sleep 0.3
         pkill -9 -f 'mapeador\.py' 2>/dev/null
     done
-    pgrep -f 'mapeador\.py' >/dev/null 2>&1 \
+    proceso_vivo 'mapeador\.py' \
         && log "AVISO: el mapeador sigue vivo; seguira mandando teclas" WARN \
         || log "Mapeador detenido"
     return 0
@@ -2484,9 +2550,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 5c67ea9e1b2f" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 18ee7c87d83a" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 5c67ea9e1b2f
+# WPROTON_HELPER menu_pygame.py 18ee7c87d83a
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -3843,7 +3909,10 @@ def grid_metrics():
     # 1 fila grande en consolas portatiles). Antes solo se repartia el ancho
     # y en un monitor de sobremesa salian gigantes.
     global GCOLS, GCW, GCH, GIMG_W, GIMG_H
-    avail_w = (LIST_W if PANEL_UI else (W - 40))
+    # Se reserva un margen a la derecha para el indicador de desplazamiento.
+    # Sin el, las caratulas anchas de la ultima columna se metian debajo de la
+    # barra y parecia que se salian de la pantalla.
+    avail_w = (LIST_W if PANEL_UI else (W - 40)) - 18
     avail_h = max(120, LIST_H - 16)
     forced = 0
     try:
@@ -3917,6 +3986,12 @@ def row_segments(label, base_color):
     k, _, v = label.partition(':')
     # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
     if ' - ' in k or len(k) > 36:
+        return [(label, base_color)]
+    # Unos dos puntos DENTRO de un parentesis no separan etiqueta y valor:
+    # son parte del texto, como la proporcion "(2:3)". Sin esto, "Solo
+    # verticales (2:3)" se pintaba como si "Solo verticales (2" fuera la
+    # etiqueta, y los numeros salian de otro color.
+    if k.count('(') > k.count(')'):
         return [(label, base_color)]
     segs = [(k + ':', TH.get('acc2', ACC))]
     v = v.strip()
@@ -6506,7 +6581,91 @@ cleanup_mount() {
     MOUNT_OK=0
 }
 
+WP_SALIENDO=0     # 1 = WProton se esta cerrando: no arrancar nada mas
+WP_HAY_MENU=0     # 1 = hay un menu detras al que volver tras jugar
+
+vigilante_cierre() {
+    # Deja un observador que sigue mirando DESPUES de que WProton se cierre.
+    #
+    # Hace falta porque el problema aparece justo cuando ya no hay nadie para
+    # verlo: no da tiempo a abrir una terminal. Este observador anota, durante
+    # 15 segundos, que procesos nuestros hay y que ventanas hay en pantalla.
+    #
+    # Es una herramienta de diagnostico: apagada por defecto (DIAG_CIERRE=1
+    # en settings.conf para encenderla).
+    if [ "${DIAG_CIERRE:-0}" != 1 ]; then
+        # Que quede dicho: asi se distingue "no esta activado" de "esta
+        # activado pero fallo", que desde fuera se parecen mucho.
+        log "Observador del cierre: apagado (DIAG_CIERRE=1 en settings.conf para verlo)"
+        return 0
+    fi
+    local f="$LOG_DIR/cierre_$(date '+%Y%m%d_%H%M%S').log"
+    mkdir -p "$LOG_DIR" 2>/dev/null
+    {
+        printf 'Observador del cierre — WProton %s\n' "$WPROTON_VERSION"
+        printf 'Empieza: %s\n\n' "$(date '+%H:%M:%S')"
+    } > "$f"
+    # Se escribe en un FICHERO y se ejecuta desde ahi.
+    #
+    # Si el observador se lanzara con "sh -c '...'", su linea de ordenes
+    # contendria el texto "menu_pygame.py" (va en el patron de busqueda), y
+    # nuestra propia barrida final, que hace pkill de ese nombre, lo mataba a
+    # el. Ejecutandolo desde un fichero, su linea de ordenes es solo la ruta.
+    local obs="$RUNTIME_DIR/.observador_cierre.sh"
+    cat > "$obs" <<'OBSEOF'
+#!/bin/sh
+f="$1"; i=0
+pat="menu_pyg""ame.py|mapea""dor.py|pad_bri""dge.py|wineserver|winedevice|services.exe|umu-run|explorer.exe|pressure-vessel|bwrap|reaper"
+while [ "$i" -lt 30 ]; do
+    i=$((i+1))
+    printf "\n=== %s (segundo %s) ===\n" "$(date '+%H:%M:%S')" "$i" >> "$f"
+    printf -- "-- procesos nuestros --\n" >> "$f"
+    if pgrep -af "$pat" > "$f.tmp" 2>/dev/null && [ -s "$f.tmp" ]; then
+        cat "$f.tmp" >> "$f"
+    else
+        printf "   (ninguno)\n" >> "$f"
+    fi
+    rm -f "$f.tmp"
+    printf -- "-- ventanas en pantalla --\n" >> "$f"
+    if command -v wmctrl >/dev/null 2>&1; then
+        wmctrl -l >> "$f" 2>/dev/null || printf "   (sin respuesta)\n" >> "$f"
+    elif command -v xdotool >/dev/null 2>&1; then
+        xdotool search --name . getwindowname %@ >> "$f" 2>/dev/null
+    else
+        printf "   (instala wmctrl o xdotool para ver las ventanas)\n" >> "$f"
+    fi
+    sleep 0.5
+done
+printf "\nFin del seguimiento.\n" >> "$f"
+OBSEOF
+    chmod +x "$obs" 2>/dev/null
+    setsid /bin/sh "$obs" "$f" < /dev/null > /dev/null 2>&1 &
+    log "Observador del cierre activo -> $f"
+    return 0
+}
+
+proceso_vivo() {
+    # ¿Queda algun proceso cuyo nombre case con $1?
+    #
+    # OJO: hay que descartar las propias ordenes pgrep/pkill. Su linea de
+    # ordenes CONTIENE el texto buscado, asi que si una se esta ejecutando
+    # justo en ese momento, nos encontramos a nosotros mismos y creemos que
+    # el proceso sigue vivo. De ahi los avisos de "SIGUEN VIVOS" que salian
+    # justo despues de un "detenido".
+    pgrep -af "$1" 2>/dev/null | grep -qvE '^[0-9]+ +(pkill|pgrep|/usr/bin/pkill|/usr/bin/pgrep)\b'
+}
+
 cleanup_all() {
+    vigilante_cierre        # antes de parar nada, para verlo todo
+    # A partir de aqui no se arranca ningun proceso grafico mas.
+    #
+    # Un proceso lanzado con setsid tarda cerca de un segundo en existir de
+    # verdad: primero esta setsid y luego se convierte en el programa. Si en
+    # esa ventana comprobabamos "no queda nada vivo", era cierto... y un
+    # segundo despues aparecia su ventana, ya sin nadie que la cerrara. De ahi
+    # que el fondo saliera SEGUNDOS DESPUES de cerrar el juego.
+    WP_SALIENDO=1
+    export WP_SALIENDO
     # Se ejecuta SIEMPRE al salir (tambien al cancelar con B, que sale por la
     # trampa y no por el menu "Salir"). Si no se para el servidor de menus,
     # su proceso sigue vivo con la ventana en pantalla y parece que WProton
@@ -6548,15 +6707,63 @@ cleanup_all() {
     # venir de otra copia de WProton.
     local _i
     for _i in 1 2 3; do
-        pgrep -f 'menu_pygame\.py' >/dev/null 2>&1 || break
+        proceso_vivo 'menu_pygame\.py' || break
         pkill -f 'menu_pygame\.py' 2>/dev/null
         sleep 0.3
     done
-    pgrep -f 'menu_pygame\.py' >/dev/null 2>&1 && {
+    proceso_vivo 'menu_pygame\.py' && {
         pkill -9 -f 'menu_pygame\.py' 2>/dev/null
         log "Cierre: habia menus vivos; se han cerrado a la fuerza" WARN
     }
+    # Steam da el juego por abierto mientras siga vivo CUALQUIER proceso de
+    # los que lanzamos. Si algo sobrevive, aqui queda dicho cual: sin esto
+    # solo se sabe que "algo" quedo, y no por donde mirar.
+    local _vivos="" _p
+    for _p in menu_pygame.py mapeador.py pad_bridge.py \
+              wineserver winedevice services.exe umu-run \
+              pressure-vessel bwrap steam-runtime reaper; do
+        proceso_vivo "$_p" && _vivos="$_vivos $_p"
+    done
+    if [ -n "$_vivos" ]; then
+        log "Cierre: SIGUEN VIVOS:$_vivos (Steam creera que el juego sigue abierto)" WARN
+        for _p in $_vivos; do
+            [ "$_p" = wineserver ] && continue   # el suyo lo gestiona el runner
+            pkill -9 -f "$_p" 2>/dev/null
+        done
+        sleep 0.3
+        _vivos=""
+        for _p in menu_pygame.py mapeador.py pad_bridge.py; do
+            proceso_vivo "$_p" && _vivos="$_vivos $_p"
+        done
+        [ -n "$_vivos" ] && log "Cierre: NO se han podido cerrar:$_vivos" WARN \
+                         || log "Cierre: todo cerrado tras insistir"
+    else
+        log "Cierre: no queda nada vivo (ni nuestro ni de Wine)"
+    fi
+    # BARRIDA FINAL. Comprobar una sola vez no basta: un proceso lanzado justo
+    # antes puede tardar en existir y aparecer despues, cuando ya no queda
+    # nadie para cerrarlo. Se mira durante unos segundos mas.
+    local _t
+    for _t in 1 2 3 4 5 6; do
+        sleep 0.5
+        proceso_vivo 'menu_pygame\.py' || continue
+        log "Cierre: ha aparecido un proceso de menus tardio; se cierra" WARN
+        pkill -f 'menu_pygame\.py' 2>/dev/null
+        sleep 0.3
+        pkill -9 -f 'menu_pygame\.py' 2>/dev/null
+    done
+    proceso_vivo 'menu_pygame\.py' \
+        && log "Cierre: AUN queda un proceso de menus" WARN
     log "Cierre: completado"
+    # SOLTAR LOS CANALES DE SALIDA QUE NOS DIO STEAM.
+    #
+    # Steam no espera solo a que mueran los procesos: espera a que se cierre
+    # la tuberia por la que le hablamos. Si algo la mantiene abierta -aunque
+    # ya no escriba nada-, Steam sigue dando el juego por abierto.
+    #
+    # Todo lo nuestro escribe en el registro, no en esa tuberia, asi que
+    # soltarla aqui no pierde ningun mensaje.
+    exec 1>/dev/null 2>/dev/null
 }
 trap cleanup_all EXIT INT TERM
 
@@ -7545,12 +7752,49 @@ $(tail -n 8 "$LOG_FILE")"
     # si no, el overlay sigue "ocupado" y tmp_mount no queda vacio
     if [ "$RUNNER_KIND" = "wine" ]; then
         local wsrv; wsrv="$(dirname "$(runner_wine_bin "$rdir")")/wineserver"
-        [ -x "$wsrv" ] && "$wsrv" -w 2>/dev/null
+        # -k CIERRA los procesos del prefijo; -w solo ESPERA a que se vayan
+        # por su cuenta. Con "-w" a secas, Wine podia dejar procesos vivos
+        # (wineserver, services.exe...) y, al ser descendientes de Steam,
+        # Steam daba el juego por abierto indefinidamente.
+        if [ -x "$wsrv" ]; then
+            log "Wine: cerrando los procesos del prefijo"
+            "$wsrv" -k 2>/dev/null
+            "$wsrv" -w 2>/dev/null
+            if proceso_vivo 'wineserver'; then
+                log "Wine: AUN queda algun wineserver vivo" WARN
+            else
+                log "Wine: no queda ningun proceso del prefijo"
+            fi
+        else
+            log "Wine: no se encontro wineserver en el runner ($rdir)" WARN
+        fi
     elif [ "$RUNNER_KIND" = "proton" ]; then
-        local psrv
-        for psrv in "$rdir/files/bin/wineserver" "$rdir/dist/bin/wineserver"; do
-            [ -x "$psrv" ] && { "$psrv" -w 2>/dev/null; break; }
+        # Los runners Proton guardan el wineserver en otra carpeta, y ademas
+        # cada version lo pone en un sitio distinto. Se prueban todas las
+        # conocidas y, si no aparece en ninguna, se busca dentro del runner.
+        local psrv hallado=""
+        for psrv in "$rdir/files/bin/wineserver" "$rdir/dist/bin/wineserver" \
+                    "$rdir/files/lib/wine/x86_64-unix/wineserver" \
+                    "$rdir/dist/lib/wine/x86_64-unix/wineserver" \
+                    "$rdir/bin/wineserver"; do
+            [ -x "$psrv" ] && { hallado="$psrv"; break; }
         done
+        [ -z "$hallado" ] && hallado="$(find "$rdir" -maxdepth 5 -name wineserver \
+                                        -type f -perm -u+x 2>/dev/null | head -n1)"
+        if [ -n "$hallado" ]; then
+            log "Wine: cerrando los procesos del prefijo ($(basename "$(dirname "$hallado")"))"
+            "$hallado" -k 2>/dev/null
+            "$hallado" -w 2>/dev/null
+            if proceso_vivo 'wineserver'; then
+                log "Wine: AUN queda algun wineserver vivo" WARN
+            else
+                log "Wine: no queda ningun proceso del prefijo"
+            fi
+        else
+            log "Wine: no se encontro wineserver dentro de $rdir" WARN
+        fi
+    else
+        log "Wine: runner de tipo '${RUNNER_KIND:-?}': no se toca ningun wineserver"
     fi
     say "El juego termino (rc=$rc). Saves conservados en wsquashfs/overlays/$gid/upper/"
     cleanup_mount
@@ -9213,7 +9457,7 @@ install_exe_silent_wine() {
         wsrv="$(dirname "$(runner_wine_bin "$rdir")" 2>/dev/null)/wineserver"
         [ -x "$wsrv" ] && "$wsrv" -w 2>/dev/null
         for i in 1 2 3; do
-            pgrep -f 'wineserver' >/dev/null 2>&1 || break
+            proceso_vivo 'wineserver' || break
             sleep 1
         done
         [ -n "$(find "$dest" -type f -iname '*.exe' 2>/dev/null | head -n1)" ] && break
@@ -9915,6 +10159,167 @@ menusrv_pid()     { cat "$(menusrv_pidfile)" 2>/dev/null; }
 
 GUARDIA_PID=""
 
+# Botones del mando, en el orden en que se ven en la pantalla del editor.
+# El nombre corto es el que entiende el mapeador; el largo, el que lee la
+# gente.
+KEYS_BOTONES="a|A (abajo)
+b|B (derecha)
+x|X (arriba)
+y|Y (izquierda)
+up|Cruceta arriba
+down|Cruceta abajo
+left|Cruceta izquierda
+right|Cruceta derecha
+pageup|L1
+pagedown|R1
+l2|L2 (gatillo izquierdo)
+r2|R2 (gatillo derecho)
+l3|L3 (stick izquierdo pulsado)
+r3|R3 (stick derecho pulsado)
+start|Start
+select|Select
+joystick1up|Stick izquierdo arriba
+joystick1down|Stick izquierdo abajo
+joystick1left|Stick izquierdo izquierda
+joystick1right|Stick izquierdo derecha"
+
+keys_tecla_elegir() {
+    # Devuelve el nombre de tecla (KEY_...) que elija el usuario.
+    # $1 = boton que se esta configurando (solo para el titulo)
+    local sel letra
+    sel="$(menu "¿Qué tecla pulsa \"$1\"?" \
+        "Escribir una letra o número" \
+        "Flechas del teclado" \
+        "Enter" "Espacio" "Escape" "Tabulador" "Retroceso" \
+        "Shift" "Control" "Alt" \
+        "Teclas F (F1 a F12)" \
+        "-- quitar esta asignación --" \
+        "<< Volver")" || return 1
+    case "$sel" in
+        "Escribir una letra"*)
+            letra="$(ask_text "Escribe UNA letra o número para \"$1\"" "")" || return 1
+            letra="$(printf '%s' "$letra" | tr -d '[:space:]' | cut -c1)"
+            [ -n "$letra" ] || return 1
+            printf 'KEY_%s' "$(printf '%s' "$letra" | tr 'a-z' 'A-Z')" ;;
+        "Flechas"*)
+            sel="$(menu "¿Qué flecha?" "Arriba" "Abajo" "Izquierda" "Derecha" "<< Volver")" || return 1
+            case "$sel" in
+                Arriba)    printf 'KEY_UP' ;;
+                Abajo)     printf 'KEY_DOWN' ;;
+                Izquierda) printf 'KEY_LEFT' ;;
+                Derecha)   printf 'KEY_RIGHT' ;;
+                *) return 1 ;;
+            esac ;;
+        "Teclas F"*)
+            sel="$(menu "¿Qué tecla F?" F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 "<< Volver")" || return 1
+            case "$sel" in F*) printf 'KEY_%s' "$sel" ;; *) return 1 ;; esac ;;
+        Enter)      printf 'KEY_ENTER' ;;
+        Espacio)    printf 'KEY_SPACE' ;;
+        Escape)     printf 'KEY_ESC' ;;
+        Tabulador)  printf 'KEY_TAB' ;;
+        Retroceso)  printf 'KEY_BACKSPACE' ;;
+        Shift)      printf 'KEY_LEFTSHIFT' ;;
+        Control)    printf 'KEY_LEFTCTRL' ;;
+        Alt)        printf 'KEY_LEFTALT' ;;
+        "-- quitar"*) printf '__QUITAR__' ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
+
+keys_editor() {
+    # Crear o retocar el .keys de un juego, boton a boton.
+    #
+    # Antes habia que coger el .keys de otro juego y editarlo a mano con un
+    # editor de texto. Aqui salen todos los botones del mando en una lista y
+    # se le asigna una tecla a cada uno.
+    #
+    # La combinacion Select+Start para cerrar el juego va SIEMPRE, sin tocar:
+    # es la salida de emergencia y conviene que este en todos los juegos.
+    # OJO: "destino" en una linea aparte. En el mismo "local", $gid todavia
+    # no vale nada y el fichero saldria con el nombre equivocado.
+    local gid="$1" destino
+    destino="$PROFILE_DIR/$gid.keys"
+    local tmp; tmp="$(mktemp)" || return 1
+
+    # partir de lo que ya haya, si lo hay
+    if [ -f "$destino" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
+        "$PY_BIN" - "$destino" > "$tmp" 2>/dev/null <<'PYLEER'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    sys.exit(0)
+for a in d.get('actions_player1', []):
+    t, g = a.get('trigger'), a.get('target')
+    if isinstance(t, str) and isinstance(g, str):
+        print('%s|%s' % (t, g))
+PYLEER
+        [ -s "$tmp" ] && say "[keys] Partiendo del fichero que ya tenia $gid"
+    fi
+
+    local sel nom largo actual tecla n
+    while :; do
+        # construir la lista con la asignacion actual de cada boton
+        local opciones=""
+        while IFS='|' read -r nom largo; do
+            [ -n "$nom" ] || continue
+            actual="$(grep -m1 "^$nom|" "$tmp" 2>/dev/null | cut -d'|' -f2)"
+            opciones="$opciones$largo: ${actual:-—}
+"
+        done <<EOFKB
+$KEYS_BOTONES
+EOFKB
+        n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
+        # shellcheck disable=SC2046
+        sel="$(IFS=$'\n'; set -f; menu "Teclas de $gid  ($n asignadas)" \
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp"; return 1; }
+
+        case "$sel" in
+            "<< Salir sin guardar") rm -f "$tmp"; return 1 ;;
+            "== GUARDAR ==") break ;;
+        esac
+        # de la etiqueta larga al nombre corto
+        largo="${sel%%:*}"
+        nom="$(printf '%s' "$KEYS_BOTONES" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
+        [ -n "$nom" ] || continue
+        tecla="$(keys_tecla_elegir "$largo")" || continue
+        grep -v "^$nom|" "$tmp" > "$tmp.n" 2>/dev/null; mv -f "$tmp.n" "$tmp"
+        [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
+    done
+
+    if [ ! -s "$tmp" ]; then
+        ui_error "No has asignado ninguna tecla."
+        rm -f "$tmp"; return 1
+    fi
+    # escribir el .keys en el formato que entiende el mapeador
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    "$PY_BIN" - "$tmp" "$destino" <<'PYESC'
+import json, sys
+acciones = [{"trigger": ["hotkey", "start"], "type": "key", "target": ["KEY_LEFTALT", "KEY_F4"]}]
+for linea in open(sys.argv[1], encoding='utf-8'):
+    linea = linea.strip()
+    if not linea or '|' not in linea:
+        continue
+    disparo, tecla = linea.split('|', 1)
+    acciones.append({"trigger": disparo, "type": "key", "target": tecla})
+json.dump({"actions_player1": acciones}, open(sys.argv[2], 'w', encoding='utf-8'),
+          ensure_ascii=False, indent=2)
+PYESC
+    rm -f "$tmp"
+    if [ -s "$destino" ]; then
+        KEYS_FILE="$(basename "$destino")"
+        write_full_profile "$gid"
+        ui_info "Teclas guardadas para $gid.
+
+Se activan solas al lanzar el juego.
+Select + Start cierra el juego (Alt+F4)."
+        return 0
+    fi
+    ui_error "No se pudo guardar el fichero de teclas."
+    return 1
+}
+
 keys_ejemplo_crear() {
     # Deja un .keys de ejemplo con las combinaciones utiles, para quien quiera
     # usarlas. NO se aplica solo: para que funcione hay que ponerlo junto a un
@@ -9992,8 +10397,29 @@ guardia_salida_start() {
 }
 
 guardia_salida_stop() {
-    [ -n "${GUARDIA_PID:-}" ] && kill "$GUARDIA_PID" 2>/dev/null
+    # OJO con el identificador: el vigilante se lanza con "lanzar_suelto",
+    # que usa setsid, y setsid muere en cuanto arranca al python. Asi que
+    # GUARDIA_PID apunta a un proceso que ya no existe y el kill no alcanzaba
+    # al vigilante de verdad. Es el MISMO fallo que tuvimos con el mapeador.
+    #
+    # Como el vigilante es el mismo programa que los menus, al sobrevivir
+    # aparecia luego como "menus vivos" y dejaba su ventana en pantalla: el
+    # fondo de WProton seguia viendose tras cerrar, y Steam daba el juego por
+    # abierto. Por eso se busca tambien por su modo, que es unico.
+    [ -n "${GUARDIA_PID:-}" ] && {
+        kill "$GUARDIA_PID" 2>/dev/null
+        kill -- "-$GUARDIA_PID" 2>/dev/null      # y su grupo
+    }
     GUARDIA_PID=""
+    pkill -f 'menu_pygame\.py guardia' 2>/dev/null
+    local i
+    for i in 1 2 3; do
+        proceso_vivo 'menu_pygame\.py guardia' || break
+        sleep 0.2
+        pkill -9 -f 'menu_pygame\.py guardia' 2>/dev/null
+    done
+    proceso_vivo 'menu_pygame\.py guardia' \
+        && log "El vigilante del mando no se ha cerrado" WARN
     rm -f "$RUNTIME_DIR/.salir_juego" 2>/dev/null
     return 0
 }
@@ -10015,6 +10441,7 @@ menu_server_reiniciar() {
 }
 
 menu_server_start() {
+    [ "${WP_SALIENDO:-0}" = 1 ] && return 1   # cerrando: no arrancar
     # Arranca el proceso de menus persistente: UNA ventana para toda la
     # sesion. Sin esto, cada menu abria y cerraba la suya (parpadeo entre
     # menus, y en el modo Juego el compositor se quedaba sin ventana a la
@@ -10149,6 +10576,7 @@ menu_server_request() {
 }
 
 canvas_start() {
+    [ "${WP_SALIENDO:-0}" = 1 ] && return 1   # cerrando: no arrancar
     # El servidor de menus ya mantiene una ventana viva y ademas dibuja su
     # propio reposo: un fondo aparte seria una SEGUNDA ventana peleandose por
     # el foco (y recreandose sin parar). Con servidor, aqui no hay nada que hacer.
@@ -10197,6 +10625,18 @@ canvas_stop() {
             sleep 0.2
         done
         kill "$CANVAS_PID" 2>/dev/null
+        # Y COMPROBARLO. Antes se mandaba la orden y se daba por hecho: el
+        # fondo es el mismo programa que los menus, asi que si sobrevivia
+        # aparecia despues como "menus vivos" y habia que matarlo a la
+        # fuerza. Con Steam eso deja el juego marcado como abierto, porque da
+        # el juego por vivo mientras quede algun proceso nuestro.
+        for i in 1 2 3; do
+            kill -0 "$CANVAS_PID" 2>/dev/null || break
+            sleep 0.2
+            kill -9 "$CANVAS_PID" 2>/dev/null
+        done
+        kill -0 "$CANVAS_PID" 2>/dev/null \
+            && log "El fondo no se ha cerrado (pid $CANVAS_PID)" WARN
     fi
     [ -n "$CANVAS_FILE" ] && rm -f "$CANVAS_FILE"
     CANVAS_PID=""; CANVAS_FILE=""
@@ -10316,8 +10756,19 @@ Puede que se haya quedado algún proceso suyo colgado.
         sleep 0.3
     fi
 
-    # ahora que la pantalla esta estable, la ventana puede volver
     CANVAS_PID=""
+    # Si NO hay menu al que volver, no se abre ninguna ventana.
+    #
+    # Lanzado desde Steam o desde la linea de ordenes, WProton juega y se
+    # cierra: no hay menu detras. Aun asi se arrancaba el servidor de menus
+    # para enseñar "Volviendo al menu...", y esa ventana se quedaba en
+    # pantalla —Steam ademas daba el juego por abierto—. Ahora solo se abre
+    # cuando de verdad se vuelve a un menu.
+    if [ "${WP_HAY_MENU:-0}" != 1 ]; then
+        log "Fin del juego sin menu al que volver: no se abre ninguna ventana"
+        return 0
+    fi
+    # ahora que la pantalla esta estable, la ventana puede volver
     menu_server_start || canvas_start
     menu_server_say "Volviendo al menú..."
     canvas_say "Volviendo al menú..."
@@ -13090,11 +13541,14 @@ Poner el contador a cero?" && {
         "Mapeador .keys"*)
             local kmenu
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
+                "Crear o editar las teclas de este juego" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Nintendo / Batocera' || printf 'Xbox')" \
                 "<< Volver")" || kmenu=""
             case "$kmenu" in
+                "Crear o editar las teclas"*)
+                    keys_editor "$gid" || true ;;
                 "Estilo de botones:"*)
                     # Los .keys hechos en Batocera nombran los botones al
                     # estilo Nintendo: su "A" es el de la derecha y su "B" el
@@ -14079,6 +14533,7 @@ Mas runners: menu principal -> Descargar runners" ;;
         # que es justo lo que hace falta para grabar un video: se arranca la
         # grabacion y se navega mientras corre.
         bootstrap_if_needed
+        WP_HAY_MENU=1
         menu_server_start || canvas_start
         dev_menu
         main_menu ;;
@@ -14087,6 +14542,10 @@ Mas runners: menu principal -> Descargar runners" ;;
         bootstrap_if_needed
         if [ -n "${2:-}" ]; then
             [ -f "$2" ] || die "No existe el fichero: $2"
+            # Desde aqui SI se vuelve a un menu: el de ajustes del juego. Si
+            # se prueba el juego desde dentro, al terminar hay que recuperar
+            # la ventana, o el menu se quedaria sin nada donde dibujarse.
+            WP_HAY_MENU=1
             game_config_menu "$2"
         else
             main_menu
@@ -14112,14 +14571,17 @@ Mas runners: menu principal -> Descargar runners" ;;
     --menu)
         # Salida de emergencia del modo solo-jugar: menu completo siempre
         bootstrap_if_needed
+        WP_HAY_MENU=1
         menu_server_start || canvas_start
         main_menu ;;
     --play|--games)
         bootstrap_if_needed
+        WP_HAY_MENU=1
         menu_server_start || canvas_start
         direct_play_loop ;;
     "")
         bootstrap_if_needed
+        WP_HAY_MENU=1          # este camino si vuelve a un menu
         menu_server_start || canvas_start
         if [ "${DIRECT_PLAY:-0}" = 1 ]; then
             direct_play_loop

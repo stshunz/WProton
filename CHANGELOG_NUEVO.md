@@ -1,7 +1,99 @@
 # Novedades
 
+## v1.20
+
+- **Crear las teclas de un juego desde el propio WProton.** En *Ajustes del
+  juego → Mapeador .keys → Crear o editar las teclas*, salen todos los botones
+  del mando en una lista y a cada uno se le asigna la tecla que quieras, con
+  el mando y sin tocar ningún fichero. Si el juego ya tenía teclas, se parte
+  de ellas. **Select + Start para cerrar el juego se pone siempre**, sin
+  tener que acordarse.
+- **Los juegos añadidos a Steam llevan sus carátulas.** Se aprovechan las que
+  ya tienes: la vertical para la biblioteca y la panorámica para la cabecera y
+  el fondo. Si a un juego solo le falta una, se pone la que haya; antes
+  aparecían todos como un cuadro gris con el nombre.
+- **Corregido: Steam podía seguir dando el juego por abierto.** Al terminar,
+  WProton esperaba a que los procesos de Wine se fueran solos, pero no los
+  cerraba. Ahora se cierran los del prefijo de ese juego, tanto con runners
+  Wine como con Proton —que guardan ese componente en otra carpeta— y queda
+  anotado en el registro.
+- **Los números entre paréntesis ya no salen de otro color** en las opciones de
+  menú (las proporciones tipo «(2:3)» se tomaban por «etiqueta: valor»).
+- **Las carátulas anchas ya no se meten debajo de la barra** del lado derecho.
+- **Corregidos los avisos falsos de "sigue vivo" al cerrar.** WProton se
+  encontraba a sí mismo: la orden que cierra un proceso lleva su nombre
+  escrito, así que al comprobar si quedaba algo se veía esa orden y creía que
+  el proceso seguía en marcha. Por eso aparecían avisos justo después de decir
+  que se había detenido.
+- **Todos los procesos auxiliares se cierran de verdad.** WProton lanza cuatro
+  procesos por detrás (puente del mando, mapeador, vigilante y menús) y los
+  cuatro tenían el mismo defecto: se guardaba el identificador de un proceso
+  intermedio que muere al instante, así que la orden de cierre no alcanzaba al
+  real. Ahora se cierran por nombre y se comprueba el resultado; si alguno se
+  resiste, queda anotado en el registro.
+- **Revisados todos los modos de arranque.** WProton se puede abrir de nueve
+  formas distintas (desde su icono, desde Steam, con un juego concreto, para
+  importar un fichero...) y no todas vuelven a un menú al terminar. Ahora cada
+  una hace lo que corresponde: las que vuelven a un menú lo recuperan, y las
+  que no, se cierran sin dejar nada en pantalla.
+- **El fondo de WProton ya no se queda en pantalla al lanzar un juego desde
+  Steam.** Al terminar la partida se abría el menú para enseñar "Volviendo al
+  menú…", pero lanzado desde Steam no hay menú al que volver: esa ventana se
+  quedaba en pantalla y Steam daba el juego por abierto. Ahora solo se abre
+  cuando de verdad se vuelve a un menú.
+- **El fondo de WProton ya no se queda en pantalla tras cerrar un juego.**
+  Aparecía unos segundos después de salir: un proceso lanzado justo antes del
+  cierre tarda un momento en existir de verdad, así que la comprobación no lo
+  veía y luego ya no quedaba nadie para cerrarlo. Ahora, en cuanto WProton
+  empieza a cerrarse no se arranca nada más, y se vigila unos segundos por si
+  aparece algún rezagado.
+- **Steam ya no cree que el juego sigue abierto** al cerrarlo. El fondo de los
+  menús se cerraba "a la orden" sin comprobar que hubiera obedecido, y si se
+  quedaba vivo, Steam daba el juego por abierto —porque lo considera en marcha
+  mientras quede algún proceso de WProton—. Ahora se comprueba, y si algo
+  sobrevive queda anotado en el registro con su nombre.
+- **WProton ya no se cierra por un fallo recuperable.** Había una veintena de
+  situaciones que cerraban el programa entero: que falte un runner, que se
+  cancele el asistente, que falle una descarga o un empaquetado, que no se
+  pueda abrir un juego. Todas avisan ahora y vuelven al menú, dejando los
+  montajes limpios. Los avisos, además, dicen dónde arreglarlo: por ejemplo,
+  si no hay ningún runner, indican el menú desde el que descargarlo.
+
+## v1.19
+
+- **Corregido: configurar un juego suelto cerraba WProton.** Si el último juego
+  jugado era un `.exe` dentro de una carpeta, al abrir sus ajustes WProton
+  intentaba montarlo como si fuera un archivo empaquetado, daba error y se
+  cerraba. Ahora usa su carpeta directamente, y un fallo al abrir un juego
+  avisa y vuelve al menú en vez de cerrar el programa.
+- **Se comprueba lo que se descarga.** De cada runner o herramienta se calcula
+  su huella y queda anotada. Si un fichero llega corrupto o a medias, se
+  descarta en vez de instalarse. Y en *Runners y herramientas → Comprobar lo
+  descargado* puedes revisar cuando quieras que todo sigue como se descargó.
+- **Las barras de progreso son reales.** Al empaquetar un juego o extraer un
+  comprimido, la barra avanza según lo que va haciendo la herramienta, no
+  yendo y viniendo sin significar nada. En un empaquetado de varios minutos
+  ahora se sabe si queda mucho o poco.
+
 ## v1.18
 
+- **Al salir con B se pregunta antes de cerrar.** Volver de un submenú y una
+  pulsación de más cerraba WProton sin avisar.
+- **Corregido: la pantalla podía quedarse en negro al cerrar.** Si algún
+  proceso de los menús sobrevivía, su ventana a pantalla completa seguía
+  ocupando el monitor y parecía que el equipo se había colgado. Ahora se
+  comprueba al cerrar y al arrancar.
+- **Cerrar un juego con el mando ya no se anota como error.** El corte
+  intencionado devuelve un código que WProton interpretaba como fallo del
+  juego.
+- **La carpeta de un disco externo se apunta donde están los juegos**, no en la
+  raíz de la unidad. Guardar la raíz obligaba a recorrer el disco entero cada
+  vez que se abría la biblioteca.
+- **Abrir la biblioteca es mucho más rápido.** WProton abría el perfil de cada
+  juego tres veces para leer sus datos, y encima lo hacía dos veces: al
+  ordenar la lista y al construirla. Ahora se leen todos de una vez. En una
+  Steam Deck con 37 juegos se tardaba una veintena de segundos; con 141, la
+  parte de los datos pasa de más de cuatro segundos a menos de dos décimas.
 - **Los datos de los juegos tienen su propia carpeta.** La ficha (año, estudio,
   géneros, notas) y la duración de HowLongToBeat estaban mezcladas con las
   carátulas; ahora viven en `datos/`. Los ficheros que ya tuvieras se trasladan

@@ -311,6 +311,12 @@ sudo steamos-readonly enable
 
 Después, desconecta y vuelve a conectar el mando.
 
+**Quiero que un juego responda a teclas concretas del teclado.**
+En *Ajustes del juego → Mapeador .keys → Crear o editar las teclas*. Salen
+todos los botones del mando; eliges uno y le asignas su tecla. Se guarda solo
+y se activa al lanzar el juego. La combinación **Select + Start** cierra el
+juego siempre, aunque no la configures.
+
 **Con un `.keys` los botones salen cambiados (disparo en B en vez de en A).**
 Ese fichero se escribió con la convención de Batocera, que nombra los botones
 al estilo Nintendo. En *Ajustes del juego → Mapeador .keys → Estilo de
