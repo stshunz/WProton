@@ -1336,10 +1336,11 @@ pad_bridge_stop() {
     #
     # Se busca por NOMBRE (no por ruta, que puede venir de otra copia) y se
     # COMPRUEBA. Mientras siga vivo, Steam da el juego por abierto.
-    [ -n "$PAD_BRIDGE_PID" ] && {
-        kill "$PAD_BRIDGE_PID" 2>/dev/null
-        kill -- "-$PAD_BRIDGE_PID" 2>/dev/null      # y su grupo
-    }
+    # NUNCA matar el GRUPO por este identificador: apunta al proceso
+    # intermedio que muere al instante, y su numero puede haberlo reutilizado
+    # otro proceso del sistema. Matar "su grupo" podia llevarse por delante la
+    # sesion entera y reiniciar la consola en SteamOS. Basta con el nombre.
+    [ -n "$PAD_BRIDGE_PID" ] && kill "$PAD_BRIDGE_PID" 2>/dev/null
     PAD_BRIDGE_PID=""
     # zombis de sesiones anteriores (script matado sin pasar por el trap):
     # seguian traduciendo mando->teclado y provocaban MOVIMIENTOS DOBLES
@@ -2482,10 +2483,8 @@ mapeador_stop() {
     # muere en cuanto arranca al python: matarlo no servia de nada. El python
     # quedaba vivo con otro identificador, convirtiendo los botones del mando
     # en teclas mientras navegabas por los menus.
-    [ -n "${MAPEADOR_PID:-}" ] && {
-        kill "$MAPEADOR_PID" 2>/dev/null
-        kill -- "-$MAPEADOR_PID" 2>/dev/null   # y su grupo (lo crea setsid)
-    }
+    # Sin matar el grupo: ver el aviso en pad_bridge_stop
+    [ -n "${MAPEADOR_PID:-}" ] && kill "$MAPEADOR_PID" 2>/dev/null
     MAPEADOR_PID=""
     # Se busca por el NOMBRE del script, no por su ruta completa: un mapeador
     # huerfano puede venir de OTRA copia de WProton (otra carpeta, una version
@@ -6615,7 +6614,7 @@ vigilante_cierre() {
     cat > "$obs" <<'OBSEOF'
 #!/bin/sh
 f="$1"; i=0
-pat="menu_pyg""ame.py|mapea""dor.py|pad_bri""dge.py|wineserver|winedevice|services.exe|umu-run|explorer.exe|pressure-vessel|bwrap|reaper"
+pat="menu_pyg""ame.py|mapea""dor.py|pad_bri""dge.py|wineserver|winedevice|services.exe|umu-run|explorer.exe"
 while [ "$i" -lt 30 ]; do
     i=$((i+1))
     printf "\n=== %s (segundo %s) ===\n" "$(date '+%H:%M:%S')" "$i" >> "$f"
@@ -6642,6 +6641,53 @@ OBSEOF
     setsid /bin/sh "$obs" "$f" < /dev/null > /dev/null 2>&1 &
     log "Observador del cierre activo -> $f"
     return 0
+}
+
+descendientes_nuestros() {
+    # Procesos que descienden de NOSOTROS, por la cadena de padres.
+    #
+    # Es la unica forma segura de decidir que se puede cerrar: si desciende de
+    # WProton, lo lanzamos nosotros (o algo que lanzamos). Todo lo demas es
+    # ajeno y no se toca —esa confusion fue la que reiniciaba la consola—.
+    command -v ps >/dev/null 2>&1 || return 0
+    "$PY_BIN" - "$$" 2>/dev/null <<'PYDESC'
+import os, subprocess, sys
+raiz = int(sys.argv[1])
+try:
+    salida = subprocess.run(['ps', '-eo', 'pid=,ppid=,comm='],
+                            capture_output=True, text=True, timeout=10).stdout
+except Exception:
+    sys.exit(0)
+padres, nombres = {}, {}
+for l in salida.splitlines():
+    p = l.split(None, 2)
+    if len(p) < 3:
+        continue
+    try:
+        pid, ppid = int(p[0]), int(p[1])
+    except ValueError:
+        continue
+    padres[pid] = ppid
+    nombres[pid] = p[2].strip()
+yo = os.getpid()
+for pid in padres:
+    if pid in (raiz, yo):
+        continue
+    actual, saltos = pid, 0
+    nom = nombres.get(pid, '')
+    if nom.startswith('['):          # hilo del nucleo, no es un proceso
+        continue
+    if nom in ('sh', 'dash', 'sleep', 'ps', 'awk', 'grep'):
+        # el observador del cierre y sus ayudantes: los lanzamos nosotros
+        # para diagnosticar, y esperarlos seria esperarnos a nosotros mismos
+        continue
+    while actual > 1 and saltos < 40:
+        actual = padres.get(actual, 0)
+        saltos += 1
+        if actual == raiz:
+            print('%d %s' % (pid, nombres.get(pid, '?')))
+            break
+PYDESC
 }
 
 proceso_vivo() {
@@ -6697,6 +6743,13 @@ cleanup_all() {
     mapeador_stop
     log "Cierre: parando el vigilante"
     guardia_salida_stop
+    # Estos dos existian pero el cierre no los llamaba: la barra de progreso
+    # y el aviso de la primera instalacion podian quedarse en marcha. El aviso
+    # ademas usa zenity, que no es ninguno de los procesos que vigilamos por
+    # nombre, asi que se habria quedado sin que nadie lo notara.
+    log "Cierre: parando la barra de progreso y los avisos"
+    progress_stop 2>/dev/null || true
+    install_notice_stop 2>/dev/null || true
     log "Cierre: parando el fondo"
     canvas_stop
     log "Cierre: parando el servidor de menus"
@@ -6718,42 +6771,122 @@ cleanup_all() {
     # Steam da el juego por abierto mientras siga vivo CUALQUIER proceso de
     # los que lanzamos. Si algo sobrevive, aqui queda dicho cual: sin esto
     # solo se sabe que "algo" quedo, y no por donde mirar.
-    local _vivos="" _p
-    for _p in menu_pygame.py mapeador.py pad_bridge.py \
-              wineserver winedevice services.exe umu-run \
-              pressure-vessel bwrap steam-runtime reaper; do
+    # DOS LISTAS SEPARADAS, y esta separacion es importante.
+    #
+    # NUESTROS procesos se pueden cerrar. Los DEMAS (los de Wine y los
+    # envoltorios de Steam) solo se MIRAN, nunca se tocan: son de Steam, y
+    # cerrarlos derriba la sesion entera. En SteamOS eso reinicia la consola.
+    local _mios="menu_pygame.py mapeador.py pad_bridge.py"
+    # OJO con lo que se pone aqui. "pressure-vessel", "bwrap", "steam-runtime"
+    # y "reaper" NO valen: casan con la interfaz de Steam, que esta siempre en
+    # marcha, con el hilo oom_reaper del nucleo, y con el propio proceso de
+    # Steam que nos lanzo y nos espera. Confundirlos con restos nuestros fue
+    # lo que reinicio la consola.
+    local _ajenos="wineserver winedevice services.exe umu-run"
+    local _vivos="" _otros="" _p
+
+    for _p in $_mios; do
         proceso_vivo "$_p" && _vivos="$_vivos $_p"
     done
+    for _p in $_ajenos; do
+        proceso_vivo "$_p" && _otros="$_otros $_p"
+    done
+
     if [ -n "$_vivos" ]; then
-        log "Cierre: SIGUEN VIVOS:$_vivos (Steam creera que el juego sigue abierto)" WARN
+        log "Cierre: siguen vivos procesos nuestros:$_vivos" WARN
         for _p in $_vivos; do
-            [ "$_p" = wineserver ] && continue   # el suyo lo gestiona el runner
-            pkill -9 -f "$_p" 2>/dev/null
+            pkill -9 -f "$_p" 2>/dev/null      # solo lo nuestro
         done
         sleep 0.3
         _vivos=""
-        for _p in menu_pygame.py mapeador.py pad_bridge.py; do
+        for _p in $_mios; do
             proceso_vivo "$_p" && _vivos="$_vivos $_p"
         done
         [ -n "$_vivos" ] && log "Cierre: NO se han podido cerrar:$_vivos" WARN \
-                         || log "Cierre: todo cerrado tras insistir"
+                         || log "Cierre: todo lo nuestro cerrado"
     else
-        log "Cierre: no queda nada vivo (ni nuestro ni de Wine)"
+        log "Cierre: no queda ningun proceso nuestro"
     fi
-    # BARRIDA FINAL. Comprobar una sola vez no basta: un proceso lanzado justo
-    # antes puede tardar en existir y aparecer despues, cuando ya no queda
-    # nadie para cerrarlo. Se mira durante unos segundos mas.
+    # los ajenos solo se anotan, para saber si Steam sigue esperando por algo
+    if [ -n "$_otros" ]; then
+        # OJO al interpretarlo: cuando WProton se lanza desde Steam, esos
+        # procesos son sus PADRES —Steam nos envuelve en ellos y espera a que
+        # terminemos—, asi que es NORMAL que sigan vivos mientras nosotros
+        # seguimos. Se apunta el parentesco para poder distinguirlo de una
+        # fuga de verdad.
+        log "Cierre: activos de Steam/Wine (NO se tocan):$_otros"
+        log "Cierre: nuestro proceso es $$ y nuestro padre es ${PPID:-?}"
+        if command -v ps >/dev/null 2>&1; then
+            log "Cierre: nuestro padre es: $(ps -o comm= -p "${PPID:-1}" 2>/dev/null || echo '?')"
+        fi
+    fi
+    # BARRIDA FINAL, solo de lo nuestro: un proceso lanzado justo antes puede
+    # tardar en existir y aparecer cuando ya no queda nadie para cerrarlo.
+    # Comprobacion corta: como desde que empieza el cierre ya no se arranca
+    # ningun proceso grafico (WP_SALIENDO), no hace falta vigilar segundos.
     local _t
-    for _t in 1 2 3 4 5 6; do
-        sleep 0.5
-        proceso_vivo 'menu_pygame\.py' || continue
-        log "Cierre: ha aparecido un proceso de menus tardio; se cierra" WARN
+    for _t in 1 2; do
+        proceso_vivo 'menu_pygame\.py' || break
+        log "Cierre: queda un proceso de menus; se cierra" WARN
         pkill -f 'menu_pygame\.py' 2>/dev/null
         sleep 0.3
         pkill -9 -f 'menu_pygame\.py' 2>/dev/null
     done
-    proceso_vivo 'menu_pygame\.py' \
-        && log "Cierre: AUN queda un proceso de menus" WARN
+
+    # ¿QUE QUEDA EN NUESTRO PROPIO GRUPO?
+    #
+    # Steam no espera a cualquier proceso: espera a los que comparten grupo
+    # con lo que el lanzo. Un trabajo en segundo plano nuestro que siga vivo
+    # -aunque no tenga ventana ni haga nada- basta para que de el juego por
+    # abierto. Aqui se listan, que es justo lo que no habiamos mirado.
+    if command -v ps >/dev/null 2>&1; then
+        local _grupo _resto
+        _grupo="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+        if [ -n "$_grupo" ]; then
+            # OJO: "ps -g" NO lista por grupo (filtra por sesion). Hay que
+            # recorrer todos los procesos y comparar el grupo a mano.
+            _resto="$(ps -eo pid=,pgid=,comm= 2>/dev/null \
+                      | awk -v g="$_grupo" -v yo=$$ \
+                            '$2 == g && $1 != yo && $3 !~ /^(ps|awk|sh)$/ {print $1" "$3}')"
+            if [ -n "$_resto" ]; then
+                log "Cierre: EN NUESTRO GRUPO ($_grupo) quedan: $(printf '%s' "$_resto" | tr '\n' ' ')" WARN
+            else
+                log "Cierre: en nuestro grupo ($_grupo) no queda nadie mas"
+            fi
+        fi
+    fi
+    # NO se espera a ningun "hijo".
+    #
+    # Se probo a esperar por si quedaban restos del juego, pero el observador
+    # demostro con datos que no queda ninguno: lo que se detectaba eran
+    # procesos permanentes de Steam y un hilo del nucleo. Esa espera solo
+    # retrasaba el cierre hasta 15 segundos, y un cierre lento es justo lo que
+    # hace que Steam siga dando el juego por abierto.
+    # TRABAJOS EN SEGUNDO PLANO DE ESTA MISMA SHELL.
+    #
+    # Es la lista que lleva bash de lo que ha lanzado EL, asi que por
+    # definicion no puede contener nada de Steam ni del sistema: es todo
+    # nuestro. Y es justo lo que hace esperar a quien nos lanzo, porque
+    # comparten grupo con nosotros.
+    #
+    # Antes se cerraban uno a uno por su nombre, y era facil olvidarse de
+    # alguno: aqui no hay forma de olvidarse.
+    local _trabajos
+    _trabajos="$(jobs -p 2>/dev/null | tr '\n' ' ')"
+    if [ -n "${_trabajos// /}" ]; then
+        log "Cierre: quedan trabajos nuestros en segundo plano: $_trabajos"
+        # shellcheck disable=SC2086
+        kill $_trabajos 2>/dev/null
+        sleep 0.3
+        _trabajos="$(jobs -p 2>/dev/null | tr '\n' ' ')"
+        if [ -n "${_trabajos// /}" ]; then
+            # shellcheck disable=SC2086
+            kill -9 $_trabajos 2>/dev/null
+            log "Cierre: hubo que insistir con los trabajos en segundo plano"
+        fi
+    else
+        log "Cierre: sin trabajos nuestros en segundo plano"
+    fi
     log "Cierre: completado"
     # SOLTAR LOS CANALES DE SALIDA QUE NOS DIO STEAM.
     #
@@ -6763,7 +6896,10 @@ cleanup_all() {
     #
     # Todo lo nuestro escribe en el registro, no en esa tuberia, asi que
     # soltarla aqui no pierde ningun mensaje.
-    exec 1>/dev/null 2>/dev/null
+    # Solo cuando NO hay menu detras (venimos de Steam o de la linea de
+    # ordenes). Si WProton sigue con sus menus, cerrar sus canales no aporta
+    # nada y es un riesgo innecesario.
+    [ "${WP_HAY_MENU:-0}" != 1 ] && exec 1>/dev/null 2>/dev/null
 }
 trap cleanup_all EXIT INT TERM
 
@@ -10406,10 +10542,8 @@ guardia_salida_stop() {
     # aparecia luego como "menus vivos" y dejaba su ventana en pantalla: el
     # fondo de WProton seguia viendose tras cerrar, y Steam daba el juego por
     # abierto. Por eso se busca tambien por su modo, que es unico.
-    [ -n "${GUARDIA_PID:-}" ] && {
-        kill "$GUARDIA_PID" 2>/dev/null
-        kill -- "-$GUARDIA_PID" 2>/dev/null      # y su grupo
-    }
+    # Sin matar el grupo: ver el aviso en pad_bridge_stop
+    [ -n "${GUARDIA_PID:-}" ] && kill "$GUARDIA_PID" 2>/dev/null
     GUARDIA_PID=""
     pkill -f 'menu_pygame\.py guardia' 2>/dev/null
     local i
@@ -14525,7 +14659,8 @@ case "${1:-}" in
 
 Ya puedes lanzar juegos, o abrir WProton sin parametros para
 entrar en los menus.
-Mas runners: menu principal -> Descargar runners" ;;
+Mas runners: menu principal -> Descargar runners"
+        exit 0 ;;
     --dev)
         # Modo desarrollo (sin documentar). No hay opcion en los menus a
         # proposito: asi no aparece en las capturas de pantalla.
@@ -14536,8 +14671,9 @@ Mas runners: menu principal -> Descargar runners" ;;
         WP_HAY_MENU=1
         menu_server_start || canvas_start
         dev_menu
-        main_menu ;;
-    --kill)   kill_all ;;
+        main_menu
+        exit 0 ;;
+    --kill)   kill_all; exit 0 ;;
     --config)
         bootstrap_if_needed
         if [ -n "${2:-}" ]; then
@@ -14549,7 +14685,8 @@ Mas runners: menu principal -> Descargar runners" ;;
             game_config_menu "$2"
         else
             main_menu
-        fi ;;
+        fi
+        exit 0 ;;
     --version)
         printf 'WProton v%s\n' "$WPROTON_VERSION"; exit 0 ;;
     --update)
@@ -14558,7 +14695,7 @@ Mas runners: menu principal -> Descargar runners" ;;
     --exe)
         [ -z "${2:-}" ] && die "Uso: $0 --exe juego.wsquashfs"
         bootstrap_if_needed
-        launch_game "$2" "manual" ;;
+        launch_game "$2" "manual"; exit 0 ;;
     --import)
         # Forzar el flujo de importacion/empaquetado (probar/comprimir) para
         # exe o carpeta; los comprimidos ya importan solos sin este flag
@@ -14567,18 +14704,19 @@ Mas runners: menu principal -> Descargar runners" ;;
         case "$2" in
             *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD) package_exe "$2" ;;
             *) if [ -d "$2" ]; then package_dir "$2"; else import_input "$2"; fi ;;
-        esac ;;
+        esac
+        exit 0 ;;
     --menu)
         # Salida de emergencia del modo solo-jugar: menu completo siempre
         bootstrap_if_needed
         WP_HAY_MENU=1
         menu_server_start || canvas_start
-        main_menu ;;
+        main_menu; exit 0 ;;
     --play|--games)
         bootstrap_if_needed
         WP_HAY_MENU=1
         menu_server_start || canvas_start
-        direct_play_loop ;;
+        direct_play_loop; exit 0 ;;
     "")
         bootstrap_if_needed
         WP_HAY_MENU=1          # este camino si vuelve a un menu
@@ -14590,6 +14728,32 @@ Mas runners: menu principal -> Descargar runners" ;;
         fi ;;
     *)
         # === LANZAMIENTO CLI (frontends): wsquashfs, zip/7z/rar, exe, carpeta, sh ===
+        #
+        # ARRANQUE IDENTICO AL DEL MODO GRAFICO.
+        #
+        # Antes este camino se saltaba la preparacion de la ventana y salia
+        # por su cuenta, asi que WProton vivia y moria de forma distinta segun
+        # como se le llamara. Siendo el mismo programa, no tiene sentido: se
+        # arranca igual, se juega igual y se cierra igual. Lo unico que cambia
+        # es que aqui no hay menu que enseñar despues.
         bootstrap_if_needed
-        import_input "$1" ;;
+        WP_HAY_MENU=1
+        menu_server_start || canvas_start
+        import_input "$1"
+        # SALIDA EXPLICITA, igual que por los menus.
+        #
+        # Antes este camino se caia por el final del script, asi que bash
+        # devolvia el estado de la ultima orden. Cerrar un juego con la
+        # combinacion del mando da 241 o 255, y quien nos lanzo -Steam- recibia
+        # eso como un error en vez de como un cierre normal.
+        #
+        # Por los menus siempre se salia con "exit 0"; aqui no. Esa era la
+        # diferencia entre los dos caminos.
+        _rc_cli=$?
+        case "$_rc_cli" in
+            0)   log "Salida por linea de ordenes: correcta" ;;
+            241|255) log "Salida por linea de ordenes: el juego se cerro con el mando (rc=$_rc_cli); se informa como correcta" ;;
+            *)   log "Salida por linea de ordenes: rc=$_rc_cli; se informa como correcta para no marcar error" ;;
+        esac
+        exit 0 ;;
 esac
