@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.19"
+WPROTON_VERSION="1.20"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -718,6 +718,21 @@ py_libs_dir() {
 log() { printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"; }
 say() { printf '%s\n' "$1" >&2; log "$1"; }
 die() { say "ERROR: $1"; ui_error "$1"; cleanup_mount; exit 1; }
+
+fallo() {
+    # Como "die", pero SIN cerrar WProton.
+    #
+    # "die" esta pensado para el arranque: si faltan dependencias no hay nada
+    # que hacer. Pero se estaba usando tambien dentro de los menus, y ahi
+    # cerrar el programa entero por un juego que no arranca o un runner que
+    # falta es desproporcionado: se avisa y se vuelve al menu.
+    #
+    # Desmonta igual que "die", para no dejar montajes colgando.
+    say "ERROR: $1"
+    ui_error "$1"
+    cleanup_mount
+    return 1
+}
 
 HAS_ZENITY=0
 command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && HAS_ZENITY=1
@@ -5929,15 +5944,15 @@ setup_umu() {
     say "Descargando umu-launcher (zipapp)..."
     local url tmp="$RUNTIME_DIR/.umu_tmp"
     url="$(gh_latest_asset "Open-Wine-Components/umu-launcher" "zipapp")"
-    [ -z "$url" ] && die "No se pudo obtener la URL de umu-launcher"
+    [ -z "$url" ] && { fallo "No se pudo obtener la URL de umu-launcher"; return 1; }
     rm -rf "$tmp"; mkdir -p "$tmp"
-    dl "$url" "$tmp/umu.pkg" || die "Fallo descargando umu"
+    dl "$url" "$tmp/umu.pkg" || { fallo "Fallo descargando umu"; return 1; }
     case "$url" in
         *.zip) mv "$tmp/umu.pkg" "$tmp/umu.zip"; extract_archive "$tmp/umu.zip" "$tmp" ;;
         *)     mv "$tmp/umu.pkg" "$tmp/umu.tar"; tar -xf "$tmp/umu.tar" -C "$tmp" ;;
     esac
     local found; found="$(find "$tmp" -type f -name 'umu-run' | head -n1)"
-    [ -z "$found" ] && die "umu-run no encontrado en el paquete descargado"
+    [ -z "$found" ] && { fallo "umu-run no encontrado en el paquete descargado"; return 1; }
     rm -rf "$RUNTIME_DIR/umu"; mkdir -p "$RUNTIME_DIR/umu"
     cp "$found" "$UMU_BIN" && chmod +x "$UMU_BIN"
     rm -rf "$tmp"
@@ -6014,7 +6029,7 @@ setup_proton() {
     say "Buscando último GE-Proton x86_64..."
     local url
     url="$(gh_latest_asset "GloriousEggroll/proton-ge-custom" 'GE-Proton.*\.tar\.gz$')"
-    [ -z "$url" ] && die "No se pudo obtener la URL de GE-Proton"
+    [ -z "$url" ] && { fallo "No se pudo obtener la URL de GE-Proton"; return 1; }
     local name; name="$(basename "$url" .tar.gz)"
     if [ -d "$RUNNERS_DIR/$name" ]; then
         if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
@@ -6025,8 +6040,8 @@ setup_proton() {
         return 0
     fi
     local tmp="$RUNNERS_DIR/.dl_tmp"; rm -rf "$tmp"; mkdir -p "$tmp"
-    dl "$url" "$tmp/$(basename "$url")" || die "Fallo descargando GE-Proton"
-    extract_archive "$tmp/$(basename "$url")" "$RUNNERS_DIR" || die "Fallo extrayendo GE-Proton"
+    dl "$url" "$tmp/$(basename "$url")" || { fallo "Fallo descargando GE-Proton"; return 1; }
+    extract_archive "$tmp/$(basename "$url")" "$RUNNERS_DIR" || { fallo "Fallo extrayendo GE-Proton"; return 1; }
     rm -rf "$tmp"
     if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
         say "GE-Proton instalado: $name"
@@ -6415,7 +6430,16 @@ mount_game() {
     rm -rf "$work"; mkdir -p "$upper" "$work" "$MOUNT_RO" "$MOUNT_RW"
 
     loading_say "Montando el juego..."
-    mount_image_ro "$squash" "$MOUNT_RO" || die "no se pudo montar $squash"
+    # No se usa "die": esto puede pasar al elegir un juego desde el menu, y
+    # cerrar WProton entero por ello es desproporcionado.
+    if ! mount_image_ro "$squash" "$MOUNT_RO"; then
+        ui_error "No se pudo abrir el juego:
+
+$squash
+
+El fichero puede estar dañado o incompleto."
+        return 1
+    fi
     # squash_to_uid/gid: los wsquashfs hechos en Batocera llevan los ficheros
     # como root; sin esto, cuando fuse-overlayfs copia uno a la capa superior
     # intenta conservar el propietario y falla con "Operation not permitted"
@@ -6448,7 +6472,16 @@ mount_ro_only() {
     umount_dir "$MOUNT_RO"
     mkdir -p "$MOUNT_RO"
     loading_say "Montando el juego..."
-    mount_image_ro "$squash" "$MOUNT_RO" || die "no se pudo montar $squash"
+    # No se usa "die": esto puede pasar al elegir un juego desde el menu, y
+    # cerrar WProton entero por ello es desproporcionado.
+    if ! mount_image_ro "$squash" "$MOUNT_RO"; then
+        ui_error "No se pudo abrir el juego:
+
+$squash
+
+El fichero puede estar dañado o incompleto."
+        return 1
+    fi
     MOUNT_OK=1
     MOUNT_POINT="$MOUNT_RO"
 }
@@ -6823,7 +6856,20 @@ acquire_game_root() {
     if [ -d "$1" ]; then
         MOUNT_POINT="$1"
         ACQ_MOUNTED=0
-    else
+        return 0
+    fi
+    # Un ejecutable suelto (o cualquier fichero que no sea una imagen) NO se
+    # monta: su raiz es la carpeta donde vive. Antes se intentaba montar y
+    # fallaba con "esto no parece una imagen squashfs", cerrando WProton.
+    case "$(printf '%s' "${1##*/}" | tr 'A-Z' 'a-z')" in
+        *.wsquashfs|*.squashfs|*.dwarfs|*.wtgz) ;;
+        *)
+            MOUNT_POINT="${1%/*}"
+            ACQ_MOUNTED=0
+            log "Raiz del juego: $MOUNT_POINT (es un ejecutable, no hay que montar)"
+            return 0 ;;
+    esac
+    if true; then
         ACQ_MOUNTED=1
         if [ "${3:-rw}" = "ro" ]; then
             mount_ro_only "$1" "$2"
@@ -6885,7 +6931,7 @@ wizard_pick_runner() {
         ui_info "No hay runners en runtime/proton/. Descargando GE-Proton..."
         setup_proton
         runners="$(list_runners)"
-        [ -z "$runners" ] && die "Sigue sin haber runners instalados"
+        [ -z "$runners" ] && { fallo "Sigue sin haber runners instalados"; return 1; }
     fi
     local brow=""
     [ "${HAS_BUNDLED_RUNNER:-0}" = 1 ] && brow="(incluido en el wsquashfs) [wine]"
@@ -7234,7 +7280,7 @@ export_game_env() {
 
 build_runner_cmd() {
     local rdir="$1" kind
-    kind="$(runner_kind "$rdir")" || die "Runner invalido: $rdir"
+    kind="$(runner_kind "$rdir")" || { fallo "Runner invalido: $rdir"; return 1; }
     RUN_CMD=()
     # La superposicion de Steam se cuela por LD_PRELOAD cuando WProton se
     # lanza desde el modo Juego, y en 32 bits ni siquiera carga: llena el
@@ -7267,13 +7313,13 @@ build_runner_cmd() {
     fi
     [ "$GAMEMODE" = 1 ] && command -v gamemoderun >/dev/null 2>&1 && RUN_CMD+=(gamemoderun)
     if [ "$kind" = "proton" ]; then
-        [ -x "$UMU_BIN" ] || die "Falta umu-run (necesario para runners Proton). Ejecuta: $0 --setup"
+        [ -x "$UMU_BIN" ] || { fallo "Falta umu-run (necesario para runners Proton).\n\nInstalalo en: Runners y herramientas -> Actualizar umu-launcher"; return 1; }
         export PROTONPATH="$rdir"
         export GAMEID STORE
         RUN_CMD+=("$PY_BIN" "$UMU_BIN")
     else
         local wbin; wbin="$(runner_wine_bin "$rdir")"
-        [ -n "$wbin" ] || die "No se encontro bin/wine en $rdir"
+        [ -n "$wbin" ] || { fallo "No se encontro bin/wine en $rdir"; return 1; }
         local _wdir; _wdir="$(dirname "$wbin")"
         export PATH="$_wdir:$PATH"
         RUN_CMD+=("$wbin")
@@ -7349,7 +7395,7 @@ Configurar juego -> Comprobar integridad"
     [ -n "$BUNDLED_RUNNER_DIR" ] && say "[+] Este wsquashfs incluye su propio Wine: $(basename "$BUNDLED_RUNNER_DIR")"
 
     if ! profile_exists "$gid"; then
-        first_run_wizard "$gid" "$merged" || die "Asistente cancelado"
+        first_run_wizard "$gid" "$merged" || { cleanup_mount; return 1; }
     fi
     load_profile "$gid"
     if [ "${RUNNER:-}" = "bundled" ] && [ -z "$BUNDLED_RUNNER_DIR" ]; then
@@ -7371,7 +7417,7 @@ Configurar juego -> Comprobar integridad"
     if [ -n "$EXE_OVERRIDE" ] && [ -f "$merged/$EXE_OVERRIDE" ] && [ "$mode" = "auto" ]; then
         EXE_PATH="$merged/$EXE_OVERRIDE"; EXE_ARGS="$ARGS_OVERRIDE"
     else
-        find_exe "$merged" "$mode" || die "No se selecciono ningun ejecutable"
+        find_exe "$merged" "$mode" || { cleanup_mount; return 1; }
         [ -n "$ARGS_OVERRIDE" ] && EXE_ARGS="$ARGS_OVERRIDE"
     fi
     say "Ejecutable: $EXE_PATH"
@@ -7380,7 +7426,7 @@ Configurar juego -> Comprobar integridad"
     loading_say "Preparando el entorno de Windows..."
     ensure_runner
     local rdir; rdir="$(get_runner_path)"
-    [ -z "$rdir" ] && die "No hay runners instalados. Ejecuta: $0 --setup"
+    [ -z "$rdir" ] && { fallo "No hay ningun runner instalado.\n\nDescarga uno en: Runners y herramientas -> Descargar runners"; return 1; }
 
     export_game_env "$gid"
     build_runner_cmd "$rdir"
@@ -8448,7 +8494,7 @@ run_in_prefix() {
         mounted_here=1
     fi
     local rdir; rdir="$(get_runner_path)"
-    [ -z "$rdir" ] && die "No hay runners instalados. Ejecuta: $0 --setup"
+    [ -z "$rdir" ] && { fallo "No hay ningun runner instalado.\n\nDescarga uno en: Runners y herramientas -> Descargar runners"; return 1; }
     export_game_env "$gid"
     build_runner_cmd "$rdir"
     pad_bridge_stop
@@ -8918,14 +8964,14 @@ build_wsquashfs() {
         run_con_porcentaje "Empaquetando '$name' a DwarFS..." \
             "$MKDWARFS_BIN" -i "$src" -o "$out" -l7 --log-level=warn \
             --progress=simple \
-            || { rm -f "$out"; die "mkdwarfs fallo"; }
+            || { rm -f "$out"; fallo "El empaquetado a DwarFS fallo (mira el registro)"; return 1; }
     else
         need_mksquashfs
         # -percentage: mksquashfs va escribiendo solo el numero, pensado
         # justo para alimentar una barra de progreso.
         run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
             mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage \
-            || { rm -f "$out"; die "mksquashfs fallo"; }
+            || { rm -f "$out"; fallo "El empaquetado fallo (mira el registro)"; return 1; }
     fi
     rm -rf "${OVERLAY_BASE:?}/${name}"
     printf '%s' "$out"
@@ -8952,7 +8998,7 @@ $(basename "$dir")
         PACKED_OUT="$out"
         return 0
     fi
-    die "El empaquetado fallo; la carpeta original se conserva"
+    fallo "El empaquetado fallo; la carpeta original se conserva"; return 1
 }
 
 offer_test_then_pack() {
@@ -9448,8 +9494,8 @@ directamente el ejecutable."
 
 import_archive() {
     # zip/7z/rar (multiparte) -> extraer, PURGAR originales, empaquetar/mover, lanzar
-    command -v 7z >/dev/null 2>&1 || die "Falta 7z (paquete p7zip):
-CachyOS: sudo pacman -S p7zip"
+    command -v 7z >/dev/null 2>&1 || { fallo "; return 1; }Falta 7z (paquete p7zip):
+CachyOS: sudo pacman -S p7zip"; return 1; }
     local input="$1"
     local in_dir name_raw prefix game_name extract_dir
     in_dir="$(dirname "$input")"
@@ -9512,7 +9558,7 @@ CachyOS: sudo pacman -S p7zip"
         done
     else
         rm -rf "$extract_dir"
-        die "La descompresion fallo o fue interrumpida. Se conservan los archivos fuente."
+        fallo "La descompresion fallo o fue interrumpida. Se conservan los archivos fuente."; return 1
     fi
 
     # Contiene ya un wsquashfs? -> moverlo tal cual a la carpeta de juegos
@@ -9563,11 +9609,11 @@ launch_loose_exe() {
         fi
     fi
     if ! profile_exists "$gid"; then
-        first_run_wizard "$gid" "$(dirname "$exe")" || die "Asistente cancelado"
+        first_run_wizard "$gid" "$(dirname "$exe")" || return 1
     fi
     load_profile "$gid"
     local rdir; rdir="$(get_runner_path)"
-    [ -z "$rdir" ] && die "No hay runners instalados. Ejecuta: $0 --setup"
+    [ -z "$rdir" ] && { fallo "No hay ningun runner instalado.\n\nDescarga uno en: Runners y herramientas -> Descargar runners"; return 1; }
     export_game_env "$gid"
     build_runner_cmd "$rdir"
     pad_sdl_prefix_setup "$rdir"
