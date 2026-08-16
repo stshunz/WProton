@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.21"
+WPROTON_VERSION="1.22"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -7556,6 +7556,12 @@ prefix_label() {
 prefix_path() {
     # shared = prefixes/default | own = por juego | bundled = el propio montaje
     # (con bundled, las escrituras del registro caen en overlays/<n>/upper/)
+    #
+    # WP_PREFIX_OVERRIDE manda por encima de todo: lo usa "Instalar librerias"
+    # cuando el usuario elige un prefijo concreto de la lista. Hace falta
+    # porque run_in_prefix vuelve a cargar el perfil por su cuenta, asi que
+    # cambiar PREFIX_MODE antes de llamarlo no serviria de nada.
+    [ -n "${WP_PREFIX_OVERRIDE:-}" ] && { printf '%s' "$WP_PREFIX_OVERRIDE"; return; }
     case "$PREFIX_MODE" in
         own)     printf '%s' "$PREFIX_DIR/$1" ;;
         bundled)
@@ -9061,25 +9067,86 @@ $WPROTON_REPO"
     done
 }
 
+listar_prefijos() {
+    # Los prefijos que hay DE VERDAD en disco. Se pide system.reg para no
+    # listar carpetas a medio crear ni restos de un wineboot que fallo.
+    [ -d "$PREFIX_DIR" ] || return 0
+    local d
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        [ -f "$d/system.reg" ] || continue
+        printf '%s\n' "$(basename "$d")"
+    done <<EOFPFX
+$(find "$PREFIX_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+EOFPFX
+}
+
+redist_prefijo_libre() {
+    # Instalar en CUALQUIER prefijo de los que hay, elegido de una lista.
+    # Hace falta porque "el prefijo de un juego" no vale cuando ese juego
+    # esta en modo compartido: acabaria en default sin avisar.
+    local lista sel
+    lista="$(listar_prefijos)"
+    if [ -z "$lista" ]; then
+        ui_info "Todavia no hay ningun prefijo creado en:\n$PREFIX_DIR\n\nSe crea solo la primera vez que lanzas un juego."
+        return 1
+    fi
+    # Array, como en main_menu. Nada de meter la lista en la linea del menu
+    # con comodines: un prefijo con un espacio en el nombre se partiria en dos
+    # opciones y se elegiria el prefijo equivocado.
+    local opts=() p
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        # el compartido se marca: es el que afecta a mas juegos
+        if [ "$p" = "default" ]; then
+            opts+=("default   (el COMPARTIDO: lo usan todos los juegos en ese modo)")
+        else
+            opts+=("$p")
+        fi
+    done <<EOFOPT
+$lista
+EOFOPT
+    opts+=("<< Volver")
+    sel="$(menu "Elige el prefijo donde instalar" "${opts[@]}")" || return
+    case "$sel" in "<< Volver"|"") return ;; esac
+    case "$sel" in "default   "*) sel="default" ;; esac
+    [ -d "$PREFIX_DIR/$sel" ] || { ui_error "Ese prefijo ya no esta"; return 1; }
+    load_profile "$sel"
+    WP_PREFIX_OVERRIDE="$PREFIX_DIR/$sel"
+    redist_menu "" "$sel"
+    WP_PREFIX_OVERRIDE=""
+}
+
 redist_target_menu() {
     # Desde el menu principal: elegir en QUE prefijo instalar las librerias
     local t
     t="$(menu "Instalar librerias - elige el prefijo destino" \
         "Prefijo compartido (default) - lo usan todos los juegos en modo compartido" \
         "Prefijo de un juego concreto (elegir juego)" \
+        "Otro prefijo de la lista (elegir a mano)" \
         "<< Volver")" || return
     case "$t" in
         "Prefijo compartido"*)
             load_profile "__wp_default__"   # inexistente -> defaults (shared)
             redist_menu "" "default" ;;
         "Prefijo de un juego"*)
-            local g gid2
+            local g gid2 destino
             pick_squash_ui || return
             g="$WP_PICK"
             g="$(wpact_ruta "$g")" || return
             gid2="$(game_id "$g")"
             load_profile "$gid2"
+            # Decir DONDE va a caer de verdad. Si el juego usa el compartido,
+            # esto acaba en prefixes/default y antes no se avisaba: parecia
+            # que las librerias iban al juego y no era asi.
+            destino="$(prefix_path "$gid2")"
+            if [ "$(basename "$destino")" = "default" ]; then
+                ui_ask "'$gid2' usa el prefijo COMPARTIDO.\n\nLas librerias se instalaran en:\n$destino\n\nAfecta a todos los juegos en modo compartido. Seguir?" \
+                    || return
+            fi
             redist_menu "$g" "$gid2" ;;
+        "Otro prefijo de la lista"*)
+            redist_prefijo_libre ;;
     esac
 }
 
@@ -9143,17 +9210,79 @@ EOF
     esac
     [ -z "$verbs" ] && { say "Sin redistribuibles seleccionados"; return 0; }
     say "Instalando redistribuibles en el prefijo: $verbs"
+    # La lista viaja en WP_PREFIX_VERBOS para que run_in_prefix los instale de
+    # uno en uno con la barra contando, ya con el prefijo montado y listo.
+    WP_PREFIX_VERBOS="$verbs"
+    WP_REDIST_FALLIDOS=""
     # shellcheck disable=SC2086
-    run_with_progress "Instalando: $verbs ..." \
-        run_in_prefix_quiet "$squash" "$gid" $verbs
-    ui_info "Redistribuibles procesados: $verbs
-Revisa el último log si algo fallo."
+    run_in_prefix "$squash" "$gid" winetricks -q $verbs
+    WP_PREFIX_VERBOS=""
+    if [ -n "${WP_REDIST_FALLIDOS:-}" ]; then
+        ui_info "Instalados: $verbs
+
+DIERON ERROR: $WP_REDIST_FALLIDOS
+Mira el último log para ver por qué."
+    else
+        ui_info "Redistribuibles instalados: $verbs"
+    fi
 }
 
-run_in_prefix_quiet() {
-    # winetricks -q con verbos (sin GUI) en el prefijo del juego
-    local squash="$1" gid="$2"; shift 2
-    run_in_prefix "$squash" "$gid" winetricks -q "$@"
+winetricks_uno_a_uno() {
+    # Instala los redistribuibles DE UNO EN UNO, con la barra contando
+    # cuantos van. $1 = carpeta del runner; los verbos, en WP_PREFIX_VERBOS.
+    #
+    # winetricks no suelta ningun porcentaje, asi que no sirve
+    # run_con_porcentaje: lo unico medible de verdad es cuantos verbos se han
+    # terminado de cuantos hay. Antes era UNA barra indeterminada para todo el
+    # lote, y con dotnet48 dentro podian ser diez minutos sin saber si iba por
+    # el primero o por el ultimo.
+    #
+    # Va aqui dentro, y no en quien llama, porque el montaje del juego ya esta
+    # hecho arriba: sacando el bucle fuera habria que montar y desmontar una
+    # vez por verbo.
+    local rdir="$1"
+    local -a verbos=()
+    local v
+    # shellcheck disable=SC2086
+    for v in $WP_PREFIX_VERBOS; do [ -n "$v" ] && verbos+=("$v"); done
+    local total=${#verbos[@]}
+    [ "$total" -gt 0 ] || return 0
+    if [ "$RUNNER_KIND" = "wine" ] && ! command -v winetricks >/dev/null 2>&1; then
+        ui_info "winetricks no esta instalado en el host"
+        return 1
+    fi
+    local i=0 rc=0 fallidos="" barra=0
+    if pygame_available; then
+        write_menu_pygame
+        progress_start "WProton"
+        barra=1
+    fi
+    for v in "${verbos[@]}"; do
+        # el porcentaje se pone ANTES de empezar el verbo: asi la barra marca
+        # lo ya terminado y no promete de mas
+        [ "$barra" = 1 ] && progress_set "$(( i * 100 / total ))" \
+            "Instalando $v   ($((i+1)) de $total)"
+        say "Redistribuible $((i+1))/$total: $v"
+        if [ "$RUNNER_KIND" = "wine" ]; then
+            WINE="$(runner_wine_bin "$rdir")" winetricks -q "$v" >> "$LOG_FILE" 2>&1
+        else
+            "${RUN_CMD[@]}" winetricks -q "$v" >> "$LOG_FILE" 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            fallidos="$fallidos $v"
+            rc=1
+            say "AVISO: '$v' dio error (se sigue con el resto)"
+        fi
+        i=$((i+1))
+    done
+    if [ "$barra" = 1 ]; then
+        progress_set 100 "Listo"
+        progress_stop
+        loading_clear
+    fi
+    # el que llama lo lee para decir QUE fallo, no solo que algo fallo
+    WP_REDIST_FALLIDOS="${fallidos# }"
+    return $rc
 }
 
 run_in_prefix() {
@@ -9163,6 +9292,15 @@ run_in_prefix() {
     load_profile "$gid"
     local mounted_here=0
     BUNDLED_PREFIX_DIR=""
+    if [ -n "${WP_PREFIX_OVERRIDE:-}" ]; then
+        # Prefijo forzado a mano. Los prefijos "propios" se llaman igual que
+        # el juego, asi que load_profile puede haber cargado un perfil en modo
+        # "bundled": sin wsquashfs que montar, eso acabaria en error. Con el
+        # prefijo puesto a dedo no hay nada que montar.
+        [ "$PREFIX_MODE" = "bundled" ] && PREFIX_MODE="shared"
+        [ "${RUNNER:-}" = "bundled" ] && RUNNER=""
+        say "Prefijo forzado: $WP_PREFIX_OVERRIDE"
+    fi
     if [ "$PREFIX_MODE" = "bundled" ] || [ "${RUNNER:-}" = "bundled" ]; then
         acquire_game_root "$squash" "$gid" rw
         if [ "$PREFIX_MODE" = "bundled" ]; then
@@ -9183,7 +9321,10 @@ run_in_prefix() {
     export_game_env "$gid"
     build_runner_cmd "$rdir"
     pad_bridge_stop
-    if [ "$RUNNER_KIND" = "wine" ] && [ "$1" = "winetricks" ]; then
+    if [ -n "${WP_PREFIX_VERBOS:-}" ]; then
+        # lote de redistribuibles: uno a uno, con barra de verdad
+        winetricks_uno_a_uno "$rdir"
+    elif [ "$RUNNER_KIND" = "wine" ] && [ "$1" = "winetricks" ]; then
         command -v winetricks >/dev/null 2>&1 || { ui_info "winetricks no esta instalado en el host"; return 1; }
         WINE="$(runner_wine_bin "$rdir")" winetricks "${@:2}" >> "$LOG_FILE" 2>&1
     else
@@ -10177,10 +10318,40 @@ directamente el ejecutable."
     fi
 }
 
+purgar_comprimidos() {
+    # Borra los comprimidos de los que salio el juego. SOLO se llama cuando
+    # el .wsquashfs ya esta en disco.
+    #
+    # Antes esto empezaba con "rm -f ${prefijo}*", un comodin sobre la ruta
+    # sin extension: con un juego llamado "Halo" se llevaba por delante
+    # Halo.txt, Halo.jpg, Halo-partidas.zip... cualquier cosa que empezara
+    # igual. Ahora se mira SIEMPRE la extension, una por una.
+    local in_dir="$1" base_prefix="$2" game_name="$3"
+    local pat f n borrados=0
+    pat="$(basename "$base_prefix")"
+    say "[+] Purgando archivos comprimidos originales..."
+    while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        n="$(basename "$f")"
+        case "$n" in
+            *.zip|*.ZIP|*.7z|*.7Z|*.rar|*.RAR|*.wtgz|*.WTGZ) ;;
+            *.[0-9][0-9][0-9])           ;;   # .001 .002 ... multiparte de 7z
+            *.z[0-9][0-9]|*.Z[0-9][0-9]) ;;   # .z01 ...     zip partido
+            *.r[0-9][0-9]|*.R[0-9][0-9]) ;;   # .r00 ...     rar antiguo
+            *) continue ;;                    # cualquier otra cosa NO se toca
+        esac
+        rm -f "$f" && borrados=$((borrados+1))
+    done <<EOFPURGA
+$(find "$in_dir" -maxdepth 1 -type f \( -name "$pat.*" -o -name "$game_name.*" \) 2>/dev/null)
+EOFPURGA
+    say "[+] Borrados $borrados fichero(s) comprimido(s)."
+}
+
 import_archive() {
     # zip/7z/rar (multiparte) -> extraer, PURGAR originales, empaquetar/mover, lanzar
-    command -v 7z >/dev/null 2>&1 || { fallo "; return 1; }Falta 7z (paquete p7zip):
+    command -v 7z >/dev/null 2>&1 || { fallo "Falta 7z (paquete p7zip):
 CachyOS: sudo pacman -S p7zip"; return 1; }
+
     local input="$1"
     local in_dir name_raw prefix game_name extract_dir
     in_dir="$(dirname "$input")"
@@ -10221,26 +10392,30 @@ CachyOS: sudo pacman -S p7zip"; return 1; }
             run_with_progress "Descomprimiendo fichero: $name_raw ..." \
                 tar -xzf "$input" -C "$extract_dir" || ext_ok=0 ;;
         *)
-            run_with_progress "Descomprimiendo fichero: $name_raw ..." \
-                # -bsp1: 7z escribe el porcentaje, para la barra
-                run_con_porcentaje "Extrayendo $(basename "$input")..." \
-                    7z x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
+            # -bsp1: 7z escribe el porcentaje, para la barra.
+            #
+            # OJO: aqui NO va un run_with_progress delante. Lo hubo, pero con
+            # el comentario colado entre la barra invertida y la orden: la
+            # barra unia las dos lineas, el "#" se comia el resto, y
+            # run_with_progress acababa llamandose solo con el titulo y sin
+            # nada que ejecutar. Abria una ventana de progreso al 10%, se
+            # cerraba sola, y encima dejaba un trabajo en segundo plano vacio.
+            # La extraccion funcionaba de casualidad, porque run_con_porcentaje
+            # quedaba como orden aparte en la linea siguiente. Que es, ademas,
+            # la que hay que usar: 7z sabe decir el porcentaje de verdad.
+            run_con_porcentaje "Extrayendo $name_raw..." \
+                7z x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
     esac
     if [ "$ext_ok" = 1 ]; then
         say "[+] Extraccion completada."
-        # la carpeta de donde vino el comprimido se recuerda ANTES de
-        # borrarlo: si no, al purgarlo se perdia el sitio al que volver
+        # La carpeta de donde vino el comprimido se recuerda ANTES de tocar
+        # nada: si no, al purgarlo se perdia el sitio al que volver.
         remember_browse "$input"
-        say "[+] Purgando archivos comprimidos originales..."
-        rm -f "${prefix}"* 2>/dev/null
-        find "$in_dir" -maxdepth 1 -type f -name "${game_name}*" 2>/dev/null | while read -r f; do
-            case "${f##*.}" in
-                zip|7z|rar|001|002|003|004|005|z01|z02|z03|z04|z05|ZIP|7Z|RAR) rm -f "$f" ;;
-                *) case "$(basename "$f")" in
-                       *.part*.rar|*.r[0-9][0-9]) rm -f "$f" ;;
-                   esac ;;
-            esac
-        done
+        # OJO: AQUI NO SE BORRA NADA.
+        # Antes se purgaba el comprimido justo despues de extraer, o sea
+        # ANTES de empaquetar. Si al empaquetar no habia sitio, o fallaba, o
+        # se cancelaba, el usuario se quedaba sin el zip y sin el juego. La
+        # purga esta ahora al final, cuando el .wsquashfs ya existe.
     else
         rm -rf "$extract_dir"
         fallo "La descompresion fallo o fue interrumpida. Se conservan los archivos fuente."; return 1
@@ -10252,7 +10427,10 @@ CachyOS: sudo pacman -S p7zip"; return 1; }
     local out
     if [ -n "$inner" ]; then
         out="$GAMES_PATH/$(basename "$inner")"
-        mv -f "$inner" "$out"
+        if ! mv -f "$inner" "$out"; then
+            fallo "No se pudo mover el juego a:\n$GAMES_PATH\n\nNO se ha borrado nada. Lo extraido sigue en:\n$extract_dir"
+            return 1
+        fi
         rm -rf "$extract_dir"
         say "[OK] wsquashfs importado: $out"
     else
@@ -10267,9 +10445,18 @@ CachyOS: sudo pacman -S p7zip"; return 1; }
         local exe; exe="$(find_game_exe "$root")"
         [ -n "$exe" ] && { say "[+] Ejecutable: $(basename "$exe") - escribiendo autorun.cmd"; write_autorun "$root" "$exe"; }
         out="$(build_wsquashfs "$root" "$game_name")"
+        # build_wsquashfs devuelve 1 y no escribe nada si falta espacio, si
+        # falla mksquashfs o si se cancela. Antes no se miraba: se borraba lo
+        # extraido igualmente y se intentaba lanzar una ruta vacia.
+        if [ -z "$out" ] || [ ! -s "$out" ]; then
+            fallo "No se pudo empaquetar '$game_name'.\n\nNO se ha borrado nada: tienes el comprimido original donde estaba, y lo ya extraido en:\n$extract_dir"
+            return 1
+        fi
         rm -rf "$extract_dir"
         say "[OK] Empaquetado: $out"
     fi
+    # El juego ya esta en disco: ahora si se puede tirar el comprimido.
+    purgar_comprimidos "$in_dir" "$prefix" "$game_name"
     launch_game "$out" "auto"
 }
 
@@ -10668,6 +10855,102 @@ keys_tecla_elegir() {
     return 0
 }
 
+keys_resumen() {
+    # Enseña en cristiano lo que ya tiene asignado un .keys. $1 = fichero.
+    #
+    # Los .keys vienen de tres sitios y NO todos usan la misma forma:
+    #   - el editor de aqui escribe boton y tecla como texto suelto
+    #   - el ejemplo y los de Batocera usan listas, para las combinaciones
+    # Se admiten las dos, y lo que no se reconozca sale tal cual en vez de
+    # desaparecer: mas vale enseñar "KEY_RAROSO" que dar la lista por buena
+    # cuando falta media.
+    local f="$1"
+    [ -f "$f" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" - "$f" 2>/dev/null <<'PYKEYS'
+import json
+import sys
+
+BOTONES = {
+    'a': 'A', 'b': 'B', 'x': 'X', 'y': 'Y',
+    'up': 'Cruceta arriba', 'down': 'Cruceta abajo',
+    'left': 'Cruceta izq.', 'right': 'Cruceta der.',
+    'pageup': 'L1', 'pagedown': 'R1', 'l1': 'L1', 'r1': 'R1',
+    'l2': 'L2', 'r2': 'R2', 'l3': 'L3', 'r3': 'R3',
+    'start': 'Start', 'select': 'Select', 'hotkey': 'Hotkey',
+    'joystick1up': 'Stick izq. arriba', 'joystick1down': 'Stick izq. abajo',
+    'joystick1left': 'Stick izq. izq.', 'joystick1right': 'Stick izq. der.',
+    'joystick2up': 'Stick der. arriba', 'joystick2down': 'Stick der. abajo',
+    'joystick2left': 'Stick der. izq.', 'joystick2right': 'Stick der. der.',
+    }
+TECLAS = {
+    'LEFTALT': 'Alt', 'RIGHTALT': 'AltGr',
+    'LEFTCTRL': 'Ctrl', 'RIGHTCTRL': 'Ctrl der.',
+    'LEFTSHIFT': 'Mayus', 'RIGHTSHIFT': 'Mayus der.',
+    'LEFTMETA': 'Windows', 'ENTER': 'Enter', 'KPENTER': 'Enter (num)',
+    'SPACE': 'Espacio', 'ESC': 'Escape', 'TAB': 'Tabulador',
+    'BACKSPACE': 'Retroceso', 'DELETE': 'Supr', 'INSERT': 'Insert',
+    'HOME': 'Inicio', 'END': 'Fin', 'PAGEUP': 'Av.Pag', 'PAGEDOWN': 'Re.Pag',
+    'UP': 'Flecha arriba', 'DOWN': 'Flecha abajo',
+    'LEFT': 'Flecha izq.', 'RIGHT': 'Flecha der.',
+    }
+
+
+def lista(v):
+    """El campo puede venir como texto suelto o como lista."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v]
+    return [str(v)]
+
+
+def boton(n):
+    return BOTONES.get(str(n).lower(), str(n))
+
+
+def tecla(n):
+    n = str(n)
+    corto = n[4:] if n.startswith('KEY_') else n
+    if corto in TECLAS:
+        return TECLAS[corto]
+    if len(corto) == 1:                      # letras y numeros
+        return corto
+    if corto.startswith('F') and corto[1:].isdigit():
+        return corto
+    return corto.capitalize() if corto.isalpha() else n
+
+
+def main():
+    try:
+        with open(sys.argv[1], encoding='utf-8') as fh:
+            datos = json.load(fh)
+    except (OSError, ValueError):
+        # Un .keys roto no es lo mismo que uno vacio: hay que decirlo, o el
+        # usuario creeria que no tiene nada asignado y lo estaria perdiendo.
+        sys.stdout.write('!ROTO\n')
+        return 1
+    acciones = datos.get('actions_player1') or []
+    filas = []
+    for a in acciones:
+        if not isinstance(a, dict):
+            continue
+        origen = ' + '.join(boton(x) for x in lista(a.get('trigger')))
+        destino = ' + '.join(tecla(x) for x in lista(a.get('target')))
+        if origen and destino:
+            filas.append('%-26s ->  %s' % (origen, destino))
+    if not filas:
+        return 1
+    sys.stdout.write('\n'.join(filas) + '\n')
+    return 0
+
+
+sys.exit(main())
+PYKEYS
+}
+
 keys_editor() {
     # Crear o retocar el .keys de un juego, boton a boton.
     #
@@ -10679,24 +10962,60 @@ keys_editor() {
     # es la salida de emergencia y conviene que este en todos los juegos.
     # OJO: "destino" en una linea aparte. En el mismo "local", $gid todavia
     # no vale nada y el fichero saldria con el nombre equivocado.
-    local gid="$1" destino
+    local gid="$1" squash="${2:-}" destino
     destino="$PROFILE_DIR/$gid.keys"
-    local tmp; tmp="$(mktemp)" || return 1
+    local tmp tmpc origen=""
+    tmp="$(mktemp)" || return 1
+    tmpc="$(mktemp)" || { rm -f "$tmp"; return 1; }
+    printf '{"actions_player1": []}' > "$tmpc"
 
-    # partir de lo que ya haya, si lo hay
-    if [ -f "$destino" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
-        "$PY_BIN" - "$destino" > "$tmp" 2>/dev/null <<'PYLEER'
-import json, sys
+    # De donde se parte. OJO: NO vale mirar solo profiles/<gid>.keys. El .keys
+    # puede estar junto al juego (<juego>.wsquashfs.keys), que es como lo pone
+    # Batocera, y entonces el editor salia con todo a "—" y 0 asignadas: al
+    # guardar se escribia uno nuevo encima y se perdia el que habia.
+    origen="$(find_keys_file "$squash" "$gid")" || origen=""
+    [ -n "$origen" ] || { [ -f "$destino" ] && origen="$destino"; }
+
+    if [ -n "$origen" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
+        "$PY_BIN" - "$origen" "$tmp" "$tmpc" 2>/dev/null <<'PYLEER'
+import json
+import sys
+
+
+def uno(v):
+    """El valor unico, si viene como texto o como lista de uno. Si no, None."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple)) and len(v) == 1 and isinstance(v[0], str):
+        return v[0]
+    return None
+
+
 try:
-    d = json.load(open(sys.argv[1], encoding='utf-8'))
-except Exception:
+    with open(sys.argv[1], encoding='utf-8') as fh:
+        datos = json.load(fh)
+except (OSError, ValueError):
     sys.exit(0)
-for a in d.get('actions_player1', []):
-    t, g = a.get('trigger'), a.get('target')
-    if isinstance(t, str) and isinstance(g, str):
-        print('%s|%s' % (t, g))
+
+editables, conservar = [], []
+for a in datos.get('actions_player1', []):
+    if not isinstance(a, dict):
+        continue
+    disparo, tecla = uno(a.get('trigger')), uno(a.get('target'))
+    if disparo is not None and tecla is not None:
+        editables.append('%s|%s' % (disparo, tecla))
+    else:
+        # Combinaciones (Hotkey+Y, L3+R3...) y teclas compuestas. Aqui no se
+        # pueden editar (la lista es un boton por fila), pero se GUARDAN tal
+        # cual: antes se perdian sin avisar en cuanto se tocaba cualquier otra.
+        conservar.append(a)
+
+with open(sys.argv[2], 'w', encoding='utf-8') as fh:
+    fh.write('\n'.join(editables) + ('\n' if editables else ''))
+with open(sys.argv[3], 'w', encoding='utf-8') as fh:
+    json.dump({'actions_player1': conservar}, fh, ensure_ascii=False, indent=2)
 PYLEER
-        [ -s "$tmp" ] && say "[keys] Partiendo del fichero que ya tenia $gid"
+        say "[keys] Partiendo de $(basename "$origen")"
     fi
 
     local sel nom largo actual tecla n
@@ -10711,14 +11030,42 @@ PYLEER
         done <<EOFKB
 $KEYS_BOTONES
 EOFKB
+        # Las combinaciones tambien se enseñan, aunque no se puedan cambiar
+        # desde aqui: asi se ve de un vistazo TODO lo que tiene el juego y no
+        # hace falta abrir el fichero para saber si falta algo.
+        local combis nc=0
+        combis="$(keys_resumen "$tmpc")" || combis=""
+        case "$combis" in '!ROTO') combis="" ;; esac
+        if [ -n "$combis" ]; then
+            nc="$(printf '%s\n' "$combis" | grep -c .)"
+            opciones="$opciones-- combinaciones (no se editan aqui) --
+"
+            while IFS= read -r _c; do
+                [ -n "$_c" ] || continue
+                opciones="$opciones   $_c
+"
+            done <<EOFCOMBIS
+$combis
+EOFCOMBIS
+        fi
         n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
+        local titulo="Teclas de $gid  ($n asignadas"
+        [ "$nc" -gt 0 ] && titulo="$titulo + $nc combinaciones"
+        titulo="$titulo)"
         # shellcheck disable=SC2046
-        sel="$(IFS=$'\n'; set -f; menu "Teclas de $gid  ($n asignadas)" \
-               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp"; return 1; }
+        sel="$(IFS=$'\n'; set -f; menu "$titulo" \
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc"; return 1; }
 
         case "$sel" in
-            "<< Salir sin guardar") rm -f "$tmp"; return 1 ;;
+            "<< Salir sin guardar") rm -f "$tmp" "$tmpc"; return 1 ;;
             "== GUARDAR ==") break ;;
+            "-- combinaciones"*|"   "*)
+                ui_info "Las combinaciones no se cambian desde aqui: esta lista es de un boton por fila.
+
+$combis
+
+Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .keys a mano."
+                continue ;;
         esac
         # de la etiqueta larga al nombre corto
         largo="${sel%%:*}"
@@ -10731,23 +11078,41 @@ EOFKB
 
     if [ ! -s "$tmp" ]; then
         ui_error "No has asignado ninguna tecla."
-        rm -f "$tmp"; return 1
+        rm -f "$tmp" "$tmpc"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
-    "$PY_BIN" - "$tmp" "$destino" <<'PYESC'
-import json, sys
-acciones = [{"trigger": ["hotkey", "start"], "type": "key", "target": ["KEY_LEFTALT", "KEY_F4"]}]
-for linea in open(sys.argv[1], encoding='utf-8'):
-    linea = linea.strip()
-    if not linea or '|' not in linea:
-        continue
-    disparo, tecla = linea.split('|', 1)
-    acciones.append({"trigger": disparo, "type": "key", "target": tecla})
-json.dump({"actions_player1": acciones}, open(sys.argv[2], 'w', encoding='utf-8'),
-          ensure_ascii=False, indent=2)
+    "$PY_BIN" - "$tmp" "$destino" "$tmpc" <<'PYESC'
+import json
+import sys
+
+FIJA = {"trigger": ["hotkey", "start"], "type": "key",
+        "target": ["KEY_LEFTALT", "KEY_F4"]}
+acciones = [FIJA]
+
+# Primero lo que no se puede editar en la lista (combinaciones y teclas
+# compuestas): se devuelve tal cual vino. La salida de emergencia no se copia,
+# que ya va la primera y saldria dos veces.
+try:
+    with open(sys.argv[3], encoding='utf-8') as fh:
+        for a in json.load(fh).get('actions_player1', []):
+            if a.get('trigger') != FIJA['trigger']:
+                acciones.append(a)
+except (OSError, ValueError, IndexError):
+    pass
+
+with open(sys.argv[1], encoding='utf-8') as fh:
+    for linea in fh:
+        linea = linea.strip()
+        if not linea or '|' not in linea:
+            continue
+        disparo, tecla = linea.split('|', 1)
+        acciones.append({"trigger": disparo, "type": "key", "target": tecla})
+
+with open(sys.argv[2], 'w', encoding='utf-8') as fh:
+    json.dump({"actions_player1": acciones}, fh, ensure_ascii=False, indent=2)
 PYESC
-    rm -f "$tmp"
+    rm -f "$tmp" "$tmpc"
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
@@ -11770,8 +12135,8 @@ config_export() {
     fi
     if [ -d "$DATOS_DIR" ] && \
        [ -n "$(find "$DATOS_DIR" -type f 2>/dev/null | head -n1)" ]; then
-        mkdir -p "$tmp/wproton_config/datos"
-        cp -a "$DATOS_DIR/." "$tmp/wproton_config/datos/" 2>/dev/null
+        mkdir -p "$tmp/wproton_config/metadata"
+        cp -a "$DATOS_DIR/." "$tmp/wproton_config/metadata/" 2>/dev/null
     fi
     if [ -d "$COVERS_43_DIR" ] && \
        [ -n "$(find "$COVERS_43_DIR" -type f 2>/dev/null | head -n1)" ]; then
@@ -11852,7 +12217,9 @@ por los del zip. Se guardara antes una copia en backups/." || { rm -rf "$tmp"; r
             [ -d "$base/covers" ] && { mkdir -p "$COVERS_DIR"; cp -a "$base/covers/." "$COVERS_DIR/" 2>/dev/null; }
             [ -d "$base/covers_wide" ] && { mkdir -p "$COVERS_WIDE_DIR"; cp -a "$base/covers_wide/." "$COVERS_WIDE_DIR/" 2>/dev/null; }
             [ -d "$base/covers_43" ] && { mkdir -p "$COVERS_43_DIR"; cp -a "$base/covers_43/." "$COVERS_43_DIR/" 2>/dev/null; }
-            [ -d "$base/datos" ] && { mkdir -p "$DATOS_DIR"; cp -a "$base/datos/." "$DATOS_DIR/" 2>/dev/null; }
+            # los dos nombres: los zips hechos con 1.21 o antes traen "datos"
+            [ -d "$base/metadata" ] && { mkdir -p "$DATOS_DIR"; cp -a "$base/metadata/." "$DATOS_DIR/" 2>/dev/null; }
+            [ -d "$base/datos" ]    && { mkdir -p "$DATOS_DIR"; cp -a "$base/datos/."    "$DATOS_DIR/" 2>/dev/null; }
             [ -d "$base/lang" ] && { mkdir -p "$LANG_DIR"; cp -a "$base/lang/." "$LANG_DIR/" 2>/dev/null; }
             rm -rf "$tmp"
             load_settings
@@ -12470,17 +12837,56 @@ COVERS_43_DIR="$BASE_DIR/covers_43"       # 4:3 (640x480)
 # Datos de los juegos (ficha de Steam, duracion de HowLongToBeat). Antes
 # vivian mezclados con las caratulas; con tres carpetas de caratulas, esto
 # pide su propio sitio.
-DATOS_DIR="$BASE_DIR/datos"
+#
+# La carpeta se llamaba "datos" y pasa a "metadata", para que todas las que
+# WProton crea junto al script esten en el mismo idioma (covers, profiles,
+# prefixes, logs, backups...). El NOMBRE DE LA VARIABLE se queda como estaba:
+# el codigo es en castellano de arriba abajo, y lo que se unifica son las
+# carpetas que ve el usuario, no los identificadores.
+DATOS_DIR="$BASE_DIR/metadata"
 
 datos_preparar() {
-    # Crea la carpeta y traslada lo que estuviera en covers/. Una sola vez.
+    # Crea la carpeta y trae lo que hubiera de antes. Dos mudanzas:
+    #   covers/*.info.json  ->  metadata/   (vivian con las caratulas)
+    #   datos/              ->  metadata/   (el cambio de nombre)
+    #
+    # NUNCA se pisa un fichero que ya este en el destino: si alguien acaba con
+    # las dos carpetas, lo nuevo manda y lo viejo solo rellena los huecos.
+    # Y si algo se queda sin mover, la carpeta vieja NO se borra.
+    local viejo="$BASE_DIR/datos" f n=0
+    if [ -d "$viejo" ] && [ "$viejo" != "$DATOS_DIR" ]; then
+        if [ ! -e "$DATOS_DIR" ] && mv -f "$viejo" "$DATOS_DIR" 2>/dev/null; then
+            log "Carpeta 'datos' renombrada a 'metadata'"
+        else
+            mkdir -p "$DATOS_DIR" 2>/dev/null
+            local quedan=0
+            for f in "$viejo"/*; do
+                [ -e "$f" ] || continue
+                if [ ! -f "$f" ] || [ -e "$DATOS_DIR/${f##*/}" ]; then
+                    quedan=$((quedan+1))       # ya existe, o no es un fichero
+                    continue
+                fi
+                mv -f "$f" "$DATOS_DIR/" 2>/dev/null && n=$((n+1)) || quedan=$((quedan+1))
+            done
+            [ "$n" -gt 0 ] && log "Movidos de 'datos' a 'metadata': $n fichero(s)"
+            # solo desaparece si quedo vacia; rmdir no borra nada con contenido
+            if rmdir "$viejo" 2>/dev/null; then
+                log "Carpeta 'datos' vacia, eliminada"
+            else
+                # Se queda a proposito: dentro hay algo que ya existia en
+                # metadata (y no se pisa) o que no es un fichero suelto. Mejor
+                # que sobre una carpeta a que desaparezca algo.
+                log "Carpeta 'datos' conservada: quedan $quedan elemento(s) que NO se han tocado" WARN
+            fi
+        fi
+    fi
     mkdir -p "$DATOS_DIR" 2>/dev/null
-    local f n=0
+    n=0
     for f in "$COVERS_DIR"/*.info.json "$COVERS_DIR"/*.hltb; do
         [ -f "$f" ] || continue
         mv -f "$f" "$DATOS_DIR/" 2>/dev/null && n=$((n+1))
     done
-    [ "$n" -gt 0 ] && log "Datos de juegos movidos a datos/: $n fichero(s)"
+    [ "$n" -gt 0 ] && log "Datos de juegos movidos a 'metadata': $n fichero(s)"
     return 0
 }
 
@@ -14172,16 +14578,43 @@ Poner el contador a cero?" && {
                 ui_info "Todavia no hay partidas registradas de este juego."
             fi ;;
         "Mapeador .keys"*)
-            local kmenu
-            kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" \
-                "Crear o editar las teclas de este juego" \
+            local kmenu kopts=() kres=""
+            # Si ya hay un .keys, lo primero que se ofrece es VERLO. Antes
+            # habia que entrar al editor para enterarte de que tenia dentro,
+            # y con un fichero traido de fuera ni eso.
+            if [ -n "$kf0" ]; then
+                kres="$(keys_resumen "$kf0")" || kres=""
+                case "$kres" in
+                    '!ROTO') kopts+=("Ver las teclas asignadas  (el fichero esta ROTO)") ;;
+                    '')      kopts+=("Ver las teclas asignadas  (no tiene ninguna)") ;;
+                    *)       kopts+=("Ver las teclas asignadas  ($(printf '%s\n' "$kres" | grep -c .))") ;;
+                esac
+            fi
+            kopts+=("Crear o editar las teclas de este juego" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Nintendo / Batocera' || printf 'Xbox')" \
-                "<< Volver")" || kmenu=""
+                "<< Volver")
+            kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" "${kopts[@]}")" || kmenu=""
             case "$kmenu" in
+                "Ver las teclas asignadas"*)
+                    case "$kres" in
+                        '!ROTO')
+                            ui_error "$(basename "$kf0") no se puede leer: no es un JSON valido.
+
+El mapeador lo ignorara y el juego no tendra teclas.
+Crea uno nuevo con 'Crear o editar las teclas'." ;;
+                        '')
+                            ui_info "$(basename "$kf0") no tiene ninguna tecla asignada." ;;
+                        *)
+                            ui_info "$(basename "$kf0")
+
+$kres
+
+Se activan solas al lanzar el juego." ;;
+                    esac ;;
                 "Crear o editar las teclas"*)
-                    keys_editor "$gid" || true ;;
+                    keys_editor "$gid" "$squash" || true ;;
                 "Estilo de botones:"*)
                     # Los .keys hechos en Batocera nombran los botones al
                     # estilo Nintendo: su "A" es el de la derecha y su "B" el
@@ -15113,7 +15546,7 @@ if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MA
 fi
 
 covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
-datos_preparar          # crea datos/ y traslada las fichas que hubiera
+datos_preparar          # crea metadata/ y trae lo que hubiera de antes
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
