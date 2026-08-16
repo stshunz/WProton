@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.20"
+WPROTON_VERSION="1.21"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -64,6 +64,7 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 # --- Ajustes globales (settings.conf se crea con valores por defecto) ---
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
+WP_PICK=""                               # resultado de pick_squash_ui
 GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
 LIST_COVER=vertical                      # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
@@ -5400,6 +5401,286 @@ GTKEOF
 }
 
 # ----------------------------------------------------------------------------
+# 4d. CONSTRUCTOR DE LA BIBLIOTECA
+#
+#     Componer la lista llamaba a varias funciones de bash POR CADA JUEGO
+#     (identificador, etiqueta, caratula en tres carpetas y con dos formas de
+#     nombre). Con 29 juegos eran 9 s en una Steam Deck; con 141, del orden de
+#     un minuto. Este helper lo hace todo en una pasada: 1,30 s -> 0,019 s.
+#
+#     La via de siempre NO se ha borrado: sigue ahi como red de seguridad
+#     (biblioteca_lenta) y se usa sola si el helper falla o devuelve menos
+#     filas que juegos hay.
+# ----------------------------------------------------------------------------
+BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
+
+write_biblioteca() {
+    grep -q "WPROTON_HELPER biblioteca.py 5071bfb1f3f9" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$BIBLIOTECA_PY" <<'BIBEOF'
+# WPROTON_HELPER biblioteca.py 5071bfb1f3f9
+# -*- coding: utf-8 -*-
+"""Construye la lista de la biblioteca de UNA sola vez.
+
+Antes esto lo hacia bash llamando a varias funciones por cada juego. Cada
+llamada cuesta poco, pero con 141 juegos son miles, y en una Steam Deck eso
+eran decenas de segundos de espera al abrir la lista.
+
+Aqui se hace todo en una pasada: se leen los perfiles, se buscan las
+caratulas y se compone cada fila. Bash solo lee el resultado.
+
+Uso:
+    biblioteca.py <fichero_mapa> <fichero_info> < lista_de_juegos
+    biblioteca.py --rejilla <fichero_manifiesto> < lista_de_juegos
+
+Vista de lista, escribe:
+    - fichero_mapa:  etiqueta<TAB>ruta       (para volver de la etiqueta a la ruta)
+    - fichero_info:  etiqueta|caratula|fav|veces|segundos|ficha|duracion
+    - por pantalla:  una etiqueta por linea, en el mismo orden
+
+Vista de rejilla, escribe:
+    - manifiesto:    etiqueta|caratula|ruta|fav
+
+La etiqueta de la rejilla lleva dentro el tiempo jugado y la fecha de la
+ultima partida, y la forma de la caratula la manda WP_GRID_FORMA en vez de
+LIST_COVER (cada vista de rejilla usa una distinta).
+
+Las reglas (identificador, etiqueta, busqueda de caratula) son las mismas que
+usa wproton.sh; si se cambian alli, hay que cambiarlas aqui.
+"""
+import os
+import sys
+
+EXTS_IMAGEN = ('png', 'jpg', 'jpeg', 'webp')
+EXTS_EMPAQUETADO = ('.wsquashfs', '.squashfs', '.dwarfs')
+
+
+def entorno(nombre, por_defecto=''):
+    return os.environ.get(nombre, por_defecto)
+
+
+def game_id(ruta):
+    """Identificador del juego: como lo calcula wproton.sh."""
+    gid = os.path.basename(ruta.rstrip('/'))
+    if not os.path.isdir(ruta):
+        gid = os.path.splitext(gid)[0]
+    return gid.replace(' ', '_').replace('/', '_')
+
+
+def etiqueta(ruta, raices):
+    """Como se ve el juego en la lista: sin la extension del empaquetado.
+
+    Si hay varias carpetas de juegos, se anade de cual viene, para poder
+    distinguir dos juegos con el mismo nombre.
+    """
+    nom = os.path.basename(ruta.rstrip('/'))
+    # Distinguiendo mayusculas, igual que el "case" de wproton.sh: un
+    # Juego.WSQUASHFS puesto a mano conserva su extension en los dos caminos.
+    # Si algun dia se acepta la mayuscula, hay que cambiarlo en los dos sitios.
+    for ext in EXTS_EMPAQUETADO:
+        if nom.endswith(ext):
+            nom = nom[:-len(ext)]
+            break
+    if len(raices) > 1:
+        for r in raices:
+            if r and (ruta + '/').startswith(r.rstrip('/') + '/'):
+                base = os.path.basename(r.rstrip('/'))
+                if base:
+                    return '%s   (%s)' % (nom, base)
+                break
+    return nom
+
+
+def nombres_posibles(gid):
+    """El identificador cambia los espacios por guiones bajos; quien copia su
+    coleccion a mano conserva los espacios. Se prueban las dos formas."""
+    yield gid
+    if '_' in gid:
+        yield gid.replace('_', ' ')
+
+
+def buscar_cover(gid, carpeta, carpeta_vertical, legacy_wide=False):
+    """Ruta de la caratula, o cadena vacia."""
+    for nom in nombres_posibles(gid):
+        for ext in EXTS_IMAGEN:
+            p = os.path.join(carpeta, '%s.%s' % (nom, ext))
+            if os.path.isfile(p):
+                return p
+    if legacy_wide:                      # nomenclatura anterior: <juego>.wide.*
+        # Solo el identificador, sin la forma con espacios: es lo que hace
+        # cover_for. Aqui no se prueban las dos formas a proposito.
+        for ext in EXTS_IMAGEN:
+            p = os.path.join(carpeta_vertical, '%s.wide.%s' % (gid, ext))
+            if os.path.isfile(p):
+                return p
+    if carpeta != carpeta_vertical:      # respaldo: la vertical de siempre
+        for nom in nombres_posibles(gid):
+            for ext in EXTS_IMAGEN:
+                p = os.path.join(carpeta_vertical, '%s.%s' % (nom, ext))
+                if os.path.isfile(p):
+                    return p
+    return ''
+
+
+SIN_PERFIL = ('0', '0', '0', '')
+
+
+def leer_perfiles(carpeta):
+    """Todos los perfiles de una vez: gid -> (fav, veces, segundos, ultima)."""
+    datos = {}
+    try:
+        ficheros = [f for f in os.listdir(carpeta) if f.endswith('.conf')]
+    except OSError:
+        return datos
+    for f in ficheros:
+        fav, veces, segs, ultima = '0', '0', '0', ''
+        try:
+            with open(os.path.join(carpeta, f), encoding='utf-8',
+                      errors='replace') as fh:
+                for linea in fh:
+                    if linea.startswith('FAVORITO='):
+                        fav = linea.split('=', 1)[1].strip().strip('"')
+                    elif linea.startswith('PLAY_COUNT='):
+                        veces = linea.split('=', 1)[1].strip().strip('"')
+                    elif linea.startswith('PLAY_SECONDS='):
+                        segs = linea.split('=', 1)[1].strip().strip('"')
+                    elif linea.startswith('LAST_PLAYED='):
+                        ultima = linea.split('=', 1)[1].strip().strip('"')
+        except OSError:
+            continue
+        datos[f[:-5]] = (fav or '0', veces or '0', segs or '0', ultima)
+    return datos
+
+
+def fmt_playtime(segundos):
+    """segundos -> "3 h 12 min" / "45 min" / "<1 min". Como fmt_playtime()."""
+    horas, minutos = segundos // 3600, (segundos % 3600) // 60
+    if horas > 0:
+        return '%d h %d min' % (horas, minutos)
+    if minutos > 0:
+        return '%d min' % minutos
+    return '<1 min'
+
+
+def etiqueta_rejilla(ruta, raices):
+    """La etiqueta de la rejilla: como la de la lista y, ademas, los tres
+    recortes que hacia el bucle de bash por si la extension seguia ahi."""
+    t = etiqueta(ruta, raices)
+    corte = t.rfind('.wsquashfs')          # "${t2%.wsquashfs*}"
+    if corte >= 0:
+        t = t[:corte]
+    for ext in ('.squashfs', '.dwarfs'):   # "${t2%.squashfs}" y "${t2%.dwarfs}"
+        if t.endswith(ext):
+            t = t[:-len(ext)]
+    return t
+
+
+def carpetas_de_covers(forma):
+    """(carpeta de esa forma, carpeta vertical) para buscar_cover."""
+    vertical = entorno('COVERS_DIR')
+    carpeta = {
+        'wide': entorno('COVERS_WIDE_DIR'),
+        '43': entorno('COVERS_43_DIR'),
+    }.get(forma, vertical) or vertical
+    return carpeta, vertical
+
+
+def rejilla(f_manifiesto, juegos, raices, perfiles):
+    """Una fila por juego: etiqueta|caratula|ruta|fav."""
+    forma = entorno('WP_GRID_FORMA', 'vertical')
+    carpeta_cover, covers = carpetas_de_covers(forma)
+    filas = []
+    for ruta in juegos:
+        etq = etiqueta_rejilla(ruta, raices)
+        gid = game_id(ruta)
+        cov = buscar_cover(gid, carpeta_cover, covers,
+                           legacy_wide=(forma == 'wide'))
+        fav, _veces, segs, ultima = perfiles.get(gid, SIN_PERFIL)
+
+        info = ''
+        try:                               # bash: [ "$sc" -gt 0 ] 2>/dev/null
+            if int(segs) > 0:
+                info = fmt_playtime(int(segs))
+        except ValueError:
+            pass
+        if ultima:
+            # Solo la fecha, sin la hora: la hora no cabe y ademas el ' - '
+            # separa las dos cosas. OJO con las barras verticales.
+            info = (info + ' - ' if info else '') + ultima.split(' ')[0]
+        if info:
+            etq = '%s   [%s]' % (etq, info)
+        # El separador es sagrado: si una fecha o un nombre cuela un '|', la
+        # fila se parte y el juego se queda sin caratula.
+        etq = etq.replace('|', '/')
+
+        filas.append('%s|%s|%s|%s' % (etq, cov, ruta, fav or '0'))
+
+    with open(f_manifiesto, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(filas) + ('\n' if filas else ''))
+    return 0
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.stderr.write('uso: biblioteca.py <mapa> <info>\n'
+                         '     biblioteca.py --rejilla <manifiesto>\n')
+        return 2
+
+    perfiles = leer_perfiles(entorno('PROFILE_DIR'))
+    raices = [r for r in entorno('WP_RAICES', '').split('\n') if r.strip()]
+    juegos = [l.rstrip('\n') for l in sys.stdin if l.strip()]
+
+    if sys.argv[1] == '--rejilla':
+        return rejilla(sys.argv[2], juegos, raices, perfiles)
+
+    f_mapa, f_info = sys.argv[1], sys.argv[2]
+
+    forma = entorno('LIST_COVER', 'vertical')
+    carpeta_cover, covers = carpetas_de_covers(forma)
+    datos_dir = entorno('DATOS_DIR')
+
+    vistas = set()
+    lineas_mapa, lineas_info, etiquetas = [], [], []
+
+    for ruta in juegos:
+        etq = etiqueta(ruta, raices)
+        # dos juegos pueden quedar con la misma etiqueta al quitar la
+        # extension: el segundo conserva su nombre completo
+        if etq in vistas:
+            etq = os.path.basename(ruta.rstrip('/'))
+        vistas.add(etq)
+
+        gid = game_id(ruta)
+        cov = buscar_cover(gid, carpeta_cover, covers,
+                           legacy_wide=(forma == 'wide'))
+        fav, veces, segs, _ultima = perfiles.get(gid, SIN_PERFIL)
+
+        ficha = os.path.join(datos_dir, '%s.info.json' % gid)
+        ficha = ficha if (datos_dir and os.path.isfile(ficha)
+                          and os.path.getsize(ficha) > 0) else ''
+        dur = os.path.join(datos_dir, '%s.hltb' % gid)
+        dur = dur if (datos_dir and os.path.isfile(dur)
+                      and os.path.getsize(dur) > 0) else ''
+
+        lineas_mapa.append('%s\t%s' % (etq, ruta))
+        lineas_info.append('%s|%s|%s|%s|%s|%s|%s'
+                           % (etq, cov, fav, veces, segs, ficha, dur))
+        etiquetas.append(etq)
+
+    with open(f_mapa, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(lineas_mapa) + ('\n' if lineas_mapa else ''))
+    with open(f_info, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(lineas_info) + ('\n' if lineas_info else ''))
+    sys.stdout.write('\n'.join(etiquetas) + ('\n' if etiquetas else ''))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+BIBEOF
+}
+
+# ----------------------------------------------------------------------------
 # 5. HELPERS DE MENU (seleccion via fichero temporal, nunca $( ) crudo con GUIs)
 # ----------------------------------------------------------------------------
 menu() {
@@ -6840,20 +7121,43 @@ cleanup_all() {
     # -aunque no tenga ventana ni haga nada- basta para que de el juego por
     # abierto. Aqui se listan, que es justo lo que no habiamos mirado.
     if command -v ps >/dev/null 2>&1; then
-        local _grupo _resto
-        _grupo="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+        # LA FOTO SE SACA A UN FICHERO, NUNCA CON $( ) NI CON TUBERIA.
+        #
+        # Antes era "$(ps -eo ... | awk ...)". Una tuberia dentro de $( )
+        # obliga a bash a bifurcarse, y esas bifurcaciones son procesos bash
+        # de NUESTRO MISMO GRUPO: cuando ps saca la foto, salen en ella. El
+        # filtro descarta ps, awk y sh, pero no bash, asi que la comprobacion
+        # se encontraba a si misma y avisaba en todos los cierres de un
+        # superviviente que no existia.
+        #
+        # Medido con un script vacio, sin nada en segundo plano:
+        #   $( ) con tuberia -> tres bash y un tr    (todos fantasmas)
+        #   $( ) sin tuberia -> un bash              (fantasma)
+        #   foto a fichero   -> nadie                <- lo que se hace ahora
+        #
+        # Es el mismo fallo de siempre: pgrep encontrandose a si mismo.
+        local _grupo="" _resto _foto
+        _foto="$(mktemp)"
+        ps -o pgid= -p $$ > "$_foto" 2>/dev/null
+        # read en vez de $( ): asi no se bifurca ni una sola vez
+        read -r _grupo < "$_foto" 2>/dev/null || _grupo=""
+        _grupo="${_grupo// /}"
         if [ -n "$_grupo" ]; then
             # OJO: "ps -g" NO lista por grupo (filtra por sesion). Hay que
             # recorrer todos los procesos y comparar el grupo a mano.
-            _resto="$(ps -eo pid=,pgid=,comm= 2>/dev/null \
-                      | awk -v g="$_grupo" -v yo=$$ \
-                            '$2 == g && $1 != yo && $3 !~ /^(ps|awk|sh)$/ {print $1" "$3}')"
-            if [ -n "$_resto" ]; then
-                log "Cierre: EN NUESTRO GRUPO ($_grupo) quedan: $(printf '%s' "$_resto" | tr '\n' ' ')" WARN
+            ps -eo pid=,pgid=,comm= > "$_foto" 2>/dev/null
+            # awk lee el fichero YA ESCRITO: lo que se bifurque ahora ya no
+            # puede salir en una foto que se saco antes.
+            _resto="$(awk -v g="$_grupo" -v yo=$$ \
+                          '$2 == g && $1 != yo && $3 !~ /^(ps|awk|sh)$/ {printf "%s %s ", $1, $3}' \
+                          "$_foto" 2>/dev/null)"
+            if [ -n "${_resto// /}" ]; then
+                log "Cierre: EN NUESTRO GRUPO ($_grupo) quedan: $_resto" WARN
             else
                 log "Cierre: en nuestro grupo ($_grupo) no queda nadie mas"
             fi
         fi
+        rm -f "$_foto"
     fi
     # NO se espera a ningun "hijo".
     #
@@ -8770,7 +9074,8 @@ redist_target_menu() {
             redist_menu "" "default" ;;
         "Prefijo de un juego"*)
             local g gid2
-            g="$(pick_squash)" || return
+            pick_squash_ui || return
+            g="$WP_PICK"
             g="$(wpact_ruta "$g")" || return
             gid2="$(game_id "$g")"
             load_profile "$gid2"
@@ -13187,6 +13492,241 @@ pick_squash() {
     done
 }
 
+vista_recargar() {
+    # pick_squash corre dentro de $( ): lo que cambia ahi NO vuelve a esta
+    # shell. La vista se guardo bien en el fichero, asi que se relee de ahi.
+    #
+    # Solo se toca GAMES_VIEW a proposito. Recargar los ajustes enteros
+    # (load_settings) pisaria variables que el padre puede tener a medio
+    # cambiar y sin guardar todavia.
+    [ -f "$SETTINGS_FILE" ] || return 0
+    local v
+    v="$(sed -n 's/^GAMES_VIEW="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$SETTINGS_FILE" | head -n1)"
+    case "$v" in
+        list|grid|banner|cuadro) ;;
+        *) return 0 ;;                   # vacio o con algo raro: no se toca
+    esac
+    [ "$v" = "${GAMES_VIEW:-}" ] && return 0
+    log "Vista releida del fichero: ${GAMES_VIEW:-?} -> $v"
+    GAMES_VIEW="$v"
+}
+
+pick_squash_ui() {
+    # Envoltorio de pick_squash para los menus: elige el juego Y recupera la
+    # vista. Deja el resultado en WP_PICK, no por la salida estandar; asi el
+    # que llama NO tiene que meterlo en $( ) y perder el cambio otra vez.
+    WP_PICK="$(pick_squash)"
+    local rc=$?      # INMEDIATAMENTE: cualquier cosa por en medio lo pisa
+    vista_recargar
+    return $rc
+}
+
+biblioteca_lenta() {
+    # La via de siempre: una pasada de bash por juego. Se conserva tal cual
+    # estaba en la 1.20, palabra por palabra, porque es la referencia contra la
+    # que se compara la rapida y la red de seguridad si esta falla.
+    #   $1 mapa   etiqueta<TAB>ruta
+    #   $2 info   etiqueta|caratula|fav|veces|segundos|ficha|duracion
+    #   $3 salida una etiqueta por linea, en orden
+    #   $4 lista de rutas, una por linea
+    local mapa="$1" info="$2" salida="$3" juegos="$4"
+    : > "$mapa"; : > "$info"; : > "$salida"
+    local rel3 etq gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
+    while IFS= read -r rel3; do
+        [ -n "$rel3" ] || continue
+        etq="$(juego_etiqueta "$rel3")"
+        # La etiqueta es la clave para volver a la ruta. Al quitar la
+        # extension pueden coincidir dos juegos (el mismo nombre en
+        # .wsquashfs y en .dwarfs, por ejemplo): en ese caso se deja el
+        # nombre completo del segundo, para no perder ninguno.
+        if cut -f1 "$mapa" 2>/dev/null | grep -qxF "$etq"; then
+            etq="${rel3##*/}"
+        fi
+        printf '%s\t%s\n' "$etq" "$rel3" >> "$mapa"
+        printf '%s\n' "$etq" >> "$salida"
+        gid3="$(game_id "$rel3")"
+        cov3="$(cover_for "$gid3" "${LIST_COVER:-vertical}")" || cov3=""
+        mt3="$(game_meta "$rel3")"
+        fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
+        pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
+        fjson="$DATOS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
+        fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
+        printf '%s|%s|%s|%s|%s|%s|%s\n' \
+            "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
+            >> "$info"
+    done <<EOFINFO
+$juegos
+EOFINFO
+    return 0
+}
+
+rejilla_lenta() {
+    # El bucle de la rejilla tal como estaba, movido a una funcion. Es la
+    # referencia contra la que se compara la rapida y la red de seguridad.
+    #   $1 manifiesto  etiqueta|caratula|ruta|favorito
+    #   $2 lista de rutas, una por linea
+    #   $3 forma de la caratula (vertical | wide | 43)
+    local man="$1" juegos="$2" aspecto="$3"
+    : > "$man"
+    local rel gid2 t2 cov mt fv sc lp info t3
+    while IFS= read -r rel; do
+        [ -n "$rel" ] || continue
+        gid2="$(game_id "$rel")"
+        t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
+        t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
+        # con la vista de caratulas anchas se pide la horizontal; si el
+        # juego no la tiene, cover_for devuelve la vertical
+        cov="$(cover_for "$gid2" "$aspecto")" || cov=""
+        info=""
+        mt="$(game_meta "$rel")"
+        fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
+        [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
+        # OJO: nada de "|" aqui. El manifiesto usa | como separador de
+        # columnas: al jugar aparecia la fecha y partia la linea, con lo
+        # que la ruta de la caratula se perdia y el juego salia sin ella.
+        [ -n "$lp" ] && info="${info:+$info - }${lp%% *}"
+        t3="$t2$([ -n "$info" ] && printf '   [%s]' "$info")"
+        t3="$(printf '%s' "$t3" | tr '|' '/')"     # el separador es sagrado
+        printf '%s|%s|%s|%s\n' "$t3" "$cov" "$rel" "${fv:-0}" >> "$man"
+    done <<EOF2
+$juegos
+EOF2
+    return 0
+}
+
+rejilla_rapida() {
+    # Lo mismo, con un solo proceso. Mismos argumentos que rejilla_lenta.
+    # La forma de la caratula viaja en WP_GRID_FORMA y no en LIST_COVER:
+    # cada vista de rejilla usa una distinta (grid vertical, banner ancha,
+    # cuadro 4:3), asi que no vale la de la lista.
+    local man="$1" juegos="$2" aspecto="$3"
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_biblioteca || return 1
+    [ -s "$BIBLIOTECA_PY" ] || return 1
+    : > "$man"
+    printf '%s\n' "$juegos" | \
+        COVERS_DIR="$COVERS_DIR" \
+        COVERS_WIDE_DIR="$COVERS_WIDE_DIR" \
+        COVERS_43_DIR="$COVERS_43_DIR" \
+        PROFILE_DIR="$PROFILE_DIR" \
+        WP_GRID_FORMA="$aspecto" \
+        WP_RAICES="$(games_paths)" \
+        "$PY_BIN" "$BIBLIOTECA_PY" --rejilla "$man" 2>>"$LOG_FILE"
+}
+
+rejilla_componer() {
+    # Punto de entrada de la rejilla. Igual que biblioteca_componer, y con el
+    # mismo WP_BIBLIOTECA_COMPARAR=1 para contrastar las dos vias sobre la
+    # biblioteca de verdad.
+    local man="$1" juegos="$2" aspecto="$3"
+    local esperadas rapida=0
+    esperadas="$(printf '%s\n' "$juegos" | grep -c . || true)"
+
+    if rejilla_rapida "$man" "$juegos" "$aspecto"; then
+        local n; n="$(grep -c . "$man" 2>/dev/null || true)"
+        if [ "${n:-0}" = "$esperadas" ]; then
+            rapida=1
+        else
+            log "Rejilla: la via rapida dio $n de $esperadas filas; se usa la de siempre" WARN
+        fi
+    else
+        log "Rejilla: la via rapida no esta disponible; se usa la de siempre" WARN
+    fi
+
+    if [ "$rapida" != 1 ]; then
+        rejilla_lenta "$man" "$juegos" "$aspecto"
+        return 0
+    fi
+
+    if [ "${WP_BIBLIOTECA_COMPARAR:-0}" = 1 ]; then
+        local vm; vm="$(mktemp)"
+        rejilla_lenta "$vm" "$juegos" "$aspecto"
+        if cmp -s "$man" "$vm"; then
+            log "Rejilla COMPARAR: el manifiesto coincide ($esperadas juegos, $aspecto)"
+        else
+            log "Rejilla COMPARAR: el manifiesto NO coincide" ERROR
+            diff "$vm" "$man" 2>/dev/null | head -n 20 >> "$LOG_FILE"
+        fi
+        rm -f "$vm"
+    fi
+    return 0
+}
+
+biblioteca_rapida() {
+    # Lo mismo, con un solo proceso. Mismos argumentos que biblioteca_lenta.
+    # Devuelve 1 si no se puede usar; el que llama sigue con la via de siempre.
+    local mapa="$1" info="$2" salida="$3" juegos="$4"
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_biblioteca || return 1
+    [ -s "$BIBLIOTECA_PY" ] || return 1
+    : > "$mapa"; : > "$info"; : > "$salida"
+    # OJO: las etiquetas salen a un FICHERO, no a $( ). Es la norma de la casa
+    # desde selector_manual.py, y ademas asi se pueden contar las filas sin que
+    # el shell se coma los saltos de linea del final.
+    printf '%s\n' "$juegos" | \
+        COVERS_DIR="$COVERS_DIR" \
+        COVERS_WIDE_DIR="$COVERS_WIDE_DIR" \
+        COVERS_43_DIR="$COVERS_43_DIR" \
+        DATOS_DIR="$DATOS_DIR" \
+        PROFILE_DIR="$PROFILE_DIR" \
+        LIST_COVER="${LIST_COVER:-vertical}" \
+        WP_RAICES="$(games_paths)" \
+        "$PY_BIN" "$BIBLIOTECA_PY" "$mapa" "$info" > "$salida" 2>>"$LOG_FILE"
+}
+
+biblioteca_componer() {
+    # Punto de entrada: intenta la via rapida y, si algo no cuadra, rehace la
+    # lista por la via de siempre. Quien llama no se entera de cual se uso.
+    #
+    # Con WP_BIBLIOTECA_COMPARAR=1 se hacen LAS DOS sobre la biblioteca real y
+    # se avisa de cualquier diferencia. Las pruebas se hicieron con bibliotecas
+    # inventadas; la de verdad tiene nombres y caratulas que pueden sacar casos
+    # no previstos, y es el cambio mas delicado hecho al proyecto.
+    local mapa="$1" info="$2" salida="$3" juegos="$4"
+    local esperadas rapida=0
+    esperadas="$(printf '%s\n' "$juegos" | grep -c . || true)"
+
+    if biblioteca_rapida "$mapa" "$info" "$salida" "$juegos"; then
+        local n_etq n_map n_inf
+        n_etq="$(grep -c . "$salida" 2>/dev/null || true)"
+        n_map="$(grep -c . "$mapa"   2>/dev/null || true)"
+        n_inf="$(grep -c . "$info"   2>/dev/null || true)"
+        if [ "${n_etq:-0}" = "$esperadas" ] && \
+           [ "${n_map:-0}" = "$esperadas" ] && \
+           [ "${n_inf:-0}" = "$esperadas" ]; then
+            rapida=1
+        else
+            log "Biblioteca: la via rapida dio $n_etq/$n_map/$n_inf de $esperadas filas; se usa la de siempre" WARN
+        fi
+    else
+        log "Biblioteca: la via rapida no esta disponible; se usa la de siempre" WARN
+    fi
+
+    if [ "$rapida" != 1 ]; then
+        biblioteca_lenta "$mapa" "$info" "$salida" "$juegos"
+        return 0
+    fi
+
+    if [ "${WP_BIBLIOTECA_COMPARAR:-0}" = 1 ]; then
+        local vm vi vs difs=0
+        vm="$(mktemp)"; vi="$(mktemp)"; vs="$(mktemp)"
+        biblioteca_lenta "$vm" "$vi" "$vs" "$juegos"
+        local par
+        for par in "mapa:$mapa:$vm" "info:$info:$vi" "etiquetas:$salida:$vs"; do
+            local que="${par%%:*}" resto="${par#*:}"
+            local nuevo="${resto%%:*}" viejo="${resto#*:}"
+            if ! cmp -s "$nuevo" "$viejo"; then
+                difs=$((difs+1))
+                log "Biblioteca COMPARAR: $que NO coincide" ERROR
+                diff "$viejo" "$nuevo" 2>/dev/null | head -n 20 >> "$LOG_FILE"
+            fi
+        done
+        rm -f "$vm" "$vi" "$vs"
+        [ "$difs" = 0 ] && log "Biblioteca COMPARAR: los tres ficheros coinciden ($esperadas juegos)"
+    fi
+    return 0
+}
+
 pick_squash_una_vez() {
     # Devuelve un wsquashfs de la biblioteca O una carpeta/exe suelto (navegador)
     # Ya no hace falta la entrada "juego suelto": las carpetas de las carpetas
@@ -13240,29 +13780,12 @@ Tienes tres formas de añadir juegos:
     if [ "$_es_rejilla" = 1 ] && pygame_available && [ -n "$list" ]; then
         pad_bridge_stop
         write_menu_pygame
-        local man tmpsel rel gid2 t2 cov
+        local man tmpsel
         man="$(mktemp)"; tmpsel="$(mktemp)"
-        while IFS= read -r rel; do
-            gid2="$(game_id "$rel")"
-            t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
-            t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
-            # con la vista de caratulas anchas se pide la horizontal; si el
-            # juego no la tiene, cover_for devuelve la vertical
-            cov="$(cover_for "$gid2" "$_aspecto")" || cov=""
-            local mt fv sc lp info=""
-            mt="$(game_meta "$rel")"
-            fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
-            [ "${sc:-0}" -gt 0 ] 2>/dev/null && info="$info$(fmt_playtime "$sc")"
-            # OJO: nada de "|" aquí. El manifiesto usa | como separador de
-            # columnas: al jugar aparecia la fecha y partia la linea, con lo
-            # que la ruta de la carátula se perdia y el juego salia sin ella.
-            [ -n "$lp" ] && info="${info:+$info - }${lp%% *}"
-            local t3; t3="$t2$([ -n "$info" ] && printf '   [%s]' "$info")"
-            t3="$(printf '%s' "$t3" | tr '|' '/')"     # el separador es sagrado
-            printf '%s|%s|%s|%s\n' "$t3" "$cov" "$rel" "${fv:-0}" >> "$man"
-        done <<EOF2
-$list
-EOF2
+        local _tg0 _tg1; _tg0="$(date +%s)"
+        rejilla_componer "$man" "$list" "$_aspecto"
+        _tg1="$(date +%s)"
+        log "Rejilla: datos de los juegos en $((_tg1-_tg0))s"
         # La rejilla tambien va por el SERVIDOR de menus: si no, abre una
         # ventana aparte (parpadeo) y no puede marcar favoritos con R1,
         # porque el fichero de favoritos viaja en la peticion.
@@ -13317,35 +13840,11 @@ EOF2
     # La lista MUESTRA etiquetas legibles (el nombre del juego, y de que
     # carpeta viene si hay varias), pero por dentro trabaja con rutas
     # absolutas. El mapa guarda la correspondencia.
-    local infofile mapfile etiquetas="" etq
-    local rel3 gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
-    infofile="$(mktemp)"; mapfile="$(mktemp)"
-    while IFS= read -r rel3; do
-        [ -n "$rel3" ] || continue
-        etq="$(juego_etiqueta "$rel3")"
-        # La etiqueta es la clave para volver a la ruta. Al quitar la
-        # extension pueden coincidir dos juegos (el mismo nombre en
-        # .wsquashfs y en .dwarfs, por ejemplo): en ese caso se deja el
-        # nombre completo del segundo, para no perder ninguno.
-        if cut -f1 "$mapfile" 2>/dev/null | grep -qxF "$etq"; then
-            etq="${rel3##*/}"
-        fi
-        printf '%s\t%s\n' "$etq" "$rel3" >> "$mapfile"
-        etiquetas="$etiquetas$etq
-"
-        gid3="$(game_id "$rel3")"
-        cov3="$(cover_for "$gid3" "${LIST_COVER:-vertical}")" || cov3=""
-        mt3="$(game_meta "$rel3")"
-        fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
-        pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
-        fjson="$DATOS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
-        fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
-        printf '%s|%s|%s|%s|%s|%s|%s\n' \
-            "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
-            >> "$infofile"
-    done <<EOFINFO
-$list
-EOFINFO
+    local infofile mapfile etqfile etiquetas=""
+    infofile="$(mktemp)"; mapfile="$(mktemp)"; etqfile="$(mktemp)"
+    biblioteca_componer "$mapfile" "$infofile" "$etqfile" "$list"
+    etiquetas="$(cat "$etqfile")"
+    rm -f "$etqfile"
     local favfile; favfile="$(mktemp)"
     _t1="$(date +%s)"
     log "Biblioteca: datos de los juegos en $((_t1-_t0))s"
@@ -13851,8 +14350,9 @@ direct_play_loop() {
     # Modo solo-jugar: lista de juegos en bucle; al cancelar, se cierra.
     local g
     while true; do
-        g="$(pick_squash)"
+        pick_squash_ui
         local prc=$?
+        g="$WP_PICK"
         if [ "$prc" = 2 ]; then
             say "Reintentando abrir la lista de juegos..."
             sleep 1
@@ -13885,7 +14385,8 @@ main_dispatch() {
         "Jugar"*)
             # Los favoritos se marcan DENTRO del menu (R1) y se guardan al
             # salir: no hay que reabrir nada.
-            local g; g="$(pick_squash)" && play_or_config "$g" ;;
+            local g
+            pick_squash_ui && { g="$WP_PICK"; play_or_config "$g"; } ;;
         "Añadir un juego"*)
             local imp=""
             if pygame_available; then
@@ -13905,7 +14406,8 @@ main_dispatch() {
         "Instalar librerias"*) redist_target_menu ;;
         "Ajustes de un juego"*)
             local g2
-            if g2="$(pick_squash)"; then
+            if pick_squash_ui; then
+                g2="$WP_PICK"
                 g2="$(wpact_ruta "$g2")" || return 0
                 game_config_menu "$g2"
             fi ;;

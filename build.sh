@@ -113,7 +113,7 @@ PY
         esac
     done < "$BASE"
 
-    [ "$n" -eq 5 ] || { rojo "Se esperaban 5 inserciones y hubo $n"; exit 1; }
+    [ "$n" -eq 6 ] || { rojo "Se esperaban 6 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -132,7 +132,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'
@@ -176,7 +176,8 @@ s = open(ruta, encoding='utf-8').read()
 for var, fin, dest in (('MENU_PYGAME_PY','PGEOF','menu_pygame.py'),
                        ('MAPEADOR_PY','MAPEOF','mapeador.py'),
                        ('STEAM_ADD_PY','SAEOF','steam_add.py'),
-                       ('MENU_GTK_PY','GTKEOF','menu_gtk.py')):
+                       ('MENU_GTK_PY','GTKEOF','menu_gtk.py'),
+                       ('BIBLIOTECA_PY','BIBEOF','biblioteca.py')):
     st = s.index('cat > "$%s" <<' % var)
     ini = s.index('\n', st) + 1
     en = s.index('\n%s\n' % fin, st)
