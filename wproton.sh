@@ -9629,11 +9629,50 @@ prefijo_limpiar() {
     #   - enlaces a las carpetas del usuario (Wine crea enlaces de Escritorio,
     #     Documentos, etc. hacia $HOME): en otro equipo apuntarian a ninguna
     #     parte, y ademas se llevarian por delante ficheros ajenos al copiar.
+    #   - unidades de dosdevices que apuntan a ESTA maquina (d:, e:...): en
+    #     otro equipo no existen. c: y z: si viajan, son las de siempre.
     #   - caches de shaders y temporales: son GIGAS que se regeneran solos.
-    local dc="$1" d
+    #
+    # $1 = RAIZ del prefijo (la que tiene drive_c y los .reg dentro).
+    local raiz="$1" dc="$1/drive_c" d
     say "Limpiando el prefijo antes de empaquetar..."
-    # 1) enlaces del perfil de usuario -> carpetas normales y vacias
-    find "$dc/users" -maxdepth 3 -type l 2>/dev/null | while IFS= read -r d; do
+    # 0) unidades que solo existen aqui
+    if [ -d "$raiz/dosdevices" ]; then
+        for d in "$raiz"/dosdevices/*; do
+            [ -e "$d" ] || [ -L "$d" ] || continue
+            case "${d##*/}" in
+                'c:'|'z:'|'c::'|'z::') continue ;;
+            esac
+            rm -f "$d" 2>/dev/null
+        done
+        # c: siempre relativa: asi sigue valiendo en cualquier sitio donde se
+        # monte el archivo. Si viajara absoluta apuntaria a este ordenador.
+        if [ -L "$raiz/dosdevices/c:" ]; then
+            rm -f "$raiz/dosdevices/c:"
+            ln -s "../drive_c" "$raiz/dosdevices/c:" 2>/dev/null
+        fi
+    fi
+    # 1) Enlaces del perfil que SALEN del prefijo -> carpetas vacias.
+    #
+    # OJO: solo los que apuntan fuera. Antes se convertian TODOS, y ahi dentro
+    # estan los enlaces INTERNOS de Wine y Proton: "Local Settings",
+    # "Application Data", "My Documents"... Al volverlos carpetas de verdad,
+    # Proton cree que el prefijo es de los antiguos, intenta migrarlo
+    # renombrando a " BACKUP", y sobre un montaje overlay renombrar un
+    # directorio que vive en la capa de solo lectura falla:
+    #     OSError: [Errno 18] Invalid cross-device link
+    # El juego no arrancaba. Ademas, aunque arrancase, las aplicaciones
+    # perderian sus rutas de AppData.
+    local destino
+    find "$dc/users" -maxdepth 4 -type l 2>/dev/null | while IFS= read -r d; do
+        destino="$(readlink "$d" 2>/dev/null)" || continue
+        case "$destino" in
+            /*) ;;                    # absoluto: puede apuntar fuera
+            *)  continue ;;           # relativo: interno de Wine, NO se toca
+        esac
+        case "$destino/" in
+            "$raiz"/*|"$dc"/*) continue ;;   # absoluto pero dentro: se queda
+        esac
         rm -f "$d" && mkdir -p "$d"
     done
     # 2) basura conocida
@@ -9682,8 +9721,24 @@ y vuelve a intentarlo."
             return 1 ;;
     esac
 
+    # Sin ejecutable, el autorun.cmd sale con CMD="" y el archivo se monta
+    # pero no sabe que lanzar. EXE_PATH solo esta puesto si el juego se ha
+    # lanzado en esta sesion: entrando por Configurar suele estar vacio, y
+    # antes se empaquetaba igual y el fallo no se veia hasta usarlo.
+    if [ -z "$exe" ] || [ ! -f "$exe" ]; then
+        exe="$(find_game_exe "$src")" || exe=""
+        [ -n "$exe" ] && say "[+] Ejecutable encontrado: $(basename "$exe")"
+    fi
+    if [ -z "$exe" ]; then
+        ui_error "No se encuentra el ejecutable de '$gid'.
+
+Sin el, el archivo se montaria pero no sabria que lanzar.
+Lanza el juego una vez (o fijalo en 'Ejecutable') y repite."
+        return 1
+    fi
+
     local tam_pfx tam_juego total
-    tam_pfx="$(dir_bytes "$dc")"
+    tam_pfx="$(dir_bytes "$pfx")"   # el prefijo entero, no solo drive_c
     tam_juego="$(dir_bytes "$src")"
     total=$(( ${tam_pfx:-0} + ${tam_juego:-0} ))
     if ! ui_ask "Empaquetar '$gid' CON su prefijo (autosuficiente)?
@@ -9707,10 +9762,22 @@ mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
     rm -rf "$tmp"; mkdir -p "$tmp" || { ui_error "No se pudo crear la carpeta de trabajo"; return 1; }
 
     loading_say "Copiando el prefijo..."
-    if ! cp -a "$dc" "$tmp/drive_c" 2>>"$LOG_FILE"; then
+    # EL PREFIJO ENTERO, no solo drive_c.
+    #
+    # Antes se copiaba unicamente drive_c y se dejaban fuera system.reg,
+    # user.reg, userdef.reg y dosdevices/. En el registro esta TODO lo que
+    # instalo winetricks: los redistribuibles, las anulaciones de DLL, la
+    # version de Windows... o sea, justo lo que hace que el archivo sea
+    # autosuficiente. Y ademas has_bundled_prefix() pide un system.reg o un
+    # user.reg en la raiz, asi que el archivo que salia de aqui NI SIQUIERA
+    # se reconocia como que llevaba prefijo: al lanzarlo caia al compartido.
+    if ! cp -a "$pfx/." "$tmp/" 2>>"$LOG_FILE"; then
         rm -rf "$tmp"; ui_error "No se pudo copiar el prefijo"; return 1
     fi
-    prefijo_limpiar "$tmp/drive_c"
+    if [ ! -d "$tmp/drive_c" ]; then
+        rm -rf "$tmp"; ui_error "El prefijo copiado no tiene drive_c"; return 1
+    fi
+    prefijo_limpiar "$tmp"
 
     # ¿El juego ya vive DENTRO del prefijo? Entonces no hay que copiarlo otra
     # vez: basta con apuntar al sitio donde ya esta.
@@ -9736,17 +9803,41 @@ mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
     local exe_rel exe_name
     exe_name="$(basename "$exe")"
     exe_rel="$rel_dir"
-    if [ -n "$exe" ]; then
-        # respetar la subcarpeta del ejecutable dentro del juego
-        local sub; sub="$(dirname "$(readlink -f "$exe")")"
-        local base_src; base_src="$(readlink -f "$src")"
+    # Respetar la subcarpeta del ejecutable dentro del juego.
+    #
+    # OJO con el caso mas normal, el .exe en la raiz de la carpeta. Antes se
+    # comparaba "$sub/" con el patron "$base_src"/* (que casa, porque * vale
+    # tambien para lo vacio) y luego se recortaba "$base_src/" de "$sub", que
+    # NO lleva barra final: no recortaba nada y el DIR salia con la ruta
+    # absoluta de esta maquina pegada detras.
+    local sub base_src
+    sub="$(dirname "$(readlink -f "$exe")")"
+    base_src="$(readlink -f "$src")"
+    if [ "$sub" != "$base_src" ]; then
         case "$sub/" in
-            "$base_src"/*) exe_rel="$rel_dir/${sub#$base_src/}" ;;
+            "$base_src"/*) exe_rel="$rel_dir/${sub#"$base_src"/}" ;;
         esac
     fi
+    exe_rel="${exe_rel%/}"
     printf 'DIR="drive_c/%s"\r\nCMD="%s"\r\n' "$exe_rel" "$exe_name" \
         > "$tmp/autorun.cmd"
     say "[+] autorun.cmd -> DIR=drive_c/$exe_rel CMD=$exe_name"
+
+    # Antes de gastar minutos comprimiendo, comprobar que lo montado va a
+    # reconocerse como prefijo incluido: es exactamente lo que mira
+    # has_bundled_prefix() al lanzar.
+    if ! has_bundled_prefix "$tmp"; then
+        rm -rf "$tmp"
+        ui_error "El prefijo copiado no lleva system.reg ni user.reg.
+
+Sin ellos el archivo NO seria autosuficiente: al lanzarlo se
+usaria el prefijo compartido y se perderia todo lo instalado.
+
+Prueba el juego una vez con 'Prefijo: propio del juego' para
+que el prefijo se cree del todo, y vuelve a intentarlo."
+        return 1
+    fi
+    say "[+] El prefijo incluye: $(ls "$tmp" | tr '\n' ' ')"
 
     loading_clear
     if build_wsquashfs "$tmp" "$gid"; then
