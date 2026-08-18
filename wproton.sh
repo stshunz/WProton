@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.22"
+WPROTON_VERSION="1.23"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -8085,6 +8085,8 @@ Configurar juego -> Comprobar integridad"
     build_runner_cmd "$rdir"
     pad_sdl_prefix_setup "$rdir"
     bundled_prefix_prepare "$rdir"
+    # Aqui y no antes: hace falta el runner resuelto y WINEPREFIX exportado.
+    redist_base_compartido "$rdir"
 
     guardia_salida_start
     loading_say "Iniciando $gid..."
@@ -9334,6 +9336,66 @@ run_in_prefix() {
     return 0
 }
 
+redist_base_compartido() {
+    # La PRIMERA vez que se estrena el prefijo compartido, ofrecer dejarle
+    # instalado vcrun2022 (Visual C++ 2015-2022). Es lo que piden casi todos
+    # los juegos de Windows y lo que mas veces hace falta: sin el, muchos
+    # arrancan y se cierran sin decir nada.
+    #
+    # Solo vcrun2022 a proposito. Los d3dx* NO van aqui: con Proton, DXVK ya
+    # traduce d3d9/10/11, y esos verbos solo hacen falta para juegos que
+    # llaman a las DLL auxiliares (D3DX9_43.dll y compañia). Se instalan
+    # cuando toque desde "Instalar librerias", sin ensuciar de oficio un
+    # prefijo que comparten todos los juegos en modo compartido.
+    #
+    # $1 = carpeta del runner
+    local rdir="$1"
+    [ -n "${WINEPREFIX:-}" ] || return 0
+    # solo el compartido: los propios y los incluidos son cosa de cada juego
+    [ "$(basename "$WINEPREFIX")" = "default" ] || return 0
+    local marca="$WINEPREFIX/.wp_redist_base"
+    [ -f "$marca" ] && return 0
+    # Si ya hay registro, el prefijo NO se esta estrenando: viene de antes de
+    # la 1.23. Se marca y no se pregunta, que nadie pidio tocarle nada.
+    if [ -f "$WINEPREFIX/system.reg" ]; then
+        : > "$marca" 2>/dev/null
+        return 0
+    fi
+
+    if ! ui_ask "Es la primera vez que se usa el prefijo compartido.
+
+Instalar ahora Visual C++ 2015-2022 (vcrun2022)?
+
+Lo piden casi todos los juegos de Windows. Sin el, muchos
+arrancan y se cierran sin dar ningun error.
+
+Tarda un par de minutos y necesita conexion. Puedes hacerlo
+mas tarde desde 'Instalar librerias'."; then
+        : > "$marca" 2>/dev/null      # dijo que no: no se vuelve a preguntar
+        say "Prefijo compartido: sin redistribuibles de base (elegido por el usuario)"
+        return 0
+    fi
+
+    say "[+] Preparando el prefijo compartido con vcrun2022..."
+    WP_PREFIX_VERBOS="vcrun2022"
+    WP_REDIST_FALLIDOS=""
+    winetricks_uno_a_uno "$rdir"
+    WP_PREFIX_VERBOS=""
+    # La marca se pone pase lo que pase: si fallo la descarga, no tiene
+    # sentido volver a preguntar en cada partida. Se dice como reintentarlo.
+    : > "$marca" 2>/dev/null
+    if [ -n "${WP_REDIST_FALLIDOS:-}" ]; then
+        ui_info "No se pudo instalar vcrun2022 (suele ser la conexion).
+
+El juego se lanza igual. Cuando quieras, reintentalo desde
+'Instalar librerias' -> 'Prefijo compartido': winetricks salta
+lo que ya este puesto, asi que repetirlo es seguro."
+    else
+        say "[+] Prefijo compartido listo con vcrun2022"
+    fi
+    return 0
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -9496,6 +9558,124 @@ run_exe_in_game() {
 #     Se instalan DENTRO del overlay: los ficheros van a upper/ y persisten
 #     sin tocar el wsquashfs original.
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# 13c. WINEDLLOVERRIDES CON MENU
+#
+# Antes solo se podia escribir a mano la cadena entera, y habia que acordarse
+# del formato. Ahora se marcan de una lista, pero la cadena que se guarda es
+# la misma de siempre: "dinput8=n,b;d3d9=n,b".
+# ----------------------------------------------------------------------------
+
+# Las que se piden casi siempre. El texto de despues del doble espacio es solo
+# para el menu: al leer la seleccion se coge el primer campo.
+DLL_COMUNES="dinput8|mando y teclado en juegos viejos
+d3d9|Direct3D 9: dgVoodoo2, ReShade, wrappers
+dxgi|DirectX moderno: OptiScaler, ReShade
+winhttp|cargadores de mods, tipo BepInEx
+winmm|sonido y cargadores de mods viejos"
+
+dll_over_lista() {
+    # Desmenuza WINEDLLOVERRIDES en una linea por DLL: "d3d9=n,b".
+    #
+    # Wine deja agrupar varias en una sola asignacion ("d3d9,ddraw=n,b"), que
+    # es como lo dejan dgVoodoo2 y OptiScaler. Aqui se separan para poder
+    # marcarlas una a una; al guardar se vuelven a juntar con ";".
+    local cadena="${1:-}" trozo nombres modo n
+    printf '%s\n' "$cadena" | tr ';' '\n' | while IFS= read -r trozo; do
+        trozo="$(printf '%s' "$trozo" | tr -d ' ')"
+        [ -n "$trozo" ] || continue
+        case "$trozo" in *=*) ;; *) continue ;; esac
+        nombres="${trozo%%=*}"
+        modo="${trozo#*=}"
+        printf '%s\n' "$nombres" | tr ',' '\n' | while IFS= read -r n; do
+            [ -n "$n" ] && printf '%s=%s\n' "$n" "$modo"
+        done
+    done
+}
+
+dll_over_menu() {
+    # Marca y desmarca DLL de una lista. $1 = gid, $2 = lista extra de DLL
+    # encontradas en el juego (una por linea, sin ruta ni extension).
+    local gid="$1" extra="${2:-}"
+    if ! pygame_available; then
+        ui_info "La lista necesita los menus pygame (--setup).\n\nUsa 'Escribir a mano'."
+        return 1
+    fi
+    pad_bridge_stop
+    write_menu_pygame
+
+    local actuales; actuales="$(dll_over_lista "$DLL_OVERRIDES")"
+    local tmpsel tmpopt; tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
+    local linea dll modo desc
+
+    # 1) Lo que YA esta puesto, marcado y con su modo tal cual.
+    #
+    # Van primero y con su modo original a proposito: si se reescribieran
+    # todas como "n,b" se cambiaria en silencio lo que hubiera puesto a mano
+    # (o dgVoodoo2, que usa varias DLL a la vez). Aqui no desaparece ninguna.
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        dll="${linea%%=*}"
+        desc="$(printf '%s\n' "$DLL_COMUNES" | awk -F'|' -v d="$dll" '$1==d{print $2}')"
+        printf '1|%s  (%s)\n' "$linea" "${desc:-puesta ya}" >> "$tmpopt"
+    done <<EOFACT
+$actuales
+EOFACT
+
+    # 2) Las comunes que falten
+    while IFS='|' read -r dll desc; do
+        [ -n "$dll" ] || continue
+        printf '%s\n' "$actuales" | grep -qx "$dll=.*" && continue
+        printf '0|%s=n,b  (%s)\n' "$dll" "$desc" >> "$tmpopt"
+    done <<EOFCOM
+$DLL_COMUNES
+EOFCOM
+
+    # 3) Las encontradas en la carpeta del juego
+    while IFS= read -r dll; do
+        [ -n "$dll" ] || continue
+        grep -q "^[01]|$dll=" "$tmpopt" && continue
+        printf '0|%s=n,b  (en la carpeta del juego)\n' "$dll" >> "$tmpopt"
+    done <<EOFEXTRA
+$extra
+EOFEXTRA
+
+    if [ ! -s "$tmpopt" ]; then
+        rm -f "$tmpsel" "$tmpopt"
+        ui_info "No hay ninguna DLL que ofrecer."
+        return 1
+    fi
+
+    PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check \
+        "DLL overrides de $gid (X marca, A acepta)" "$tmpsel" "$tmpopt" \
+        >> "$LOG_FILE" 2>&1
+    local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
+    [ $rc -ne 0 ] && return 1
+
+    # El menu devuelve las etiquetas marcadas separadas por "|"; de cada una
+    # interesa el primer campo, que es justo "dll=modo".
+    DLL_OVERRIDES="$(printf '%s' "$sel" | tr '|' '\n' \
+        | awk 'NF{printf "%s%s", (NR>1?";":""), $1}')"
+    write_full_profile "$gid"
+    ui_info "DLL overrides: ${DLL_OVERRIDES:-ninguno}"
+    return 0
+}
+
+dll_over_del_juego() {
+    # Las DLL que hay junto al ejecutable del juego. Son las candidatas de
+    # verdad: si alguien ha dejado ahi un dinput8.dll es porque quiere que se
+    # cargue, y sin el override Wine usa la suya y el mod no arranca.
+    local squash="$1" gid="$2" carpeta
+    carpeta="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
+    find "$carpeta" -maxdepth 1 -type f -iname '*.dll' 2>/dev/null \
+        | while IFS= read -r f; do
+              f="${f##*/}"
+              printf '%s\n' "${f%.[Dd][Ll][Ll]}"
+          done | sort -fu
+    release_game_root
+}
+
 merge_overrides() {
     # Anade $1 a DLL_OVERRIDES sin duplicar
     case "$DLL_OVERRIDES" in
@@ -14599,8 +14779,44 @@ desactivalo aquí mismo." ;;
         "Wayland"*)       WAYLAND=$((1-WAYLAND));       write_full_profile "$gid" ;;
         "Gamescope:"*)    config_gamescope "$gid" ;;
         "DLL overrides:"*)
-            DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: d3d9,ddraw=n,b ; winmm=n,b)" "$DLL_OVERRIDES")"
-            write_full_profile "$gid" ;;
+            local dsel dextra
+            dsel="$(menu "DLL overrides de $gid" \
+                "Elegir de una lista (las comunes y las que ya tienes)" \
+                "Buscar las DLL que hay en el juego y elegir" \
+                "Escribir a mano la cadena entera" \
+                "Quitar todos" \
+                "<< Volver")" || dsel=""
+            case "$dsel" in
+                "Elegir de una lista"*)
+                    dll_over_menu "$gid" "" ;;
+                "Buscar las DLL"*)
+                    # Montar el juego cuesta unos segundos, asi que se avisa
+                    loading_say "Buscando DLL junto al ejecutable..."
+                    dextra="$(dll_over_del_juego "$squash" "$gid")" || dextra=""
+                    loading_clear
+                    if [ -z "$dextra" ]; then
+                        ui_info "No hay ninguna DLL junto al ejecutable de '$gid'.
+
+Se ofrecen igualmente las comunes."
+                    fi
+                    dll_over_menu "$gid" "$dextra" ;;
+                "Escribir a mano"*)
+                    DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: dinput8=n,b;d3d9=n,b)" "$DLL_OVERRIDES")"
+                    write_full_profile "$gid" ;;
+                "Quitar todos")
+                    if [ -z "$DLL_OVERRIDES" ]; then
+                        ui_info "No hay ninguno puesto."
+                    elif ui_ask "Quitar TODOS los DLL overrides de '$gid'?
+
+Ahora mismo: $DLL_OVERRIDES
+
+Los que pusieron dgVoodoo2 u OptiScaler tambien se van, y esas
+herramientas dejarian de cargarse."; then
+                        DLL_OVERRIDES=""
+                        write_full_profile "$gid"
+                        ui_info "DLL overrides: ninguno"
+                    fi ;;
+            esac ;;
         "Idioma del juego:"*)
             GAME_LANG="$(ask_text "Locale (vacio = sistema; ej: ru_RU.UTF-8, ja_JP.UTF-8, en_US.UTF-8)" "$GAME_LANG")"
             write_full_profile "$gid" ;;
