@@ -65,6 +65,7 @@ mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
 GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
 WP_PICK=""                               # resultado de pick_squash_ui
+WIZ_QUIERE_DLL=0                         # el asistente pidio elegir DLL overrides
 GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
 LIST_COVER=vertical                      # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
@@ -79,6 +80,7 @@ MENU_SERVER=1                            # 1 = un solo proceso para todos los me
 OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
+DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
 PAD_EXIT=1                               # cerrar el juego con el mando
 PAD_EXIT_COMBO=select                    # select | l3r3 | start
 PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacion
@@ -181,6 +183,7 @@ OCULTAR_CURSOR="$OCULTAR_CURSOR"
 DIAG_MANDO="$DIAG_MANDO"
 # Vigilar que queda en pantalla tras cerrar (para depurar): 0 = no, 1 = si
 DIAG_CIERRE="$DIAG_CIERRE"
+DIAG_DLL="$DIAG_DLL"
 PAD_EXIT="$PAD_EXIT"
 PAD_EXIT_COMBO="$PAD_EXIT_COMBO"
 PAD_EXIT_SEGUNDOS="$PAD_EXIT_SEGUNDOS"
@@ -7409,6 +7412,7 @@ profile_defaults() {
     EXE_OVERRIDE=""; ARGS_OVERRIDE=""
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
+    HDR=0                    # rango dinamico alto (necesita gamescope o Wayland)
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     # Mandos de Sony (DualSense / DS4) con GE-Proton 11-4 o mas nuevo:
     #   auto - lo que decida Proton (lo normal)
@@ -7486,6 +7490,7 @@ FSYNC=$FSYNC
 ESYNC=$ESYNC
 DXVK_ASYNC=$DXVK_ASYNC
 WAYLAND=$WAYLAND
+HDR=$HDR
 WINED3D=$WINED3D
 FSR=$FSR
 LAA=$LAA
@@ -7658,26 +7663,21 @@ wizard_pick_exe() {
     return 0
 }
 
-aplicar_toggles_basicos() {
-    # Aplica las opciones basicas marcadas en el asistente. Estaba escrito dos
-    # veces (menus GTK y zenity): anadir una opcion nueva y tocar solo una de
-    # las copias habria dado un fallo dificil de encontrar.
-    local sel="$1"
-    MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0
-    case "$sel" in *MangoHud*)  MANGOHUD=1 ;; esac
-    case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
-    case "$sel" in *Fsync*)     FSYNC=1 ;; esac
-    case "$sel" in *DXVK*)      DXVK_ASYNC=1 ;; esac
-    case "$sel" in *Wayland*)   WAYLAND=1 ;; esac
-    return 0
-}
-
-wizard_toggles() {
-    if pygame_available; then
-        pad_bridge_stop
-        write_menu_pygame
-        local tmpsel tmpopt; tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
-        cat > "$tmpopt" <<EOF
+wizard_opciones() {
+    # LA lista del paso 3/3. UNA sola vez, y todos los menus la leen de aqui.
+    #
+    # Antes estaba escrita cuatro veces (pygame, GTK, zenity y texto) y ya se
+    # habia desincronizado: "Mando via SDL" faltaba en zenity y en texto, y
+    # NTsync solo existia en pygame. Quien no tuviera pygame no podia activar
+    # esas dos en el asistente.
+    #
+    # Los DLL overrides son UNA entrada, no cinco: marcarla abre despues la
+    # pantalla de siempre, con las comunes, las que ya haya y la opcion de
+    # mirar las DLL del propio juego. Cinco filas aqui alargaban la lista a
+    # doce y en la pantalla de la Deck se salian.
+    #
+    # Formato: marcada(0/1)|texto
+    cat <<'EOFOPC'
 0|MangoHud (FPS en pantalla)
 1|GameMode (prioridad CPU)
 1|Fsync (sincronizacion rapida)
@@ -7685,60 +7685,130 @@ wizard_toggles() {
 1|Mando via SDL automático (DualSense/DS4 como Xbox)
 0|NTsync (sincronizacion por kernel, 6.14+)
 0|Wayland nativo (experimental)
-EOF
+0|DLL overrides (marcar para elegir cuales)
+EOFOPC
+}
+
+aplicar_toggles_basicos() {
+    # Aplica lo marcado en el paso 3/3. La usan LOS CUATRO menus: anadir una
+    # opcion y tocar solo una copia daria un fallo dificil de encontrar, que
+    # es exactamente lo que llego a pasar.
+    local sel="$1"
+    MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0
+    PAD_SDL=0; NTSYNC=0; DLL_OVERRIDES=""
+    case "$sel" in *MangoHud*)  MANGOHUD=1 ;; esac
+    case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
+    case "$sel" in *Fsync*)     FSYNC=1 ;; esac
+    case "$sel" in *DXVK*)      DXVK_ASYNC=1 ;; esac
+    case "$sel" in *"Mando via SDL"*) PAD_SDL=auto ;; esac
+    case "$sel" in *NTsync*)    NTSYNC=1 ;; esac
+    case "$sel" in *Wayland*)   WAYLAND=1 ;; esac
+    # Solo se anota la intencion: quien elige cuales es wizard_dlls, ya con
+    # la pantalla buena. Asi no hay dos sitios armando la misma cadena.
+    WIZ_QUIERE_DLL=0
+    case "$sel" in *"DLL overrides"*) WIZ_QUIERE_DLL=1 ;; esac
+    return 0
+}
+
+wizard_prefijo() {
+    # Elegir el prefijo desde el asistente. $1 = raiz del juego.
+    #
+    # Antes solo se preguntaba (con un si/no) cuando el wsquashfs traia uno
+    # dentro; no habia forma de pedir uno propio sin salir del asistente y
+    # entrar por Configurar.
+    local root="$1" opts=() sel
+    opts+=("Compartido - prefixes/default, lo usan todos los juegos")
+    opts+=("Propio del juego - prefixes/<juego>, aislado")
+    if has_bundled_prefix "$root"; then
+        opts+=("El que trae el wsquashfs - registro y DLLs propios del juego")
+    fi
+    sel="$(menu "Prefijo para este juego" "${opts[@]}")" || return 0
+    case "$sel" in
+        "Propio"*)          PREFIX_MODE="own" ;;
+        "El que trae"*)     PREFIX_MODE="bundled" ;;
+        *)                  PREFIX_MODE="shared" ;;
+    esac
+    return 0
+}
+
+wizard_dlls() {
+    # Solo si se marco la casilla en el paso 3/3. $1 = gid, $2 = raiz del juego.
+    [ "${WIZ_QUIERE_DLL:-0}" = 1 ] || return 0
+    local extra=""
+    # Las DLL que hay junto al ejecutable son las candidatas de verdad; se
+    # miran ya que el juego esta montado y no cuesta nada.
+    extra="$(dll_over_del_juego "$2" "$1" 2>/dev/null)" || extra=""
+    if pygame_available; then
+        dll_over_menu "$1" "$extra"
+    else
+        # Sin pygame no hay pantalla de marcar: se pide la cadena a mano, que
+        # es mejor que dejar al usuario sin nada despues de haberlo pedido.
+        local sug=""
+        [ -n "$extra" ] && sug="$(printf '%s\n' "$extra" | head -1)=n,b"
+        DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: dinput8=n,b;d3d9=n,b)" "${sug}")"
+    fi
+    return 0
+}
+
+wizard_toggles() {
+    local tmpsel tmpopt rc sel
+    if pygame_available; then
+        pad_bridge_stop
+        write_menu_pygame
+        tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
+        wizard_opciones > "$tmpopt"
         PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
             env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check "Paso 3/3 - Configuración basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
-        local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
+        rc=$?; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
         [ $rc -ne 0 ] && return 1
-        MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0; PAD_SDL=0; NTSYNC=0
-        case "$sel" in *MangoHud*)  MANGOHUD=1 ;; esac
-        case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
-        case "$sel" in *Fsync*)     FSYNC=1 ;; esac
-        case "$sel" in *DXVK*)      DXVK_ASYNC=1 ;; esac
-        case "$sel" in *"Mando via SDL"*) PAD_SDL=auto ;; esac
-        case "$sel" in *NTsync*)    NTSYNC=1 ;; esac
-        case "$sel" in *Wayland*)   WAYLAND=1 ;; esac
+        aplicar_toggles_basicos "$sel"
         return 0
     fi
     if gtk_available; then
         pad_bridge_start
         write_menu_gtk
-        local tmpsel tmpopt; tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
-        cat > "$tmpopt" <<EOF
-0|MangoHud (FPS en pantalla)
-1|GameMode (prioridad CPU)
-1|Fsync (sincronizacion rapida)
-1|DXVK Async + GPL (menos stutter en AMD)
-1|Mando via SDL automático (DualSense/DS4 como Xbox)
-0|Wayland nativo (experimental)
-EOF
+        tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
+        wizard_opciones > "$tmpopt"
         "$SYS_PY" "$MENU_GTK_PY" check "Paso 3/3 - Configuración basica" "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
-        local sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
+        sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
         [ -z "$sel" ] && return 1
         aplicar_toggles_basicos "$sel"
         return 0
     fi
     if [ "$HAS_ZENITY" = 1 ]; then
-        local tmpsel; tmpsel="$(mktemp)"
+        # los argumentos de zenity salen de la MISMA lista, en pares
+        local zargs=() marca texto linea
+        while IFS='|' read -r marca texto; do
+            [ -n "$texto" ] || continue
+            [ "$marca" = 1 ] && zargs+=("TRUE") || zargs+=("FALSE")
+            zargs+=("$texto")
+        done <<EOFZ
+$(wizard_opciones)
+EOFZ
+        tmpsel="$(mktemp)"
         zenity --list --checklist --title="WProton" \
             --text="Paso 3/3 - Configuración basica (X del mando marca/desmarca)" \
-            --column="On" --column="Opción" \
-            FALSE "MangoHud (FPS en pantalla)" \
-            TRUE  "GameMode (prioridad CPU)" \
-            TRUE  "Fsync (sincronizacion rapida)" \
-            TRUE  "DXVK Async + GPL (menos stutter en AMD)" \
-            FALSE "Wayland nativo (experimental)" \
-            --height=440 --width=560 --separator='|' > "$tmpsel" 2>/dev/null
-        local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel"
+            --column="On" --column="Opción" "${zargs[@]}" \
+            --height=520 --width=640 --separator='|' > "$tmpsel" 2>/dev/null
+        rc=$?; sel="$(cat "$tmpsel")"; rm -f "$tmpsel"
         [ $rc -ne 0 ] && return 1
         aplicar_toggles_basicos "$sel"
     else
-        local r
-        printf 'MangoHud? [s/N]: '  >&2; read -r r; { [ "$r" = s ] || [ "$r" = S ]; } && MANGOHUD=1 || MANGOHUD=0
-        printf 'GameMode? [S/n]: '  >&2; read -r r; [ "$r" = n ] || [ "$r" = N ] && GAMEMODE=0 || GAMEMODE=1
-        printf 'Fsync? [S/n]: '     >&2; read -r r; [ "$r" = n ] || [ "$r" = N ] && FSYNC=0 || FSYNC=1
-        printf 'DXVK Async? [S/n]: ' >&2; read -r r; [ "$r" = n ] || [ "$r" = N ] && DXVK_ASYNC=0 || DXVK_ASYNC=1
-        printf 'Wayland? [s/N]: '   >&2; read -r r; { [ "$r" = s ] || [ "$r" = S ]; } && WAYLAND=1 || WAYLAND=0
+        # sin ninguna interfaz: preguntar una por una, de la misma lista
+        local r marca texto acum=""
+        while IFS='|' read -r marca texto; do
+            [ -n "$texto" ] || continue
+            if [ "$marca" = 1 ]; then
+                printf '%s [S/n]: ' "$texto" >&2; read -r r
+                case "$r" in n|N) ;; *) acum="$acum|$texto" ;; esac
+            else
+                printf '%s [s/N]: ' "$texto" >&2; read -r r
+                case "$r" in s|S) acum="$acum|$texto" ;; esac
+            fi
+        done <<EOFT
+$(wizard_opciones)
+EOFT
+        aplicar_toggles_basicos "$acum"
     fi
     return 0
 }
@@ -7754,25 +7824,14 @@ first_run_wizard() {
     if [ "$HAS_BUNDLED_RUNNER" = 1 ] && [ "$RUNNER" != "bundled" ] && [ -z "$RUNNER" ]; then
         : # eligio automático pudiendo elegir el incluido: respetar
     fi
-    if [ "$RUNNER" = "bundled" ] && has_bundled_prefix "$root"; then
-        # Wine incluido elegido: ofrecer también su prefix (van de la mano)
-        if ui_ask "Usar también el prefix incluido en el wsquashfs?
-(registro y DLLs que acompanan a ese Wine)"; then
-            PREFIX_MODE="bundled"
-        fi
-    elif has_bundled_prefix "$root"; then
-        if ui_ask "Este wsquashfs incluye un prefix de Wine (estilo Batocera).
-Usarlo como prefijo del juego?
-(Si: registro y DLLs propios del juego, escrituras al overlay
- No: prefijo compartido de WProton)"; then
-            PREFIX_MODE="bundled"
-        fi
-    fi
+    wizard_prefijo "$root" || return 1
     wizard_pick_exe "$root" || return 1
     wizard_toggles || return 1
+    wizard_dlls "$gid" "$root"
     write_full_profile "$gid"
     ui_info "Perfil creado: profiles/$gid.conf
-Runner: ${RUNNER:-último GE-Proton} | Prefijo: compartido (prefixes/default)
+Runner: ${RUNNER:-último GE-Proton} | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
+DLL overrides: $DLL_OVERRIDES}
 Afinalo cuando quieras con: ./wproton.sh --config"
     return 0
 }
@@ -7922,7 +7981,35 @@ export_game_env() {
     [ "$WINED3D" = 1 ]    && export PROTON_USE_WINED3D=1
     [ "$FSR" = 1 ]        && export WINE_FULLSCREEN_FSR=1 WINE_FULLSCREEN_FSR_STRENGTH=2
     [ "$LAA" = 1 ]        && export PROTON_FORCE_LARGE_ADDRESS_AWARE=1
-    [ -n "$DLL_OVERRIDES" ] && export WINEDLLOVERRIDES="$DLL_OVERRIDES"
+    if [ -n "$DLL_OVERRIDES" ]; then
+        export WINEDLLOVERRIDES="$DLL_OVERRIDES"
+        # Se escribe en el registro a proposito. Antes se exportaba en
+        # silencio y no habia forma de saber si se estaba aplicando: la unica
+        # pista era que el juego fuera distinto, que no es una pista.
+        say "[+] WINEDLLOVERRIDES=$DLL_OVERRIDES"
+        # OJO: EXTRA_ENV se exporta DESPUES, asi que si trae otro
+        # WINEDLLOVERRIDES gana ese y este se pierde entero (no se suman).
+        case "${EXTRA_ENV:-}" in
+            *WINEDLLOVERRIDES*)
+                log "Las 'Variables extra' traen otro WINEDLLOVERRIDES: pisara a '$DLL_OVERRIDES'" WARN ;;
+        esac
+    fi
+    if [ "${DIAG_DLL:-0}" = 1 ]; then
+        # Con esto Wine cuenta de donde carga cada DLL. Es MUY hablador, por
+        # eso va apagado; pero es la unica prueba de verdad de si el override
+        # se aplico, y de si la DLL nativa estaba donde tenia que estar.
+        export WINEDEBUG="${WINEDEBUG:+$WINEDEBUG,}+loaddll"
+        say "[+] Diagnostico de DLL activo (WINEDEBUG=+loaddll)"
+    fi
+    if [ "${HDR:-0}" = 1 ]; then
+        # HDR. Hacen falta las tres, que cada capa mira la suya:
+        #   DXVK_HDR           lo activa en la traduccion de DirectX
+        #   PROTON_ENABLE_HDR  se lo expone al juego (en GE pone DXVK_HDR solo,
+        #                      pero se ponen las dos por si el runner no es GE)
+        #   ENABLE_HDR_WSI     la capa Vulkan, la que hace falta con NVIDIA
+        export DXVK_HDR=1 PROTON_ENABLE_HDR=1 ENABLE_HDR_WSI=1
+        say "[+] HDR activado (DXVK_HDR, PROTON_ENABLE_HDR, ENABLE_HDR_WSI)"
+    fi
     [ -n "$GAME_LANG" ]     && export LC_ALL="$GAME_LANG" LANG="$GAME_LANG"
     if [ -n "$EXTRA_ENV" ]; then
         # shellcheck disable=SC2086,SC2163  # a proposito: EXTRA_ENV trae
@@ -7959,6 +8046,14 @@ build_runner_cmd() {
     if [ -n "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ -n "$GAMESCOPE" ]; then
         # gamescope manual dentro del modo Juego: mismo problema de capas
         export ENABLE_GAMESCOPE_WSI=0
+    fi
+    if [ "${HDR:-0}" = 1 ] && [ -n "$gs_args" ]; then
+        # gamescope no saca HDR si no se le pide, por mucho que el juego lo
+        # mande. Se anade solo si el usuario no lo puso ya en sus argumentos.
+        case " $gs_args " in
+            *" --hdr-enabled "*|*" --hdr-enabled="*) ;;
+            *) gs_args="$gs_args --hdr-enabled" ;;
+        esac
     fi
     if [ -n "$gs_args" ] && command -v gamescope >/dev/null 2>&1; then
         # shellcheck disable=SC2206
@@ -8180,6 +8275,7 @@ EOFRA
     # Antes solo se paraba en la limpieza final, asi que seguia actuando
     # durante todo el rato que estuvieras navegando despues de jugar.
     mapeador_stop
+    dll_informe
     WP_JUGANDO=0
     trap cleanup_all INT TERM        # se vuelve a atender las senales
     local dur=$(( $(date +%s) - t0 ))
@@ -9674,6 +9770,51 @@ dll_over_del_juego() {
               printf '%s\n' "${f%.[Dd][Ll][Ll]}"
           done | sort -fu
     release_game_root
+}
+
+dll_informe() {
+    # Despues de jugar, decir si cada DLL forzada se cargo DE VERDAD y de
+    # donde. Solo con DIAG_DLL=1, que hace falta el +loaddll de Wine.
+    #
+    # LO QUE DECIDE ES LA ULTIMA PALABRA DE LA LINEA, no la ruta. Wine lo
+    # dice el solito:
+    #     Loaded L"C:\\Games\\Juego\\d3d9.dll"          at 7BB60000: native
+    #     Loaded L"C:\\windows\\system32\\dinput8.dll"   at 79530000: builtin
+    #
+    # La primera version de esto miraba si la ruta llevaba "system32" y daba
+    # el override por fallido. Estaba mal por partida doble: una DLL nativa
+    # puede vivir EN system32 (es donde la deja winetricks), y ademas una
+    # misma DLL se carga varias veces (proceso de 32 y de 64 bits), asi que
+    # mirar el monton de lineas a la vez mezclaba unas con otras. Daba
+    # "no se aplico" con overrides que funcionaban perfectamente.
+    [ "${DIAG_DLL:-0}" = 1 ] || return 0
+    [ -n "${DLL_OVERRIDES:-}" ] || return 0
+    [ -s "$LOG_FILE" ] || return 0
+    local linea dll cargas nativas desde
+    say "--- Comprobacion de los DLL overrides ---"
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        dll="${linea%%=*}"
+        cargas="$(grep -i 'loaddll' "$LOG_FILE" 2>/dev/null \
+                  | grep -iE "[\\\\/]${dll}\\.dll\"" || true)"
+        if [ -z "$cargas" ]; then
+            say "  $dll: no se cargo nunca (el juego no la pidio)"
+            continue
+        fi
+        nativas="$(printf '%s\n' "$cargas" | grep -ci ': *native$' || true)"
+        if [ "${nativas:-0}" -gt 0 ]; then
+            # de donde salio la nativa, que es lo que interesa comprobar
+            desde="$(printf '%s\n' "$cargas" | grep -i ': *native$' \
+                     | sed -n 's/.*Loaded L"\([^"]*\)".*/\1/p' | head -1)"
+            say "  $dll: NATIVA -> el override se aplico  [${desde:-?}]"
+        else
+            say "  $dll: solo la de Wine (builtin) -> el override NO se aplico"
+        fi
+    done <<EOFDLL
+$(dll_over_lista "$DLL_OVERRIDES")
+EOFDLL
+    say "  (detalle completo en el registro, buscando 'loaddll')"
+    return 0
 }
 
 merge_overrides() {
@@ -14604,14 +14745,35 @@ config_gamescope() {
     write_full_profile "$gid"
 }
 
+hdr_pega() {
+    # Devuelve 0 si el HDR tiene alguna via por la que salir de verdad.
+    #
+    # No basta con poner las variables: alguien tiene que sacar la senal a la
+    # pantalla. O gamescope (el nuestro o el del modo Juego), o una sesion
+    # Wayland con el runner en modo Wayland.
+    [ -n "${GAMESCOPE:-}" ] && return 0
+    [ "${IS_GAMESCOPE:-0}" = 1 ] && return 0
+    [ "${WAYLAND:-0}" = 1 ] && [ -n "${WAYLAND_DISPLAY:-}" ] && return 0
+    return 1
+}
+
+hdr_pega_texto() {
+    if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        printf 'no hay sesion Wayland ni gamescope'
+    else
+        printf 'falta gamescope, o activar Wayland nativo'
+    fi
+}
+
 cfg_rendimiento_menu() {
     # Ajustes que casi nunca hay que tocar: se sacaron del menu principal del
     # juego, que habia llegado a 42 lineas y era incomodo de recorrer con el
     # mando. Aqui se guardan igual: al volver, el perfil se escribe entero.
-    local gid="$1" squash="${2:-}" sel gs_row bat_row
+    local gid="$1" squash="${2:-}" sel gs_row bat_row hdr_row
     while :; do
         gs_row="Gamescope anidado: $(onoff "${NESTED_GAMESCOPE:-0}")"
         bat_row="Wayland nativo: $(onoff "$WAYLAND")"
+        hdr_row="HDR: $(onoff "${HDR:-0}")$(hdr_pega || printf ' [%s]' "$(hdr_pega_texto)")"
         sel="$(menu "Rendimiento y compatibilidad - $gid" \
             "MangoHud: $(onoff "$MANGOHUD")" \
             "GameMode: $(onoff "$GAMEMODE")" \
@@ -14624,6 +14786,7 @@ cfg_rendimiento_menu() {
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
             "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-0}")" \
             "$bat_row" \
+            "$hdr_row" \
             "Gamescope: ${GAMESCOPE:-OFF}" \
             "$gs_row" \
             "DLL overrides: ${DLL_OVERRIDES:-ninguno}" \
@@ -14777,6 +14940,27 @@ desactivalo aquí mismo." ;;
         "FSR"*)           FSR=$((1-FSR));               write_full_profile "$gid" ;;
         "LAA"*)           LAA=$((1-LAA));               write_full_profile "$gid" ;;
         "Wayland"*)       WAYLAND=$((1-WAYLAND));       write_full_profile "$gid" ;;
+        "HDR:"*)
+            if [ "${HDR:-0}" = 1 ]; then
+                HDR=0
+            else
+                HDR=1
+                # Encenderlo donde no puede salir no rompe nada, pero el
+                # usuario se queda esperando un cambio que no llega. Mas vale
+                # decirlo que dejarle pensando que el juego no lo soporta.
+                hdr_pega || ui_info "HDR activado, pero aqui no va a verse:
+
+$(hdr_pega_texto).
+
+Hace falta una de estas dos:
+  - gamescope con --hdr-enabled (se anade solo si pones
+    argumentos en 'Gamescope')
+  - o el modo Juego de SteamOS con HDR encendido en los
+    ajustes de pantalla
+
+El monitor tambien tiene que ser HDR y el juego traerlo."
+            fi
+            write_full_profile "$gid" ;;
         "Gamescope:"*)    config_gamescope "$gid" ;;
         "DLL overrides:"*)
             local dsel dextra
