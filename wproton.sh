@@ -1737,9 +1737,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py d42966c84466" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 520c80ffb2c6" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py d42966c84466
+# WPROTON_HELPER mapeador.py 520c80ffb2c6
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
@@ -1770,7 +1770,41 @@ ABS_ESTANDAR = {
     ecodes.ABS_HAT0X: ("left",          "right"),
 }
 
+# La Deck (y el Steam Controller) con el driver hid-steam del kernel NO sigue
+# el reparto de siempre. Segun drivers/hid/hid-steam.c:
+#
+#     ABS_X  / ABS_Y      stick izquierdo
+#     ABS_RX / ABS_RY     stick derecho
+#     ABS_HAT0X / HAT0Y   TOUCHPAD IZQUIERDO   <- aqui NO hay cruceta
+#     ABS_HAT1X / HAT1Y   touchpad derecho
+#     ABS_HAT2Y / HAT2X   gatillo izquierdo / derecho
+#
+# Dejar HAT0 como cruceta hacia que rozar el touchpad izquierdo disparara las
+# teclas de la cruceta. La cruceta de verdad llega como BOTONES (544-547), que
+# ya se registran aparte.
+ABS_STEAMDECK = {
+    ecodes.ABS_Y:  ("joystick1up",   "joystick1down"),
+    ecodes.ABS_X:  ("joystick1left", "joystick1right"),
+    ecodes.ABS_RY: ("joystick2up",   "joystick2down"),
+    ecodes.ABS_RX: ("joystick2left", "joystick2right"),
+}
+
 PERFILES = {
+    # Va el primero: con el driver hid-steam la Deck se llama "Steam Deck" y
+    # antes no casaba con ningun perfil, asi que caia en GENERIC y con el
+    # reparto de ejes equivocado. (En modo Juego, cuando es Steam quien crea
+    # el mando virtual, se llama "Microsoft X-Box 360 pad N" y sigue usando
+    # XBOX_360, que es lo correcto: ese SI es un mando estandar.)
+    "STEAM_DECK": {
+        "match": ["steam deck", "valve software steam"],
+        "ids": {
+            "a": 304, "b": 305, "x": 307, "y": 308,
+            "start": 315, "select": 314, "hotkey": 314,
+            "pageup": 310, "pagedown": 311,
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
+        },
+        "abs_map": ABS_STEAMDECK, "threshold": 16000, "center": 0
+    },
     "XBOX_360": {
         "match": ["microsoft", "xbox 360", "360", "x-box 360"],
         "ids": {
@@ -2177,6 +2211,10 @@ def main():
 
     map_normal = {}
     map_combos = []
+    # botones que salen en alguna combinacion: su tecla se manda al SOLTAR
+    btn_en_combo = set()
+    # los que estan pulsados esperando a ver si forman combinacion
+    pendiente = set()
     DIR_KEYS = [
         "up", "down", "left", "right",
         "joystick1up", "joystick1down", "joystick1left", "joystick1right",
@@ -2206,8 +2244,10 @@ def main():
                    for t in (target if isinstance(target, list) else [target])
                    if hasattr(ecodes, t)]
         if isinstance(trig, list):
-            map_combos.append({"req": [ids.get(x, x) for x in trig], "outs": t_codes,
+            _req = [ids.get(x, x) for x in trig]
+            map_combos.append({"req": _req, "outs": t_codes,
                                "active": False, "kb": is_kb})
+            btn_en_combo.update(_req)
         elif trig in map_dirs:
             map_dirs[trig] = t_codes
             # Hay mandos (Anbernic, Decktroid y similares) cuya cruceta llega
@@ -2249,17 +2289,50 @@ def main():
     # .keys con "l2" o "r2" no hacia nada. Aqui se traduce el eje a
     # pulsacion, con un umbral de la cuarta parte del recorrido.
     _gatillo_teclas = {}
-    for _n, _ejes in (("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE)),
-                      ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS))):
+    # ABS_HAT2Y y ABS_HAT2X son los gatillos segun la especificacion de mandos
+    # de Linux ("lower trigger buttons are reported as BTN_TR2 or ABS_HAT2X
+    # (right) and BTN_TL2 or ABS_HAT2Y (left)"), y es lo que usa hid-steam en
+    # la Deck. Sin ellos, un .keys con "l2" o "r2" no hacia NADA ahi.
+    #
+    # Anadirlos no rompe nada: si un mando manda HAT2 como cruceta digital
+    # (rango -1..1), el umbral que se calcula mas abajo es 8 como minimo y ese
+    # eje no llega nunca a superarlo, asi que no dispara por error.
+    for _n, _ejes in (("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE, ecodes.ABS_HAT2Y)),
+                      ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS, ecodes.ABS_HAT2X))):
         _cod = ids.get(_n)
         if _cod is not None and map_normal.get(_cod):
             for _e in _ejes:
                 _gatillo_teclas[_e] = map_normal[_cod]
     _gatillo_on = {}     # eje -> si esta pulsado ahora
     _gatillo_umbral = {} # eje -> a partir de que valor cuenta como pulsado
+    _eje_umbral = {}     # lo mismo para los sticks, calculado del propio mando
+    # Resumen de lo que ha quedado cargado.
+    #
+    # Antes solo se decia algo CUANDO habia gatillos; si la tabla salia vacia
+    # no se escribia ni una linea, asi que ante un "los gatillos no me van" no
+    # habia forma de distinguir entre "no se cargaron" y "se cargaron pero no
+    # llegan eventos". Ahora se dice siempre, y por su nombre.
+    def _nom_eje(_c):
+        _n = ecodes.ABS.get(_c, _c)
+        return _n if isinstance(_n, str) else str(_c)
+
+    print("[keys] Botones cargados: %d" % len(map_normal), flush=True)
+    _dirs = [k for k, v in map_dirs.items() if v]
+    print("[keys] Direcciones cargadas: %s"
+          % (", ".join(sorted(_dirs)) if _dirs else "NINGUNA"), flush=True)
     if _gatillo_teclas:
-        print("[keys] Gatillos analogicos activos para %d eje(s)"
-              % len(_gatillo_teclas), flush=True)
+        print("[keys] Gatillos analogicos por: %s"
+              % ", ".join(sorted(_nom_eje(_e) for _e in _gatillo_teclas)),
+              flush=True)
+    else:
+        print("[keys] Gatillos analogicos: NINGUNO "
+              "(el .keys no asigna l2 ni r2, o el perfil no los define)",
+              flush=True)
+    _ejes_usados = sorted(_nom_eje(_c) for _c in abs_map_actual)
+    print("[keys] Ejes que se vigilan: %s" % ", ".join(_ejes_usados), flush=True)
+    if map_combos:
+        print("[keys] Combinaciones: %d (sus botones se envian al soltar)"
+              % len(map_combos), flush=True)
     ui_mouse=None
     if _mcfg:
         try:
@@ -2297,6 +2370,7 @@ def main():
                                         ui.syn()
                                         try: launch_teclado_virtual(device)
                                         except Exception as _e: print(f"[!] {_e}")
+                                        for _b in c["req"]: pendiente.discard(_b)
                                         pulsados.clear()
                                     else:
                                         # dejar constancia: sin esto no habia
@@ -2304,19 +2378,52 @@ def main():
                                         # habia disparado o no
                                         print("[combo] %s -> %s" % (c["req"], c["outs"]),
                                               flush=True)
+                                        # la combinacion manda: lo que
+                                        # estuviera esperando a soltarse se
+                                        # descarta, no se envia
+                                        for _b in c["req"]: pendiente.discard(_b)
                                         for t in c["outs"]: ui.write(ecodes.EV_KEY, t, 1)
                                 elif c["active"] and not all_pressed and event.value == 0:
                                     c["active"] = False
                                     if not c.get("kb"):
                                         for t in c["outs"]: ui.write(ecodes.EV_KEY, t, 0)
 
-                            # Botón individual → teclado (solo si no está en combo activo)
+                            # Boton individual -> teclado.
+                            #
+                            # Si el boton ADEMAS forma parte de alguna
+                            # combinacion, su tecla NO se manda al pulsar: se
+                            # espera a soltarlo, y solo se manda si mientras
+                            # tanto no disparo ninguna combinacion.
+                            #
+                            # Sin esto, un .keys con "select -> ESC" y la
+                            # combinacion hotkey+start (que WProton pone
+                            # siempre, y donde hotkey ES select) mandaba un
+                            # ESC cada vez que se usaba Select+Start: el juego
+                            # recibia el ESC antes de que la combinacion
+                            # llegara a formarse. En un juego de coches eso
+                            # abria el menu de pausa al intentar salir.
+                            # Peor todavia: mantener Select para cerrar el
+                            # juego (la guardia de 2 segundos) dejaba el ESC
+                            # pulsado todo ese rato.
                             in_active_combo = any(
                                 event.code in c["req"] and c["active"] for c in map_combos
                             )
-                            if not in_active_combo and event.code in map_normal:
-                                for t in map_normal[event.code]:
-                                    ui.write(ecodes.EV_KEY, t, event.value)
+                            if event.code in map_normal and not in_active_combo:
+                                if event.code not in btn_en_combo:
+                                    for t in map_normal[event.code]:
+                                        ui.write(ecodes.EV_KEY, t, event.value)
+                                elif event.value == 1:
+                                    # se apunta y se decide al soltar
+                                    pendiente.add(event.code)
+                                elif event.value == 0 and event.code in pendiente:
+                                    pendiente.discard(event.code)
+                                    for t in map_normal[event.code]:
+                                        ui.write(ecodes.EV_KEY, t, 1)
+                                    ui.syn()
+                                    for t in map_normal[event.code]:
+                                        ui.write(ecodes.EV_KEY, t, 0)
+                            elif event.value == 0:
+                                pendiente.discard(event.code)
 
                             # Click digital (PS4, bumpers, botones)
                             if ui_mouse and _mclick and not _mclick_abs and event.code == _mclick:
@@ -2369,9 +2476,41 @@ def main():
                                     neg_active = val < 0
                                     pos_active = val > 0
                                 else:
+                                    # El umbral se le pregunta AL MANDO, no se
+                                    # da por hecho.
+                                    #
+                                    # El del perfil es un numero fijo (16000)
+                                    # que supone un recorrido de 32767. Con un
+                                    # mando de 0-255 eso no se alcanza jamas, y
+                                    # aun acertando el recorrido salen casi 49%:
+                                    # habia que mover el stick hasta media
+                                    # carrera para que respondiera. Los gatillos
+                                    # ya se calculaban asi desde hace tiempo;
+                                    # los sticks se habian quedado atras.
+                                    _u = _eje_umbral.get(event.code)
+                                    if _u is None:
+                                        _u = threshold
+                                        try:
+                                            _ai = _dev.absinfo(event.code)
+                                            _recorrido = max(abs(_ai.max - center),
+                                                             abs(center - _ai.min))
+                                            if _recorrido > 0:
+                                                # 35% del recorrido, y nunca por
+                                                # debajo del triple de la zona
+                                                # muerta que declara el mando
+                                                _u = max(_ai.flat * 3,
+                                                         (_recorrido * 35) // 100)
+                                        except Exception:
+                                            pass
+                                        _eje_umbral[event.code] = _u
+                                        print("[keys] Umbral de %s: %d "
+                                              "(el perfil decia %d)"
+                                              % (ecodes.ABS.get(event.code,
+                                                                event.code),
+                                                 _u, threshold), flush=True)
                                     val = event.value - center
-                                    neg_active = val < -threshold
-                                    pos_active = val > threshold
+                                    neg_active = val < -_u
+                                    pos_active = val > _u
                                 for direction, active in ((neg_dir, neg_active), (pos_dir, pos_active)):
                                     if active != ejes_on[direction]:
                                         ejes_on[direction] = active
