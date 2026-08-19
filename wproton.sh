@@ -7733,11 +7733,33 @@ wizard_prefijo() {
 
 wizard_dlls() {
     # Solo si se marco la casilla en el paso 3/3. $1 = gid, $2 = raiz del juego.
+    #
+    # OJO: aqui NO se puede usar dll_over_del_juego. Esa llama a
+    # preparar_carpeta_exe, que en mitad del asistente hace tres cosas malas:
+    #
+    #   1. load_profile "$gid"  ->  profile_defaults, que BORRA todo lo que se
+    #      acaba de marcar en el paso 3/3. El perfil ni siquiera existe aun,
+    #      asi que se quedaba todo en los valores por defecto.
+    #   2. need_exe_dir  ->  si EXE_OVERRIDE esta vacio (el usuario dejo el
+    #      ejecutable en automatico), vuelve a pedir que se elija el exe. Por
+    #      eso salia dos veces la misma pantalla.
+    #   3. acquire_game_root ... rw  ->  vuelve a montar un juego que el
+    #      asistente ya tiene montado, y al soltarlo lo desmonta por debajo.
+    #
+    # Aqui no hace falta nada de eso: el juego ya esta montado en $2 y el
+    # ejecutable ya se eligio en el paso anterior.
     [ "${WIZ_QUIERE_DLL:-0}" = 1 ] || return 0
-    local extra=""
-    # Las DLL que hay junto al ejecutable son las candidatas de verdad; se
-    # miran ya que el juego esta montado y no cuesta nada.
-    extra="$(dll_over_del_juego "$2" "$1" 2>/dev/null)" || extra=""
+    local root="$2" carpeta extra=""
+    carpeta="$root"
+    if [ -n "${EXE_OVERRIDE:-}" ]; then
+        carpeta="$root/$(dirname "$EXE_OVERRIDE")"
+    fi
+    [ -d "$carpeta" ] || carpeta="$root"
+    extra="$(find "$carpeta" -maxdepth 1 -type f -iname '*.dll' 2>/dev/null \
+             | while IFS= read -r f; do
+                   f="${f##*/}"
+                   printf '%s\n' "${f%.[Dd][Ll][Ll]}"
+               done | sort -fu)"
     if pygame_available; then
         dll_over_menu "$1" "$extra"
     else
@@ -7745,7 +7767,7 @@ wizard_dlls() {
         # es mejor que dejar al usuario sin nada despues de haberlo pedido.
         local sug=""
         [ -n "$extra" ] && sug="$(printf '%s\n' "$extra" | head -1)=n,b"
-        DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: dinput8=n,b;d3d9=n,b)" "${sug}")"
+        DLL_OVERRIDES="$(ask_text "WINEDLLOVERRIDES (ej: dinput8=n,b;d3d9=n,b)" "$sug")"
     fi
     return 0
 }
