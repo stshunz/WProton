@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.26"
+WPROTON_VERSION="1.27"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -9555,6 +9555,80 @@ redist_target_menu() {
     esac
 }
 
+redist_lista() {
+    # Las opciones de cada categoria. Formato: marcada(0/1)|verbo (que hace)
+    #
+    # Los verbos son los de winetricks, copiados de su files/verbs/dlls.txt.
+    # Los unicos que NO son suyos son "directx_todo" y "ue4prereqs", packs
+    # nuestros que se expanden despues de elegir.
+    local cat="$1"
+    case "$cat" in
+        "Visual C++ y .NET"*|"Verlo todo"*)
+            cat <<'EOFVC'
+1|vcrun2022 (VC++ 2015-2022, el más comun)
+0|vcrun2013 (VC++ 2013)
+0|vcrun2012 (VC++ 2012)
+0|vcrun2010 (VC++ 2010)
+0|vcrun2008 (VC++ 2008)
+0|vcrun2005 (VC++ 2005)
+0|dotnet48 (.NET 4.8 - instalacion LENTA)
+EOFVC
+            ;;
+    esac
+    case "$cat" in
+        "DirectX y shaders"*|"Verlo todo"*)
+            cat <<'EOFDX'
+0|directx_todo (pack: D3DX 9/10/11 + los dos compiladores)
+0|d3dx9 (DirectX 9 - D3DX)
+0|d3dx10 (DirectX 10 - D3DX)
+0|d3dx11_43 (DirectX 11 - D3DX)
+0|d3dcompiler_43 (compilador de shaders, juegos DX9/DX11)
+0|d3dcompiler_47 (compilador de shaders, juegos modernos)
+0|dinput8 (mando/teclado en juegos viejos)
+EOFDX
+            ;;
+    esac
+    case "$cat" in
+        "Codecs de video"*|"Verlo todo"*)
+            cat <<'EOFCODEC'
+0|quartz (DirectShow: el motor de video de Windows)
+0|directshow (pack DirectShow: amstream, qasf, qcap, qdvd, qedit, quartz)
+0|wmp11 (Windows Media Player 11 - lo piden muchos juegos)
+0|wmp10 (Windows Media Player 10 - para juegos mas viejos)
+0|wmp9 (Windows Media Player 9 - los mas viejos)
+0|wmv9vcm (video WMV9 - cinematicas .wmv)
+0|l3codecx (audio MP3 para DirectShow)
+0|icodecs (codecs Indeo - intros de juegos de los 90)
+0|cinepak (codec Cinepak - intros muy viejas)
+0|xvid (codec Xvid)
+0|ffdshow (pack de codecs de video)
+0|lavfilters (LAV Filters - codecs modernos, cubre casi todo)
+0|allcodecs (pack: dirac, ffdshow, icodecs, cinepak, l3codecx, xvid)
+0|avifil32 (video AVI clasico)
+0|devenum (enumerador de dispositivos DirectShow)
+0|mf (Media Foundation - videos in-game, juegos modernos)
+0|ogg (OpenCodecs: FLAC, Speex, Theora, Vorbis, WebM)
+0|openal (sonido OpenAL)
+0|xaudio29 (XAudio 2.9 - juegos modernos)
+0|xact (XACT/XAudio, juegos viejos)
+0|dsound (DirectSound)
+EOFCODEC
+            ;;
+    esac
+    case "$cat" in
+        "Otros"*|"Verlo todo"*)
+            cat <<'EOFOTROS'
+0|ue4prereqs (Prerrequisitos Unreal Engine - pack)
+0|xna40 (XNA 4.0 - muchos indies: Terraria, Bastion...)
+0|physx (NVIDIA PhysX)
+0|corefonts (fuentes de Windows - textos que no se ven)
+0|msxml6 (MSXML 6 - algunos instaladores y juegos)
+EOFOTROS
+            ;;
+    esac
+    return 0
+}
+
 redist_menu() {
     # Multi-seleccion de redistribuibles e instalacion via winetricks en el
     # prefijo del juego (idea tomada del sistema de redist de Batocera)
@@ -9565,37 +9639,34 @@ redist_menu() {
     fi
     pad_bridge_stop
     write_menu_pygame
+    # Por categorias: cuarenta entradas seguidas no se manejan bien con el
+    # mando, y ademas quien busca un codec no quiere ver quince Visual C++.
+    local cat
+    cat="$(menu "Instalar librerias en $gid" \
+        "Visual C++ y .NET (lo que piden casi todos)" \
+        "DirectX y shaders" \
+        "Codecs de video y sonido (intros y cinematicas)" \
+        "Otros (fuentes, PhysX, XNA, Unreal...)" \
+        "Verlo todo en una sola lista" \
+        "<< Volver")" || return 0
+    case "$cat" in "<< Volver"|"") return 0 ;; esac
+
     local tmpsel tmpopt; tmpsel="$(mktemp)"; tmpopt="$(mktemp)"
-    cat > "$tmpopt" <<'EOF'
-1|vcrun2022 (VC++ 2015-2022, el más comun)
-0|vcrun2013 (VC++ 2013)
-0|vcrun2012 (VC++ 2012)
-0|vcrun2010 (VC++ 2010)
-0|vcrun2008 (VC++ 2008)
-0|vcrun2005 (VC++ 2005)
-0|d3dx9 (DirectX 9 - D3DX)
-0|d3dx10 (DirectX 10 - D3DX)
-0|d3dx11_43 (DirectX 11 - D3DX)
-0|d3dcompiler_43 (compilador de shaders, juegos DX9/DX11)
-0|d3dcompiler_47 (compilador de shaders, juegos modernos)
-0|directx_todo (pack: D3DX 9/10/11 + los dos compiladores)
-0|xna40 (XNA 4.0 - muchos indies: Terraria, Bastion...)
-0|physx (NVIDIA PhysX)
-0|ue4prereqs (Prerrequisitos Unreal Engine - pack)
-0|xact (XACT/XAudio, juegos viejos)
-0|mf (Media Foundation - videos in-game)
-0|openal (sonido OpenAL)
-0|dinput8 (mando/teclado en juegos viejos)
-0|corefonts (fuentes de Windows - textos que no se ven)
-0|msxml6 (MSXML 6 - algunos instaladores y juegos)
-0|dotnet48 (.NET 4.8 - instalacion LENTA)
-EOF
+    redist_lista "$cat" > "$tmpopt"
+    if [ ! -s "$tmpopt" ]; then
+        rm -f "$tmpsel" "$tmpopt"
+        return 0
+    fi
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check "Redistribuibles para $gid (X marca, A instala)" \
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" check "${cat%% (*} - $gid (X marca, A instala)" \
         "$tmpsel" "$tmpopt" >> "$LOG_FILE" 2>&1
     local rc=$? sel; sel="$(cat "$tmpsel")"; rm -f "$tmpsel" "$tmpopt"
     [ $rc -ne 0 ] && return 1
-    local verbs; verbs="$(printf '%s' "$sel" | tr '|' '\n' | awk 'NF{print $1}' | tr '\n' ' ')"
+    # Las lineas "--- TITULO ---" son separadores de la lista, no verbos. Si
+    # alguien las marca hay que descartarlas: si no, se intentaria instalar
+    # "---" y winetricks daria un error raro por cada una.
+    local verbs; verbs="$(printf '%s' "$sel" | tr '|' '\n' \
+        | awk 'NF && $1 !~ /^-+$/ {print $1}' | tr '\n' ' ')"
     verbs="${verbs% }"
     # "directx_todo" no es un verbo de winetricks: es un pack nuestro con todo
     # lo de DirectX que suelen pedir los juegos, comodo cuando no se sabe cual
@@ -9613,6 +9684,14 @@ EOF
         verbs="$(printf '%s' "$verbs" | tr ' ' '\n' | awk 'NF' | awk '!seen[$0]++' | tr '\n' ' ')"
         verbs="${verbs% }"; verbs="${verbs# }" ;;
     esac
+    # Los Windows Media Player se pisan entre ellos: instalar dos deja el
+    # prefijo peor que instalar uno. Se queda el mas nuevo de los marcados.
+    case " $verbs " in
+        *" wmp11 "*) verbs="$(printf '%s' " $verbs " | sed 's/ wmp10 / /; s/ wmp9 / /')" ;;
+        *" wmp10 "*) verbs="$(printf '%s' " $verbs " | sed 's/ wmp9 / /')" ;;
+    esac
+    verbs="$(printf '%s' "$verbs" | tr ' ' '\n' | awk 'NF' | tr '\n' ' ')"
+    verbs="${verbs% }"; verbs="${verbs# }"
     [ -z "$verbs" ] && { say "Sin redistribuibles seleccionados"; return 0; }
     say "Instalando redistribuibles en el prefijo: $verbs"
     # La lista viaja en WP_PREFIX_VERBOS para que run_in_prefix los instale de
@@ -14368,6 +14447,29 @@ montar_disco() {
     return 0
 }
 
+disco_carpeta_juegos() {
+    # Donde estan DE VERDAD los juegos dentro de un disco recien montado.
+    # $1 = punto de montaje. Vacio si no se encuentra ninguno.
+    #
+    # Se apunta esa carpeta y no la raiz del disco: guardar la raiz obliga a
+    # recorrer la unidad entera cada vez que se abre la biblioteca, y con un
+    # disco lleno eso son minutos.
+    local mp="$1" carpetas n destino
+    carpetas="$(find "$mp" -maxdepth 3 \( -iname '*.wsquashfs' \
+                -o -iname '*.squashfs' -o -iname '*.dwarfs' \) \
+                -printf '%h\n' 2>/dev/null | sort -u)"
+    n="$(printf '%s' "$carpetas" | grep -c . || true)"
+    case "$n" in
+        0) return 0 ;;
+        1) destino="$carpetas" ;;
+        *) # varias carpetas: se queda el tronco comun, que suele ser la
+           # carpeta de juegos con subcarpetas por sistema o por letra
+           destino="$(printf '%s\n' "$carpetas" | sed 's|/[^/]*$||' | sort -u | head -n1)"
+           [ -d "$destino" ] || destino="$mp" ;;
+    esac
+    printf '%s' "$(abs_path "$destino")"
+}
+
 montar_disco_manual() {
     # Montar un disco CUANDO EL USUARIO QUIERE, sin depender de que falte una
     # carpeta. El caso tipico: acaba de conectar un disco externo con juegos y
@@ -14417,34 +14519,36 @@ autorizacion. Dos formas de resolverlo:
     local cuantos
     cuantos="$(find "$mp" -maxdepth 3 \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
                -o -iname '*.dwarfs' \) 2>/dev/null | wc -l)"
+    # PRIMERO se mira si la carpeta ya estaba, y solo se pregunta si hay algo
+    # que decidir.
+    #
+    # Antes se preguntaba siempre "quieres añadirlo como carpeta de juegos?" y
+    # solo despues se comprobaba, asi que quien monta el mismo disco externo
+    # cada dia se comia la pregunta y, dijera lo que dijera, la respuesta era
+    # "ya estaba". Dos pantallas para no hacer nada.
+    local destino=""
+    [ "$cuantos" -gt 0 ] && destino="$(disco_carpeta_juegos "$mp")"
+    if [ -n "$destino" ] && games_paths | grep -qxF "$destino"; then
+        ui_info "Disco montado en:
+$mp
+
+Su carpeta de juegos ya estaba en la biblioteca:
+$destino
+
+No hay nada mas que hacer: tus juegos ya estan disponibles."
+        return 0
+    fi
+
     if ui_ask "Disco montado en:
 $mp
 
 Se han encontrado $cuantos juego(s) empaquetado(s).
 
 Quieres añadirlo como carpeta de juegos?"; then
-        # Se apunta la carpeta donde estan los juegos DE VERDAD, no la raiz
-        # del disco. Guardar la raiz obliga a recorrer la unidad entera cada
-        # vez que se abre la biblioteca, y con un disco lleno eso son minutos.
-        local destino="$mp"
-        if [ "$cuantos" = 0 ]; then
+        if [ -z "$destino" ]; then
             destino="$(pick_dir "Carpeta con los juegos dentro del disco" "$mp")" || destino="$mp"
-        else
-            local carpetas
-            carpetas="$(find "$mp" -maxdepth 3 \( -iname '*.wsquashfs' \
-                        -o -iname '*.squashfs' -o -iname '*.dwarfs' \) \
-                        -printf '%h\n' 2>/dev/null | sort -u)"
-            local n_carp; n_carp="$(printf '%s' "$carpetas" | grep -c . || true)"
-            if [ "$n_carp" = 1 ]; then
-                destino="$carpetas"
-            elif [ "$n_carp" -gt 1 ]; then
-                # varias carpetas: se queda el tronco comun, que suele ser la
-                # carpeta de juegos con subcarpetas por sistema o por letra
-                destino="$(printf '%s\n' "$carpetas" | sed 's|/[^/]*$||' | sort -u | head -n1)"
-                [ -d "$destino" ] || destino="$mp"
-            fi
+            destino="$(abs_path "$destino")"
         fi
-        destino="$(abs_path "$destino")"
         if games_paths | grep -qxF "$destino"; then
             ui_info "Esa carpeta ya estaba en la lista."
         else
