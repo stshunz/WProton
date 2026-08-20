@@ -117,6 +117,34 @@ Lo más útil:
 - *Propio del juego*: uno exclusivo. Útil si un juego necesita librerías que estorban a otros.
 - *Incluido en el archivo*: si el juego trae el suyo (estilo Batocera).
 
+**Idioma del juego** — se elige de una lista y viene en **español** de fábrica.
+Muchos juegos miran el idioma del sistema para decidir en cuál arrancan. Si
+tu sistema no tiene ese idioma generado, WProton te avisa: Wine suele
+apañarse igual, pero si el juego sigue saliendo en inglés esa es la razón más
+probable.
+
+**DLL overrides** — para los juegos que necesitan cargar una DLL propia en vez
+de la de Wine: dgVoodoo2, ReShade, OptiScaler, cargadores de mods como BepInEx.
+Ya no hace falta escribir la cadena a mano:
+
+- *Elegir de una lista* — las cinco habituales (`dinput8`, `d3d9`, `dxgi`,
+  `winhttp`, `winmm`) y las que ya tengas puestas, marcadas.
+- *Buscar las DLL que hay en el juego* — mira junto al ejecutable. Si alguien
+  dejó ahí un `dinput8.dll`, es porque quiere que se cargue.
+- *Escribir a mano* y *Quitar todos*, que avisa de lo que se lleva por delante.
+
+Lo que ya tuvieras puesto **nunca se pierde**: la lista muestra la unión de lo
+tuyo y lo que se ofrece, con tus valores intactos.
+
+> ¿Se está aplicando de verdad? Pon `DIAG_DLL=1` en `settings.conf`, juega un
+> minuto y mira el registro: dirá si cada DLL se cargó la nativa o la de Wine.
+> Déjalo apagado el resto del tiempo, que habla muchísimo.
+
+**HDR** — en *Rendimiento y compatibilidad*. Pone las variables que hacen falta
+y se lo pide a gamescope. La propia fila del menú te dice si va a poder verse:
+si no hay gamescope ni sesión Wayland, no hay HDR por mucho que lo enciendas.
+El monitor también tiene que serlo, y el juego traerlo.
+
 **Mando vía SDL** — en automático. Se activa solo con mandos que lo necesitan (DualSense, DualShock, mandos de Nintendo) y se queda apagado con mandos XInput como los de la Steam Deck o la Legion Go.
 
 **Buscar en la base de umu** — consulta la base de datos de
@@ -134,7 +162,7 @@ dos, y cada una vive en su carpeta con el nombre del juego:
 | `covers/` | Vertical (2:3), para la lista y la rejilla clásica |
 | `covers_wide/` | Panorámica, tipo cabecera de Steam |
 | `covers_43/` | Cuadrada 4:3 (640x480) |
-| `datos/` | Ficha del juego y duración (no son imágenes) |
+| `metadata/` | Ficha del juego y duración (no son imágenes) |
 
 Cada vista usa su carpeta, y en la vista de lista puedes elegir cuál se
 enseña en el panel (*Biblioteca y preferencias → Carátula en la vista de
@@ -149,6 +177,27 @@ guiones bajos — las dos formas valen.
 > (steamgriddb.com → Profile → Preferences → API). En vez de teclearla con el
 > mando, puedes pegarla en un fichero de texto y dejarlo junto a `wproton.sh`:
 > WProton la recoge, la guarda a buen recaudo y borra el fichero.
+
+**Importar un fichero `.reg`** (en *Herramientas del prefijo*) — mete claves en
+el registro del prefijo. El uso más común es cambiar el idioma de un juego que
+lo guarda ahí y no en un menú. Antes de aplicarlo te enseña qué lleva dentro, y
+**guarda una copia del registro** en `wp_registro_<fecha>/` dentro del prefijo,
+porque una vez importado no hay deshacer.
+
+**Ocultar el mando al juego** (en *Herramientas del prefijo*) — algunos juegos
+viejos, al detectar un mando, usan **su** soporte nativo y dejan de mirar el
+teclado para conducir o moverse: entonces el `.keys` no sirve de nada aunque
+funcione. Esta opción le dice a Wine que no lo sondee, y el juego solo ve el
+teclado.
+
+> Sin verificar todavía. Si no notas diferencia, comprueba en *Abrir winecfg* →
+> pestaña de mandos qué nombre le da Wine al tuyo: puede no coincidir con el
+> que escribimos.
+
+**Instalar librerías** — los redistribuibles de Windows. Se puede elegir en qué
+prefijo van: el compartido, el de un juego concreto, o cualquiera de los que
+tengas. Se instalan de uno en uno y la barra avanza de verdad; si alguno falla,
+sigue con el resto y al final dice cuál falló.
 
 **Empaquetar con su prefijo** — crea un archivo **autosuficiente**: lleva dentro
 el juego y su prefijo, así que se copia a otro equipo y funciona sin instalar
@@ -312,7 +361,24 @@ sudo steamos-readonly enable
 Después, desconecta y vuelve a conectar el mando.
 
 **Quiero que un juego responda a teclas concretas del teclado.**
-En *Ajustes del juego → Mapeador .keys → Crear o editar las teclas*. Salen
+En *Ajustes del juego → Mapeador .keys*. Si el juego ya tiene un `.keys`, lo
+primero que ofrece es **ver las teclas que tiene asignadas**, sin abrir el
+fichero:
+
+```
+Ver las teclas asignadas  (4)
+
+    Hotkey + Start             ->  Alt + F4
+    A                          ->  Espacio
+    L1                         ->  E
+    Stick izq. arriba          ->  Flecha arriba
+```
+
+También se puede **usar el mando como ratón**: un stick mueve el puntero y un
+botón hace clic. Va bien en juegos de estrategia, aventuras gráficas e
+instaladores, que con el mando no se pueden ni empezar.
+
+Para cambiarlas, *Crear o editar las teclas*. Salen
 todos los botones del mando; eliges uno y le asignas su tecla. Se guarda solo
 y se activa al lanzar el juego. La combinación **Select + Start** cierra el
 juego siempre, aunque no la configures.
@@ -408,7 +474,22 @@ tocan.
 
 ---
 
-## 11. Dónde está cada cosa
+## 11. Salir de un juego con el mando
+
+Mantén **Select cinco segundos** durante la partida y el juego se cierra. Son
+cinco y no dos a propósito: es una salida de emergencia y no debe dispararse
+sin querer.
+
+Sirve sobre todo en el escritorio, donde un juego sin opción de salir te deja
+atrapado si no tienes el teclado a mano. En el modo Juego de la Deck también
+funciona, aunque ahí está además el botón de Steam.
+
+Se puede cambiar el tiempo y la combinación en `settings.conf`
+(`PAD_EXIT_SEGUNDOS`, `PAD_EXIT_COMBO`: `select`, `l3r3` o `start`).
+
+---
+
+## 12. Dónde está cada cosa
 
 | Carpeta | Contiene |
 |---|---|
@@ -418,6 +499,7 @@ tocan.
 | `prefixes/` | Los prefijos de Wine |
 | `backups/` | Copias de partidas y de tu configuración |
 | `covers/` | Carátulas |
+| `metadata/` | Fichas de Steam y duraciones (se llamaba `datos`) |
 | `runtime/` | Python, runners y herramientas |
 | `logs/` | Registros (se limpian solos) |
 | `lang/` | Idiomas |

@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.20** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.26** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca de juegos, con la carátula y la ficha del juego seleccionado](img/lista.png)
 
@@ -30,6 +30,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Búsqueda** escribiendo con el teclado, o con el **teclado en pantalla** (botón Y), que también sirve para escribir argumentos, notas y variables.
 - **Tres temas**: moderno (el predeterminado), clásico y arcade (synthwave con efecto CRT).
 - **Menús persistentes**: todos los menús se dibujan en un mismo proceso, sin parpadeo al cambiar de uno a otro.
+- **La biblioteca se abre al instante**, aunque tengas cientos de juegos: la lista se compone de una sola vez en vez de consultar cada juego por separado (con 141 juegos, de 1,5 s a 0,02 s). Si algo falla, se rehace por la vía de siempre sin que te enteres.
 - **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**:
 
 ![Vista de rejilla de WProton](img/rejilla.jpg)
@@ -49,12 +50,22 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - En Batocera detecta los Wine del sistema y los de `/userdata/system/wine/custom`.
 
 ### Ajustes por juego
-Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, DLL overrides, idioma, NTsync y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).
+Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).
+
+- **DLL overrides con menú**: se marcan de una lista con las más habituales (`dinput8`, `d3d9`, `dxgi`, `winhttp`, `winmm`), las que ya tengas puestas y las que encuentre junto al ejecutable del juego. Nada de recordar el formato ni de perder por el camino lo que dejaron dgVoodoo2 u OptiScaler.
+- **Idioma del juego** de una lista, en **español por defecto**. Avisa si el sistema no tiene ese idioma generado, que es la causa más común de que un juego siga saliendo en inglés.
+- **HDR**: pone las variables que hacen falta y se lo pide a gamescope. Y dice en el propio menú si va a poder verse: sin gamescope ni sesión Wayland no hay HDR, por mucho que se active.
+- El **asistente de añadir un juego** deja listos también los DLL overrides y el prefijo, sin tener que entrar después por *Configurar*.
 
 Además: **notas**, **favoritos**, **estadísticas de tiempo jugado** y **copias de seguridad de las partidas**.
 
 ### Herramientas
 winecfg, winetricks, redistribuibles de Windows (vcredist, PhysX, prerrequisitos de Unreal, DirectX…), **dgVoodoo2**, **OptiScaler** y **mapeador `.keys`** (mando → teclado, formato Batocera), que se activa solo si el juego tiene su fichero.
+
+- **Importar un fichero `.reg`** al prefijo, por ejemplo para cambiar el idioma de un juego que lo guarda en el registro. Enseña lo que lleva dentro antes de aplicarlo y **guarda una copia del registro**, porque no hay deshacer.
+- **Instalar librerías en cualquier prefijo**, no solo en el compartido, con una **barra que avanza de verdad**: los redistribuibles se instalan de uno en uno y se ve por cuál va. Si uno falla, sigue con el resto y dice cuál falló.
+- La primera vez que se estrena el prefijo compartido, ofrece dejarle instalado **Visual C++ 2015-2022**, que es lo que piden casi todos los juegos de Windows y sin lo cual muchos arrancan y se cierran sin dar ningún error.
+- El **mapeador `.keys`** enseña las teclas que ya tiene asignadas un juego sin tener que abrir el fichero, conserva las combinaciones al editarlo, y permite **usar el mando como ratón** (un stick mueve el puntero y un botón hace clic), útil en juegos de estrategia y aventuras gráficas.
 
 ### Mantenimiento
 - **Espacio en disco**: qué ocupa cada cosa, tamaño por juego, limpieza de cachés y detección de prefijos y partidas huérfanas.
@@ -119,6 +130,7 @@ Para integrarlo en un frontend (ES-DE, DeckStation…), apunta el lanzador a `wp
 | **R1** | Marcar o quitar favorito |
 | **Y** | Buscar (abre el teclado en pantalla) |
 | **Select + A** | Pantalla completa / ventana |
+| **Select** (5 s, jugando) | Cerrar el juego sin tocar el teclado |
 
 Con teclado: flechas, Enter, Esc, F11 y **escribir directamente** para filtrar.
 
@@ -130,6 +142,7 @@ settings.conf           ← ajustes generales
 profiles/               ← un .conf (y opcionalmente un .keys) por juego
 lang/                   ← idiomas (en.json se genera solo)
 covers/                 ← carátulas
+metadata/               ← fichas de Steam y duraciones (antes "datos")
 backups/                ← copias de partidas y de tu configuración
 runtime/                ← Python, runners, umu y herramientas
 prefixes/               ← prefijos de Wine
@@ -142,6 +155,7 @@ cache/  logs/  games/
 ## Problemas conocidos
 
 - **Konsole no cierra su ventana** al terminar WProton si se lanzó desde ahí. WProton sí termina (el prompt vuelve), pero la ventana se queda abierta. En investigación; no afecta al uso normal ni al modo Juego.
+- **Ocultar el mando al juego** (*Herramientas del prefijo*) está sin verificar: escribe la clave del registro que usa Wine para dejar de sondear un joystick, pero todavía no se ha confirmado con ningún juego que se empeñe en usar su soporte nativo.
 - **Compartir perfiles de la comunidad**: la descarga funciona; el envío está desactivado mientras se decide un método cómodo para quien no usa Git.
 
 ## Créditos

@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.25"
+WPROTON_VERSION="1.26"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1737,9 +1737,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 520c80ffb2c6" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py e2d36f7d59b8" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 520c80ffb2c6
+# WPROTON_HELPER mapeador.py e2d36f7d59b8
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
@@ -2261,8 +2261,29 @@ def main():
             map_normal[ids[trig]] = t_codes
 
     # ── Teclado virtual para shortcuts ──────────────────────────────────────
+    #
+    # SE DECLARAN LAS TECLAS QUE HACEN FALTA, UNA A UNA.
+    #
+    # Antes era evdev.UInput(name=...) a secas, dejando que python-evdev
+    # eligiera el juego de teclas del dispositivo. Eso es un cheque en blanco:
+    # el kernel DESCARTA EN SILENCIO cualquier tecla que el dispositivo no
+    # haya declarado. Se escribia KEY_UP, el registro decia que se habia
+    # escrito, y al juego no le llegaba nada. Declarandolas no hay duda.
+    _necesarias = set()
+    for _lista in list(map_normal.values()) + list(map_dirs.values()):
+        _necesarias.update(_lista or [])
+    for _c in map_combos:
+        _necesarias.update(_c["outs"] or [])
     try:
-        ui = evdev.UInput(name="Mapeador_KB_Portable")
+        if _necesarias:
+            ui = evdev.UInput({ecodes.EV_KEY: sorted(_necesarias)},
+                              name="Mapeador_KB_Portable")
+            print("[keys] Teclado virtual con %d tecla(s) declarada(s): %s"
+                  % (len(_necesarias),
+                     ", ".join(sorted(ecodes.KEY.get(_k, str(_k))
+                                      for _k in _necesarias))), flush=True)
+        else:
+            ui = evdev.UInput(name="Mapeador_KB_Portable")
     except Exception as e:
         print(f"ERROR UInput teclado: {e}")
         return
@@ -2297,15 +2318,38 @@ def main():
     # Anadirlos no rompe nada: si un mando manda HAT2 como cruceta digital
     # (rango -1..1), el umbral que se calcula mas abajo es 8 como minimo y ese
     # eje no llega nunca a superarlo, asi que no dispara por error.
+    # Los gatillos como DIRECCION DE EJE, igual que Batocera.
+    #
+    # evmapy.py de Batocera traduce cada nombre generico a un eje con
+    # direccion: "ABSY:min" para el stick arriba, "ABSZ:max" para el gatillo
+    # izquierdo. Todo pasa por LA MISMA maquina.
+    #
+    # Aqui habia dos caminos distintos: map_dirs para las direcciones y
+    # _gatillo_teclas para los gatillos. Y los registros de un tester
+    # demostraron que el de las direcciones funcionaba (el stick giraba el
+    # coche) y el de los gatillos no, sin que se viera la diferencia leyendo
+    # el codigo. Con un solo camino, esa diferencia no puede existir.
+    #
+    # abs_dirs:     eje -> (nombre hacia el minimo, nombre hacia el maximo)
+    # dirs_teclas:  nombre -> teclas
+    # _eje_centro:  eje -> valor de reposo (los gatillos reposan en su MINIMO,
+    #               no en el centro del recorrido)
+    abs_dirs = dict(abs_map_actual)
+    dirs_teclas = dict(map_dirs)
+    _eje_centro = {}
     for _n, _ejes in (("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE, ecodes.ABS_HAT2Y)),
                       ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS, ecodes.ABS_HAT2X))):
         _cod = ids.get(_n)
         if _cod is not None and map_normal.get(_cod):
+            _nombre = "__%s" % _n          # "__l2" / "__r2"
+            dirs_teclas[_nombre] = map_normal[_cod]
             for _e in _ejes:
                 _gatillo_teclas[_e] = map_normal[_cod]
-    _gatillo_on = {}     # eje -> si esta pulsado ahora
-    _gatillo_umbral = {} # eje -> a partir de que valor cuenta como pulsado
+                # el gatillo solo va en un sentido: hacia su maximo
+                abs_dirs[_e] = (None, _nombre)
     _eje_umbral = {}     # lo mismo para los sticks, calculado del propio mando
+    _gatillo_visto = set()   # ejes de gatillo de los que ya llego algo
+    _dir_vista = set()       # (direccion, encendida) ya trazadas
     # Resumen de lo que ha quedado cargado.
     #
     # Antes solo se decia algo CUANDO habia gatillos; si la tabla salia vacia
@@ -2328,7 +2372,7 @@ def main():
         print("[keys] Gatillos analogicos: NINGUNO "
               "(el .keys no asigna l2 ni r2, o el perfil no los define)",
               flush=True)
-    _ejes_usados = sorted(_nom_eje(_c) for _c in abs_map_actual)
+    _ejes_usados = sorted(_nom_eje(_c) for _c in abs_dirs)
     print("[keys] Ejes que se vigilan: %s" % ", ".join(_ejes_usados), flush=True)
     if map_combos:
         print("[keys] Combinaciones: %d (sus botones se envian al soltar)"
@@ -2344,8 +2388,63 @@ def main():
             print(f"[!] Sin ratón virtual: {e}"); ui_mouse=None
     _macc_x=0.0; _macc_y=0.0; _mlast=_tm.monotonic(); _msx=center; _msy=center
 
+    # DOS controles pueden mandar la MISMA tecla. En el .keys de Need for
+    # Speed, r2 y joystick1up mandan los dos KEY_UP. Antes cada uno escribia
+    # por su cuenta, asi que al soltar el stick se soltaba la tecla aunque el
+    # gatillo siguiera apretado: en un juego de coches, dejaba de acelerar y
+    # parecia que el gatillo no funcionaba.
+    #
+    # Ahora se cuenta cuantas fuentes mantienen cada tecla. Se suelta cuando
+    # la suelta LA ULTIMA, no la primera.
+    _ref = {}
+    _avisadas = set()
+    _emitidas = set()   # teclas que ya se han mandado alguna vez
+
+    def _tecla(codigo, encendida):
+        """Pulsa o suelta una tecla que pueden mandar VARIOS controles.
+
+        Un .keys puede asignar la misma tecla a dos sitios a proposito: en
+        Need for Speed, el gas (flecha arriba) esta en el gatillo Y en el
+        stick, para poder acelerar con cualquiera de los dos.
+
+        Las dos reglas, y hacen falta las dos:
+
+          - Al PULSAR, el juego tiene que enterarse SIEMPRE, aunque otro
+            control ya tuviera la tecla cogida. Si no, el segundo control
+            parece muerto: no genera ningun evento. Cuando ya esta pulsada
+            se suelta y se vuelve a pulsar, para que se vea una pulsacion
+            nueva y no un silencio.
+
+          - Al SOLTAR, la tecla se levanta cuando la suelta EL ULTIMO. Si no,
+            soltar el stick apagaba el gas aunque el gatillo siguiera a fondo.
+        """
+        if encendida:
+            _ref[codigo] = _ref.get(codigo, 0) + 1
+            if _ref[codigo] == 1:
+                ui.write(ecodes.EV_KEY, codigo, 1)
+            else:
+                ui.write(ecodes.EV_KEY, codigo, 0)
+                ui.syn()
+                ui.write(ecodes.EV_KEY, codigo, 1)
+                if codigo not in _avisadas:
+                    _avisadas.add(codigo)
+                    print("[keys] %s la mandan varios controles a la vez; "
+                          "se repulsa para que el juego lo note"
+                          % ecodes.KEY.get(codigo, codigo), flush=True)
+        else:
+            n = _ref.get(codigo, 0)
+            if n <= 0:
+                return            # nadie la tenia: no se manda un soltar suelto
+            _ref[codigo] = n - 1
+            if _ref[codigo] == 0:
+                ui.write(ecodes.EV_KEY, codigo, 0)
+        if codigo not in _emitidas:
+            _emitidas.add(codigo)
+            print("[keys] Al teclado virtual: %s"
+                  % ecodes.KEY.get(codigo, codigo), flush=True)
+
     pulsados = set()
-    ejes_on  = {k: False for k in DIR_KEYS}
+    ejes_on  = {k: False for k in list(DIR_KEYS) + list(dirs_teclas)}
 
     try:
         while True:
@@ -2382,11 +2481,11 @@ def main():
                                         # estuviera esperando a soltarse se
                                         # descarta, no se envia
                                         for _b in c["req"]: pendiente.discard(_b)
-                                        for t in c["outs"]: ui.write(ecodes.EV_KEY, t, 1)
+                                        for t in c["outs"]: _tecla(t, True)
                                 elif c["active"] and not all_pressed and event.value == 0:
                                     c["active"] = False
                                     if not c.get("kb"):
-                                        for t in c["outs"]: ui.write(ecodes.EV_KEY, t, 0)
+                                        for t in c["outs"]: _tecla(t, False)
 
                             # Boton individual -> teclado.
                             #
@@ -2411,17 +2510,17 @@ def main():
                             if event.code in map_normal and not in_active_combo:
                                 if event.code not in btn_en_combo:
                                     for t in map_normal[event.code]:
-                                        ui.write(ecodes.EV_KEY, t, event.value)
+                                        _tecla(t, event.value == 1)
                                 elif event.value == 1:
                                     # se apunta y se decide al soltar
                                     pendiente.add(event.code)
                                 elif event.value == 0 and event.code in pendiente:
                                     pendiente.discard(event.code)
                                     for t in map_normal[event.code]:
-                                        ui.write(ecodes.EV_KEY, t, 1)
+                                        _tecla(t, True)
                                     ui.syn()
                                     for t in map_normal[event.code]:
-                                        ui.write(ecodes.EV_KEY, t, 0)
+                                        _tecla(t, False)
                             elif event.value == 0:
                                 pendiente.discard(event.code)
 
@@ -2443,27 +2542,21 @@ def main():
                                     ui_mouse.write(ecodes.EV_KEY, ecodes.BTN_LEFT,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
-                            # Gatillo analogico -> pulsacion de tecla
-                            if event.code in _gatillo_teclas:
-                                _um = _gatillo_umbral.get(event.code)
-                                if _um is None:
-                                    # El recorrido cambia entre mandos (0-255,
-                                    # 0-1023, 0-32767): se pregunta al propio
-                                    # mando en vez de suponer un valor.
-                                    try:
-                                        _um = max(8, _dev.absinfo(event.code).max // 4)
-                                    except Exception:
-                                        _um = 64
-                                    _gatillo_umbral[event.code] = _um
-                                _pulsado = event.value > _um
-                                if _pulsado != _gatillo_on.get(event.code, False):
-                                    _gatillo_on[event.code] = _pulsado
-                                    for _t in _gatillo_teclas[event.code]:
-                                        ui.write(ecodes.EV_KEY, _t, 1 if _pulsado else 0)
-                                    ui.syn()
-                            # Mapeo de dirección → teclado
-                            if event.code in abs_map_actual:
-                                neg_dir, pos_dir = abs_map_actual[event.code]
+                            # Los gatillos YA NO tienen camino propio: van
+                            # por la tabla de direcciones de aqui abajo, como
+                            # en Batocera. Solo queda la traza, para saber que
+                            # el eje llega y con que umbral se le mide.
+                            if event.code in _gatillo_teclas \
+                                    and event.code not in _gatillo_visto:
+                                _gatillo_visto.add(event.code)
+                                print("[keys] Llega %s (valor %d)"
+                                      % (ecodes.ABS.get(event.code, event.code),
+                                         event.value), flush=True)
+
+                            # Mapeo de dirección → teclado. EL UNICO camino:
+                            # sticks, cruceta y gatillos pasan por aqui.
+                            if event.code in abs_dirs:
+                                neg_dir, pos_dir = abs_dirs[event.code]
                                 # La CRUCETA no es analogica: solo manda -1, 0
                                 # o +1. Compararla con el umbral de los sticks
                                 # (16000, para no detectar el roce) hacia que
@@ -2475,6 +2568,7 @@ def main():
                                     val = event.value
                                     neg_active = val < 0
                                     pos_active = val > 0
+                                    _u = 0
                                 else:
                                     # El umbral se le pregunta AL MANDO, no se
                                     # da por hecho.
@@ -2492,14 +2586,21 @@ def main():
                                         _u = threshold
                                         try:
                                             _ai = _dev.absinfo(event.code)
-                                            _recorrido = max(abs(_ai.max - center),
-                                                             abs(center - _ai.min))
+                                            _c = center
+                                            if event.code in _gatillo_teclas:
+                                                # un gatillo reposa en su MINIMO
+                                                # y se aprieta hacia el maximo
+                                                _c = _ai.min
+                                                _eje_centro[event.code] = _c
+                                            _recorrido = max(abs(_ai.max - _c),
+                                                             abs(_c - _ai.min))
                                             if _recorrido > 0:
                                                 # 35% del recorrido, y nunca por
                                                 # debajo del triple de la zona
                                                 # muerta que declara el mando
+                                                _pc = 25 if event.code in _gatillo_teclas else 35
                                                 _u = max(_ai.flat * 3,
-                                                         (_recorrido * 35) // 100)
+                                                         (_recorrido * _pc) // 100)
                                         except Exception:
                                             pass
                                         _eje_umbral[event.code] = _u
@@ -2508,14 +2609,37 @@ def main():
                                               % (ecodes.ABS.get(event.code,
                                                                 event.code),
                                                  _u, threshold), flush=True)
-                                    val = event.value - center
+                                    _c = _eje_centro.get(event.code, center)
+                                    val = event.value - _c
                                     neg_active = val < -_u
                                     pos_active = val > _u
-                                for direction, active in ((neg_dir, neg_active), (pos_dir, pos_active)):
-                                    if active != ejes_on[direction]:
+                                for direction, active in ((neg_dir, neg_active),
+                                                          (pos_dir, pos_active)):
+                                    # un gatillo solo tiene sentido positivo:
+                                    # su lado negativo va a None y se salta
+                                    if direction is None:
+                                        continue
+                                    if active != ejes_on.get(direction, False):
                                         ejes_on[direction] = active
-                                        for t in map_dirs[direction]:
-                                            ui.write(ecodes.EV_KEY, t, 1 if active else 0)
+                                        # La primera vez que cada direccion se
+                                        # enciende y la primera que se apaga.
+                                        # Sin esto no se ve si una direccion se
+                                        # queda COLGADA: un stick que no suelta
+                                        # deja la tecla pulsada para siempre y
+                                        # cualquier otro control que use esa
+                                        # misma tecla parece muerto.
+                                        _marca = (direction, active)
+                                        if _marca not in _dir_vista:
+                                            _dir_vista.add(_marca)
+                                            print("[keys] %s %s (%s = %d, umbral %d)"
+                                                  % (direction,
+                                                     "ON " if active else "OFF",
+                                                     ecodes.ABS.get(event.code,
+                                                                    event.code),
+                                                     event.value, _u),
+                                                  flush=True)
+                                        for t in dirs_teclas[direction]:
+                                            _tecla(t, active)
 
                             ui.syn()
 
@@ -2692,9 +2816,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 18ee7c87d83a" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 9a70488afb92" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 18ee7c87d83a
+# WPROTON_HELPER menu_pygame.py 9a70488afb92
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -5302,6 +5426,8 @@ def guardia(marca, segundos=5.0, combo='select'):
         _cursor = None
     _t0 = time.time()
     _vistos = [0]
+    _btn_log = [0]      # botones ya apuntados (NO lecturas)
+    _desde = {}         # boton de la combinacion -> cuando se pulso
     while True:
         ahora = time.time()
         if ahora - ultimo_escaneo > 3:
@@ -5338,15 +5464,32 @@ def guardia(marca, segundos=5.0, combo='select'):
                     continue
                 if v == 1:
                     aqui.add(c)
-                    # Los primeros botones se apuntan con su codigo: asi se
-                    # ve si el guardia recibe algo y si los codigos son los
-                    # esperados en ESTE mando. Sin esto habia que adivinar.
-                    if _vistos[0] <= 12:
+                    # Los primeros BOTONES se apuntan con su codigo, para ver
+                    # si llegan y si son los que espera la combinacion.
+                    #
+                    # OJO: antes esto miraba _vistos, que cuenta LECTURAS, no
+                    # botones. Los ejes de los sticks generan lecturas sin
+                    # parar, asi que se comian el cupo de 12 antes de que
+                    # nadie pulsara nada y no se registraba ni un boton. En
+                    # los registros de un tester no habia ni una linea.
+                    if _btn_log[0] < 12:
+                        _btn_log[0] += 1
                         sys.stderr.write('menu_pygame: guardia: boton %d en %s '
                                          '(la combinacion espera %s)\n'
                                          % (c, p, list(REQ)))
+                    if c in REQ:
+                        _desde[c] = time.time()
+                        sys.stderr.write('menu_pygame: guardia: %d PULSADO '
+                                         '(hay que mantenerlo %.0fs)\n'
+                                         % (c, segundos))
                 elif v == 0:
                     aqui.discard(c)
+                    # Cuanto se mantuvo. Si sale "soltado a los 4.6s" cuando
+                    # hacen falta 5, el problema es el tiempo y no el codigo.
+                    if c in REQ and c in _desde:
+                        sys.stderr.write('menu_pygame: guardia: %d soltado a '
+                                         'los %.1fs\n' % (c, time.time() - _desde[c]))
+                        del _desde[c]
         # Si a los 60 segundos no ha llegado NI UN evento, es que no se puede
         # leer el mando (permisos), no que el usuario no pulse nada.
         if _vistos[0] == 0 and 'mudo' not in avisado and time.time() - _t0 > 60:
@@ -7552,6 +7695,7 @@ profile_defaults() {
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     HDR=0                    # rango dinamico alto (necesita gamescope o Wayland)
+    MANDO_OCULTO=0           # 1 = el juego no ve el mando (manda el .keys)
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     # Mandos de Sony (DualSense / DS4) con GE-Proton 11-4 o mas nuevo:
     #   auto - lo que decida Proton (lo normal)
@@ -7584,7 +7728,8 @@ profile_defaults() {
     LAA=0                    # 1 = Large Address Aware (32bit >2GB RAM)
     GAMESCOPE=""             # args de gamescope (vacio = desactivado)
     DLL_OVERRIDES=""         # WINEDLLOVERRIDES, ej: d3d9,ddraw=n,b
-    GAME_LANG=""             # locale, ej: ru_RU.UTF-8 / ja_JP.UTF-8
+    GAME_LANG="es_ES.UTF-8"  # el juego arranca en espanol salvo que se cambie
+                             # (vacio = el del sistema)
     EXTRA_ENV=""
 }
 
@@ -7630,6 +7775,7 @@ ESYNC=$ESYNC
 DXVK_ASYNC=$DXVK_ASYNC
 WAYLAND=$WAYLAND
 HDR=$HDR
+MANDO_OCULTO=$MANDO_OCULTO
 WINED3D=$WINED3D
 FSR=$FSR
 LAA=$LAA
@@ -11507,6 +11653,14 @@ def main():
         return 1
     acciones = datos.get('actions_player1') or []
     filas = []
+    raton = datos.get('mouse') or {}
+    if raton:
+        ejes = {'joystick1': 'Stick izquierdo', 'joystick2': 'Stick derecho'}
+        filas.append('%-26s ->  %s' % (
+            ejes.get(raton.get('axis', 'joystick2'), raton.get('axis')),
+            'mover el raton (velocidad %s)' % raton.get('speed', 900)))
+        filas.append('%-26s ->  %s' % (
+            boton(raton.get('click_left', 'r2')), 'clic del raton'))
     for a in acciones:
         if not isinstance(a, dict):
             continue
@@ -11524,6 +11678,117 @@ sys.exit(main())
 PYKEYS
 }
 
+keys_raton_leer() {
+    # $1 = fichero temporal del raton, $2 = campo -> valor (o vacio)
+    [ -s "$1" ] || return 0
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 0
+    "$PY_BIN" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+sys.stdout.write(str(d.get(sys.argv[2],"")))' "$1" "$2" 2>/dev/null
+}
+
+keys_raton_fila() {
+    # La fila que se enseña en la lista del editor. $1 = temporal del raton.
+    local eje click
+    if [ ! -s "$1" ]; then
+        printf 'Raton: no (el stick no mueve el puntero)'
+        return 0
+    fi
+    eje="$(keys_raton_leer "$1" axis)"
+    click="$(keys_raton_leer "$1" click_left)"
+    printf 'Raton: si  (%s mueve, %s hace clic)' \
+        "$(keys_boton_nombre "${eje:-joystick2}")" \
+        "$(keys_boton_nombre "${click:-r2}")"
+}
+
+keys_boton_nombre() {
+    # El nombre largo de un boton o stick, para no enseñar "pagedown" a secas
+    case "$1" in
+        joystick1) printf 'stick izquierdo' ;;
+        joystick2) printf 'stick derecho' ;;
+        *) local n
+           n="$(printf '%s\n' "$KEYS_BOTONES" | awk -F'|' -v d="$1" '$1==d{print $2}')"
+           printf '%s' "${n:-$1}" ;;
+    esac
+}
+
+keys_raton_editar() {
+    # Enciende, apaga y ajusta el raton. $1 = temporal del raton.
+    #
+    # Sirve para los juegos de PC que piden raton por narices (estrategia,
+    # aventuras graficas, menus de instalador) y que con el mando no se
+    # pueden ni empezar.
+    local f="$1" sel eje click vel
+    while :; do
+        if [ -s "$f" ]; then
+            eje="$(keys_raton_leer "$f" axis)";      eje="${eje:-joystick2}"
+            click="$(keys_raton_leer "$f" click_left)"; click="${click:-r2}"
+            vel="$(keys_raton_leer "$f" speed)";     vel="${vel:-900}"
+            sel="$(menu "Raton con el mando" \
+                "Mover con: $(keys_boton_nombre "$eje")" \
+                "Clic con: $(keys_boton_nombre "$click")" \
+                "Velocidad: $vel" \
+                "Apagar el raton" \
+                "<< Volver")" || return 0
+        else
+            sel="$(menu "Raton con el mando" \
+                "Encender: el stick derecho mueve el puntero" \
+                "<< Volver")" || return 0
+        fi
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Encender"*)
+                printf '{"axis": "joystick2", "click_left": "r2", "speed": 900}' > "$f" ;;
+            "Apagar el raton")
+                : > "$f" ;;
+            "Mover con:"*)
+                if [ "$eje" = "joystick2" ]; then eje=joystick1; else eje=joystick2; fi
+                keys_raton_poner "$f" axis "$eje" ;;
+            "Clic con:"*)
+                # Los que tienen sentido: los que no suelen hacer falta en el
+                # juego y caen bien con el pulgar en el stick.
+                local nuevo
+                nuevo="$(menu "Que boton hace clic" \
+                    "r2 - gatillo derecho" \
+                    "l2 - gatillo izquierdo" \
+                    "pagedown - R1" \
+                    "pageup - L1" \
+                    "a - boton de abajo" \
+                    "<< Volver")" || continue
+                case "$nuevo" in
+                    "<< Volver"|"") continue ;;
+                esac
+                keys_raton_poner "$f" click_left "${nuevo%% *}" ;;
+            "Velocidad:"*)
+                local v
+                v="$(menu "Velocidad del puntero (ahora $vel)" \
+                    "400 - lento" "900 - normal" "1500 - rapido" "2500 - muy rapido" \
+                    "<< Volver")" || continue
+                case "$v" in
+                    "<< Volver"|"") continue ;;
+                esac
+                keys_raton_poner "$f" speed "${v%% *}" ;;
+        esac
+    done
+}
+
+keys_raton_poner() {
+    # Cambia UN campo del temporal del raton. $1 = fichero, $2 = campo, $3 = valor
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception:
+    d={"axis":"joystick2","click_left":"r2","speed":900}
+v=sys.argv[3]
+d[sys.argv[2]]=int(v) if v.isdigit() else v
+json.dump(d,open(sys.argv[1],"w",encoding="utf-8"),ensure_ascii=False)' \
+        "$1" "$2" "$3" 2>/dev/null
+}
+
 keys_editor() {
     # Crear o retocar el .keys de un juego, boton a boton.
     #
@@ -11537,10 +11802,12 @@ keys_editor() {
     # no vale nada y el fichero saldria con el nombre equivocado.
     local gid="$1" squash="${2:-}" destino
     destino="$PROFILE_DIR/$gid.keys"
-    local tmp tmpc origen=""
+    local tmp tmpc tmpr origen=""
     tmp="$(mktemp)" || return 1
     tmpc="$(mktemp)" || { rm -f "$tmp"; return 1; }
+    tmpr="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
     printf '{"actions_player1": []}' > "$tmpc"
+    : > "$tmpr"                      # vacio = este .keys no lleva raton
 
     # De donde se parte. OJO: NO vale mirar solo profiles/<gid>.keys. El .keys
     # puede estar junto al juego (<juego>.wsquashfs.keys), que es como lo pone
@@ -11550,7 +11817,7 @@ keys_editor() {
     [ -n "$origen" ] || { [ -f "$destino" ] && origen="$destino"; }
 
     if [ -n "$origen" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
-        "$PY_BIN" - "$origen" "$tmp" "$tmpc" 2>/dev/null <<'PYLEER'
+        "$PY_BIN" - "$origen" "$tmp" "$tmpc" "$tmpr" 2>/dev/null <<'PYLEER'
 import json
 import sys
 
@@ -11569,6 +11836,11 @@ try:
         datos = json.load(fh)
 except (OSError, ValueError):
     sys.exit(0)
+
+raton = datos.get('mouse') or {}
+if raton:
+    with open(sys.argv[4], 'w', encoding='utf-8') as fh:
+        json.dump(raton, fh, ensure_ascii=False)
 
 editables, conservar = [], []
 for a in datos.get('actions_player1', []):
@@ -11621,17 +11893,25 @@ EOFKB
 $combis
 EOFCOMBIS
         fi
+        # El raton va como una fila mas, al final. El mapeador ya sabia
+        # moverlo desde hace tiempo, pero no habia por donde configurarlo:
+        # habia que escribir la seccion "mouse" a mano en el .keys.
+        opciones="$opciones$(keys_raton_fila "$tmpr")
+"
         n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
         local titulo="Teclas de $gid  ($n asignadas"
         [ "$nc" -gt 0 ] && titulo="$titulo + $nc combinaciones"
         titulo="$titulo)"
         # shellcheck disable=SC2046
         sel="$(IFS=$'\n'; set -f; menu "$titulo" \
-               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc"; return 1; }
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
 
         case "$sel" in
-            "<< Salir sin guardar") rm -f "$tmp" "$tmpc"; return 1 ;;
+            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr"; return 1 ;;
             "== GUARDAR ==") break ;;
+            "Raton:"*)
+                keys_raton_editar "$tmpr"
+                continue ;;
             "-- combinaciones"*|"   "*)
                 ui_info "Las combinaciones no se cambian desde aqui: esta lista es de un boton por fila.
 
@@ -11651,11 +11931,11 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
 
     if [ ! -s "$tmp" ]; then
         ui_error "No has asignado ninguna tecla."
-        rm -f "$tmp" "$tmpc"; return 1
+        rm -f "$tmp" "$tmpc" "$tmpr"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
-    "$PY_BIN" - "$tmp" "$destino" "$tmpc" <<'PYESC'
+    "$PY_BIN" - "$tmp" "$destino" "$tmpc" "$tmpr" <<'PYESC'
 import json
 import sys
 
@@ -11682,10 +11962,21 @@ with open(sys.argv[1], encoding='utf-8') as fh:
         disparo, tecla = linea.split('|', 1)
         acciones.append({"trigger": disparo, "type": "key", "target": tecla})
 
+salida = {"actions_player1": acciones}
+
+# La seccion "mouse", si se pidió. El mapeador la lee de aqui.
+try:
+    with open(sys.argv[4], encoding='utf-8') as fh:
+        _t = fh.read().strip()
+    if _t:
+        salida["mouse"] = json.loads(_t)
+except (OSError, ValueError, IndexError):
+    pass
+
 with open(sys.argv[2], 'w', encoding='utf-8') as fh:
-    json.dump({"actions_player1": acciones}, fh, ensure_ascii=False, indent=2)
+    json.dump(salida, fh, ensure_ascii=False, indent=2)
 PYESC
-    rm -f "$tmp" "$tmpc"
+    rm -f "$tmp" "$tmpc" "$tmpr"
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
@@ -14951,7 +15242,7 @@ cfg_rendimiento_menu() {
             "Gamescope: ${GAMESCOPE:-OFF}" \
             "$gs_row" \
             "DLL overrides: ${DLL_OVERRIDES:-ninguno}" \
-            "Idioma del juego: ${GAME_LANG:-sistema}" \
+            "Idioma del juego: $(idioma_nombre "$GAME_LANG")" \
             "Variables extra: ${EXTRA_ENV:-ninguna}" \
             "<< Volver")" || return 0
         case "$sel" in
@@ -14961,6 +15252,212 @@ cfg_rendimiento_menu() {
     done
 }
 
+mandos_nombres() {
+    # Los nombres de los mandos TAL CUAL los ve Wine.
+    #
+    # Se sacan de /proc/bus/input/devices, que es la misma lista de la que
+    # tira Wine, y asi no hace falta evdev ni adivinar nada. Solo los que
+    # exponen un joystick (js*): un teclado o el sensor de movimiento no
+    # cuentan como mando.
+    local line name=""
+    [ -r /proc/bus/input/devices ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            N:*) name="${line#N: Name=}"; name="${name%\"}"; name="${name#\"}" ;;
+            H:*) case "$line" in
+                     *js*) [ -n "$name" ] && printf '%s\n' "$name" ;;
+                 esac ;;
+        esac
+    done < /proc/bus/input/devices
+    return 0
+}
+
+mando_oculto_aplicar() {
+    # Enciende o apaga "ocultar el mando al juego" en el prefijo.
+    # $1 = wsquashfs, $2 = gid, $3 = 1 para ocultar, 0 para volver a mostrar
+    #
+    # Wine tiene su propio panel de mandos (wine control -> Game Controllers)
+    # que permite dejar de sondear un joystick, y lo guarda en el registro.
+    # Escribimos ahi directamente.
+    #
+    # Sirve para los juegos viejos que, al detectar un mando, se empenan en
+    # usar SU soporte nativo y dejan de mirar el teclado para lo importante:
+    # entonces el .keys deja de servir para nada aunque funcione.
+    local squash="$1" gid="$2" ocultar="$3"
+    local nombres tmp n=0
+    nombres="$(mandos_nombres | sort -u)"
+    if [ -z "$nombres" ]; then
+        ui_error "No veo ningun mando conectado.
+
+Conectalo (o enciendelo) y vuelve a intentarlo: hace falta
+saber su nombre exacto para decirselo a Wine."
+        return 1
+    fi
+    tmp="$(mktemp)"
+    printf 'Windows Registry Editor Version 5.00\r\n\r\n' > "$tmp"
+    printf '[HKEY_CURRENT_USER\\Software\\Wine\\DirectInput\\Joysticks]\r\n' >> "$tmp"
+    while IFS= read -r nombre; do
+        [ -n "$nombre" ] || continue
+        if [ "$ocultar" = 1 ]; then
+            printf '"%s"="disabled"\r\n' "$nombre" >> "$tmp"
+        else
+            # el guion suelto BORRA el valor: asi se deshace del todo en vez
+            # de dejar rastro con otro valor que Wine tendria que interpretar
+            printf '"%s"=-\r\n' "$nombre" >> "$tmp"
+        fi
+        n=$((n+1))
+    done <<EOFMANDOS
+$nombres
+EOFMANDOS
+    say "[+] $([ "$ocultar" = 1 ] && printf 'Ocultando' || printf 'Mostrando') $n mando(s) al juego"
+    run_in_prefix "$squash" "$gid" regedit /S "$(win_path "$tmp")"
+    rm -f "$tmp"
+    if [ "$ocultar" = 1 ]; then
+        ui_info "El juego ya no vera el mando:
+
+$nombres
+
+Ahora leera el teclado, asi que el .keys manda. Si el juego
+estaba a medio configurar, entra una vez a sus opciones de
+control para que se entere."
+    else
+        ui_info "El juego vuelve a ver el mando."
+    fi
+    return 0
+}
+
+IDIOMAS="Español|es_ES.UTF-8
+Inglés|en_US.UTF-8
+Francés|fr_FR.UTF-8
+Alemán|de_DE.UTF-8
+Italiano|it_IT.UTF-8
+Portugués (Brasil)|pt_BR.UTF-8
+Japonés|ja_JP.UTF-8
+Ruso|ru_RU.UTF-8
+Chino simplificado|zh_CN.UTF-8"
+
+idioma_locale() {
+    # nombre -> locale. Si no esta en la lista, se devuelve tal cual.
+    local l
+    l="$(printf '%s\n' "$IDIOMAS" | awk -F'|' -v n="$1" '$1==n{print $2}')"
+    printf '%s' "${l:-$1}"
+}
+
+idioma_nombre() {
+    # locale -> nombre, para que el menu no enseñe "es_ES.UTF-8" a secas
+    [ -n "$1" ] || { printf 'el del sistema'; return 0; }
+    local n
+    n="$(printf '%s\n' "$IDIOMAS" | awk -F'|' -v l="$1" '$2==l{print $1}')"
+    printf '%s' "${n:-$1}"
+}
+
+idioma_avisar_si_falta() {
+    # Wine se apana con el locale aunque el sistema no lo tenga generado,
+    # pero conviene decirlo: si el juego sigue en ingles, esta es la razon
+    # mas probable y si no se avisa se pierde un buen rato buscandola.
+    local loc="$1"
+    [ -n "$loc" ] || return 0
+    command -v locale >/dev/null 2>&1 || return 0
+    if ! locale -a 2>/dev/null | grep -qiF "$(printf '%s' "${loc%%.*}")"; then
+        ui_info "Puesto: $loc
+
+OJO: este sistema no tiene ese idioma generado.
+
+Wine suele apanarse igual y el juego arranca en el idioma
+pedido, pero si sigue saliendo en ingles, la razon es esta.
+En SteamOS se arregla con:
+  sudo steamos-readonly disable
+  sudo locale-gen ${loc%%.*}.UTF-8"
+    fi
+    return 0
+}
+
+reg_previsualizar() {
+    # Enseña lo que se va a meter ANTES de meterlo. $1 = fichero .reg
+    #
+    # Un .reg puede tocar cualquier cosa del registro, y una vez aplicado no
+    # hay deshacer. Merece la pena leerlo antes.
+    local f="$1" claves valores
+    claves="$(grep -c '^\[' "$f" 2>/dev/null || true)"
+    valores="$(grep -c '^"' "$f" 2>/dev/null || true)"
+    printf 'Fichero: %s\n' "$(basename "$f")"
+    printf 'Tamaño:  %s bytes\n' "$(stat -c%s "$f" 2>/dev/null || echo '?')"
+    printf 'Claves:  %s     Valores: %s\n\n' "$claves" "$valores"
+    printf 'Primeras lineas:\n'
+    # se recorta: un .reg de un juego puede tener miles de lineas
+    head -n 25 "$f" | sed 's/^/  /'
+    [ "$(grep -c . "$f")" -gt 25 ] && printf '  ... (%s lineas mas)\n' \
+        "$(( $(grep -c . "$f") - 25 ))"
+    return 0
+}
+
+reg_importar() {
+    # Mete el contenido de un .reg en el prefijo del juego.
+    # $1 = wsquashfs (puede ir vacio), $2 = gid
+    #
+    # Sirve, por ejemplo, para cambiar el idioma de un juego: muchos lo leen
+    # de una clave del registro y no de un menu.
+    local squash="$1" gid="$2" f destino copia
+    f="$(browse_for_path "Elige el fichero .reg" "${LAST_BROWSE:-$HOME}" file)" || return 0
+    [ -n "$f" ] || return 0
+    if [ ! -f "$f" ]; then
+        ui_error "No existe: $f"
+        return 1
+    fi
+    case "$(printf '%s' "${f##*/}" | tr 'A-Z' 'a-z')" in
+        *.reg) ;;
+        *) ui_ask "'$(basename "$f")' no acaba en .reg.
+
+Aplicarlo igualmente?" || return 0 ;;
+    esac
+    # Un .reg es texto, y regedit espera UTF-16 o ANSI. Si no empieza por la
+    # cabecera de siempre, casi seguro que no es un .reg de verdad.
+    if ! head -c 400 "$f" | tr -d '\000' | grep -qi 'REGEDIT4\|Windows Registry Editor'; then
+        ui_ask "El fichero no lleva la cabecera de un .reg
+('REGEDIT4' o 'Windows Registry Editor').
+
+Puede que no sea un fichero de registro. Seguir?" || return 0
+    fi
+
+    ui_info "$(reg_previsualizar "$f")" || true
+    ui_ask "Meter esto en el prefijo de '$gid'?
+
+Prefijo: $(prefix_label)
+
+NO hay deshacer, pero se guarda una copia del registro antes." || return 0
+
+    # La copia: solo los .reg del prefijo, que es lo que puede estropearse.
+    # Pesan poco y es lo unico que hace falta para volver atras.
+    destino="$(prefix_path "$gid")"
+    if [ -d "$destino" ]; then
+        copia="$destino/wp_registro_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$copia" 2>/dev/null
+        local n=0 r
+        for r in "$destino"/*.reg; do
+            [ -f "$r" ] && cp -a "$r" "$copia/" 2>/dev/null && n=$((n+1))
+        done
+        if [ "$n" -gt 0 ]; then
+            say "[+] Copia del registro en: $copia ($n ficheros)"
+        else
+            rmdir "$copia" 2>/dev/null
+            say "[i] El prefijo aun no tiene registro que copiar"
+        fi
+    fi
+
+    say "[+] Importando $(basename "$f")..."
+    # /S = sin preguntar. La ruta va en formato Windows: Wine mapea Z: a la
+    # raiz del sistema, asi que cualquier fichero del disco es alcanzable.
+    run_in_prefix "$squash" "$gid" regedit /S "$(win_path "$f")"
+    ui_info "Importado: $(basename "$f")
+
+Si algo va mal, el registro anterior esta en:
+${copia:-(no habia registro que copiar)}
+
+Arrancar el juego una vez para que Wine lo asiente."
+    remember_browse "$f"
+    return 0
+}
+
 cfg_prefijo_menu() {
     # Todo lo que toca el prefijo de Wine, junto y en un sitio logico
     local gid="$1" squash="${2:-}" sel
@@ -14968,6 +15465,8 @@ cfg_prefijo_menu() {
         sel="$(menu "Herramientas del prefijo - $gid" \
             "Abrir winecfg" \
             "Abrir winetricks" \
+            "Importar un fichero .reg (idioma, ajustes del juego)" \
+            "Ocultar el mando al juego: $(onoff "${MANDO_OCULTO:-0}")" \
             "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)" \
             "Configurar dgVoodoo (Cpl)" \
             "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
@@ -15163,8 +15662,24 @@ herramientas dejarian de cargarse."; then
                     fi ;;
             esac ;;
         "Idioma del juego:"*)
-            GAME_LANG="$(ask_text "Locale (vacio = sistema; ej: ru_RU.UTF-8, ja_JP.UTF-8, en_US.UTF-8)" "$GAME_LANG")"
-            write_full_profile "$gid" ;;
+            local lsel
+            lsel="$(menu "Idioma del juego (ahora: $(idioma_nombre "$GAME_LANG"))" \
+                "Español" "Inglés" "Francés" "Alemán" "Italiano" \
+                "Portugués (Brasil)" "Japonés" "Ruso" "Chino simplificado" \
+                "El del sistema" \
+                "Escribir un locale a mano" \
+                "<< Volver")" || lsel=""
+            case "$lsel" in
+                "<< Volver"|"") ;;
+                "El del sistema") GAME_LANG=""; write_full_profile "$gid" ;;
+                "Escribir un locale a mano")
+                    GAME_LANG="$(ask_text "Locale (vacio = sistema; ej: ko_KR.UTF-8)" "$GAME_LANG")"
+                    write_full_profile "$gid" ;;
+                *)
+                    GAME_LANG="$(idioma_locale "$lsel")"
+                    idioma_avisar_si_falta "$GAME_LANG"
+                    write_full_profile "$gid" ;;
+            esac ;;
         "Variables extra:"*)
             EXTRA_ENV="$(ask_text "Variables extra (ej: PROTON_USE_WINED3D=1)" "$EXTRA_ENV")"
             write_full_profile "$gid" ;;
@@ -15172,6 +15687,21 @@ herramientas dejarian de cargarse."; then
         "Configurar dgVoodoo"*) config_dgvoodoo_cpl "$squash" "$gid" ;;
         "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
         "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
+        "Importar un fichero .reg"*) reg_importar "$squash" "$gid" ;;
+        "Ocultar el mando al juego:"*)
+            if [ "${MANDO_OCULTO:-0}" = 1 ]; then
+                mando_oculto_aplicar "$squash" "$gid" 0 && MANDO_OCULTO=0
+            else
+                ui_ask "Ocultarle el mando a '$gid'?
+
+Algunos juegos viejos, al detectar un mando, usan SU soporte
+nativo y dejan de mirar el teclado para conducir o moverse:
+entonces el .keys no sirve de nada aunque funcione.
+
+Ocultandoselo, el juego solo vera el teclado." \
+                    && mando_oculto_aplicar "$squash" "$gid" 1 && MANDO_OCULTO=1
+            fi
+            write_full_profile "$gid" ;;
         "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
         ">> EMPAQUETAR A WSQUASHFS <<")
             # El juego es una carpeta: comprimirlo conservando su perfil
