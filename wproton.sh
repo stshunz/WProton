@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.27"
+WPROTON_VERSION="1.28"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -6996,37 +6996,200 @@ $(basename "$img")"; return 1; }
     return 0
 }
 
-is_mounted() {
-    if command -v mountpoint >/dev/null 2>&1; then
-        mountpoint -q "$1" 2>/dev/null
-    else
-        grep -qs " $1 " /proc/mounts
+montaje_en_proc() {
+    # ¿Aparece esta carpeta en /proc/mounts? El kernel la lista aunque el
+    # proceso FUSE que la sirve haya muerto, que es justo lo que hace falta
+    # saber. Los espacios van escapados como \040 en ese fichero.
+    local d; d="$(printf '%s' "$1" | sed 's/ /\\040/g')"
+    # -F (texto literal): la ruta lleva "\040" para los espacios, y sin -F
+    # grep se come la barra invertida como si fuera un escape suyo. Un juego
+    # en una carpeta con espacios no se detectaba.
+    grep -qsF " $d " /proc/mounts
+}
+
+montaje_roto() {
+    # Un montaje FUSE cuyo proceso murio: sigue en /proc/mounts pero cualquier
+    # acceso da ENOTCONN ("Transport endpoint is not connected").
+    #
+    # Es lo que deja un juego que se cuelga, y lo que obligaba a REINICIAR LA
+    # DECK: nada lo limpiaba, y al volver a lanzar el montaje fallaba y se
+    # culpaba al fichero ("puede estar dañado o incompleto"), que estaba bien.
+    montaje_en_proc "$1" || return 1
+    # Esta en la tabla de montajes pero NO se puede mirar como directorio:
+    # eso es exactamente un montaje cuyo proceso murio. En uno vivo, "-d" es
+    # cierto; en uno roto el stat() falla con ENOTCONN y sale falso.
+    #
+    # No vale "ls": sobre un enlace colgado devuelve EXITO, asi que daba por
+    # bueno lo que no lo estaba.
+    [ -d "$1" ] && return 1
+    return 0
+}
+
+reparar_montajes() {
+    # Limpia los montajes que dejo una partida que se colgo.
+    #
+    # Antes no habia forma de hacerlo desde WProton: el resto no se detectaba
+    # (stat falla en un montaje roto) y la unica salida era reiniciar.
+    if [ "${WP_JUGANDO:-0}" = 1 ]; then
+        ui_error "Hay un juego en marcha. Cierralo antes de reparar nada."
+        return 1
     fi
+    local d rotos="" vivos="" n=0
+    for d in "$MOUNT_BASE"/*; do            # "*" y no "*/": ver limpiar_rotos_si_los_hay
+        case "$d" in *'/*') continue ;; esac
+        if montaje_roto "$d"; then
+            rotos="$rotos  $(basename "$d")   (colgado)
+"
+            n=$((n+1))
+        elif is_mounted "$d"; then
+            vivos="$vivos  $(basename "$d")   (montado y vivo)
+"
+        fi
+    done
+    if [ "$n" = 0 ]; then
+        ui_info "No hay ningun montaje colgado.
+${vivos:+
+Montados ahora mismo:
+$vivos}"
+        return 0
+    fi
+    ui_ask "Hay $n montaje(s) colgados de una partida anterior:
+
+$rotos
+Se van a desmontar. Las partidas guardadas NO se tocan: viven
+en overlays/, aparte de los montajes.
+
+Seguir?" || return 0
+    loading_say "Limpiando montajes..."
+    sweep_stale_mounts
+    loading_clear
+    local quedan=0
+    for d in "$MOUNT_BASE"/*; do
+        case "$d" in *'/*') continue ;; esac
+        montaje_roto "$d" && quedan=$((quedan+1))
+    done
+    if [ "$quedan" = 0 ]; then
+        ui_info "Listo: $n montaje(s) limpiados.
+
+Ya puedes volver a lanzar el juego."
+    else
+        ui_error "Quedan $quedan sin limpiar.
+
+Puede que el sistema no deje desmontarlos sin permisos. En ese
+caso si hace falta reiniciar, pero es raro: mira el registro."
+    fi
+    return 0
+}
+
+limpiar_rotos_si_los_hay() {
+    # Limpia los montajes colgados ANTES de montar el juego siguiente.
+    #
+    # Barrer solo al arrancar no basta: el caso normal es colgarse un juego y
+    # volver a lanzarlo SIN salir de WProton, y ahi el resto seguia puesto y
+    # el montaje volvia a fallar. Se hace aqui porque es el momento exacto en
+    # que estorba, y no cuesta nada: si no hay ninguno, no hace nada.
+    local d n=0
+        # OJO con el glob: "*/" obliga a bash a comprobar que es un
+        # directorio, y esa comprobacion es un stat() que FALLA en un montaje
+        # roto. O sea, se saltaba justo lo que hay que limpiar. Con "*" se
+        # listan las entradas por nombre, sin tocarlas.
+    for d in "$MOUNT_BASE"/*; do
+        case "$d" in *'/*') continue ;; esac
+        montaje_roto "$d" || continue
+        n=$((n+1))
+        umount_dir "$d"
+    done
+    [ "$n" -gt 0 ] && say "[+] Limpiados $n montaje(s) colgados de antes"
+    return 0
+}
+
+fallo_montaje_texto() {
+    # El mensaje cuando no se puede montar un juego.
+    #
+    # Antes decia siempre "el fichero puede estar dañado o incompleto", y esa
+    # frase mandaba a la gente a reinstalar o a reiniciar la Deck cuando lo
+    # que solia haber era un montaje colgado de una partida anterior. Se
+    # comprueba antes de acusar al fichero.
+    local squash="$1" pendientes=0 d
+    for d in "$MOUNT_BASE"/*; do            # "*" y no "*/": ver limpiar_rotos_si_los_hay
+        case "$d" in *'/*') continue ;; esac
+        montaje_roto "$d" && pendientes=$((pendientes+1))
+    done
+    if [ "$pendientes" -gt 0 ]; then
+        printf '%s' "No se pudo abrir el juego:
+
+$(basename "$squash")
+
+Hay $pendientes montaje(s) COLGADOS de una partida anterior, y
+son la causa mas probable. El fichero seguramente esta bien.
+
+Prueba 'Espacio en disco -> Reparar montajes colgados', o
+cierra WProton del todo y vuelve a abrirlo: al arrancar se
+limpian solos."
+        return 0
+    fi
+    printf '%s' "No se pudo abrir el juego:
+
+$squash
+
+El fichero puede estar dañado o incompleto. Comprueba su
+integridad desde 'Espacio en disco'."
+}
+
+is_mounted() {
+    # PRIMERO /proc/mounts, que es la verdad. "mountpoint" hace stat() sobre
+    # la carpeta, y en un montaje roto stat falla: decia "no montado" cuando
+    # en realidad lo estaba, y por eso el resto no se limpiaba nunca.
+    montaje_en_proc "$1" && return 0
+    command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$1" 2>/dev/null
 }
 
 umount_dir() {
     # Desmontar con reintentos (wine puede tardar en soltar ficheros) y borrar
     # el directorio: objetivo -> tmp_mount/ queda VACIO al cerrar el juego
     local d="$1" i
-    [ -d "$d" ] || return 0
-    if is_mounted "$d"; then
+    # OJO: aqui NO vale [ -d "$d" ] || return 0.
+    #
+    # "test -d" hace stat(), y en un montaje roto stat falla con ENOTCONN, asi
+    # que saliamos sin limpiar justo el caso que hay que limpiar. Se pregunta
+    # tambien a /proc/mounts, que no hace stat.
+    if [ ! -d "$d" ] && ! montaje_en_proc "$d"; then
+        return 0
+    fi
+    if montaje_roto "$d"; then
+        # Roto: no tiene sentido reintentar con calma, no va a soltarse. Se
+        # tira de perezoso directamente.
+        log "Montaje roto en $d (el proceso FUSE murio): limpiando" WARN
+        "$FUSERMOUNT_BIN" -uz "$d" 2>/dev/null \
+            || umount -l "$d" 2>/dev/null \
+            || fusermount3 -uz "$d" 2>/dev/null
+    elif is_mounted "$d"; then
         for i in 1 2 3 4 5; do
             "$FUSERMOUNT_BIN" -u "$d" 2>/dev/null && break
             log "umount ocupado ($d), reintento $i/5..." WARN
             sleep 1
         done
         is_mounted "$d" && "$FUSERMOUNT_BIN" -uz "$d" 2>/dev/null
+        is_mounted "$d" && umount -l "$d" 2>/dev/null
     fi
     is_mounted "$d" || rmdir "$d" 2>/dev/null
 }
 
 sweep_stale_mounts() {
     # Limpia restos de sesiones anteriores (crashes, cortes...)
-    local d
-    for d in "$MOUNT_BASE"/*/; do
-        [ -d "$d" ] || continue
-        umount_dir "${d%/}"
+    local d n=0
+        # OJO con el glob: "*/" obliga a bash a comprobar que es un
+        # directorio, y esa comprobacion es un stat() que FALLA en un montaje
+        # roto. O sea, se saltaba justo lo que hay que limpiar. Con "*" se
+        # listan las entradas por nombre, sin tocarlas.
+    for d in "$MOUNT_BASE"/*; do
+        case "$d" in *'/*') continue ;; esac      # no habia ninguno
+        # Sin [ -d ]: un montaje roto no pasa esa prueba y es el que hay que
+        # limpiar. El glob del padre si funciona aunque el hijo este roto.
+        montaje_roto "$d" && n=$((n+1))
+        umount_dir "$d"
     done
+    [ "$n" -gt 0 ] && log "Limpiados $n montaje(s) rotos de una sesion anterior" WARN
     # work/ nunca debe sobrevivir entre sesiones (fuse-overlayfs lo quiere vacio)
     find "$OVERLAY_BASE" -mindepth 2 -maxdepth 2 -type d -name work -exec rm -rf {} + 2>/dev/null
     # Migracion desde el layout viejo de WProton (mounts/<n>/upper) si existiera
@@ -7069,15 +7232,12 @@ mount_game() {
     # work/ SIEMPRE vacio; upper/ JAMAS se toca (saves)
     rm -rf "$work"; mkdir -p "$upper" "$work" "$MOUNT_RO" "$MOUNT_RW"
 
+    limpiar_rotos_si_los_hay
     loading_say "Montando el juego..."
     # No se usa "die": esto puede pasar al elegir un juego desde el menu, y
     # cerrar WProton entero por ello es desproporcionado.
     if ! mount_image_ro "$squash" "$MOUNT_RO"; then
-        ui_error "No se pudo abrir el juego:
-
-$squash
-
-El fichero puede estar dañado o incompleto."
+        ui_error "$(fallo_montaje_texto "$squash")"
         return 1
     fi
     # squash_to_uid/gid: los wsquashfs hechos en Batocera llevan los ficheros
@@ -7111,15 +7271,12 @@ mount_ro_only() {
     fi
     umount_dir "$MOUNT_RO"
     mkdir -p "$MOUNT_RO"
+    limpiar_rotos_si_los_hay
     loading_say "Montando el juego..."
     # No se usa "die": esto puede pasar al elegir un juego desde el menu, y
     # cerrar WProton entero por ello es desproporcionado.
     if ! mount_image_ro "$squash" "$MOUNT_RO"; then
-        ui_error "No se pudo abrir el juego:
-
-$squash
-
-El fichero puede estar dañado o incompleto."
+        ui_error "$(fallo_montaje_texto "$squash")"
         return 1
     fi
     MOUNT_OK=1
@@ -7695,7 +7852,6 @@ profile_defaults() {
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     HDR=0                    # rango dinamico alto (necesita gamescope o Wayland)
-    MANDO_OCULTO=0           # 1 = el juego no ve el mando (manda el .keys)
     PAD_SDL=auto             # auto | 1 | 0  (auto: activarlo solo si hace falta)
     # Mandos de Sony (DualSense / DS4) con GE-Proton 11-4 o mas nuevo:
     #   auto - lo que decida Proton (lo normal)
@@ -7775,7 +7931,6 @@ ESYNC=$ESYNC
 DXVK_ASYNC=$DXVK_ASYNC
 WAYLAND=$WAYLAND
 HDR=$HDR
-MANDO_OCULTO=$MANDO_OCULTO
 WINED3D=$WINED3D
 FSR=$FSR
 LAA=$LAA
@@ -13204,6 +13359,7 @@ disk_menu() {
         sel="$(menu "Espacio en disco" \
             "Mostrar el tamaño de WProton" \
             "Tamaño por juego" \
+            "Reparar montajes colgados" \
             "Limpiar cache de shaders" \
             "Buscar prefijos y saves huerfanos" \
             "Borrar copias de saves antiguas" \
@@ -13220,6 +13376,8 @@ disk_menu() {
                     # shellcheck disable=SC2046
                     (IFS=$'\n'; set -f; menu "Tamaño por juego (juego + saves + prefijo)" $lst "<< Volver") >/dev/null || true
                 fi ;;
+            "Reparar montajes colgados")
+                reparar_montajes ;;
             "Limpiar cache de shaders")
                 local csz; csz="$(dir_bytes "$CACHE_DIR")"
                 if [ "${csz:-0}" -lt 1048576 ]; then
@@ -14291,6 +14449,12 @@ browse_for_path() {
         if [ "$mode" = "keys" ]; then
             files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f -iname '*.keys' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
             header=".. (subir)"
+        elif [ "$mode" = "reg" ]; then
+            # Los .reg tienen su propio modo. Con "file" se filtraba por
+            # extensiones de JUEGO (wsquashfs, zip, exe...) y no salia
+            # ninguno: la pantalla aparecia vacia y no habia nada que elegir.
+            files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f -iname '*.reg' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
+            header=".. (subir)"
         elif [ "$mode" = "file" ] || [ "$mode" = "play" ]; then
             files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f \( \
                 -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' -o -iname '*.zip' \
@@ -14475,6 +14639,11 @@ montar_disco_manual() {
     # carpeta. El caso tipico: acaba de conectar un disco externo con juegos y
     # todavia no lo ha añadido a la biblioteca.
     #
+    # DEVUELVE 9 cuando el disco quedo montado y listo para jugar. Quien llama
+    # lo usa para salir al menu principal en vez de dejar al usuario en el
+    # submenu de carpetas: se entra ahi PARA montar el disco, asi que una vez
+    # montado no hay nada mas que hacer en esa pantalla.
+    #
     # Al terminar se ofrece añadirlo como carpeta de juegos: montar y no poder
     # usarlo dejaba el trabajo a medias.
     local discos sel dev mp
@@ -14536,7 +14705,7 @@ Su carpeta de juegos ya estaba en la biblioteca:
 $destino
 
 No hay nada mas que hacer: tus juegos ya estan disponibles."
-        return 0
+        return 9
     fi
 
     if ui_ask "Disco montado en:
@@ -14560,7 +14729,10 @@ $destino
 
 Ya deberian aparecer sus juegos en la lista."
         fi
+        return 9
     fi
+    # Monto pero el usuario no quiso añadirla: se queda donde estaba, por si
+    # quiere hacer otra cosa con las carpetas.
     return 0
 }
 
@@ -15356,80 +15528,6 @@ cfg_rendimiento_menu() {
     done
 }
 
-mandos_nombres() {
-    # Los nombres de los mandos TAL CUAL los ve Wine.
-    #
-    # Se sacan de /proc/bus/input/devices, que es la misma lista de la que
-    # tira Wine, y asi no hace falta evdev ni adivinar nada. Solo los que
-    # exponen un joystick (js*): un teclado o el sensor de movimiento no
-    # cuentan como mando.
-    local line name=""
-    [ -r /proc/bus/input/devices ] || return 0
-    while IFS= read -r line; do
-        case "$line" in
-            N:*) name="${line#N: Name=}"; name="${name%\"}"; name="${name#\"}" ;;
-            H:*) case "$line" in
-                     *js*) [ -n "$name" ] && printf '%s\n' "$name" ;;
-                 esac ;;
-        esac
-    done < /proc/bus/input/devices
-    return 0
-}
-
-mando_oculto_aplicar() {
-    # Enciende o apaga "ocultar el mando al juego" en el prefijo.
-    # $1 = wsquashfs, $2 = gid, $3 = 1 para ocultar, 0 para volver a mostrar
-    #
-    # Wine tiene su propio panel de mandos (wine control -> Game Controllers)
-    # que permite dejar de sondear un joystick, y lo guarda en el registro.
-    # Escribimos ahi directamente.
-    #
-    # Sirve para los juegos viejos que, al detectar un mando, se empenan en
-    # usar SU soporte nativo y dejan de mirar el teclado para lo importante:
-    # entonces el .keys deja de servir para nada aunque funcione.
-    local squash="$1" gid="$2" ocultar="$3"
-    local nombres tmp n=0
-    nombres="$(mandos_nombres | sort -u)"
-    if [ -z "$nombres" ]; then
-        ui_error "No veo ningun mando conectado.
-
-Conectalo (o enciendelo) y vuelve a intentarlo: hace falta
-saber su nombre exacto para decirselo a Wine."
-        return 1
-    fi
-    tmp="$(mktemp)"
-    printf 'Windows Registry Editor Version 5.00\r\n\r\n' > "$tmp"
-    printf '[HKEY_CURRENT_USER\\Software\\Wine\\DirectInput\\Joysticks]\r\n' >> "$tmp"
-    while IFS= read -r nombre; do
-        [ -n "$nombre" ] || continue
-        if [ "$ocultar" = 1 ]; then
-            printf '"%s"="disabled"\r\n' "$nombre" >> "$tmp"
-        else
-            # el guion suelto BORRA el valor: asi se deshace del todo en vez
-            # de dejar rastro con otro valor que Wine tendria que interpretar
-            printf '"%s"=-\r\n' "$nombre" >> "$tmp"
-        fi
-        n=$((n+1))
-    done <<EOFMANDOS
-$nombres
-EOFMANDOS
-    say "[+] $([ "$ocultar" = 1 ] && printf 'Ocultando' || printf 'Mostrando') $n mando(s) al juego"
-    run_in_prefix "$squash" "$gid" regedit /S "$(win_path "$tmp")"
-    rm -f "$tmp"
-    if [ "$ocultar" = 1 ]; then
-        ui_info "El juego ya no vera el mando:
-
-$nombres
-
-Ahora leera el teclado, asi que el .keys manda. Si el juego
-estaba a medio configurar, entra una vez a sus opciones de
-control para que se entere."
-    else
-        ui_info "El juego vuelve a ver el mando."
-    fi
-    return 0
-}
-
 IDIOMAS="Español|es_ES.UTF-8
 Inglés|en_US.UTF-8
 Francés|fr_FR.UTF-8
@@ -15502,7 +15600,12 @@ reg_importar() {
     # Sirve, por ejemplo, para cambiar el idioma de un juego: muchos lo leen
     # de una clave del registro y no de un menu.
     local squash="$1" gid="$2" f destino copia
-    f="$(browse_for_path "Elige el fichero .reg" "${LAST_BROWSE:-$HOME}" file)" || return 0
+    ui_info "Elige un fichero .reg.
+
+Solo se listan los que acaban en .reg. Si no ves ninguno, es
+que en esa carpeta no hay: normalmente vienen junto al juego,
+o los descargas aparte."
+    f="$(browse_for_path "Elige el fichero .reg" "${LAST_BROWSE:-$HOME}" reg)" || return 0
     [ -n "$f" ] || return 0
     if [ ! -f "$f" ]; then
         ui_error "No existe: $f"
@@ -15569,8 +15672,8 @@ cfg_prefijo_menu() {
         sel="$(menu "Herramientas del prefijo - $gid" \
             "Abrir winecfg" \
             "Abrir winetricks" \
+            "Instalar librerias en el prefijo: $(prefix_label)" \
             "Importar un fichero .reg (idioma, ajustes del juego)" \
-            "Ocultar el mando al juego: $(onoff "${MANDO_OCULTO:-0}")" \
             "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)" \
             "Configurar dgVoodoo (Cpl)" \
             "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
@@ -15791,21 +15894,24 @@ herramientas dejarian de cargarse."; then
         "Configurar dgVoodoo"*) config_dgvoodoo_cpl "$squash" "$gid" ;;
         "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
         "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
-        "Importar un fichero .reg"*) reg_importar "$squash" "$gid" ;;
-        "Ocultar el mando al juego:"*)
-            if [ "${MANDO_OCULTO:-0}" = 1 ]; then
-                mando_oculto_aplicar "$squash" "$gid" 0 && MANDO_OCULTO=0
-            else
-                ui_ask "Ocultarle el mando a '$gid'?
+        "Instalar librerias en el prefijo:"*)
+            # Directo al prefijo DE ESTE juego. Desde el menu principal hay
+            # que elegir el juego otra vez, y quien viene de su pantalla de
+            # configuracion ya lo ha elegido.
+            local destino_pfx
+            destino_pfx="$(prefix_path "$gid")"
+            if [ "$(basename "$destino_pfx")" = "default" ]; then
+                # El compartido lo usan todos los juegos en ese modo: conviene
+                # saberlo antes de meterle nada.
+                ui_ask "'$gid' usa el prefijo COMPARTIDO.
 
-Algunos juegos viejos, al detectar un mando, usan SU soporte
-nativo y dejan de mirar el teclado para conducir o moverse:
-entonces el .keys no sirve de nada aunque funcione.
+Lo que instales ira a:
+$destino_pfx
 
-Ocultandoselo, el juego solo vera el teclado." \
-                    && mando_oculto_aplicar "$squash" "$gid" 1 && MANDO_OCULTO=1
+y lo veran todos los juegos en modo compartido. Seguir?" || return 0
             fi
-            write_full_profile "$gid" ;;
+            redist_menu "$squash" "$gid" ;;
+        "Importar un fichero .reg"*) reg_importar "$squash" "$gid" ;;
         "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
         ">> EMPAQUETAR A WSQUASHFS <<")
             # El juego es una carpeta: comprimirlo conservando su perfil
@@ -16028,6 +16134,7 @@ game_config_menu() {
             "Ejecutable: ${EXE_OVERRIDE:-auto (autorun.cmd / escaneo)}" \
             "Argumentos: ${ARGS_OVERRIDE:-ninguno}" \
             "Prefijo: $(prefix_label)" \
+            "Instalar librerias en el prefijo: $(prefix_label)" \
             "GAMEID (protonfixes): $GAMEID" \
             "Buscar en la base de umu (identificador automático)" \
             "Carátula: elegir una imagen (vertical u horizontal)" \
@@ -16366,7 +16473,11 @@ carpetas_juegos_menu() {
             "Carpeta principal:"*)
                 p="$(pick_dir "Carpeta principal de juegos" "$GAMES_PATH")" || continue
                 [ -d "$p" ] && { GAMES_PATH="$p"; save_settings; } ;;
-            "Montar un disco"*) montar_disco_manual || true ;;
+            "Montar un disco"*)
+                montar_disco_manual
+                # 9 = disco montado y listo: se sale al menu principal en vez
+                # de volver a esta pantalla, que ya no pinta nada
+                [ "$?" = 9 ] && return 0 ;;
             "Añadir otra carpeta"*)
                 p="$(pick_dir "Otra carpeta con juegos" "$(browse_start "$HOME")")" || continue
                 [ -d "$p" ] || continue
