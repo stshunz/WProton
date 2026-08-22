@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # ============================================================================
 #  WProton - Lanzador portable de juegos Windows con soporte .wsquashfs
+#
+#  Copyright (C) 2026  stshunz y colaboradores
+#
+#  Este programa es software libre: puedes redistribuirlo y/o modificarlo
+#  bajo los terminos de la Licencia Publica General GNU publicada por la
+#  Free Software Foundation, en su version 3 o (a tu eleccion) cualquier
+#  version posterior.
+#
+#  Se distribuye con la esperanza de que sea util, pero SIN NINGUNA GARANTIA;
+#  ni siquiera la garantia implicita de COMERCIABILIDAD o IDONEIDAD PARA UN
+#  PROPOSITO PARTICULAR. Consulta la Licencia Publica General GNU para mas
+#  detalles.
+#
+#  Deberias haber recibido una copia de la Licencia junto con este programa.
+#  Si no, mirala en <https://www.gnu.org/licenses/>.
 # ----------------------------------------------------------------------------
 #  Filosofia:
 #    * LANZAR  -> por linea de comandos:  ./wproton.sh juego.wsquashfs
@@ -31,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.30"
+WPROTON_VERSION="1.31"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -87,6 +102,11 @@ PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacio
 GAMES_PATHS_EXTRA=""                     # carpetas de juegos adicionales
 GE_CUSTOM_NAME="GE-Custom"               # nombre del runner propio
 GE_CUSTOM_URL="https://www.mediafire.com/file/oqprcy5dpju5m1k/ge-custom.tar.gz/file"
+# Segundo runner propio, para alojar uno concreto (por ejemplo el Proton
+# Experimental). Vacio = la opcion NI SIQUIERA SALE en el menu: mas vale no
+# ofrecerla que ofrecer algo que no descarga nada.
+PROTON_EXP_URL="https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file"
+PROTON_EXP_NAME="Proton-Experimental"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
@@ -200,6 +220,8 @@ GAMES_PATHS_EXTRA="$GAMES_PATHS_EXTRA"
 # --------------------------------------------------------------------------
 GE_CUSTOM_NAME="$GE_CUSTOM_NAME"
 GE_CUSTOM_URL="$GE_CUSTOM_URL"
+PROTON_EXP_URL="$PROTON_EXP_URL"
+PROTON_EXP_NAME="$PROTON_EXP_NAME"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
@@ -1393,10 +1415,19 @@ pad_bridge_stop() {
 STEAM_ADD_PY="$RUNTIME_DIR/steam_add.py"
 
 write_steam_add() {
-    grep -q "WPROTON_HELPER steam_add.py 57faaea85774" "$STEAM_ADD_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER steam_add.py 3f6725b2040c" "$STEAM_ADD_PY" 2>/dev/null && return 0
     cat > "$STEAM_ADD_PY" <<'SAEOF'
-# WPROTON_HELPER steam_add.py 57faaea85774
+# WPROTON_HELPER steam_add.py 3f6725b2040c
 #!/usr/bin/env python3
+# WProton - accesos directos de Steam
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # WPROTON_STEAMADD_V1 - anade un acceso directo no-Steam a shortcuts.vdf
 # uso: steam_add.py <shortcuts.vdf> <nombre> <exe> <startdir> <launchopts> <icono>
 import sys, os, struct, zlib
@@ -1761,9 +1792,18 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py e2d36f7d59b8" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 1beb3936f1ca" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py e2d36f7d59b8
+# WPROTON_HELPER mapeador.py 1beb3936f1ca
+# WProton - mapeador de mando a teclado
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
@@ -2271,7 +2311,19 @@ def main():
             _req = [ids.get(x, x) for x in trig]
             map_combos.append({"req": _req, "outs": t_codes,
                                "active": False, "kb": is_kb})
-            btn_en_combo.update(_req)
+            # SOLO se difiere el boton que se MANTIENE, no el que completa la
+            # combinacion.
+            #
+            # En "hotkey+start" el hotkey se aguanta y el start se pulsa
+            # despues: al pulsar start la combinacion ya se forma, asi que su
+            # tecla puede salir al instante sin adelantarse a nada.
+            #
+            # Diferirlo tambien (que es lo que se hacia) tenia un efecto
+            # secundario feo: el juego ve el boton FISICO del mando antes de
+            # que llegue nuestra tecla, y se queda con el. Un tester lo vio
+            # claro al mapear controles: todos los botones salian como la
+            # tecla asignada menos Start, que salia como "1P START BUTTON".
+            btn_en_combo.update(_req[:-1])
         elif trig in map_dirs:
             map_dirs[trig] = t_codes
             # Hay mandos (Anbernic, Decktroid y similares) cuya cruceta llega
@@ -2501,10 +2553,18 @@ def main():
                                         # habia disparado o no
                                         print("[combo] %s -> %s" % (c["req"], c["outs"]),
                                               flush=True)
-                                        # la combinacion manda: lo que
-                                        # estuviera esperando a soltarse se
-                                        # descarta, no se envia
-                                        for _b in c["req"]: pendiente.discard(_b)
+                                        # La combinacion manda:
+                                        #  - lo que estuviera esperando a
+                                        #    soltarse se descarta
+                                        #  - y lo que YA se hubiera mandado se
+                                        #    suelta, para no dejar una tecla
+                                        #    pegada mientras se sale del juego
+                                        #    (pasa al pulsar start antes que
+                                        #    el hotkey: su ENTER ya salio)
+                                        for _b in c["req"]:
+                                            pendiente.discard(_b)
+                                            for _t in map_normal.get(_b, []):
+                                                _tecla(_t, False)
                                         for t in c["outs"]: _tecla(t, True)
                                 elif c["active"] and not all_pressed and event.value == 0:
                                     c["active"] = False
@@ -2840,10 +2900,19 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 4a1ee1742ba6" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py f38af7727072" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 4a1ee1742ba6
+# WPROTON_HELPER menu_pygame.py f38af7727072
 #!/usr/bin/env python3
+# WProton - menus con mando
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -4043,6 +4112,18 @@ AYUDAS_ES = [
     ('Herramientas del prefijo',
      'winecfg, winetricks, importar un .reg, dgVoodoo2, OptiScaler y borrar el '
      'prefijo para empezar de cero.'),
+    ('Dejarlo como esta',
+     'No toca el estilo de botones. Siempre se puede cambiar despues desde '
+     'los ajustes del juego.'),
+    ('Estilo Xbox',
+     'Los nombres de los botones dentro del .keys se leen al estilo Xbox: '
+     '"a" es el de abajo y "b" el de la derecha.'),
+    ('Estilo Nintendo',
+     'Como en Batocera: "a" es el boton de la DERECHA y "b" el de abajo. Si '
+     'los botones salen cambiados, prueba a cambiar de estilo.'),
+    ('Estilo de botones:',
+     'Como se leen los nombres de los botones dentro del .keys. Xbox: "a" '
+     'abajo. Nintendo/Batocera: "a" a la derecha.'),
     ('Mapeador .keys',
      'Convierte los botones del mando en teclas, para juegos que no soportan '
      'mando. Formato de Batocera.'),
@@ -4132,6 +4213,12 @@ AYUDAS_ES = [
      'Baja solo las 4:3.'),
     ('Todas (las tres formas)',
      'Baja las tres. Tarda el triple y gasta el triple de peticiones.'),
+    ('Proton oficial de Steam',
+     'Usa el Proton que Steam ya tiene instalado. No se descarga nada: se '
+     'enlaza, asi que no ocupa sitio y se actualiza con Steam.'),
+    ('Proton-Experimental',
+     'El Proton oficial de Valve. Como no se publica fuera de Steam, se '
+     'descarga de donde lo aloja WProton.'),
     ('GE-Proton',
      'El Proton de GloriousEggroll. Es el que mejor va en la mayoria de juegos.'),
     ('Proton-CachyOS',
@@ -6157,10 +6244,19 @@ gtk_available() {
 }
 
 write_menu_gtk() {
-    grep -q "WPROTON_HELPER menu_gtk.py 64308497297e" "$MENU_GTK_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_gtk.py d654c84f899f" "$MENU_GTK_PY" 2>/dev/null && return 0
     cat > "$MENU_GTK_PY" <<'GTKEOF'
-# WPROTON_HELPER menu_gtk.py 64308497297e
+# WPROTON_HELPER menu_gtk.py d654c84f899f
 #!/usr/bin/env python3
+# WProton - menus GTK
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # Selector de WProton con foco garantizado en la lista (navegable con mando)
 # Uso: menu_gtk.py <list|check> <titulo> <fichero_salida> <fichero_opciones>
 #   list : una opción por linea; al elegir se escribe en salida
@@ -6279,11 +6375,20 @@ GTKEOF
 BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
 
 write_biblioteca() {
-    grep -q "WPROTON_HELPER biblioteca.py 17a6df2848eb" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER biblioteca.py d351fb5045b4" "$BIBLIOTECA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
-# WPROTON_HELPER biblioteca.py 17a6df2848eb
+# WPROTON_HELPER biblioteca.py d351fb5045b4
 # -*- coding: utf-8 -*-
+# WProton - composicion rapida de la biblioteca
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 """Construye la lista de la biblioteca de UNA sola vez.
 
 Antes esto lo hacia bash llamando a varias funciones por cada juego. Cada
@@ -7207,37 +7312,116 @@ mediafire_directo() {
     return 0
 }
 
-setup_proton_custom() {
-    # Runner propio de WProton. Se descarga en la instalacion junto al ultimo
-    # GE-Proton, y tambien se puede pedir desde "Descargar runners".
-    local url="${GE_CUSTOM_URL:-}"
-    [ -n "$url" ] || { say "Sin URL para el runner propio (GE_CUSTOM_URL)"; return 1; }
-    local nombre="${GE_CUSTOM_NAME:-GE-Custom}"
+runner_desde_url() {
+    # Descarga un runner desde una URL propia y lo deja en runtime/proton/.
+    #   $1 = URL (MediaFire o directa)   $2 = nombre de la carpeta
+    #   $3 = texto para la barra de progreso
+    #
+    # Vale para cualquier runner alojado por nosotros. Se saco de
+    # setup_proton_custom para no tener dos copias de lo mismo en cuanto
+    # aparecio un segundo: la comprobacion de que lo descargado es un tar.gz
+    # de verdad y no una pagina de error es justo lo que no conviene duplicar.
+    local url="$1" nombre="$2" texto="${3:-Descargando $2...}"
+    [ -n "$url" ] || { say "Sin URL para $nombre"; return 1; }
     if [ -d "$RUNNERS_DIR/$nombre" ]; then
-        [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ] && say "Runner propio ya instalado: $nombre" \
-                                              || ui_info "Runner propio ya instalado: $nombre"
+        [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ] && say "Ya instalado: $nombre" \
+                                              || ui_info "Ya instalado: $nombre"
         return 0
     fi
-    # Si hay una ventana de progreso (la de Python), se informa por ahi; si
-    # no, por el canal habitual. Nada de abrir un zenity aparte.
     if [ -n "${PROGRESS_FILE:-}" ]; then
-        progress_set 90 "Descargando el runner propio de WProton..."
+        progress_set 90 "$texto"
     else
-        loading_say "Descargando el runner propio de WProton..."
+        loading_say "$texto"
     fi
-    local directo; directo="$(mediafire_directo "$url")" || {
-        say "AVISO: no se pudo resolver el enlace del runner propio"
-        return 1; }
-    local tmp="$RUNNERS_DIR/.dl_custom"; rm -rf "$tmp"; mkdir -p "$tmp"
-    if ! dl "$directo" "$tmp/ge-custom.tar.gz"; then
-        rm -rf "$tmp"; say "AVISO: fallo la descarga del runner propio"; return 1
+    local directo="$url"
+    case "$url" in
+        *mediafire.com*)
+            directo="$(mediafire_directo "$url")" || {
+                say "AVISO: no se pudo resolver el enlace de $nombre"
+                return 1; } ;;
+    esac
+    local tmp="$RUNNERS_DIR/.dl_$nombre"; rm -rf "$tmp"; mkdir -p "$tmp"
+    if ! dl "$directo" "$tmp/runner.tar.gz"; then
+        rm -rf "$tmp"; say "AVISO: fallo la descarga de $nombre"; return 1
     fi
-    # comprobar que es de verdad un tar.gz y no una pagina de error
-    if ! tar tzf "$tmp/ge-custom.tar.gz" >/dev/null 2>&1; then
+    # Que sea de verdad un tar.gz y no una pagina de error: MediaFire devuelve
+    # HTML con codigo 200 cuando el enlace caduca, asi que sin esto se
+    # extraeria basura y el fallo apareceria mucho despues.
+    if ! tar tzf "$tmp/runner.tar.gz" >/dev/null 2>&1; then
         rm -rf "$tmp"
         say "AVISO: lo descargado no es un tar.gz (el enlace habra cambiado)"
         return 1
     fi
+    RUNNER_TMP="$tmp"
+    return 0
+}
+
+setup_proton_experimental() {
+    # El Proton Experimental que alojamos nosotros.
+    #
+    # Valve no lo publica fuera de Steam, asi que si se quiere ofrecer hay que
+    # alojarlo. La URL va en PROTON_EXP_URL (settings.conf): si esta vacia, la
+    # opcion ni sale en el menu.
+    local nombre="${PROTON_EXP_NAME:-Proton-Experimental}"
+    runner_desde_url "${PROTON_EXP_URL:-}" "$nombre" \
+        "Descargando $nombre..." || {
+            ui_error "No se pudo descargar $nombre.
+
+Mira el registro: lo mas probable es que el enlace haya
+caducado. Puedes poner otro en PROTON_EXP_URL, dentro de
+settings.conf."
+            return 1; }
+    [ -n "${RUNNER_TMP:-}" ] || return 0      # ya estaba instalado
+    local tmp="$RUNNER_TMP"
+    # SE EXTRAE APARTE, no directamente en runtime/proton/.
+    #
+    # El tar trae la carpeta con el nombre de Steam ("Proton - Experimental"),
+    # asi que hay que renombrarla. Pero buscar "la carpeta que parece un
+    # Proton" DENTRO de runtime/proton/ es jugarsela: ahi tambien estan los
+    # runners del usuario, y un GE-Proton10-5 casa igual de bien con ese
+    # patron. Probado: le renombraba el GE-Proton y se quedaba sin el.
+    #
+    # Extrayendo en una carpeta vacia, lo unico que hay es lo que acaba de
+    # salir del tar.
+    local salida="$tmp/extraido"
+    mkdir -p "$salida"
+    if ! extract_archive "$tmp/runner.tar.gz" "$salida"; then
+        rm -rf "$tmp"; ui_error "Fallo al extraer $nombre"; return 1
+    fi
+    local d origen=""
+    for d in "$salida"/*/; do
+        [ -f "${d}proton" ] || continue
+        origen="${d%/}"
+        break
+    done
+    if [ -z "$origen" ]; then
+        # puede venir sin carpeta contenedora, con el proton en la raiz
+        [ -f "$salida/proton" ] && origen="$salida"
+    fi
+    if [ -n "$origen" ]; then
+        rm -rf "$RUNNERS_DIR/$nombre" 2>/dev/null
+        mv "$origen" "$RUNNERS_DIR/$nombre" 2>/dev/null
+    fi
+    rm -rf "$tmp"
+    if [ -d "$RUNNERS_DIR/$nombre" ]; then
+        say "[+] Runner instalado: $nombre"
+        ui_info "Listo: '$nombre' ya esta entre tus runners."
+        return 0
+    fi
+    ui_error "Se descargo y extrajo, pero no encuentro la carpeta del runner.
+Mira dentro de: $RUNNERS_DIR"
+    return 1
+}
+
+setup_proton_custom() {
+    # Runner propio de WProton. Se descarga en la instalacion junto al ultimo
+    # GE-Proton, y tambien se puede pedir desde "Descargar runners".
+    local nombre="${GE_CUSTOM_NAME:-GE-Custom}"
+    runner_desde_url "${GE_CUSTOM_URL:-}" "$nombre" \
+        "Descargando el runner propio de WProton..." || return 1
+    [ -n "${RUNNER_TMP:-}" ] || return 0      # ya estaba instalado
+    local tmp="$RUNNER_TMP"
+    mv -f "$tmp/runner.tar.gz" "$tmp/ge-custom.tar.gz"
     if ! extract_archive "$tmp/ge-custom.tar.gz" "$RUNNERS_DIR"; then
         rm -rf "$tmp"; say "AVISO: fallo extrayendo el runner propio"; return 1
     fi
@@ -7355,7 +7539,14 @@ Se abrira el menu de descarga de runners."
 # --- Descarga multi-fuente de runners (menu) ---
 download_runner_menu() {
     local src repo
+    # La fila del Experimental solo existe si hay URL configurada: una opcion
+    # que no descarga nada es peor que no tenerla.
+    local fila_exp=""
+    [ -n "${PROTON_EXP_URL:-}" ] \
+        && fila_exp="${PROTON_EXP_NAME:-Proton-Experimental} [proton] - el oficial de Valve, alojado por nosotros"
+    # shellcheck disable=SC2086
     src="$(menu "Descargar runner - elige fuente" \
+        ${fila_exp:+"$fila_exp"} \
         "GE-Proton [proton] - GloriousEggroll, el estandar" \
         "Proton-CachyOS [proton] - optimizado x86-64-v3" \
         "DWProton [proton] - Dawn Winery, fixes anime/gacha" \
@@ -7368,6 +7559,9 @@ download_runner_menu() {
         "WProton Custom [proton] - el runner propio de WProton" \
         "<< Volver")" || return
     case "$src" in
+        "${PROTON_EXP_NAME:-Proton-Experimental}"*)
+            setup_proton_experimental
+            return ;;
         "WProton Custom"*)
             setup_proton_custom || ui_error "No se pudo descargar el runner propio.
 
@@ -8279,6 +8473,29 @@ find_game_exe() {
     # Heuristica del script antiguo, en orden de fiabilidad
     local ROOT="$1" EXE=""
 
+    # 0) EL AUTORUN.CMD MANDA, igual que al lanzar.
+    #
+    # Antes esto no lo miraba, y find_exe (lo que se usa AL LANZAR) si. O sea
+    # que el asistente sugeria un .exe distinto del que se iba a ejecutar; al
+    # aceptar la sugerencia se guardaba en el perfil y entonces el autorun ya
+    # no se consultaba nunca. Asi se perdian los juegos que arrancan por un
+    # .bat (TeknoParrot y compania): el .bat estaba, y el autorun apuntaba a
+    # el, pero el asistente proponia el .exe del lanzador.
+    local AUTO
+    AUTO=$(find "$ROOT" -maxdepth 1 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
+    [ -z "$AUTO" ] && AUTO=$(find "$ROOT" -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
+    if [ -f "$AUTO" ]; then
+        parse_autorun "$AUTO"
+        if [ -n "$R_CMD_BASE" ]; then
+            if [ -n "$R_DIR" ]; then
+                EXE=$(find "$ROOT" -ipath "*${R_DIR}*" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+            else
+                EXE=$(find "$ROOT" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+            fi
+            [ -n "$EXE" ] && { printf '%s' "$EXE"; return; }
+        fi
+    fi
+
     # 1) Binarios de motor (Unreal y similares)
     EXE=$(find "$ROOT" -type f -iname '*.exe' \
         \( -ipath '*/Binaries/Win64/*' -o -ipath '*/Binaries/Win32/*' \
@@ -8316,9 +8533,21 @@ find_game_exe() {
     [ -n "$EXE" ] && { printf '%s' "$EXE"; return; }
 
     # 6) sin ningun .exe utilizable: puede ser un juego que arranca por .bat
-    find "$ROOT" -maxdepth 2 -type f \( -iname '*.bat' -o -iname '*.cmd' \) \
-        ! -iname 'autorun.cmd' ! -ipath '*/windows/*' \
-        2>/dev/null | _fexe | head -n1
+    #
+    # Sin tope de profundidad: los .bat de arranque suelen vivir junto al
+    # juego, y con maxdepth 2 se quedaban fuera en cuanto el juego estaba un
+    # par de carpetas mas adentro. Se prueba primero cerca y luego hondo, para
+    # no coger un .bat de utilidad enterrado si hay uno en la raiz.
+    # Ordenado por PROFUNDIDAD: "find" no promete ningun orden, asi que sin
+    # esto podia salir "utilidades/limpiar.bat" antes que "jugar.bat" de la
+    # raiz. Se cuentan las barras y se coge el mas cercano a la raiz.
+    EXE=$(find "$ROOT" -maxdepth 2 -type f \( -iname '*.bat' -o -iname '*.cmd' \) \
+        ! -iname 'autorun.cmd' ! -ipath '*/windows/*' 2>/dev/null | _fexe \
+        | awk -F/ '{print NF"\t"$0}' | sort -n -k1,1 | cut -f2- | head -n1)
+    [ -n "$EXE" ] && { printf '%s' "$EXE"; return; }
+    find "$ROOT" -type f \( -iname '*.bat' -o -iname '*.cmd' \) \
+        ! -iname 'autorun.cmd' ! -ipath '*/windows/*' 2>/dev/null | _fexe \
+        | awk -F/ '{print NF"\t"$0}' | sort -n -k1,1 | cut -f2- | head -n1
 }
 
 parse_autorun() {
@@ -8904,8 +9133,64 @@ EOFT
     return 0
 }
 
+wizard_keys() {
+    # Si el juego trae un .keys, se ofrece configurarlo AQUI.
+    # $1 = gid, $2 = ruta del juego (wsquashfs o exe)
+    #
+    # Antes habia que añadir el juego, lanzarlo, descubrir que los botones
+    # estaban cambiados, salir y entrar en los ajustes. Es el mismo caso que
+    # los DLL overrides: si se sabe al añadirlo, se pregunta al añadirlo.
+    local gid="$1" juego="$2" kf resumen n
+    kf="$(find_keys_file "$juego" "$gid")" || return 0    # no trae .keys
+    resumen="$(keys_resumen "$kf")" || resumen=""
+    case "$resumen" in
+        '!ROTO')
+            ui_info "Este juego trae un fichero de teclas, pero esta ROTO:
+
+$(basename "$kf")
+
+Se ignorara. Puedes rehacerlo desde los ajustes del juego."
+            return 0 ;;
+        '') n=0 ;;
+        *)  n="$(printf '%s\n' "$resumen" | grep -c .)" ;;
+    esac
+
+    # El estilo decide como se leen los nombres de los botones DENTRO del
+    # .keys: en Batocera, "a" es el boton de la derecha (como en Nintendo) y
+    # en Xbox es el de abajo. Con el estilo equivocado todo sale cambiado.
+    local sel
+    sel="$(menu "Este juego trae teclas para el mando ($n asignadas)" \
+        "Estilo Xbox        (A abajo, B derecha)" \
+        "Estilo Nintendo / Batocera  (A derecha, B abajo)" \
+        "Ver las teclas asignadas" \
+        "Dejarlo como esta")" || return 0
+    case "$sel" in
+        "Estilo Xbox"*)     KEYS_ESTILO=xbox ;;
+        "Estilo Nintendo"*) KEYS_ESTILO=nintendo ;;
+        "Ver las teclas"*)
+            if [ "$n" = 0 ]; then
+                ui_info "El fichero no tiene ninguna tecla asignada."
+            else
+                ui_info "$(basename "$kf")
+
+$resumen"
+            fi
+            # y se vuelve a preguntar, que para eso ha mirado
+            wizard_keys "$gid" "$juego"
+            return 0 ;;
+        *) return 0 ;;
+    esac
+    say "[+] Estilo de botones del .keys: $KEYS_ESTILO"
+    return 0
+}
+
 first_run_wizard() {
-    local gid="$1" root="$2"
+    # $1 = gid, $2 = raiz del juego (ya montada), $3 = ruta del ARCHIVO
+    #
+    # El tercero hace falta para buscar el .keys: find_keys_file mira junto al
+    # fichero del juego ("<juego>.keys", "<juego>.wsquashfs.keys"), no dentro
+    # de la carpeta montada. Es opcional: sin el, ese paso simplemente no sale.
+    local gid="$1" root="$2" juego="${3:-}"
     say "Primera ejecucion de $gid: lanzando asistente..."
     profile_defaults
     HAS_BUNDLED_RUNNER=0
@@ -8919,6 +9204,7 @@ first_run_wizard() {
     wizard_pick_exe "$root" || return 1
     wizard_toggles || return 1
     wizard_dlls "$gid" "$root"
+    [ -n "$juego" ] && wizard_keys "$gid" "$juego"
     write_full_profile "$gid"
     ui_info "Perfil creado: profiles/$gid.conf
 Runner: ${RUNNER:-último GE-Proton} | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
@@ -9234,7 +9520,7 @@ Configurar juego -> Comprobar integridad"
     [ -n "$BUNDLED_RUNNER_DIR" ] && say "[+] Este wsquashfs incluye su propio Wine: $(basename "$BUNDLED_RUNNER_DIR")"
 
     if ! profile_exists "$gid"; then
-        first_run_wizard "$gid" "$merged" || { cleanup_mount; return 1; }
+        first_run_wizard "$gid" "$merged" "$abs_squash" || { cleanup_mount; return 1; }
     fi
     load_profile "$gid"
     if [ "${RUNNER:-}" = "bundled" ] && [ -z "$BUNDLED_RUNNER_DIR" ]; then
@@ -9378,7 +9664,10 @@ EOFRA
 Últimas lineas del log:
 $(tail -n 8 "$LOG_FILE")"
     fi
-    kill "$trig" 2>/dev/null
+    # Al subshell Y a lo que tenga dentro: "kill" sobre un subshell de bash no
+    # alcanza a sus hijos, asi que el "sleep 8" seguia vivo hasta agotarse y
+    # aparecia como superviviente en la comprobacion del cierre.
+    matar_con_hijos "$trig"
     mapeador_stop
     stats_record "$gid" "$(( $(date +%s) - ${STATS_T0:-$(date +%s)} ))"
     saves_detect_end "$gid"
@@ -12227,7 +12516,7 @@ launch_loose_exe() {
         fi
     fi
     if ! profile_exists "$gid"; then
-        first_run_wizard "$gid" "$(dirname "$exe")" || return 1
+        first_run_wizard "$gid" "$(dirname "$exe")" "$exe" || return 1
     fi
     load_profile "$gid"
     local rdir; rdir="$(get_runner_path)"
@@ -12242,6 +12531,10 @@ launch_loose_exe() {
     fi
     gamepad_retrigger &
     local trig=$!
+    # El vigilante de salida tambien aqui: antes solo lo arrancaba
+    # launch_game, asi que en un exe suelto no se podia salir manteniendo
+    # Select y no habia ninguna razon para esa diferencia.
+    guardia_salida_start
     say "Lanzando exe suelto con $(basename "$rdir") [$RUNNER_KIND]"
     local st0; st0=$(date +%s)
     saves_detect_start
@@ -12254,7 +12547,11 @@ EOFRB
     # shellcheck disable=SC2086
     ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 )
     local rc=$?
-    kill "$trig" 2>/dev/null
+    # Al subshell Y a lo que tenga dentro: "kill" sobre un subshell de bash no
+    # alcanza a sus hijos, asi que el "sleep 8" seguia vivo hasta agotarse y
+    # aparecia como superviviente en la comprobacion del cierre.
+    matar_con_hijos "$trig"
+    guardia_salida_stop
     mapeador_stop
     stats_record "$gid" "$(( $(date +%s) - st0 ))"
     saves_detect_end "$gid"
@@ -13067,10 +13364,31 @@ guardia_salida_start() {
             || say "AVISO: el vigilante de salida SE CERRO; el cierre con el mando no funcionara"
         ) < /dev/null >/dev/null 2>&1 &
     fi
-    # Vigilante en bash: cuando aparezca la marca, cerrar el juego
+    # Vigilante en bash: cuando aparezca la marca, cerrar el juego.
+    #
+    # Antes este bucle SOLO terminaba si aparecia la marca. Si el juego se
+    # cerraba normalmente (que es lo habitual), se quedaba dando vueltas para
+    # siempre despertandose cada 0,4 s. Uno por partida. Son los "bash + sleep"
+    # que salian como supervivientes en los registros.
+    #
+    # Y no era solo gasto: un bucle de una partida ANTERIOR sigue vigilando la
+    # misma marca, asi que al pulsar Select en la siguiente podian responder
+    # varios a la vez, o responder uno viejo por un juego que ya no era el suyo.
+    #
+    # Ahora tiene tres formas de morirse:
+    #   - guardia_salida_stop lo mata por su identificador (lo normal)
+    #   - si desaparece su ficha de sesion, sale solo (por si el stop no llego)
+    #   - un tope de tiempo, por si todo lo demas falla
     local titulo; titulo="$(basename "${EXE_PATH:-juego}" .exe)"
-    ( orden=""
+    local sesion="$RUNTIME_DIR/.guardia_sesion"
+    printf '%s' "$$" > "$sesion" 2>/dev/null
+    ( orden="" vueltas=0
       while :; do
+          # 30 horas de tope (270000 vueltas de 0,4 s): ninguna partida dura
+          # tanto, y asi no puede quedarse uno eterno pase lo que pase
+          vueltas=$((vueltas+1))
+          [ "$vueltas" -gt 270000 ] && break
+          [ -f "$sesion" ] || break        # el juego ya termino
           if [ -f "$marca" ]; then
               orden="$(cat "$marca" 2>/dev/null)"
               rm -f "$marca" 2>/dev/null
@@ -13084,7 +13402,9 @@ guardia_salida_start() {
           fi
           sleep 0.4
       done
+      rm -f "$sesion" 2>/dev/null
     ) < /dev/null >/dev/null 2>&1 &
+    GUARDIA_BASH_PID="$!"
     case "${PAD_EXIT_COMBO:-select}" in
         l3r3)  say "[i] Con el mando: manten L3+R3 para cerrar el juego" ;;
         start) say "[i] Con el mando: manten Select+Start para cerrar el juego" ;;
@@ -13106,6 +13426,12 @@ guardia_salida_stop() {
     # Sin matar el grupo: ver el aviso en pad_bridge_stop
     [ -n "${GUARDIA_PID:-}" ] && kill "$GUARDIA_PID" 2>/dev/null
     GUARDIA_PID=""
+    # El vigilante de bash: se le quita la ficha de sesion PRIMERO (asi sale
+    # solo aunque el kill no llegue) y luego se le mata. Este si es un hijo
+    # directo, su identificador vale.
+    rm -f "$RUNTIME_DIR/.guardia_sesion" 2>/dev/null
+    [ -n "${GUARDIA_BASH_PID:-}" ] && kill "$GUARDIA_BASH_PID" 2>/dev/null
+    GUARDIA_BASH_PID=""
     pkill -f 'menu_pygame\.py guardia' 2>/dev/null
     local i
     for i in 1 2 3; do
@@ -14276,6 +14602,59 @@ run_args_for() {
         *.bat|*.cmd) printf 'cmd\n/c\n%s\n' "$f" ;;
         *)           printf '%s\n' "$f" ;;
     esac
+}
+
+matar_con_hijos() {
+    # Mata un proceso Y toda su descendencia. $1 = identificador.
+    #
+    # Hace falta porque "kill" sobre un subshell de bash no alcanza a sus
+    # hijos: el clasico es una funcion lanzada con "&" que dentro hace
+    # "sleep 8". Se mata el bash y el sleep se queda. Son los "bash + sleep"
+    # que salian como supervivientes en los registros de partidas reales.
+    #
+    # SE RECOGE EL ARBOL ENTERO ANTES DE MATAR A NADIE.
+    #
+    # Intentarlo sobre la marcha no funciona, y costo tres intentos verlo: en
+    # cuanto muere un padre, sus hijos pasan a colgar de init y dejan de
+    # aparecer como hijos suyos, asi que el recorrido los pierde y se quedan
+    # vivos. Primero se anota todo, luego se mata de las hojas a la raiz.
+    #
+    # No se mata el GRUPO entero (kill -PID): el grupo puede incluir a Steam o
+    # al propio WProton, y eso ya nos costo un reinicio de la Deck.
+    local pid="$1" todos="" pendientes="" siguiente="" p
+    [ -n "$pid" ] || return 0
+    pendientes="$pid"
+    while [ -n "$pendientes" ]; do
+        siguiente=""
+        for p in $pendientes; do
+            todos="$todos $p"
+            siguiente="$siguiente $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"
+        done
+        pendientes="$siguiente"
+    done
+    # De las hojas a la raiz: si se empezara por la raiz, lo de abajo se
+    # quedaria huerfano justo antes de que le tocara el turno.
+    todos="$(printf '%s\n' $todos | tac | tr '\n' ' ')"
+    for p in $todos; do
+        kill "$p" 2>/dev/null
+    done
+    # Segunda pasada, a lo que siga vivo.
+    #
+    # Un TERM no siempre basta: los procesos lanzados en segundo plano dentro
+    # de otro shell pueden tenerlo ignorado, y ahi el primer intento no hace
+    # nada. Se les da un respiro para que salgan por las buenas y despues se
+    # les manda KILL, que no se puede ignorar.
+    local queda=0
+    for p in $todos; do
+        kill -0 "$p" 2>/dev/null && queda=1
+    done
+    if [ "$queda" = 1 ]; then
+        sleep 0.3
+        for p in $todos; do
+            kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
+        done
+    fi
+    return 0
 }
 
 gamepad_retrigger() {
@@ -16946,7 +17325,7 @@ El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
         "Repetir asistente"*)
             acquire_game_root "$squash" "$gid" ro
             local ro="$MOUNT_POINT"
-            first_run_wizard "$gid" "$ro"
+            first_run_wizard "$gid" "$ro" "$squash"
             release_game_root
             load_profile "$gid"
             ui_ask "Lanzar el juego ahora?" && launch_game "$squash" "auto" ;;
@@ -17013,7 +17392,7 @@ game_config_menu() {
     if ! profile_exists "$gid"; then
         acquire_game_root "$squash" "$gid" ro
         local ro="$MOUNT_POINT"
-        if ! first_run_wizard "$gid" "$ro"; then
+        if ! first_run_wizard "$gid" "$ro" "$squash"; then
             release_game_root
             profile_defaults
             write_full_profile "$gid"
