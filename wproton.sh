@@ -81,6 +81,7 @@ GAMES_PATH="$BASE_DIR/games"             # carpeta de juegos (configurable)
 LAST_GAME=""                             # último juego lanzado (ruta completa)
 WP_PICK=""                               # resultado de pick_squash_ui
 WIZ_QUIERE_DLL=0                         # el asistente pidio elegir DLL overrides
+WIZ_QUIERE_KEYS=0                        # el asistente pidio configurar el .keys
 GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
 LIST_COVER=vertical                      # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
@@ -309,6 +310,7 @@ write_lang_en() {
  "Año": "Year",
  "BORRAR": "DELETE",
  "BUSCANDO: %s": "SEARCHING: %s",
+ "Batocera": "Batocera",
  "Biblioteca y preferencias": "Library and preferences",
  "Borrar TODOS los perfiles": "Delete ALL profiles",
  "Borrar copias de saves antiguas": "Delete old save backups",
@@ -440,7 +442,6 @@ write_lang_en() {
  "Muy grande": "Very large",
  "NTsync (sincronizacion por kernel)": "NTsync (kernel synchronization)",
  "Ninguno": "None",
- "Nintendo / Batocera": "Nintendo / Batocera",
  "No": "No",
  "No montar nada": "Do not mount anything",
  "Normal": "Normal",
@@ -1792,9 +1793,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 1beb3936f1ca" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 59e9dbabc4f5" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 1beb3936f1ca
+# WPROTON_HELPER mapeador.py 59e9dbabc4f5
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2298,7 +2299,7 @@ def main():
         for _p, _q in (('a', 'b'), ('x', 'y')):
             if _p in ids and _q in ids:
                 ids[_p], ids[_q] = ids[_q], ids[_p]
-        print("[keys] Estilo de botones: Nintendo/Batocera (A y B cambiados)",
+        print("[keys] Estilo de botones: Batocera (A y B cambiados)",
               flush=True)
 
     for act in data.get('actions_player1', []):
@@ -2900,9 +2901,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py f38af7727072" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py ef501abe6b12" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py f38af7727072
+# WPROTON_HELPER menu_pygame.py ef501abe6b12
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -4052,8 +4053,8 @@ AYUDAS_ES = [
      'Cierra Wine a la fuerza y desmonta todo. Para cuando un juego se cuelga '
      'y deja el sistema a medias.'),
     ('Ver el registro de la última sesión',
-     'El log de lo ultimo que paso. Es lo que hay que mirar (y enviar) cuando '
-     'algo falla y no se sabe por que.'),
+     'El log de lo ultimo que paso, con scroll. Es lo que hay que mirar (y '
+     'enviar) cuando algo falla y no se sabe por que.'),
     ('Carpetas de juegos',
      'Donde busca WProton tus juegos. Puedes tener varias, por ejemplo una en '
      'la Deck y otra en la tarjeta.'),
@@ -4115,15 +4116,21 @@ AYUDAS_ES = [
     ('Dejarlo como esta',
      'No toca el estilo de botones. Siempre se puede cambiar despues desde '
      'los ajustes del juego.'),
+    ('Teclas del mando .keys (marcar',
+     'Para juegos que no soportan mando: cada boton manda una tecla. Si el '
+     'juego ya trae un .keys, esto sale solo sin marcar nada.'),
     ('Estilo Xbox',
      'Los nombres de los botones dentro del .keys se leen al estilo Xbox: '
      '"a" es el de abajo y "b" el de la derecha.'),
-    ('Estilo Nintendo',
-     'Como en Batocera: "a" es el boton de la DERECHA y "b" el de abajo. Si '
-     'los botones salen cambiados, prueba a cambiar de estilo.'),
+    ('Batocera',
+     'Los nombres de los botones dentro del .keys se leen como en Batocera: '
+     '"a" es el de la DERECHA y "b" el de abajo.'),
+    ('Estilo Batocera',
+     'Como en Batocera: "a" es el boton de la DERECHA y "b" el de abajo, al '
+     'estilo Nintendo. Si los botones salen cambiados, prueba a cambiarlo.'),
     ('Estilo de botones:',
      'Como se leen los nombres de los botones dentro del .keys. Xbox: "a" '
-     'abajo. Nintendo/Batocera: "a" a la derecha.'),
+     'abajo. Batocera: "a" a la derecha.'),
     ('Mapeador .keys',
      'Convierte los botones del mando en teclas, para juegos que no soportan '
      'mando. Formato de Batocera.'),
@@ -5279,6 +5286,90 @@ def run_session():
     # estado del teclado virtual: sus funciones internas lo declaran global,
     # asi que run_session tiene que declararlo tambien o quedaria como local
     global TXT, shift, tr_r, tr_c
+
+    if MODE == 'ver':
+        # Visor de un fichero de texto, con scroll de verdad.
+        #
+        # El registro se enseñaba con zenity (una ventana de escritorio que en
+        # el modo Juego ni se ve) o, si no habia, metiendo 60 lineas como
+        # opciones de un menu: se cortaban por la derecha y no habia forma de
+        # leer una linea larga entera.
+        #
+        # ARG4 = fichero a mostrar
+        try:
+            with open(ARG4, encoding='utf-8', errors='replace') as fh:
+                crudo = fh.read().split('\n')
+        except OSError as e:
+            crudo = ['No se pudo abrir el fichero:', str(e)]
+        # Se parten las lineas largas al ancho de la pantalla: es la unica
+        # forma de leerlas enteras sin scroll horizontal, que con el mando
+        # seria un suplicio.
+        ancho = W - FS(40)
+        lineas = []
+        for l in crudo:
+            l = l.rstrip()
+            if not l:
+                lineas.append('')
+                continue
+            lineas.extend(wrap_title(l, f_sm, ancho, 40) or [''])
+        if not lineas:
+            lineas = ['(vacio)']
+        alto_l = f_sm.get_height() + FS(3)
+        visibles = max(4, (H - HEAD - FS(70)) // alto_l)
+        # se abre AL FINAL: lo que acaba de pasar es lo que interesa
+        pos = max(0, len(lineas) - visibles)
+        clockV = pygame.time.Clock()
+        while True:
+            for ev in eventos():
+                if ev.type == pygame.QUIT:
+                    safe_quit(1)
+                if ev.type != pygame.KEYDOWN:
+                    continue
+                k = ev.key
+                if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    safe_quit(0)
+                elif k in (pygame.K_RETURN, pygame.K_SPACE):
+                    safe_quit(0)
+                elif k == pygame.K_UP:
+                    pos = max(0, pos - 1)
+                elif k == pygame.K_DOWN:
+                    pos = min(max(0, len(lineas) - visibles), pos + 1)
+                elif k == pygame.K_PAGEUP:
+                    pos = max(0, pos - visibles)
+                elif k == pygame.K_PAGEDOWN:
+                    pos = min(max(0, len(lineas) - visibles), pos + visibles)
+                elif k == pygame.K_HOME:
+                    pos = 0
+                elif k == pygame.K_END:
+                    pos = max(0, len(lineas) - visibles)
+            if BGSURF is not None:
+                screen.blit(BGSURF, (0, 0))
+            else:
+                screen.fill(TH['bg'])
+            draw_header()
+            y = HEAD + FS(10)
+            for l in lineas[pos:pos + visibles]:
+                col = FG
+                # un poco de color para lo que importa
+                if '[!]' in l or 'ERROR' in l or 'AVISO' in l or 'WARN' in l:
+                    col = TH.get('acc2', ACC)
+                elif l.lstrip().startswith('[+]'):
+                    col = ACC
+                elif l.lstrip().startswith('['):
+                    col = DIM
+                screen.blit(rtext(f_sm, l, col), (FS(20), y))
+                y += alto_l
+            # cuanto queda, y como moverse
+            total = max(1, len(lineas))
+            pie = L('%d-%d de %d   |   arriba/abajo, L1/R1 pagina, B salir') % (
+                pos + 1, min(pos + visibles, total), total)
+            sf = rtext(f_sm, pie, DIM)
+            screen.blit(sf, ((W - sf.get_width()) // 2, H - sf.get_height() - FS(14)))
+            if SCANSURF is not None:
+                screen.blit(SCANSURF, (0, 0))
+            pygame.display.flip()
+            grabar_fotograma()
+            clockV.tick(30)
 
     if MODE == 'canvas':
         # Fondo persistente para el MODO JUEGO de SteamOS.
@@ -8984,6 +9075,7 @@ wizard_opciones() {
 0|NTsync (sincronizacion por kernel, 6.14+)
 0|Wayland nativo (experimental)
 0|DLL overrides (marcar para elegir cuales)
+0|Teclas del mando .keys (marcar para configurarlas)
 EOFOPC
 }
 
@@ -9005,6 +9097,8 @@ aplicar_toggles_basicos() {
     # la pantalla buena. Asi no hay dos sitios armando la misma cadena.
     WIZ_QUIERE_DLL=0
     case "$sel" in *"DLL overrides"*) WIZ_QUIERE_DLL=1 ;; esac
+    WIZ_QUIERE_KEYS=0
+    case "$sel" in *"Teclas del mando"*) WIZ_QUIERE_KEYS=1 ;; esac
     return 0
 }
 
@@ -9141,7 +9235,20 @@ wizard_keys() {
     # estaban cambiados, salir y entrar en los ajustes. Es el mismo caso que
     # los DLL overrides: si se sabe al añadirlo, se pregunta al añadirlo.
     local gid="$1" juego="$2" kf resumen n
-    kf="$(find_keys_file "$juego" "$gid")" || return 0    # no trae .keys
+    if ! kf="$(find_keys_file "$juego" "$gid")"; then
+        # No trae .keys. Solo se ofrece si se ha marcado la casilla: para el
+        # 95% de los juegos esto no hace falta y preguntarlo siempre seria
+        # ruido. Marcarla es decir "este juego lo necesita".
+        [ "${WIZ_QUIERE_KEYS:-0}" = 1 ] || return 0
+        ui_ask "Este juego no trae teclas para el mando.
+
+Quieres crear un fichero .keys ahora?
+
+Sirve para juegos que no soportan mando: cada boton manda una
+tecla. Tambien se puede hacer luego, desde los ajustes." || return 0
+        keys_editor "$gid" "$juego"
+        return 0
+    fi
     resumen="$(keys_resumen "$kf")" || resumen=""
     case "$resumen" in
         '!ROTO')
@@ -9161,12 +9268,12 @@ Se ignorara. Puedes rehacerlo desde los ajustes del juego."
     local sel
     sel="$(menu "Este juego trae teclas para el mando ($n asignadas)" \
         "Estilo Xbox        (A abajo, B derecha)" \
-        "Estilo Nintendo / Batocera  (A derecha, B abajo)" \
+        "Estilo Batocera  (A derecha, B abajo)" \
         "Ver las teclas asignadas" \
         "Dejarlo como esta")" || return 0
     case "$sel" in
         "Estilo Xbox"*)     KEYS_ESTILO=xbox ;;
-        "Estilo Nintendo"*) KEYS_ESTILO=nintendo ;;
+        "Estilo Batocera"*) KEYS_ESTILO=nintendo ;;
         "Ver las teclas"*)
             if [ "$n" = 0 ]; then
                 ui_info "El fichero no tiene ninguna tecla asignada."
@@ -9206,10 +9313,16 @@ first_run_wizard() {
     wizard_dlls "$gid" "$root"
     [ -n "$juego" ] && wizard_keys "$gid" "$juego"
     write_full_profile "$gid"
+    # Nada de "./wproton.sh --config": quien esta viendo estos menus con el
+    # mando no va a abrir una terminal. Se le dice por donde se llega DESDE
+    # AQUI, que es lo unico que le sirve.
     ui_info "Perfil creado: profiles/$gid.conf
 Runner: ${RUNNER:-último GE-Proton} | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
 DLL overrides: $DLL_OVERRIDES}
-Afinalo cuando quieras con: ./wproton.sh --config"
+
+Puedes cambiar todo esto cuando quieras:
+menu principal -> Ajustes de un juego,
+o pulsando X sobre el juego en la lista."
     return 0
 }
 
@@ -15549,6 +15662,36 @@ distinto al del juego. Se arregla renombrando el wsquashfs."
     return 0
 }
 
+ver_fichero() {
+    # Enseña un fichero de texto con scroll. $1 = fichero, $2 = titulo.
+    #
+    # PYGAME PRIMERO, zenity despues. Antes era al reves, y en el modo Juego
+    # de la Deck zenity abre una ventana de escritorio que no se ve: parecia
+    # que la opcion no hacia nada. El respaldo de pygame que habia metia las
+    # lineas como opciones de un menu, asi que las largas se cortaban por la
+    # derecha y no habia forma de leerlas enteras.
+    local f="$1" titulo="${2:-Ver fichero}"
+    if [ ! -s "$f" ]; then
+        ui_info "No hay nada que ver todavia:
+
+$f"
+        return 0
+    fi
+    if pygame_available; then
+        menu_server_stop
+        env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" ver "$titulo" /dev/null "$f" \
+            >/dev/null 2>&1 || true
+        return 0
+    fi
+    if [ "${HAS_ZENITY:-0}" = 1 ]; then
+        zenity --text-info --title="$titulo" --filename="$f" \
+               --width=820 --height=620 2>/dev/null
+        return 0
+    fi
+    tail -n 60 "$f" >&2
+    return 0
+}
+
 sgdb_download_covers() {
     # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
     # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
@@ -17271,7 +17414,7 @@ Poner el contador a cero?" && {
             kopts+=("Crear o editar las teclas de este juego" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
-                "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Nintendo / Batocera' || printf 'Xbox')" \
+                "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Batocera' || printf 'Xbox')" \
                 "<< Volver")
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" "${kopts[@]}")" || kmenu=""
             case "$kmenu" in
@@ -17304,12 +17447,14 @@ Se activan solas al lanzar el juego." ;;
                         KEYS_ESTILO=nintendo
                     fi
                     write_full_profile "$gid"
-                    ui_info "Estilo de botones: $KEYS_ESTILO
+                    ui_info "Estilo de botones: $([ "$KEYS_ESTILO" = nintendo ] && printf 'Batocera' || printf 'Xbox')
 
   Xbox      A abajo, B derecha (mandos de PC)
-  Nintendo  A derecha, B abajo (Batocera y consolas portatiles)
+  Batocera  A derecha, B abajo (como en Nintendo)
 
-Si los botones salen cambiados en el juego, prueba el otro." ;;
+Es como se leen los nombres dentro del .keys, no como es tu
+mando. Si los botones salen cambiados en el juego, prueba el
+otro." ;;
                 "Asignar"*)
                     local kfsel
                     kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
@@ -17736,17 +17881,7 @@ Los wsquashfs que ya tienes se siguen usando igual."
         "Detener Wine y liberar los juegos montados") kill_all ;;
         "Buscar actualizaciones"*) self_update ;;
         "Ver el registro de la última sesión")
-            if [ "$HAS_ZENITY" = 1 ]; then
-                zenity --text-info --title="WProton log" --filename="$LOG_FILE" \
-                       --width=820 --height=620 2>/dev/null
-            elif pygame_available; then
-                local loglines
-                loglines="$(tail -n 60 "$LOG_FILE" | grep -v '^$')"
-                # shellcheck disable=SC2046
-                (IFS=$'\n'; set -f; menu "Último log (B para volver)" $loglines) >/dev/null 2>&1 || true
-            else
-                tail -n 50 "$LOG_FILE" >&2
-            fi ;;
+            ver_fichero "$LOG_FILE" "Registro de la última sesión" ;;
         "Salir") exit 0 ;;
     esac
     return 0
