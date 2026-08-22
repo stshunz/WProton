@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.28"
+WPROTON_VERSION="1.29"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -2816,9 +2816,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 9a70488afb92" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 5f25cad626f0" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 9a70488afb92
+# WPROTON_HELPER menu_pygame.py 5f25cad626f0
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2987,6 +2987,8 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
     BROWSE_KIND = browse_kind
     if browse_kind == 'keys':
         BROWSE_EXTS = ('.keys',)
+    elif browse_kind == 'reg':
+        BROWSE_EXTS = ('.reg',)
     elif browse_kind == 'image':
         BROWSE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
     elif browse_kind == 'importar':
@@ -3052,7 +3054,7 @@ def load_dir(path):
         items.append([K_HDR, '>> USAR ESTA CARPETA <<', False])
     elif BROWSE_KIND == 'play':
         items.append([K_HDR, '>> JUGAR ESTA CARPETA <<', False])
-    elif BROWSE_KIND not in ('keys', 'image'):
+    elif BROWSE_KIND not in ('keys', 'image', 'reg'):
         items.append([K_HDR, '>> IMPORTAR ESTA CARPETA <<', False])
     items.append([K_UP2, '.. (subir)', False])
     items.append([K_CANCEL, '<< Cancelar', False])
@@ -3063,7 +3065,10 @@ def load_dir(path):
     for n in names:
         if not n.startswith('.') and os.path.isdir(os.path.join(cur_path, n)):
             items.append([K_DIR, n + '/', False])
-    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar'):
+    # Si el modo no esta aqui, no se enseña NINGUN fichero: solo carpetas.
+    # Al añadir el modo "reg" se olvido esta lista y la pantalla salia sin
+    # nada que elegir, aunque la carpeta tuviera .reg dentro.
+    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar', 'reg'):
         for n in names:
             p = os.path.join(cur_path, n)
             if (not n.startswith('.') and os.path.isfile(p)
@@ -7772,13 +7777,27 @@ parse_autorun() {
 
 write_autorun() {
     # $1 = raiz del juego, $2 = exe absoluto dentro de la raiz
+    #
+    # EL FORMATO ES EL DE BATOCERA, y tiene dos reglas que no son simetricas:
+    #
+    #   DIR va SIN comillas, aunque lleve espacios:
+    #       DIR=64bit/bin/carpeta con espacios
+    #   CMD va CON comillas, para que los espacios no partan los argumentos:
+    #       CMD="Nombre del juego 64-bit.exe" --fullscreen
+    #
+    # Y el fichero se escribe con saltos de linea de LINUX (LF). Aqui se
+    # ponia CRLF, que es justo lo que la documentacion de Batocera dice que
+    # NO se use ("The autorun.cmd file must use Linux line terminators").
+    #
+    # Nuestro parse_autorun admite las dos formas (quita las comillas si las
+    # hay y los \r si los hay), asi que el cambio no rompe los que ya existen.
     local root="$1" exe="$2" rel_dir exe_name
     exe_name="$(basename "$exe")"
     rel_dir="$(realpath --relative-to="$root" "$(dirname "$exe")" 2>/dev/null)"
     if [ -n "$rel_dir" ] && [ "$rel_dir" != "." ]; then
-        printf 'DIR="%s"\r\nCMD="%s"\r\n' "$rel_dir" "$exe_name" > "$root/autorun.cmd"
+        printf 'DIR=%s\nCMD="%s"\n' "$rel_dir" "$exe_name" > "$root/autorun.cmd"
     else
-        printf 'CMD="%s"\r\n' "$exe_name" > "$root/autorun.cmd"
+        printf 'CMD="%s"\n' "$exe_name" > "$root/autorun.cmd"
     fi
 }
 
@@ -7890,6 +7909,30 @@ profile_defaults() {
 }
 
 profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
+
+ultimo_juego_olvidar_si_borrado() {
+    # Si el ultimo juego jugado ya no esta, se olvida.
+    #
+    # Antes solo se miraba que el FICHERO existiera, asi que al borrar un
+    # juego (su .conf y su prefijo) seguia saliendo "Jugar al ultimo: ..." en
+    # el menu principal apuntando a algo que el usuario dio por eliminado.
+    #
+    # Se comprueban las DOS cosas: el fichero y su perfil. Borrar el perfil es
+    # justo lo que se hace al quitar un juego de WProton, y es la señal de que
+    # ya no cuenta.
+    [ -n "${LAST_GAME:-}" ] || return 0
+    local motivo=""
+    if [ ! -e "$LAST_GAME" ]; then
+        motivo="el fichero ya no esta"
+    elif [ ! -f "$PROFILE_DIR/$(game_id "$LAST_GAME").conf" ]; then
+        motivo="se borro su perfil"
+    fi
+    [ -n "$motivo" ] || return 0
+    log "Ultimo juego olvidado ($motivo): $LAST_GAME"
+    LAST_GAME=""
+    save_settings
+    return 0
+}
 
 load_profile() {
     local conf="$PROFILE_DIR/$1.conf"
@@ -10052,6 +10095,29 @@ bundled_prefix_prepare() {
     fi
     rm -f "$probe"
 
+    # 0) Con un runner de tipo Proton, el prefijo NO se busca en la raiz.
+    #
+    # Proton mira en $WINEPREFIX/pfx. Un prefijo incluido estilo Batocera
+    # tiene drive_c y los .reg en la RAIZ, asi que Proton no los encuentra:
+    # se crea un pfx nuevo y vacio dentro del overlay y el juego arranca como
+    # si no hubiera prefijo, o directamente falla. Es justo la sospecha de un
+    # tester: "no pilla el user.reg ni el system.reg".
+    #
+    # umu resuelve esto con un enlace "pfx -> ." (comprobado en un archivo que
+    # SI funcionaba). Aqui se hace lo mismo si falta: es relativo, asi que
+    # apunta al propio prefijo se monte donde se monte.
+    if [ "$(runner_kind "$rdir" 2>/dev/null)" = "proton" ] \
+       && [ ! -e "$WINEPREFIX/pfx" ]; then
+        if ln -s "." "$WINEPREFIX/pfx" 2>/dev/null; then
+            say "[+] Prefix incluido: creado el enlace 'pfx' que busca Proton"
+        else
+            say "AVISO: no se pudo crear \$WINEPREFIX/pfx."
+            say "       Con un runner Proton, el prefix incluido NO se usara."
+            say "       Prueba con un runner de tipo Wine, o pon el prefijo"
+            say "       en 'propio del juego'."
+        fi
+    fi
+
     # 1) Enlaces rotos en system32/syswow64 (y en la raiz del prefijo)
     local dirs d broken n=0 first=""
     dirs="$WINEPREFIX/drive_c/windows/system32 $WINEPREFIX/drive_c/windows/syswow64"
@@ -10681,7 +10747,9 @@ mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
         esac
     fi
     exe_rel="${exe_rel%/}"
-    printf 'DIR="drive_c/%s"\r\nCMD="%s"\r\n' "$exe_rel" "$exe_name" \
+    # DIR sin comillas, CMD con comillas, y saltos de linea de Linux: es el
+    # formato de Batocera (ver write_autorun).
+    printf 'DIR=drive_c/%s\nCMD="%s"\n' "$exe_rel" "$exe_name" \
         > "$tmp/autorun.cmd"
     say "[+] autorun.cmd -> DIR=drive_c/$exe_rel CMD=$exe_name"
 
@@ -16425,7 +16493,13 @@ Los wsquashfs que ya tienes se siguen usando igual."
         "Descargar carátulas"*)
             sgdb_download_covers ;;
         "Carpetas de juegos"*) carpetas_juegos_menu ;;
-        "Montar un disco"*)    montar_disco_manual || true ;;
+        "Montar un disco"*)
+            # El 9 de montar_disco_manual significa "disco montado y listo".
+            # Se PROPAGA para que el menu que llamo salga al principal: se
+            # entra ahi para montar el disco, y una vez montado esa pantalla
+            # ya no pinta nada.
+            montar_disco_manual
+            return $?  ;;
         "Carpeta de juegos:"*)
             local nd=""
             if pygame_available; then
@@ -16550,7 +16624,10 @@ library_menu() {
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
-            *) main_dispatch "$sel" ;;
+            *)
+                main_dispatch "$sel"
+                # 9 = "ya esta, vuelve al menu principal" (montar un disco)
+                [ "$?" = 9 ] && return 0 ;;
         esac
     done
 }
@@ -16944,6 +17021,7 @@ fi
 
 covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
 datos_preparar          # crea metadata/ y trae lo que hubiera de antes
+ultimo_juego_olvidar_si_borrado   # no ofrecer "jugar al ultimo" si ya no existe
 check_deps
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
