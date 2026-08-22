@@ -256,6 +256,7 @@ footer a{color:var(--tenue)}
             <dl>
               <div><dt>Año</dt><dd id="d-ano">—</dd></div>
               <div><dt>Género</dt><dd id="d-genero">—</dd></div>
+              <div><dt>Nota</dt><dd id="d-nota">—</dd></div>
               <div><dt>Duración</dt><dd id="d-duracion">—</dd></div>
               <div><dt>Jugado</dt><dd id="d-jugado">—</dd></div>
             </dl>
@@ -267,6 +268,7 @@ footer a{color:var(--tenue)}
           <span><i class="tecla">Y</i>buscar</span>
           <span><i class="tecla">L1</i>ficha</span>
           <span><i class="tecla">R1</i>favorito</span>
+          <span><i class="tecla">Sel+X</i>vista</span>
           <span><i class="tecla">B</i>volver</span>
         </div>
       </div>
@@ -355,13 +357,20 @@ footer a{color:var(--tenue)}
       </div>
       <div class="tarjeta">
         <h3><span>Fichas</span> y carátulas</h3>
-        <p>Año, editor, géneros, nota de la crítica y cuánto se tarda en
-           terminarlo, con la carátula al lado.</p>
+        <p>Año, editor, géneros, nota, sinopsis y cuánto se tarda en
+           terminarlo, con la carátula al lado. Se descargan de una vez para
+           toda la biblioteca.</p>
+      </div>
+      <div class="tarjeta">
+        <h3><span>Te</span> dice qué hace cada cosa</h3>
+        <p>El panel de la derecha explica la opción que tienes marcada, en
+           todos los menús. Sin salir a buscar el manual.</p>
       </div>
       <div class="tarjeta">
         <h3><span>Mandos</span> raros, también</h3>
         <p>Un fichero <code>.keys</code> traduce el mando a teclado para los
-           juegos que no lo soportan. Con perfiles para DualSense y DS4.</p>
+           juegos que no lo soportan, y hasta puede hacer de ratón. Con
+           perfiles para DualSense, DS4 y la Steam Deck.</p>
       </div>
       <div class="tarjeta">
         <h3><span>Llévatelo</span> a otro equipo</h3>
@@ -397,16 +406,23 @@ footer a{color:var(--tenue)}
 
     <div class="galeria">
       <figure class="captura">
-        <img src="img/lista.png" alt="Lista de juegos de WProton con la carátula y los datos del juego seleccionado" loading="lazy" width="960" height="540">
+        <img src="img/ficha.jpg" alt="Lista de juegos de WProton con la carátula, la ficha y la sinopsis del juego seleccionado" loading="lazy" width="1280" height="720">
         <figcaption><b>La biblioteca.</b> A la derecha, la carátula y la ficha
-          del juego resaltado: año, estudio, género, cuánto se tarda en
-          terminarlo y lo que llevas jugado. La estrella marca los favoritos.</figcaption>
+          del juego resaltado: año, estudio, género, nota, cuánto se tarda en
+          terminarlo, lo que llevas jugado y una sinopsis. Siempre los mismos
+          datos, con un guion donde no los hay.</figcaption>
       </figure>
       <figure class="captura">
         <img src="img/rejilla.jpg" alt="Vista de rejilla de WProton: los juegos como carátulas grandes" loading="lazy" width="960" height="540">
         <figcaption><b>O en rejilla, si prefieres las carátulas.</b> La misma
           biblioteca, con los juegos como portadas. Se cambia de una vista a
           otra en <i>Biblioteca y preferencias</i>.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/anchas.jpg" alt="Vista de carátulas panorámicas de WProton, cuatro por fila" loading="lazy" width="1280" height="720">
+        <figcaption><b>Y con carátulas panorámicas.</b> Menos juegos a la vez,
+          pero se reconocen mejor. Debajo de cada uno, el tiempo jugado y
+          cuándo fue la última vez.</figcaption>
       </figure>
       <figure class="captura">
         <img src="img/ajustes.png" alt="Pantalla de ajustes de un juego en WProton" loading="lazy" width="960" height="540">
@@ -453,6 +469,21 @@ footer a{color:var(--tenue)}
          menú.</p>
     </details>
     <details>
+      <summary>Un juego dice que está corrupto y solo se arregla reiniciando</summary>
+      <p>Casi seguro que el archivo está bien. Cuando un juego se cuelga deja
+         el montaje colgado, y el siguiente intento falla por eso. WProton los
+         limpia solo antes de cada lanzamiento, y también a mano desde
+         <em>Espacio en disco → Reparar montajes colgados</em>.</p>
+    </details>
+    <details>
+      <summary>Me faltan las notas de algunos juegos</summary>
+      <p>La nota viene de la ficha de Steam, y solo la traen los juegos con
+         puntuación de Metacritic: los antiguos casi nunca. Se puede rellenar
+         con una clave gratuita de <a href="https://rawg.io/apidocs">RAWG</a>,
+         que además cubre los juegos que ni siquiera están en Steam. Es
+         opcional: sin ella todo funciona igual.</p>
+    </details>
+    <details>
       <summary>Mi mando no responde en un juego</summary>
       <p>Prueba <em>Mando Sony</em> en los ajustes del juego si es un DualSense
          o un DS4. Para juegos sin soporte de mando, un fichero
@@ -490,12 +521,14 @@ footer a{color:var(--tenue)}
 
 <script>
 // La lista de la portada imita la de WProton: misma navegación, mismos datos.
+// "Fantasy Soccer" va sin nota ni duracion A PROPOSITO: las filas salen
+// siempre, con un guion donde no hay dato, igual que en el programa.
 const juegos = [
-  {n:"80's OVERDRIVE",  fav:true,  ano:"2020", gen:"Carreras, Indie", dur:"5 h",    jug:"3 veces"},
-  {n:"88 Heroes",       fav:false, ano:"2017", gen:"Acción, Plataformas", dur:"8 h", jug:"2 veces"},
-  {n:"Constance",       fav:true,  ano:"2025", gen:"Metroidvania", dur:"12 h",      jug:"7 veces"},
-  {n:"Donkey Kong Land",fav:false, ano:"2024", gen:"Plataformas", dur:"6 h",        jug:"1 vez"},
-  {n:"Fantasy Soccer",  fav:false, ano:"2019", gen:"Deportes", dur:"—",             jug:"—"}
+  {n:"80's OVERDRIVE",  fav:true,  ano:"2020", gen:"Carreras, Indie",      nota:"76/100", dur:"5 h",       jug:"3 veces"},
+  {n:"88 Heroes",       fav:false, ano:"2017", gen:"Acción, Plataformas",  nota:"58/100", dur:"8 h",       jug:"2 veces"},
+  {n:"Constance",       fav:true,  ano:"2025", gen:"Metroidvania",         nota:"85/100", dur:"12 h 30 min", jug:"7 veces"},
+  {n:"Donkey Kong Land",fav:false, ano:"2024", gen:"Plataformas",          nota:"—",      dur:"6 h",       jug:"1 vez"},
+  {n:"Fantasy Soccer",  fav:false, ano:"2019", gen:"Deportes",             nota:"—",      dur:"—",         jug:"nunca"}
 ];
 const lista = document.getElementById('lista');
 let sel = 0;
@@ -509,6 +542,7 @@ function pintar(){
   document.getElementById('caratula').textContent = j.n;
   document.getElementById('d-ano').textContent = j.ano;
   document.getElementById('d-genero').textContent = j.gen;
+  document.getElementById('d-nota').textContent = j.nota;
   document.getElementById('d-duracion').textContent = j.dur;
   document.getElementById('d-jugado').textContent = j.jug;
 }
