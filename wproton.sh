@@ -31,7 +31,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.29"
+WPROTON_VERSION="1.30"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -683,6 +683,30 @@ sgdb_key_leer() {
         return 0
     done
     printf '%s' "${SGDB_KEY:-}"
+    return 0
+}
+
+rawg_key_leer() {
+    # Clave de RAWG, la fuente SECUNDARIA de datos.
+    #
+    # Es opcional a proposito: sin ella WProton funciona igual, solo con lo
+    # que da Steam. Hay gente que no quiere registrarse en otro sitio mas.
+    #
+    # No se hace el truco del .txt suelto que se usa con SteamGridDB: dos
+    # claves distintas en dos .txt sin nombre fijo serian imposibles de
+    # distinguir por el contenido, y acabaria guardandose una donde va la
+    # otra. Esta va en su fichero, y punto.
+    local k perm
+    if [ -r "$BASE_DIR/rawg.key" ]; then
+        k="$(grep -v '^\s*#' "$BASE_DIR/rawg.key" 2>/dev/null | grep -m1 . | tr -d '[:space:]')"
+        if [ -n "$k" ]; then
+            perm="$(stat -c %a "$BASE_DIR/rawg.key" 2>/dev/null || echo 600)"
+            [ "$perm" = 600 ] || chmod 600 "$BASE_DIR/rawg.key" 2>/dev/null
+            printf '%s' "$k"
+            return 0
+        fi
+    fi
+    printf '%s' "${RAWG_KEY:-}"
     return 0
 }
 
@@ -2816,9 +2840,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 5f25cad626f0" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 4a1ee1742ba6" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 5f25cad626f0
+# WPROTON_HELPER menu_pygame.py 4a1ee1742ba6
 #!/usr/bin/env python3
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
@@ -2831,7 +2855,8 @@ write_menu_pygame() {
 #   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
 #   text   <titulo> <salida> <valor_inicial>  (teclado en pantalla)
 #   canvas <titulo> <fichero_estado>       (fondo persistente del modo Juego)
-import json, os, sys, time
+import json
+import re, os, sys, time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 LIBS = os.path.join(BASE, 'libs_py%d.%d' % sys.version_info[:2])
@@ -2913,12 +2938,35 @@ def leer_ficha(ruta):
     for trozo in str(fecha).replace(',', ' ').split():
         if trozo.isdigit() and len(trozo) == 4:
             ano = trozo
+    # La sinopsis viene con etiquetas HTML y entidades: la ficha de Steam es
+    # una pagina web, no texto plano.
+    sinopsis = d.get('short_description') or ''
+    if sinopsis:
+        sinopsis = re.sub(r'<[^>]+>', ' ', sinopsis)
+        for ent, car in (('&amp;', '&'), ('&quot;', '"'), ('&#39;', "'"),
+                         ('&lt;', '<'), ('&gt;', '>'), ('&nbsp;', ' ')):
+            sinopsis = sinopsis.replace(ent, car)
+        sinopsis = ' '.join(sinopsis.split())
     return {'nombre': d.get('name', ''),
             'ano': ano,
             'dev': lista('developers'),
             'edi': lista('publishers'),
             'gen': lista('genres'),
-            'nota': str((d.get('metacritic') or {}).get('score', '') or '')}
+            'nota': str((d.get('metacritic') or {}).get('score', '') or ''),
+            'sinopsis': sinopsis}
+
+def leer_rawg(ruta):
+    # La ficha de RAWG, la fuente secundaria. Formato plano, lo escribe
+    # rawg_completar en wproton.sh.
+    if not ruta or not os.path.isfile(ruta):
+        return {}
+    try:
+        with open(ruta, encoding='utf-8') as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in d.items() if v}
+
 
 def leer_duracion(ruta):
     # "21.5|44" -> texto para el panel
@@ -2933,7 +2981,20 @@ def leer_duracion(ruta):
         hist = float(partes[0]) if partes and partes[0] else 0
     except ValueError:
         hist = 0
-    return ('%g h' % hist) if hist else ''
+    if not hist:
+        return ''
+    # "18.69 h" es demasiada precision y ademas no casa con la fila de
+    # "Tiempo" justo debajo, que va en "4 h 20 min". Se enseña igual que
+    # aquella: HowLongToBeat da horas con decimales, no un cronometro.
+    horas = int(hist)
+    minutos = int(round((hist - horas) * 60))
+    if minutos == 60:
+        horas, minutos = horas + 1, 0
+    if horas and minutos:
+        return '%d h %d min' % (horas, minutos)
+    if horas:
+        return '%d h' % horas
+    return '%d min' % minutos
 EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
 
@@ -2972,12 +3033,18 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
                     campos = linea.rstrip('\n').split('|')
                     if not campos or not campos[0].strip():
                         continue
-                    while len(campos) < 6:
+                    while len(campos) < 9:
                         campos.append('')
                     d = {'cov': campos[1], 'fav': campos[2],
                          'veces': campos[3], 'segs': campos[4],
-                         'ficha': campos[5], 'hltb': campos[6] if len(campos) > 6 else ''}
+                         'ficha': campos[5], 'hltb': campos[6],
+                         'completado': campos[7], 'rawg': campos[8]}
                     d.update(leer_ficha(campos[5]))
+                    # RAWG solo RELLENA: lo de Steam manda, porque trae la
+                    # sinopsis en español y datos mas completos.
+                    for _k, _v in leer_rawg(campos[8]).items():
+                        if not d.get(_k):
+                            d[_k] = _v
                     d['dur'] = leer_duracion(d.get('hltb', ''))
                     LIST_INFO[campos[0]] = d
         except Exception:
@@ -3862,6 +3929,487 @@ def fmt_horas(seg):
         return '%d min' % (seg // 60)
     return '%d h %d min' % (seg // 3600, (seg % 3600) // 60)
 
+# ---------------------------------------------------------------------------
+# Ayuda del panel derecho
+#
+# El panel "SELECCION" repetia el texto de la fila y ya esta, o sea que no
+# aportaba nada. Aqui se explica QUE HACE cada opcion, que es lo que cuesta
+# adivinar cuando buscas algo y no sabes por donde anda.
+#
+# Se casa por PREFIJO porque muchas opciones llevan un valor detras
+# ("Prefijo: propio del juego", "Runner: GE-Proton11-5"). Gana el prefijo mas
+# largo que case, para poder afinar casos concretos sin romper los generales.
+#
+# OJO: esta tabla vive aqui y los menus se escriben en wproton.sh, asi que
+# pueden desincronizarse. Hay una prueba que comprueba que cada prefijo de
+# aqui existe de verdad como opcion en el script.
+# ---------------------------------------------------------------------------
+AYUDAS_ES = [
+    # --- menu principal ---
+    ('Jugar (elegir juego)',
+     'Abre la biblioteca para elegir a que jugar. Con Select+X cambias entre '
+     'lista, rejilla y caratulas.'),
+    ('Jugar al ultimo',
+     'Lanza otra vez el ultimo juego, sin pasar por la lista. Con X entras '
+     'directo a su configuracion.'),
+    ('Jugar al último',
+     'Lanza otra vez el ultimo juego, sin pasar por la lista. Con X entras '
+     'directo a su configuracion.'),
+    ('Añadir un juego',
+     'Mete un juego nuevo: un comprimido (zip, rar, 7z), un .exe suelto o una '
+     'carpeta. Lo empaqueta y te guia por su configuracion basica.'),
+    ('Ajustes de un juego',
+     'Cambia el runner, el prefijo, los DLL overrides, el idioma y todo lo '
+     'demas de UN juego, sin lanzarlo.'),
+    ('Biblioteca y preferencias',
+     'Las carpetas donde estan tus juegos, montar discos externos, las '
+     'caratulas y el aspecto de los menus.'),
+    ('Runners y herramientas',
+     'Descargar y elegir versiones de Proton y Wine, y las herramientas del '
+     'sistema.'),
+    ('Espacio en disco',
+     'Que ocupa cada cosa, limpiar caches, reparar montajes colgados y buscar '
+     'restos de juegos que ya borraste.'),
+    ('Instalar librerias',
+     'Los redistribuibles de Windows: Visual C++, DirectX, codecs de video... '
+     'Es lo primero que hay que probar cuando un juego no arranca.'),
+    ('Montar un disco',
+     'Monta un disco externo o una tarjeta para poder jugar a lo que tenga '
+     'dentro. Si su carpeta ya estaba, no pregunta nada.'),
+    ('Carátulas y perfiles de la comunidad',
+     'Descarga caratulas y fichas de los juegos, y ajustes que ya han '
+     'probado otros para que funcionen a la primera.'),
+    ('Detener Wine y liberar los juegos montados',
+     'Cierra Wine a la fuerza y desmonta todo. Para cuando un juego se cuelga '
+     'y deja el sistema a medias.'),
+    ('Ver el registro de la última sesión',
+     'El log de lo ultimo que paso. Es lo que hay que mirar (y enviar) cuando '
+     'algo falla y no se sabe por que.'),
+    ('Carpetas de juegos',
+     'Donde busca WProton tus juegos. Puedes tener varias, por ejemplo una en '
+     'la Deck y otra en la tarjeta.'),
+
+    # --- ajustes de un juego ---
+    ('Runner (Proton/Wine):',
+     'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
+     'vale la pena probar otro.'),
+    ('>> JUGAR AHORA <<',
+     'Lanza el juego ya, con los ajustes que tenga puestos.'),
+    ('Runner:',
+     'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
+     'vale la pena probar otro.'),
+    ('Ejecutable:',
+     'El .exe que se lanza. En automatico lo busca solo; cambialo si el juego '
+     'trae varios (lanzador, editor, el juego...).'),
+    ('Argumentos:',
+     'Lo que se le pasa al juego al arrancar, como -windowed o -novr.'),
+    ('Prefijo:',
+     'La "instalacion de Windows" del juego. Compartido: una para todos. '
+     'Propio: solo para este. Incluido: el que trae el archivo dentro.'),
+    ('Instalar librerias en el prefijo:',
+     'Instala redistribuibles directamente en el prefijo de este juego, sin '
+     'tener que elegirlo otra vez desde el menu principal.'),
+    ('GAMEID (protonfixes):',
+     'Identificador de Steam para que protonfixes aplique los apaños conocidos '
+     'de ese juego.'),
+    ('DLL overrides:',
+     'Fuerza a Wine a cargar una DLL de la carpeta del juego en vez de la '
+     'suya. Lo piden dgVoodoo2, ReShade, OptiScaler y los cargadores de mods.'),
+    ('Idioma del juego:',
+     'Muchos juegos miran el idioma del sistema para decidir en cual arrancan. '
+     'Aqui se le puede poner otro solo a este.'),
+    ('Variables extra:',
+     'Variables de entorno sueltas para casos raros, como PROTON_USE_WINED3D=1.'),
+    ('Notas:',
+     'Tus apuntes sobre este juego: que hay que tocar para que vaya, donde '
+     'guarda las partidas, lo que sea.'),
+    ('Favorito:',
+     'Los favoritos salen los primeros en la biblioteca.'),
+    ('Completado:',
+     'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
+     'vistazo lo que te queda pendiente.'),
+    ('Descargar carátulas',
+     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
+     'desde SteamGridDB. Hace falta una clave gratuita.'),
+    ('Clave de RAWG',
+     'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
+     'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
+    ('Descargar datos de los juegos',
+     'Baja la ficha de Steam (año, genero, nota, sinopsis) y la duracion de '
+     'HowLongToBeat de toda la biblioteca. No repite lo que ya esta.'),
+    ('Rendimiento y compatibilidad',
+     'MangoHud, GameMode, Fsync, DXVK, HDR, gamescope y demas ajustes de como '
+     'corre el juego.'),
+    ('Herramientas del prefijo',
+     'winecfg, winetricks, importar un .reg, dgVoodoo2, OptiScaler y borrar el '
+     'prefijo para empezar de cero.'),
+    ('Mapeador .keys',
+     'Convierte los botones del mando en teclas, para juegos que no soportan '
+     'mando. Formato de Batocera.'),
+    ('Copia de seguridad',
+     'Guarda tus partidas fuera del prefijo, para que sobrevivan aunque lo '
+     'borres o cambies de runner.'),
+    ('Empaquetar con su prefijo',
+     'Crea un archivo autosuficiente: el juego Y su prefijo dentro. Sirve para '
+     'llevarlo a otro equipo tal cual esta.'),
+    ('Borrar prefijo',
+     'Deja el prefijo como recien hecho. Se pierde lo instalado en el '
+     '(librerias, ajustes de Wine), NO el juego.'),
+    ('Añadir este juego a Steam',
+     'Mete el juego en tu biblioteca de Steam, con su caratula, para lanzarlo '
+     'desde el modo Juego sin pasar por WProton.'),
+    ('Raton: ',
+     'El mando hace de raton: un stick mueve el puntero y un boton hace clic. '
+     'Util en estrategia, aventuras graficas e instaladores.'),
+    ('Crear acceso en Steam',
+     'Añade el juego a tu biblioteca de Steam para lanzarlo desde el modo '
+     'Juego, con su caratula.'),
+
+    # --- rendimiento ---
+    ('MangoHud',
+     'Enseña FPS, temperaturas y uso de CPU/GPU sobre el juego.'),
+    ('GameMode',
+     'Le pide al sistema prioridad para el juego mientras se juega.'),
+    ('Gamescope',
+     'Mete el juego en su propia ventana con escalado y limite de FPS. Hace '
+     'falta para el HDR.'),
+    ('HDR:',
+     'Rango dinamico alto. Necesita gamescope o una sesion Wayland, un monitor '
+     'que lo soporte y que el juego lo traiga.'),
+    ('Wayland nativo',
+     'Que el juego hable Wayland directamente en vez de pasar por XWayland. '
+     'Experimental.'),
+    ('NTsync',
+     'Sincronizacion por kernel, mas rapida que Fsync. Necesita Linux 6.14 o '
+     'mas nuevo.'),
+    ('Fsync',
+     'Sincronizacion rapida entre hilos. Ayuda en juegos que van justos de CPU.'),
+    ('DXVK',
+     'Traduce DirectX a Vulkan. Async y GPL reducen los tirones al compilar '
+     'shaders.'),
+    ('FSR',
+     'Escalado de AMD: el juego renderiza a menos resolucion y se reescala. '
+     'Mas FPS a cambio de nitidez.'),
+    ('Abrir winecfg',
+     'La configuracion de Wine: version de Windows, unidades, letras, graficos.'),
+    ('Abrir winetricks',
+     'La herramienta de siempre para instalar librerias y ajustes de Wine, con su interfaz.'),
+    ('Configurar dgVoodoo (Cpl)',
+     'El panel de dgVoodoo2: resolucion, filtros y como emula las tarjetas antiguas.'),
+    ('Instalar dgVoodoo2',
+     'Traduce DirectX 1 a 9 y Glide a DirectX 11. Para juegos de los 90 y principios de los 2000.'),
+    ('Instalar OptiScaler',
+     'Anade escalado moderno (FSR, DLSS, XeSS) a juegos que no lo traen.'),
+    ('Importar un fichero .reg',
+     'Mete claves en el registro del prefijo. Se usa sobre todo para cambiar el idioma de un juego.'),
+    ('Borrar la configuración de este juego',
+     'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
+    ('Carátula: buscar en SteamGridDB',
+     'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula: elegir una imagen',
+     'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
+    ('Ficha del juego',
+     'Los datos de Steam de este juego: año, editor, genero y nota.'),
+    ('Ficha de Steam',
+     'Año, genero, nota de Metacritic y sinopsis, de la tienda de Steam.'),
+    ('Duración (HowLongToBeat)',
+     'Cuanto se tarda en pasar el juego, segun HowLongToBeat.'),
+    ('Las dos cosas',
+     'La ficha de Steam y la duracion, de una pasada.'),
+    ('Datos de duración de partida',
+     'Instala la libreria que hace falta para consultar HowLongToBeat.'),
+    ('Vertical (2:3',
+     'La caratula de siempre, alta y estrecha, como en las tiendas.'),
+    ('Panorámica',
+     'Caratula ancha, como las de la biblioteca de Steam.'),
+    ('Cuadrada 4:3',
+     'Caratula casi cuadrada, va bien con juegos y sistemas antiguos.'),
+    ('Solo verticales',
+     'Baja solo las altas y estrechas: menos peticiones y mas rapido.'),
+    ('Solo panorámicas',
+     'Baja solo las anchas.'),
+    ('Solo cuadradas',
+     'Baja solo las 4:3.'),
+    ('Todas (las tres formas)',
+     'Baja las tres. Tarda el triple y gasta el triple de peticiones.'),
+    ('GE-Proton',
+     'El Proton de GloriousEggroll. Es el que mejor va en la mayoria de juegos.'),
+    ('Proton-CachyOS',
+     'Proton compilado para procesadores modernos (x86-64-v3).'),
+    ('Proton-LG',
+     'Proton de Castro-Fidel, el de PortProton, basado en GE.'),
+    ('DWProton',
+     'Proton con apanos para juegos anime y gacha.'),
+    ('WProton Custom',
+     'El runner propio de WProton.'),
+    ('Wine-GE',
+     'Wine de GloriousEggroll, pensado para juegos que no son de Steam.'),
+    ('Wine Kron4ek',
+     'Wine limpio, en sus variantes vanilla, staging y tkg.'),
+    ('Wine Soda',
+     'Wine de Bottles basado en el de Valve.'),
+    ('Wine Caffe',
+     'Wine de Bottles, version TKG estable.'),
+    ('Wine-LG',
+     'Wine de Castro-Fidel, el de PortProton.'),
+    ('Actualizar GE-Proton',
+     'Descarga la ultima version de GE-Proton.'),
+    ('Actualizar umu-launcher',
+     'Actualiza umu, que es quien lanza los juegos con Proton.'),
+    ('Borrar un runner',
+     'Quita una version de Proton o Wine para liberar espacio.'),
+    ('Borrar runner',
+     'Quita una version de Proton o Wine para liberar espacio.'),
+    ('default   (el COMPARTIDO',
+     'El prefijo que usan todos los juegos en modo compartido. Lo que instales '
+     'aqui lo veran todos ellos.'),
+    ('Compartido',
+     'Una sola instalacion de Windows para todos los juegos. Ocupa poco y se configura una vez.'),
+    ('Propio del juego',
+     'Una instalacion solo para este juego. Ocupa mas, pero lo que instales no afecta a los demas.'),
+    ('Incluido en el wsquashfs',
+     'El prefijo que trae el propio archivo, con su registro y sus DLL.'),
+    ('El que trae el wsquashfs',
+     'El prefijo que trae el propio archivo, con su registro y sus DLL.'),
+    ('Prefijo compartido (default)',
+     'Lo que instales aqui lo veran todos los juegos en modo compartido.'),
+    ('Prefijo de un juego concreto',
+     'Elegir un juego e instalar en SU prefijo.'),
+    ('Otro prefijo de la lista',
+     'Elegir cualquiera de los prefijos que ya existen en disco.'),
+    ('Visual C++ y .NET',
+     'Lo que piden casi todos los juegos de Windows. Si uno no arranca, empieza por aqui.'),
+    ('DirectX y shaders',
+     'Las librerias D3DX y los compiladores de shaders que piden muchos juegos.'),
+    ('Codecs de video y sonido',
+     'Para cuando el juego arranca pero las cinematicas salen en negro o sin sonido.'),
+    ('Otros (fuentes',
+     'Fuentes de Windows, PhysX, XNA y los prerrequisitos de Unreal.'),
+    ('Verlo todo en una sola lista',
+     'Todos los redistribuibles juntos, sin categorias.'),
+    ('Elegir de una lista',
+     'Las DLL mas habituales y las que ya tengas puestas, para marcar y desmarcar.'),
+    ('Buscar las DLL que hay en el juego',
+     'Mira junto al ejecutable: si alguien dejo ahi una DLL, es que quiere que se cargue.'),
+    ('Escribir a mano la cadena entera',
+     'Para casos raros: se escribe el WINEDLLOVERRIDES tal cual.'),
+    ('Quitar todos',
+     'Quita todos los overrides. Los que pusieron dgVoodoo2 u OptiScaler tambien.'),
+    ('Crear o editar las teclas',
+     'Asigna una tecla a cada boton del mando, uno por uno.'),
+    ('Crear un .keys de ejemplo',
+     'Crea un fichero de ejemplo con Alt+Tab y Alt+F4, para partir de algo.'),
+    ('Ver las teclas asignadas',
+     'Enseña que tecla manda cada boton, sin abrir el fichero.'),
+    ('Encender: el stick derecho mueve',
+     'El mando hace de raton. Util en estrategia, aventuras graficas e instaladores.'),
+    ('Apagar el raton',
+     'El stick vuelve a ser un stick.'),
+    ('Probar el mando',
+     'Enseña que botones y ejes llegan de verdad. Para cuando algo no responde.'),
+    ('Arreglar permisos del mando',
+     'Da acceso a los dispositivos del mando. Si faltan botones o ejes, prueba esto.'),
+    ('Instalar evdev',
+     'La libreria que necesita el mapeador de teclas.'),
+    ('Flechas del teclado',
+     'Asignar una flecha: arriba, abajo, izquierda o derecha.'),
+    ('Teclas F (F1 a F12)',
+     'Asignar una tecla de funcion.'),
+    ('Escribir una letra o número',
+     'Asignar cualquier tecla escribiendola.'),
+    ('Añadir otra carpeta',
+     'Otra carpeta donde buscar juegos, ademas de la que ya hay.'),
+    ('Elegir otra carpeta',
+     'Cambia la carpeta principal de juegos.'),
+    ('Usar la carpeta games/',
+     'La carpeta que WProton crea junto a si mismo.'),
+    ('Olvidar carpetas detectadas',
+     'Borra las carpetas que se detectaron solas; se volveran a buscar al jugar.'),
+    ('Perfiles de la comunidad',
+     'Ajustes que ya han probado otros para juegos que necesitan apanos. Se descargan y se aplican.'),
+    ('Perfiles guardados',
+     'Los perfiles que tienes descargados: mirarlos o borrarlos.'),
+    ('Borrar TODOS los perfiles',
+     'Borra los perfiles de la comunidad descargados. Tus ajustes NO se tocan.'),
+    ('Buscar en la base de umu',
+     'Busca el identificador del juego en la base de umu, para que protonfixes aplique sus apanos.'),
+    ('Tamaño por juego',
+     'Que ocupa cada juego: el archivo, sus partidas y su prefijo.'),
+    ('Mostrar el tamaño de WProton',
+     'Lo que ocupa WProton entero: runners, prefijos, caratulas y datos.'),
+    ('Limpiar cache de shaders',
+     'Borra los shaders compilados. Se regeneran solos y pueden ocupar gigas.'),
+    ('Reparar montajes colgados',
+     'Limpia lo que deja un juego que se cuelga. Evita tener que reiniciar.'),
+    ('Buscar prefijos y saves huerfanos',
+     'Restos de juegos que ya borraste y siguen ocupando sitio.'),
+    ('Borrar copias de saves antiguas',
+     'Quita las copias viejas de partidas, dejando las recientes.'),
+    ('Borrar saves del overlay',
+     'Borra lo que el juego ha escrito. OJO: ahi estan las partidas guardadas.'),
+    ('Comprobar el archivo y ver cuanto ocupa',
+     'Verifica que el wsquashfs esta entero y dice lo que ocupa.'),
+    ('Comprobar lo descargado',
+     'Comprueba las huellas SHA-256 de lo descargado, por si algo vino a medias.'),
+    ('Partidas guardadas',
+     'Donde guarda el juego, y copias de seguridad para que no se pierdan.'),
+    ('Ver donde guarda las partidas',
+     'Enseña en que carpeta del prefijo escribe el juego.'),
+    ('Sincronizar AHORA con rsync',
+     'Copia las partidas a otra carpeta o disco en este momento.'),
+    ('Sincronizar la carpeta backups',
+     'Manda las copias a otro sitio, a mano con rsync o solo con Syncthing.'),
+    ('Preparar carpeta para Syncthing',
+     'Deja la carpeta lista para que Syncthing la sincronice entre equipos.'),
+    ('Copia de tu configuración',
+     'Guarda o recupera TODA tu configuracion en un zip: perfiles, ajustes y datos.'),
+    ('Exportar mi configuración',
+     'Guarda tus perfiles y ajustes en un zip, para otro equipo o por si acaso.'),
+    ('Importar configuración desde un zip',
+     'Recupera una copia hecha antes.'),
+    ('Añadir lo que falte',
+     'Solo mete lo que no tengas. Lo tuyo se queda como esta.'),
+    ('Sustituir todo',
+     'Machaca tu configuracion con la del zip. Lo que tengas ahora se pierde.'),
+    ('Repetir asistente de primera ejecucion',
+     'Vuelve a pasar por la configuracion inicial.'),
+    ('Instalar/actualizar Python portable',
+     'El Python propio de WProton, con pygame. Es lo que dibuja estos menus.'),
+    ('Descargar herramientas FUSE',
+     'Lo que hace falta para montar los juegos sin instalar nada en el sistema.'),
+    ('Descargar herramientas DwarFS',
+     'Para usar el formato dwarfs, que comprime mas que squashfs.'),
+    ('Descargar extractores GOG',
+     'Para poder abrir los instaladores de GOG.'),
+    ('Añadir WProton a Steam',
+     'Mete WProton en tu biblioteca de Steam, para abrirlo desde el modo Juego.'),
+    ('Cambiar las imágenes de WProton en Steam',
+     'La caratula y el fondo que se ven en Steam.'),
+    ('Acceso directo en el escritorio',
+     'Crea un icono para abrir WProton desde el escritorio.'),
+    ('Captura de pantalla',
+     'Hace una foto de la pantalla pasados unos segundos, para poder colocarte antes.'),
+    ('Grabar los menus',
+     'Graba un video de los menus. Util para enseñar un fallo.'),
+    ('Grabar la pantalla entera',
+     'Graba todo lo que se ve. Con algunos juegos sale en negro.'),
+    ('Ver la carpeta de capturas',
+     'Donde quedan las fotos y los videos.'),
+    ('Empaquetar a wsquashfs',
+     'Convierte una carpeta de juego en un solo archivo comprimido.'),
+    ('Probar el juego (sin empaquetar)',
+     'Lanzarlo tal cual esta, para comprobar que va antes de empaquetar.'),
+    ('wsquashfs - compatible',
+     'El formato de siempre: lo entienden Batocera y PortProton.'),
+    ('dwarfs - comprime',
+     'Comprime bastante mas y se monta igual de rapido, pero es menos compatible.'),
+    ('clasico - el original',
+     'El aspecto de siempre, una lista simple.'),
+    ('moderno - paneles',
+     'Dos paneles y color de acento. Es el que enseña la informacion de la derecha.'),
+    ('arcade - synthwave',
+     'Como el moderno pero con efecto de pantalla antigua.'),
+    ('nombre - alfabetico',
+     'Ordena la biblioteca por nombre.'),
+    ('recientes - los últimos',
+     'Ordena poniendo delante lo ultimo que jugaste.'),
+    ('jugados - los de más tiempo',
+     'Ordena por horas jugadas.'),
+    ('Automático (según el tamaño',
+     'WProton elige el tamano segun la pantalla.'),
+    ('Grande (recomendado',
+     'Letras y filas grandes, para jugar en portatil o en el sofa.'),
+    ('Muy grande',
+     'Todavia mas grande, para televisiones lejos.'),
+    ('Normal',
+     'Tamano estandar.'),
+    ('Pantalla completa nativa',
+     'A la resolucion de la pantalla, sin escalar.'),
+    ('Personalizado (escribir argumentos',
+     'Escribe tu los argumentos de gamescope.'),
+    ('Desactivado',
+     'Apagado.'),
+    ('Ninguno',
+     'Sin ninguno.'),
+    ('Configurar (runner, prefijo',
+     'Abre los ajustes de este juego.'),
+    ('Escribir la clave',
+     'Pega aqui tu clave. Se guarda en su fichero, no en settings.conf.'),
+    ('Quitar la clave',
+     'Borra la clave guardada.'),
+    ('Para qué sirve',
+     'Explica para que hace falta esto y que pasa si no lo pones.'),
+    ('El del sistema',
+     'Usa el idioma que tenga el sistema.'),
+    ('Escribir un locale a mano',
+     'Para un idioma que no este en la lista, como ko_KR.UTF-8.'),
+    ('Último log',
+     'El registro de la ultima sesion. Es lo que hay que mirar cuando algo falla.'),
+    ('Salir',
+     'Cierra WProton.'),
+    ('Arreglo mando SteamOS (Steam Input):',
+     'Apana los mandos que Steam Input duplica o presenta raro en SteamOS.'),
+    ('Carpeta principal:',
+     'La carpeta donde WProton busca los juegos.'),
+    ('Carátula en la vista de lista:',
+     'Que forma de caratula se enseña en el panel de la derecha.'),
+    ('Carátulas por fila:',
+     'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
+    ('Clic con:',
+     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Mover con:',
+     'Que stick mueve el puntero del raton.'),
+    ('Velocidad:',
+     'Lo rapido que se mueve el puntero.'),
+    ('Crear copia de seguridad ahora',
+     'Guarda AHORA las partidas de este juego, fuera del prefijo.'),
+    ('Restaurar una copia',
+     'Recupera unas partidas guardadas antes. Machaca las de ahora.'),
+    ('Descargar runners',
+     'Baja versiones de Proton y Wine de sus repositorios.'),
+    ('Destino rsync:',
+     'A donde se copian las partidas al sincronizar: otra carpeta o un disco.'),
+    ('Estadísticas:',
+     'Contar las veces y el tiempo que juegas. Solo para ti, no se envia a ningun sitio.'),
+    ('Esync:',
+     'Sincronizacion rapida entre hilos. Si un juego se cuelga al arrancar, prueba a apagarlo.'),
+    ('Formato al empaquetar:',
+     'wsquashfs para compatibilidad, dwarfs para comprimir mas.'),
+    ('Idioma:',
+     'El idioma de los menus de WProton (no el de los juegos).'),
+    ('LAA (32bit +2GB RAM):',
+     'Deja que un juego de 32 bits use mas de 2 GB. Arregla cuelgues en juegos viejos con mods.'),
+    ('Mando Sony (DualSense/DS4):',
+     'Ajustes propios de los mandos de PlayStation.'),
+    ('Mando via SDL',
+     'Presenta el mando como uno de Xbox. Necesario en DualSense y DS4 con juegos que solo entienden XInput.'),
+    ('Ordenar juegos por:',
+     'El orden de la biblioteca: por nombre, por lo ultimo jugado o por horas.'),
+    ('Tamaño de la letra:',
+     'Lo grande que se ve todo. En portatil conviene grande.'),
+    ('Tema de los menus:',
+     'El aspecto: clasico, moderno o arcade.'),
+    ('Vista de juegos:',
+     'Lista, rejilla, caratulas anchas o cuadradas. Tambien se cambia con Select+X.'),
+    ('WineD3D (OpenGL, juegos viejos):',
+     'Traduce DirectX a OpenGL en vez de a Vulkan. Solo para juegos muy viejos que fallan con DXVK.'),
+]
+
+# Prefijos ordenados de mas largo a mas corto: asi "Instalar librerias en el
+# prefijo:" gana a "Instalar librerias" y no al reves.
+AYUDAS_ES.sort(key=lambda x: -len(x[0]))
+
+
+def ayuda_de(texto):
+    """La explicacion de una opcion de menu, o None si no hay ninguna."""
+    if not texto:
+        return None
+    for prefijo, ayuda in AYUDAS_ES:
+        if texto.startswith(prefijo):
+            return L(ayuda)
+    return None
+
+
 def draw_side_panel():
     # Panel derecho: detalle de lo seleccionado. En la lista de juegos muestra
     # ademas la CARATULA y los datos del juego, para que la lista no sea solo
@@ -3913,32 +4461,45 @@ def draw_side_panel():
                                      (cx - 2, py - 2, cov.get_width() + 4, ch + 4), 1)
                     screen.blit(cov, (cx, py))
                     py += ch + 14
-        for ln in wrap_title(titulo_panel, f_it, SIDE_W - 34, 3 if datos else 6):
+        _ayuda = ayuda_de(titulo_panel) if not datos else None
+        # con ayuda debajo, el titulo se recorta a 3 lineas para dejarle sitio
+        for ln in wrap_title(titulo_panel, f_it, SIDE_W - 34,
+                             3 if (datos or _ayuda) else 6):
             screen.blit(rtext(f_it, ln, FG), (px, py))
             py += 28
+        if _ayuda:
+            py += 10
+            for ln in wrap_title(_ayuda, f_sm, SIDE_W - 34, 10):
+                if py > LIST_Y + LIST_H - 24:
+                    break
+                screen.blit(rtext(f_sm, ln, DIM), (px, py))
+                py += 20
         if datos and MODE == 'list':
             py += 6
             filas = []
-            # El favorito NO se repite aqui: su estrella ya se ve en la fila
-            # de la lista, y en el panel solo gastaba una linea.
-            if datos.get('ano'):
-                filas.append((L('Año', 'Year'), datos['ano']))
-            if datos.get('dev'):
-                filas.append((L('Desarrollo', 'Developer'), datos['dev']))
-            if datos.get('edi') and datos.get('edi') != datos.get('dev'):
-                filas.append((L('Edición', 'Publisher'), datos['edi']))
-            if datos.get('gen'):
-                filas.append((L('Género', 'Genre'), datos['gen']))
-            if datos.get('nota'):
-                filas.append((L('Nota', 'Score'), '%s/100' % datos['nota']))
-            if datos.get('dur'):
-                filas.append((L('Duración', 'Length'), datos['dur']))
-            if datos.get('veces') and datos['veces'] != '0':
-                filas.append((L('Jugado', 'Played'),
-                              L('%s veces', '%s times') % datos['veces']))
-            t = fmt_horas(datos.get('segs'))
-            if t:
-                filas.append((L('Tiempo', 'Time'), t))
+            # SIEMPRE las mismas filas, en el mismo orden, aunque el dato no
+            # este. Antes solo salian las que tenian valor, asi que cada juego
+            # enseñaba unas cuantas distintas y el panel bailaba: la nota, por
+            # ejemplo, solo la traen los juegos con puntuacion de Metacritic,
+            # y parecia que faltaba informacion en unos y en otros no.
+            SIN = L('—')
+            filas.append((L('Año', 'Year'), datos.get('ano') or SIN))
+            filas.append((L('Desarrollo', 'Developer'), datos.get('dev') or SIN))
+            _edi = datos.get('edi')
+            if _edi and _edi == datos.get('dev'):
+                _edi = ''          # no repetir la misma empresa dos veces
+            filas.append((L('Edición', 'Publisher'), _edi or SIN))
+            filas.append((L('Género', 'Genre'), datos.get('gen') or SIN))
+            filas.append((L('Nota', 'Score'),
+                          ('%s/100' % datos['nota']) if datos.get('nota') else SIN))
+            filas.append((L('Duración', 'Length'), datos.get('dur') or SIN))
+            _veces = datos.get('veces') or '0'
+            filas.append((L('Jugado', 'Played'),
+                          L('%s veces', '%s times') % _veces if _veces != '0'
+                          else L('nunca', 'never')))
+            filas.append((L('Tiempo', 'Time'), fmt_horas(datos.get('segs')) or SIN))
+            if datos.get('completado') == '1':
+                filas.append((L('Estado', 'Status'), L('COMPLETADO', 'COMPLETED')))
             for etiqueta, valor in filas:
                 if py > LIST_Y + LIST_H - 26:
                     break
@@ -3953,6 +4514,19 @@ def draw_side_panel():
                     sv = rtext(f_sm, v + '...', TH.get('acc2', ACC))
                 screen.blit(sv, (SIDE_X + SIDE_W - 16 - sv.get_width(), py))
                 py += 22
+            # La sinopsis, con lo que quede de panel. Va la ultima porque es
+            # lo unico que puede ocupar mucho y lo que menos se necesita de un
+            # vistazo.
+            _sin = datos.get('sinopsis')
+            if _sin and py < LIST_Y + LIST_H - 40:
+                py += 8
+                pygame.draw.rect(screen, TH['border'], (px, py, SIDE_W - 32, 1))
+                py += 10
+                for ln in wrap_title(_sin, f_sm, SIDE_W - 34, 12):
+                    if py > LIST_Y + LIST_H - 22:
+                        break
+                    screen.blit(rtext(f_sm, ln, DIM), (px, py))
+                    py += 19
     else:
         screen.blit(f_it.render(L('(vacio)', '(empty)'), True, DIM), (px, py))
         py += 28
@@ -5705,10 +6279,10 @@ GTKEOF
 BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
 
 write_biblioteca() {
-    grep -q "WPROTON_HELPER biblioteca.py 5071bfb1f3f9" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER biblioteca.py 17a6df2848eb" "$BIBLIOTECA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
-# WPROTON_HELPER biblioteca.py 5071bfb1f3f9
+# WPROTON_HELPER biblioteca.py 17a6df2848eb
 # -*- coding: utf-8 -*-
 """Construye la lista de la biblioteca de UNA sola vez.
 
@@ -5725,7 +6299,8 @@ Uso:
 
 Vista de lista, escribe:
     - fichero_mapa:  etiqueta<TAB>ruta       (para volver de la etiqueta a la ruta)
-    - fichero_info:  etiqueta|caratula|fav|veces|segundos|ficha|duracion
+    - fichero_info:  etiqueta|caratula|fav|veces|segundos|ficha|duracion|
+                     completado|ficha_rawg
     - por pantalla:  una etiqueta por linea, en el mismo orden
 
 Vista de rejilla, escribe:
@@ -5812,18 +6387,18 @@ def buscar_cover(gid, carpeta, carpeta_vertical, legacy_wide=False):
     return ''
 
 
-SIN_PERFIL = ('0', '0', '0', '')
+SIN_PERFIL = ('0', '0', '0', '', '0')
 
 
 def leer_perfiles(carpeta):
-    """Todos los perfiles de una vez: gid -> (fav, veces, segundos, ultima)."""
+    """Todos los perfiles: gid -> (fav, veces, segundos, ultima, completado)."""
     datos = {}
     try:
         ficheros = [f for f in os.listdir(carpeta) if f.endswith('.conf')]
     except OSError:
         return datos
     for f in ficheros:
-        fav, veces, segs, ultima = '0', '0', '0', ''
+        fav, veces, segs, ultima, completado = '0', '0', '0', '', '0'
         try:
             with open(os.path.join(carpeta, f), encoding='utf-8',
                       errors='replace') as fh:
@@ -5836,9 +6411,12 @@ def leer_perfiles(carpeta):
                         segs = linea.split('=', 1)[1].strip().strip('"')
                     elif linea.startswith('LAST_PLAYED='):
                         ultima = linea.split('=', 1)[1].strip().strip('"')
+                    elif linea.startswith('COMPLETADO='):
+                        completado = linea.split('=', 1)[1].strip().strip('"')
         except OSError:
             continue
-        datos[f[:-5]] = (fav or '0', veces or '0', segs or '0', ultima)
+        datos[f[:-5]] = (fav or '0', veces or '0', segs or '0', ultima,
+                         completado or '0')
     return datos
 
 
@@ -5885,7 +6463,7 @@ def rejilla(f_manifiesto, juegos, raices, perfiles):
         gid = game_id(ruta)
         cov = buscar_cover(gid, carpeta_cover, covers,
                            legacy_wide=(forma == 'wide'))
-        fav, _veces, segs, ultima = perfiles.get(gid, SIN_PERFIL)
+        fav, _veces, segs, ultima, _comp = perfiles.get(gid, SIN_PERFIL)
 
         info = ''
         try:                               # bash: [ "$sc" -gt 0 ] 2>/dev/null
@@ -5943,7 +6521,7 @@ def main():
         gid = game_id(ruta)
         cov = buscar_cover(gid, carpeta_cover, covers,
                            legacy_wide=(forma == 'wide'))
-        fav, veces, segs, _ultima = perfiles.get(gid, SIN_PERFIL)
+        fav, veces, segs, _ultima, completado = perfiles.get(gid, SIN_PERFIL)
 
         ficha = os.path.join(datos_dir, '%s.info.json' % gid)
         ficha = ficha if (datos_dir and os.path.isfile(ficha)
@@ -5951,10 +6529,16 @@ def main():
         dur = os.path.join(datos_dir, '%s.hltb' % gid)
         dur = dur if (datos_dir and os.path.isfile(dur)
                       and os.path.getsize(dur) > 0) else ''
+        # RAWG va en su propio fichero: mezclarlo con el de Steam haria
+        # imposible saber de donde vino cada dato.
+        rawg = os.path.join(datos_dir, '%s.rawg.json' % gid)
+        rawg = rawg if (datos_dir and os.path.isfile(rawg)
+                        and os.path.getsize(rawg) > 0) else ''
 
         lineas_mapa.append('%s\t%s' % (etq, ruta))
-        lineas_info.append('%s|%s|%s|%s|%s|%s|%s'
-                           % (etq, cov, fav, veces, segs, ficha, dur))
+        lineas_info.append('%s|%s|%s|%s|%s|%s|%s|%s|%s'
+                           % (etq, cov, fav, veces, segs, ficha, dur,
+                              completado, rawg))
         etiquetas.append(etq)
 
     with open(f_mapa, 'w', encoding='utf-8') as fh:
@@ -7885,6 +8469,7 @@ profile_defaults() {
     KEYS_ESTILO=xbox
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
+    COMPLETADO=0             # 1 = te lo has pasado
     NOTAS=""                 # apunte libre ("necesita -novr", "usar GE 9-27"...)
     PLAY_COUNT=0             # veces jugado
     PLAY_SECONDS=0           # tiempo total jugado (segundos)
@@ -7962,6 +8547,7 @@ PAD_STEAMFIX=$PAD_STEAMFIX
 NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
 FAVORITO=$FAVORITO
+COMPLETADO=$COMPLETADO
 NOTAS="$NOTAS"
 PLAY_COUNT=$PLAY_COUNT
 PLAY_SECONDS=$PLAY_SECONDS
@@ -9019,7 +9605,7 @@ community_share() {
     mkdir -p "$BASE_DIR/compartir"
     out="$BASE_DIR/compartir/$gid.conf"
     # se quitan rutas y datos locales: solo lo que sirve a otros
-    grep -vE '^(LAST_PLAYED|PLAY_COUNT|PLAY_SECONDS|FAVORITO|EXE_OVERRIDE)=' "$src" > "$out"
+    grep -vE '^(LAST_PLAYED|PLAY_COUNT|PLAY_SECONDS|FAVORITO|COMPLETADO|EXE_OVERRIDE)=' "$src" > "$out"
     ui_info "Perfil listo para compartir:
 
 compartir/$gid.conf
@@ -9319,6 +9905,145 @@ if not elegido:
     sys.exit(1)
 print('%s|%s' % elegido)
 PYAPPID
+}
+
+rawg_key_menu() {
+    # Poner o quitar la clave de RAWG.
+    local actual sel k
+    actual="$(rawg_key_leer)"
+    sel="$(menu "Clave de RAWG  ($([ -n "$actual" ] && printf 'puesta' || printf 'sin poner'))" \
+        "Escribir la clave" \
+        "Quitar la clave" \
+        "Para qué sirve" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "Escribir la clave")
+            k="$(ask_text "Pega tu clave de RAWG
+(gratis en rawg.io/apidocs -> Get API Key)
+
+Se guardara en rawg.key, solo legible por ti, y NO en
+settings.conf (que se comparte al pedir ayuda)." "")"
+            [ -z "$k" ] && return 0
+            if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/rawg.key") 2>/dev/null; then
+                chmod 600 "$BASE_DIR/rawg.key" 2>/dev/null
+                ui_info "Clave guardada.
+
+Ya puedes usar 'Descargar datos de los juegos': RAWG rellenara
+las notas y las fichas de los juegos que Steam no conozca."
+            else
+                ui_error "No se pudo escribir rawg.key"
+            fi ;;
+        "Quitar la clave")
+            rm -f "$BASE_DIR/rawg.key" 2>/dev/null
+            RAWG_KEY=""
+            ui_info "Clave quitada. Todo sigue funcionando con los datos de Steam." ;;
+        "Para qué sirve")
+            ui_info "RAWG es una base de datos de juegos con API gratuita.
+
+Es OPCIONAL: sin ella WProton funciona igual, solo con lo que
+da Steam. Sirve para dos cosas:
+
+  - La NOTA. Steam solo la trae si el juego tiene puntuacion de
+    Metacritic en su ficha, y los juegos viejos casi nunca.
+  - Los juegos que NO ESTAN EN STEAM, que hoy se quedan sin
+    ficha ninguna.
+
+Metacritic no tiene API propia; lo que se anuncia como tal son
+raspadores de su web (que se rompen solos) o servicios de pago.
+RAWG publica la nota de Metacritic en su API, que es legal y
+estable.
+
+Los datos son de RAWG (rawg.io) y hay que citarlos como fuente." ;;
+    esac
+    return 0
+}
+
+rawg_completar() {
+    # Rellena con RAWG lo que Steam no dio. $1 = gid, $2 = nombre a buscar.
+    #
+    # RAWG es la fuente SECUNDARIA: se llama despues de Steam y solo escribe
+    # los campos que falten. Sirve para dos cosas:
+    #
+    #   - la NOTA, que Steam solo trae si el juego tiene Metacritic en su
+    #     ficha, o sea casi nunca en los juegos viejos;
+    #   - los juegos que NO ESTAN EN STEAM, que hasta ahora se quedaban sin
+    #     ficha ninguna.
+    #
+    # Sin clave no hace nada y no se avisa: es opcional y no todo el mundo
+    # quiere registrarse en otro sitio.
+    local gid="$1" nombre="$2" clave out tmp
+    clave="$(rawg_key_leer)"
+    [ -n "$clave" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    out="$(ficha_file "$gid")"
+    mkdir -p "$DATOS_DIR" 2>/dev/null
+    tmp="$(mktemp)"
+    "$PY_BIN" - "$nombre" "$clave" "$out" "$tmp" <<'PYRAWG' 2>>"$LOG_FILE"
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+nombre, clave, destino, tmp = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+# Lo que ya tengamos de Steam manda: RAWG solo rellena huecos.
+previo = {}
+try:
+    with open(destino, encoding='utf-8') as fh:
+        previo = json.load(fh)
+except (OSError, ValueError):
+    previo = {}
+
+
+def dato(d, clave_):
+    """El valor de la ficha de Steam, si esta y no esta vacio."""
+    try:
+        v = list(d.values())[0].get('data', {})
+    except Exception:
+        return ''
+    if clave_ == 'nota':
+        return str((v.get('metacritic') or {}).get('score', '') or '')
+    return v
+
+
+url = ('https://api.rawg.io/api/games?key=%s&search=%s&page_size=5&search_precise=true'
+       % (urllib.parse.quote(clave), urllib.parse.quote(nombre)))
+try:
+    with urllib.request.urlopen(url, timeout=10) as r:
+        datos = json.load(r)
+except Exception as e:
+    sys.stderr.write('[rawg] %s\n' % e)
+    sys.exit(1)
+
+res = (datos.get('results') or [])
+if not res:
+    sys.exit(1)
+
+# El primero que traiga nota; si ninguno la trae, el primero a secas.
+elegido = next((g for g in res if g.get('metacritic')), res[0])
+
+salida = {
+    'nombre': elegido.get('name', ''),
+    'nota': str(elegido.get('metacritic') or ''),
+    'ano': (elegido.get('released') or '')[:4],
+    'gen': ', '.join(g.get('name', '') for g in (elegido.get('genres') or [])[:2]),
+}
+with open(tmp, 'w', encoding='utf-8') as fh:
+    json.dump(salida, fh, ensure_ascii=False)
+sys.stderr.write('[rawg] %s -> nota %s\n'
+                 % (salida['nombre'], salida['nota'] or 'sin nota'))
+PYRAWG
+    local rc=$?
+    if [ "$rc" != 0 ] || [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        return 1
+    fi
+    # Se guarda APARTE, no dentro del .info.json de Steam: mezclarlos haria
+    # imposible saber de donde vino cada dato, y al volver a bajar la ficha de
+    # Steam se perderia lo de RAWG sin enterarse nadie.
+    mv -f "$tmp" "$DATOS_DIR/${gid}.rawg.json"
+    return 0
 }
 
 ficha_descargar() {
@@ -14337,6 +15062,114 @@ Se vera al volver a la lista."
     return 1
 }
 
+fichas_descargar_todas() {
+    # Baja de una vez la ficha de Steam y la duracion de HowLongToBeat de
+    # TODOS los juegos, igual que se hace con las caratulas.
+    #
+    # Antes solo se conseguian de uno en uno, entrando en la ficha de cada
+    # juego. Con una biblioteca grande eso no lo hace nadie, asi que la lista
+    # se quedaba sin año, sin genero y sin duracion.
+    local quiere
+    quiere="$(menu "¿Qué quieres descargar?" \
+        "Ficha de Steam (año, género, nota, descripción)" \
+        "Duración (HowLongToBeat)" \
+        "Las dos cosas" \
+        "<< Volver")" || return 0
+    local con_ficha=0 con_dur=0
+    case "$quiere" in
+        "Ficha de Steam"*) con_ficha=1 ;;
+        "Duración"*)       con_dur=1 ;;
+        "Las dos"*)        con_ficha=1; con_dur=1 ;;
+        *) return 0 ;;
+    esac
+    if [ "$con_dur" = 1 ] && ! hltb_disponible; then
+        if ui_ask "Para la duración hace falta la libreria howlongtobeatpy.
+
+Instalarla ahora?"; then
+            hltb_instalar || con_dur=0
+        else
+            con_dur=0
+        fi
+        [ "$con_dur" = 0 ] && [ "$con_ficha" = 0 ] && return 1
+    fi
+
+    local list f gid nombre pend=0 idx=0 ok_f=0 ok_d=0 ok_r=0 sin=0
+    # RAWG es opcional: si no hay clave, ni se menciona
+    local RAWG_HAY; RAWG_HAY="$(rawg_key_leer)"
+    list="$(find "$GAMES_PATH" -maxdepth 3 -type f \( -iname '*.wsquashfs' \
+            -o -iname '*.squashfs' -o -iname '*.dwarfs' \) 2>/dev/null | sort)"
+    [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
+
+    # Primero se cuenta lo que falta, para que la barra signifique algo. No se
+    # vuelve a pedir lo que ya esta: son peticiones a servidores ajenos.
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        gid="$(game_id "$f")"
+        if { [ "$con_ficha" = 1 ] && [ ! -s "$(ficha_file "$gid")" ]; } \
+        || { [ "$con_dur" = 1 ] && [ ! -s "$DATOS_DIR/${gid}.hltb" ]; }; then
+            pend=$((pend+1))
+        fi
+    done <<EOFC
+$list
+EOFC
+    [ "$pend" -eq 0 ] && { ui_info "Ya estan todas descargadas."; return 0; }
+
+    mkdir -p "$DATOS_DIR" 2>/dev/null
+    progress_start "Descargando datos de los juegos"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        gid="$(game_id "$f")"
+        local falta_f=0 falta_d=0
+        [ "$con_ficha" = 1 ] && [ ! -s "$(ficha_file "$gid")" ] && falta_f=1
+        [ "$con_dur" = 1 ] && [ ! -s "$DATOS_DIR/${gid}.hltb" ] && falta_d=1
+        [ "$falta_f" = 0 ] && [ "$falta_d" = 0 ] && continue
+        idx=$((idx+1))
+        nombre="$(basename "$f")"; nombre="${nombre%.*}"
+        nombre="$(printf '%s' "$nombre" | tr '_.' '  ')"
+        progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $nombre"
+        local algo=0
+        if [ "$falta_f" = 1 ]; then
+            say "[datos] Ficha de Steam: $nombre"
+            if ficha_descargar "$gid" "$nombre"; then
+                ok_f=$((ok_f+1)); algo=1
+            else
+                say "[datos]   sin ficha para: $nombre"
+            fi
+            # RAWG despues, para lo que Steam no haya dado: la nota (que solo
+            # trae si el juego tiene Metacritic) y los juegos que ni conoce.
+            if [ -n "$RAWG_HAY" ] && [ ! -s "$DATOS_DIR/${gid}.rawg.json" ]; then
+                if rawg_completar "$gid" "$nombre"; then
+                    ok_r=$((ok_r+1)); algo=1
+                fi
+            fi
+        fi
+        if [ "$falta_d" = 1 ]; then
+            say "[datos] Duración: $nombre"
+            local dur; dur="$(hltb_duracion "$nombre")" || dur=""
+            if [ -n "$dur" ]; then
+                printf '%s' "$dur" > "$DATOS_DIR/${gid}.hltb"
+                ok_d=$((ok_d+1)); algo=1
+            else
+                say "[datos]   sin duración para: $nombre"
+            fi
+        fi
+        [ "$algo" = 0 ] && sin=$((sin+1))
+    done <<EOFD
+$list
+EOFD
+    progress_stop
+    ui_info "Datos descargados de $pend juego(s) pendientes:
+
+  Fichas de Steam:  $ok_f${RAWG_HAY:+
+  Completado (RAWG): $ok_r}
+  Duraciones:       $ok_d
+  Sin resultados:   $sin
+
+Los que no aparecen suelen tener el nombre del archivo muy
+distinto al del juego. Se arregla renombrando el wsquashfs."
+    return 0
+}
+
 sgdb_download_covers() {
     # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
     # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
@@ -15145,7 +15978,7 @@ biblioteca_lenta() {
     #   $4 lista de rutas, una por linea
     local mapa="$1" info="$2" salida="$3" juegos="$4"
     : > "$mapa"; : > "$info"; : > "$salida"
-    local rel3 etq gid3 cov3 mt3 fv3 sc3 pc3 fjson fhltb
+    local rel3 etq gid3 cov3 mt3 fv3 sc3 pc3 cp3 fjson fhltb frawg
     while IFS= read -r rel3; do
         [ -n "$rel3" ] || continue
         etq="$(juego_etiqueta "$rel3")"
@@ -15165,9 +15998,11 @@ biblioteca_lenta() {
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
         fjson="$DATOS_DIR/${gid3}.info.json"; [ -s "$fjson" ] || fjson=""
         fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
-        printf '%s|%s|%s|%s|%s|%s|%s\n' \
+        cp3="$(profile_get "$gid3" COMPLETADO)" || cp3=""
+        frawg="$DATOS_DIR/${gid3}.rawg.json"; [ -s "$frawg" ] || frawg=""
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
             "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
-            >> "$info"
+            "${cp3:-0}" "$frawg" >> "$info"
     done <<EOFINFO
 $juegos
 EOFINFO
@@ -15993,6 +16828,10 @@ La configuración de '$gid' se conserva para el wsquashfs."
             fi ;;
         "Añadir este juego a Steam")
             add_game_to_steam "$squash" "$gid" ;;
+        "Completado:"*)
+            COMPLETADO=$((1-${COMPLETADO:-0}))
+            write_full_profile "$gid"
+            say "[+] $gid: completado $([ "$COMPLETADO" = 1 ] && printf 'SI' || printf 'no')" ;;
         "Favorito:"*)
             FAVORITO=$((1-${FAVORITO:-0})); write_full_profile "$gid" ;;
         "Notas:"*)
@@ -16217,6 +17056,7 @@ game_config_menu() {
             "Rendimiento y compatibilidad >>" \
             "Herramientas del prefijo >>" \
             "Favorito: $(onoff "${FAVORITO:-0}")" \
+            "Completado: $(onoff "${COMPLETADO:-0}")" \
             "Notas: ${NOTAS:-(ninguna)}" \
             "Estadísticas: $(stats_line)" \
             "Partidas guardadas: copias y restauracion" \
@@ -16492,6 +17332,9 @@ Los wsquashfs que ya tienes se siguen usando igual."
         "Perfiles guardados"*)       perfiles_menu ;;
         "Descargar carátulas"*)
             sgdb_download_covers ;;
+        "Descargar datos de los juegos"*)
+            fichas_descargar_todas ;;
+        "Clave de RAWG"*) rawg_key_menu ;;
         "Carpetas de juegos"*) carpetas_juegos_menu ;;
         "Montar un disco"*)
             # El 9 de montar_disco_manual significa "disco montado y listo".
@@ -16668,6 +17511,8 @@ media_menu() {
     while true; do
         sel="$(menu "Carátulas y perfiles de la comunidad" \
             "Descargar carátulas (SteamGridDB)" \
+            "Descargar datos de los juegos (Steam y duración)" \
+            "Clave de RAWG (notas y juegos que no están en Steam)" \
             "Perfiles de la comunidad (juegos que necesitan ajustes)" \
             "Perfiles guardados (ver y borrar)" \
             "<< Volver")" || return

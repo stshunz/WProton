@@ -4,9 +4,9 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.26** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.30** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
-![WProton: la biblioteca de juegos, con la carátula y la ficha del juego seleccionado](img/lista.png)
+![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
 
 Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/PortWINE**, la descarga automática de runners de **Heroic**, los perfiles por juego de **TeknoParrot** y el lanzamiento vía **umu** de **Faugus Launcher**.
 
@@ -34,6 +34,10 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**:
 
 ![Vista de rejilla de WProton](img/rejilla.jpg)
+
+Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
+
+![Vista de carátulas panorámicas, cuatro por fila](img/anchas.jpg)
 , con descarga automática desde SteamGridDB o eligiendo una imagen del sistema.
 - Pantalla completa por defecto (**Select + A** para pasar a ventana) y tamaño de letra ajustable.
 - Interfaz en **castellano e inglés**, ampliable con ficheros de idioma.
@@ -60,7 +64,7 @@ Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID 
 Además: **notas**, **favoritos**, **estadísticas de tiempo jugado** y **copias de seguridad de las partidas**.
 
 ### Herramientas
-winecfg, winetricks, redistribuibles de Windows (vcredist, PhysX, prerrequisitos de Unreal, DirectX…), **dgVoodoo2**, **OptiScaler** y **mapeador `.keys`** (mando → teclado, formato Batocera), que se activa solo si el juego tiene su fichero.
+winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ y .NET, DirectX y shaders, **códecs de vídeo y sonido** —Windows Media Player, DirectShow, Indeo, Cinepak, Xvid, LAV Filters—, y otros como PhysX o los prerrequisitos de Unreal), **dgVoodoo2**, **OptiScaler** y **mapeador `.keys`** (mando → teclado, formato Batocera), que se activa solo si el juego tiene su fichero.
 
 - **Importar un fichero `.reg`** al prefijo, por ejemplo para cambiar el idioma de un juego que lo guarda en el registro. Enseña lo que lleva dentro antes de aplicarlo y **guarda una copia del registro**, porque no hay deshacer.
 - **Instalar librerías en cualquier prefijo**, no solo en el compartido, con una **barra que avanza de verdad**: los redistribuibles se instalan de uno en uno y se ve por cuál va. Si uno falla, sigue con el resto y dice cuál falló.
@@ -69,7 +73,9 @@ winecfg, winetricks, redistribuibles de Windows (vcredist, PhysX, prerrequisitos
 
 ### Mantenimiento
 - **Espacio en disco**: qué ocupa cada cosa, tamaño por juego, limpieza de cachés y detección de prefijos y partidas huérfanas.
+- **Descarga masiva de carátulas y de datos**: las carátulas desde SteamGridDB, y la ficha de Steam y la duración de HowLongToBeat de toda la biblioteca de una vez. Opcionalmente, **RAWG** rellena las notas y las fichas de los juegos que no están en Steam.
 - **Verificación de integridad** de los archivos y aviso de espacio insuficiente antes de importar.
+- **Reparación de montajes colgados**: los que deja un juego que se cuelga se limpian solos antes del siguiente lanzamiento, sin reiniciar. También a mano desde *Espacio en disco*.
 - **Exportar/importar tu configuración** completa para pasar de máquina a máquina.
 - **Auto-actualización** desde este repositorio, validando el fichero antes de reemplazar nada.
 
@@ -155,7 +161,6 @@ cache/  logs/  games/
 ## Problemas conocidos
 
 - **Konsole no cierra su ventana** al terminar WProton si se lanzó desde ahí. WProton sí termina (el prompt vuelve), pero la ventana se queda abierta. En investigación; no afecta al uso normal ni al modo Juego.
-- **Ocultar el mando al juego** (*Herramientas del prefijo*) está sin verificar: escribe la clave del registro que usa Wine para dejar de sondear un joystick, pero todavía no se ha confirmado con ningún juego que se empeñe en usar su soporte nativo.
 - **Compartir perfiles de la comunidad**: la descarga funciona; el envío está desactivado mientras se decide un método cómodo para quien no usa Git.
 
 ## Créditos
@@ -165,6 +170,11 @@ cache/  logs/  games/
 - [GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom), [Proton-CachyOS](https://github.com/CachyOS/proton-cachyos), [DWProton](https://dawn.wine), [Kron4ek](https://github.com/Kron4ek/Wine-Builds).
 - [Batocera](https://batocera.org) — formatos `.wsquashfs` y `autorun.cmd`.
 - [DwarFS](https://github.com/mhx/dwarfs), [innoextract](https://github.com/dscharrer/innoextract), [dgVoodoo2](https://github.com/dege-diosg/dgVoodoo2), [OptiScaler](https://github.com/cdozdil/OptiScaler), [SteamGridDB](https://www.steamgriddb.com).
+
+Los datos de los juegos vienen de la [tienda de Steam](https://store.steampowered.com/),
+de [HowLongToBeat](https://howlongtobeat.com/) y, opcionalmente, de
+[RAWG](https://rawg.io/) — que es también de donde salen las notas de
+Metacritic. Las carátulas, de [SteamGridDB](https://www.steamgriddb.com/).
 
 ## Licencia
 

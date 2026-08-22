@@ -94,7 +94,7 @@ Ese mismo teclado en pantalla se usa para escribir argumentos, notas o cualquier
 
 ---
 
-![La biblioteca de WProton: lista de juegos con la carátula y la ficha del juego seleccionado](img/lista.png)
+![La biblioteca de WProton: lista de juegos con la carátula, la ficha y la sinopsis del seleccionado](img/ficha.jpg)
 
 ## 3. Ajustes de un juego
 
@@ -178,24 +178,79 @@ guiones bajos — las dos formas valen.
 > mando, puedes pegarla en un fichero de texto y dejarlo junto a `wproton.sh`:
 > WProton la recoge, la guarda a buen recaudo y borra el fichero.
 
+**Descargar datos de los juegos** (en *Biblioteca y preferencias*) hace lo
+mismo con la información: baja de una vez la **ficha de Steam** (año, género,
+nota, descripción) y la **duración de HowLongToBeat** de todos los juegos que
+no la tengan. Antes solo se conseguían de uno en uno, entrando en la ficha de
+cada juego.
+
+El panel de la derecha enseña la carátula, la ficha y la sinopsis:
+
+![La ficha de un juego: carátula, año, desarrollo, género, nota, duración y sinopsis](img/ficha.jpg)
+
+### La nota, y los juegos que no están en Steam
+
+La **nota** que trae Steam es la de Metacritic, y solo la incluye si el juego
+la tiene en su ficha: los juegos viejos casi nunca. Y un juego que no esté en
+Steam se queda sin ficha ninguna.
+
+Para esos dos casos se puede poner una **clave de RAWG** (*Biblioteca y
+preferencias → Clave de RAWG*). Es gratuita y **opcional**: sin ella todo
+funciona igual, solo con los datos de Steam.
+
+RAWG es siempre la fuente **secundaria**: se consulta después de Steam y solo
+rellena lo que falte, porque la ficha de Steam trae la sinopsis en español y
+datos más completos. Cada fuente guarda su propio fichero, así que se sabe
+siempre de dónde vino cada dato.
+
+> Metacritic no tiene API propia. Lo que se anuncia como tal son raspadores de
+> su web (que se rompen cuando cambian la página) o servicios de pago. RAWG
+> publica esa nota en su API, que es estable y legal. Los datos son suyos y
+> hay que citarlos como fuente.
+
+Se puede pedir solo una de las dos. No se vuelve a descargar lo que ya está,
+así que se puede repetir cuando añadas juegos nuevos. Los que no aparezcan
+suelen tener el nombre del archivo muy distinto al del juego: se arregla
+renombrando el `.wsquashfs`.
+
 **Importar un fichero `.reg`** (en *Herramientas del prefijo*) — mete claves en
 el registro del prefijo. El uso más común es cambiar el idioma de un juego que
 lo guarda ahí y no en un menú. Antes de aplicarlo te enseña qué lleva dentro, y
 **guarda una copia del registro** en `wp_registro_<fecha>/` dentro del prefijo,
 porque una vez importado no hay deshacer.
 
-**Ocultar el mando al juego** (en *Herramientas del prefijo*) — algunos juegos
-viejos, al detectar un mando, usan **su** soporte nativo y dejan de mirar el
-teclado para conducir o moverse: entonces el `.keys` no sirve de nada aunque
-funcione. Esta opción le dice a Wine que no lo sondee, y el juego solo ve el
-teclado.
+**Instalar librerías** — los redistribuibles de Windows. Está en la pantalla
+de ajustes del juego y también en *Herramientas del prefijo*: desde ahí va
+directo al prefijo de ese juego, sin tener que volver a elegirlo. (En el menú
+principal sigue estando, para cuando quieras tocar otro prefijo.)
 
-> Sin verificar todavía. Si no notas diferencia, comprueba en *Abrir winecfg* →
-> pestaña de mandos qué nombre le da Wine al tuyo: puede no coincidir con el
-> que escribimos.
+La fila dice a qué prefijo va a instalar, y si es el **compartido** pide
+confirmación: lo que metas ahí lo verán todos los juegos en ese modo.
 
-**Instalar librerías** — los redistribuibles de Windows. Se puede elegir en qué
-prefijo van: el compartido, el de un juego concreto, o cualquiera de los que
+Primero se elige la categoría, para no tener que buscar entre cuarenta entradas:
+
+- *Visual C++ y .NET* — lo que piden casi todos
+- *DirectX y shaders*
+- *Códecs de vídeo y sonido*
+- *Otros* — fuentes, PhysX, XNA, Unreal
+- *Verlo todo en una sola lista*
+
+La de **códecs** es la que suele faltar cuando un juego arranca pero **las
+cinemáticas salen en negro o sin sonido**.
+
+| Si el juego... | Prueba con |
+|---|---|
+| No reproduce ningún vídeo | `quartz`, o el pack `directshow` |
+| Es de los 2000 y pide Media Player | `wmp11` (o `wmp10`/`wmp9` si es más viejo) |
+| Tiene intros de los 90 | `icodecs`, `cinepak` |
+| Vídeo sin sonido | `l3codecx` |
+| Cinemáticas `.wmv` | `wmv9vcm` |
+| Nada de lo anterior funciona | `lavfilters`, o el pack `allcodecs` |
+
+> De los tres Windows Media Player, **marca solo uno**: se pisan entre ellos.
+> Si marcas varios, WProton se queda con el más nuevo.
+
+Se puede elegir en qué prefijo van: el compartido, el de un juego concreto, o cualquiera de los que
 tengas. Se instalan de uno en uno y la barra avanza de verdad; si alguno falla,
 sigue con el resto y al final dice cuál falló.
 
@@ -257,6 +312,12 @@ En *Biblioteca y preferencias*:
 - **Vista de juegos**: lista o **rejilla de carátulas**. En la lista, el panel de la derecha muestra la carátula del juego resaltado y sus datos.
 
 ![Vista de rejilla: los juegos como carátulas grandes](img/rejilla.jpg)
+
+La vista de **carátulas panorámicas** enseña menos juegos a la vez, pero se
+reconocen mejor. La cinta de la esquina marca los favoritos, y debajo de
+cada uno sale el tiempo jugado y cuándo fue la última vez:
+
+![Vista de carátulas panorámicas, cuatro por fila](img/anchas.jpg)
 - **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
 - **Descargar carátulas**: necesita una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API). Se pide una sola vez.
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
