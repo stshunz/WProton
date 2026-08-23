@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.32"
+WPROTON_VERSION="1.33"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1793,9 +1793,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 59e9dbabc4f5" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 1b612fb28867" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 59e9dbabc4f5
+# WPROTON_HELPER mapeador.py 1b612fb28867
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -1961,18 +1961,128 @@ def get_perfil(dev_name):
 
 
 
-def launch_teclado_virtual(device):
+# Como se teclea un texto: caracter -> (tecla, si hace falta shift)
+_TECLAS_TEXTO = {' ': ('KEY_SPACE', False), '-': ('KEY_MINUS', False),
+                 '_': ('KEY_MINUS', True),  '.': ('KEY_DOT', False),
+                 ',': ('KEY_COMMA', False), '@': ('KEY_2', True),
+                 "'": ('KEY_APOSTROPHE', False), '/': ('KEY_SLASH', False)}
+for _c in 'abcdefghijklmnopqrstuvwxyz':
+    _TECLAS_TEXTO[_c] = ('KEY_%s' % _c.upper(), False)
+    _TECLAS_TEXTO[_c.upper()] = ('KEY_%s' % _c.upper(), True)
+for _c in '0123456789':
+    _TECLAS_TEXTO[_c] = ('KEY_%s' % _c, False)
+
+
+def teclas_de_texto(texto):
+    """Los codigos de tecla que hacen falta para escribir un texto."""
+    out = set()
+    for ch in texto or '':
+        par = _TECLAS_TEXTO.get(ch)
+        if not par:
+            continue
+        c = getattr(ecodes, par[0], None)
+        if c is not None:
+            out.add(c)
+        if par[1]:
+            out.add(ecodes.KEY_LEFTSHIFT)
+    return out
+
+
+def escribir_texto(ui, texto):
+    """Teclea un texto guardado, sin abrir ninguna ventana.
+
+    Es la alternativa al teclado en pantalla, y nacio de una comprobacion de
+    un tester: mapear una tecla a un boton escribe perfectamente en el juego,
+    pero el teclado en pantalla no. La diferencia no era el dispositivo (es el
+    mismo) sino la VENTANA: al abrirla el juego pierde el foco y se minimiza,
+    asi que las pulsaciones ya no van a el.
+
+    Sin ventana no hay foco que perder.
+    """
+    import time as _t
+    # CADA TECLA SE MANTIENE PULSADA UN RATO.
+    #
+    # Antes se pulsaba y se soltaba seguido, con microsegundos de por medio.
+    # Un juego que mira el teclado una vez por fotograma (16 ms a 60 FPS) se
+    # pierde casi todas: de "DANI" llegaba una letra suelta de milagro. Y por
+    # eso mapear una tecla a un boton SI funcionaba: la mantiene el usuario.
+    #
+    # Se puede afinar con WP_TECLEO_MS si algun juego necesita mas.
+    try:
+        _ms = max(20, min(500, int(os.environ.get('WP_TECLEO_MS') or 60)))
+    except ValueError:
+        _ms = 60
+    _hold = _ms / 1000.0
+    escrito = 0
+    for ch in texto or '':
+        par = _TECLAS_TEXTO.get(ch)
+        if not par:
+            continue
+        code = getattr(ecodes, par[0], None)
+        if code is None:
+            continue
+        if par[1]:
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTSHIFT, 1); ui.syn()
+            _t.sleep(_hold / 3)          # shift antes que la tecla
+        ui.write(ecodes.EV_KEY, code, 1); ui.syn()
+        _t.sleep(_hold)                  # <- pulsada, para que la vean
+        ui.write(ecodes.EV_KEY, code, 0); ui.syn()
+        if par[1]:
+            _t.sleep(_hold / 3)
+            ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTSHIFT, 0); ui.syn()
+        escrito += 1
+        _t.sleep(_hold / 2)              # y un hueco entre letras
+    # Enter al final, si se ha pedido.
+    #
+    # No se hace siempre a proposito: hay juegos donde el nombre va en un
+    # formulario con varios campos y el Enter salta al siguiente o acepta
+    # antes de tiempo. Quien lo quiera, lo marca.
+    _enter = (os.environ.get('WP_TEXTO_ENTER') or '0') == '1'
+    if _enter and escrito:
+        _t.sleep(_hold)                  # que al juego le de tiempo a verlo
+        ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 1); ui.syn()
+        _t.sleep(_hold)
+        ui.write(ecodes.EV_KEY, ecodes.KEY_ENTER, 0); ui.syn()
+    print("[keys] Texto escrito: %d caracter(es), %d ms cada una%s"
+          % (escrito, _ms, " + Enter" if _enter else ""), flush=True)
+    return escrito
+
+
+def launch_teclado_virtual(device, ids=None, ui_kb=None):
+    # "device" puede ser UN mando o una LISTA de mandos.
+    #
+    # Antes solo se le pasaba pads[0], que se elige "para el perfil de botones
+    # por defecto". En la Deck, Steam crea varios nodos para el mismo mando y
+    # los botones pueden venir por cualquiera de ellos: el teclado salia en
+    # pantalla pero no respondia a nada. El bucle principal del mapeador si
+    # escucha todos, asi que aqui hay que hacer lo mismo.
     try:
         import pygame
     except ImportError:
         print("[!] pygame no disponible"); return
     try:
-        _run_teclado(device)
+        _run_teclado(device, ids, ui_kb)
     except Exception as e:
         print(f"[!] Error teclado virtual: {e}")
 
-def _run_teclado(gamepad_device):
+def _run_teclado(gamepad_device, ids=None, ui_kb=None):
     import pygame, evdev as _evdev, select as _sel, time as _tm
+    # una lista siempre, venga uno o venga varios
+    _pads = list(gamepad_device) if isinstance(gamepad_device, (list, tuple)) \
+            else [gamepad_device]
+    _pads = [d for d in _pads if d is not None]
+    # LOS BOTONES, DEL PERFIL DEL MANDO.
+    #
+    # Estaban escritos a pelo (304 pulsar, 305 borrar, 308 espacio...). Eso
+    # supone un mando estilo Xbox: con otro perfil, o con el estilo Batocera
+    # puesto (que cambia A y B de sitio), los botones del teclado no eran los
+    # que el usuario acababa de configurar.
+    _i = ids or {}
+    B_OK    = _i.get("a", 304)
+    B_BORRA = _i.get("b", 305)
+    B_ESP   = _i.get("y", 308)
+    B_SALIR = [_i.get("start", 315), _i.get("r2", 313)]
+    B_MAYUS = [_i.get("select", 314), _i.get("l2", 312)]
     from evdev import ecodes as ec
     ROWS = [
         ['1','2','3','4','5','6','7','8','9','0','-','=','\u232b'],
@@ -2004,14 +2114,76 @@ def _run_teclado(gamepad_device):
     total_h=len(ROWS)*(KH+GAP)-GAP+PAD*2+50
     TH,SPEED,DEAD=14000,280.0,0.12
     import os as _os, ctypes as _ct
+    # cuanto se mantiene pulsada cada tecla (ver press_k)
+    try:
+        _HOLD = max(20, min(500, int(_os.environ.get('WP_TECLEO_MS') or 60))) / 1000.0
+    except (ValueError, TypeError):
+        _HOLD = 0.060
     _os.environ['SDL_VIDEODRIVER'] = 'x11'  # XWayland
+    # Que la ventana del teclado no se lleve el foco NI moleste al juego.
+    #
+    # Aunque luego se pone override_redirect, SDL puede pedir el foco al
+    # crearla, y muchos juegos a pantalla completa se minimizan en cuanto algo
+    # aparece delante. Estas dos son las que SDL respeta.
+    _os.environ['SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR'] = '0'
+    _os.environ.setdefault('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS', '0')
+    # Que SDL NO pida el foco al crear la ventana.
+    #
+    # Hasta ahora la ventana se creaba pidiendolo y luego se lo devolviamos al
+    # juego. Eso es una pelea que se puede perder: entre que SDL lo coge y
+    # nosotros lo devolvemos, el juego ya ha visto que lo perdio y se ha
+    # minimizado. Mejor no pedirlo desde el principio.
+    _os.environ['SDL_VIDEO_X11_WMCLASS'] = 'wproton-teclado'
+    _os.environ['SDL_WINDOW_ALLOW_HIGHDPI'] = '0'
+    _os.environ['SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN'] = '1'
+    _os.environ['SDL_VIDEO_FOREIGN_WINDOW_OPENGL'] = '0'
     pygame.init()
     info = pygame.display.Info()
-    _os.environ['SDL_VIDEO_WINDOW_POS'] = f'{(info.current_w-total_w)//2},{info.current_h-total_h-30}'
+    # DONDE SE PONE EL TECLADO.
+    #
+    # Estaba clavado abajo. Hay juegos que piden el nombre en la parte de
+    # abajo de la pantalla y el teclado tapa justo lo que estas escribiendo,
+    # asi que se puede elegir con WP_TECLADO_POS: abajo (por defecto), arriba
+    # o centro. En horizontal siempre va centrado.
+    _pos = (_os.environ.get('WP_TECLADO_POS') or 'abajo').strip().lower()
+    _x = (info.current_w - total_w) // 2
+    if _pos == 'arriba':
+        _y = 30
+    elif _pos in ('centro', 'medio'):
+        _y = max(0, (info.current_h - total_h) // 2)
+    else:
+        _y = info.current_h - total_h - 30
+    _y = max(0, min(_y, max(0, info.current_h - total_h)))
+    _os.environ['SDL_VIDEO_WINDOW_POS'] = f'{_x},{_y}'
+    print("[keys] Teclado en pantalla: %s" % _pos, flush=True)
     screen = pygame.display.set_mode((total_w, total_h), pygame.NOFRAME)
     # Aplicar override_redirect=True via XChangeWindowAttributes + unmap/remap
     # override_redirect impide que KWin gestione la ventana → no le da foco de teclado
     # Usamos X11 API directamente porque SDL_VIDEO_X11_OVERRIDE_REDIRECT no es fiable
+    # EL FOCO SE LE DEVUELVE AL JUEGO.
+    #
+    # Esto es lo que de verdad importaba y faltaba. Si nuestra ventana se
+    # queda con el foco, X entrega las pulsaciones A ELLA y no al juego: se
+    # escribe, la vista previa del teclado se actualiza, y en el juego no
+    # aparece nada. Es exactamente lo que veia un tester, y ademas explica que
+    # el juego se minimizara al abrir el teclado.
+    #
+    # No nos hace falta el foco para nada: el mando se lee por evdev, no por
+    # la ventana. Asi que se apunta quien lo tenia ANTES y se le devuelve.
+    _foco_previo = None
+    try:
+        _x11 = _ct.cdll.LoadLibrary('libX11.so.6')
+        _x11.XOpenDisplay.restype = _ct.c_void_p
+        _dpy = _x11.XOpenDisplay(None)
+        if _dpy:
+            _w = _ct.c_ulong(0); _rev = _ct.c_int(0)
+            _x11.XGetInputFocus(_ct.c_void_p(_dpy), _ct.byref(_w), _ct.byref(_rev))
+            if _w.value:
+                _foco_previo = (_w.value, _rev.value)
+            _x11.XCloseDisplay(_ct.c_void_p(_dpy))
+    except Exception as _e:
+        print("[keys] No se pudo mirar el foco: %s" % _e, flush=True)
+
     try:
         _x11 = _ct.cdll.LoadLibrary('libX11.so.6')
         _x11.XOpenDisplay.restype = _ct.c_void_p
@@ -2041,14 +2213,42 @@ def _run_teclado(gamepad_device):
                                          _CWOverrideRedirect, _ct.byref(_wa))
             _x11.XMapWindow(_ct.c_void_p(_dpy), _ct.c_ulong(_our))
             _x11.XFlush(_ct.c_void_p(_dpy))
+            # Y ahora el foco vuelve a quien lo tenia: el juego.
+            if _foco_previo:
+                _x11.XSetInputFocus(_ct.c_void_p(_dpy),
+                                    _ct.c_ulong(_foco_previo[0]),
+                                    _ct.c_int(_foco_previo[1]),
+                                    _ct.c_ulong(0))
+                _x11.XFlush(_ct.c_void_p(_dpy))
+                print("[keys] Foco devuelto a la ventana del juego", flush=True)
+            else:
+                print("[keys] AVISO: no se sabe quien tenia el foco; si el "
+                      "juego no recibe lo que escribes, es por esto", flush=True)
             _x11.XCloseDisplay(_ct.c_void_p(_dpy))
-    except: pass
+    except Exception as _e:
+        # Antes esto era un "except: pass": si fallaba, la ventana se quedaba
+        # con el foco y no habia forma de saberlo.
+        print("[keys] AVISO: no se pudo soltar el foco (%s). El juego puede "
+              "no recibir lo que escribas." % _e, flush=True)
     fk=pygame.font.SysFont('DejaVu Sans',18,bold=True)
     fp=pygame.font.SysFont('DejaVu Sans',20)
-    try:
-        ui_kb=_evdev.UInput({ec.EV_KEY:list(range(256))},name="TecladoVirtual_DS")
-    except Exception as e:
-        print(f"[!] UInput: {e}"); pygame.quit(); return
+    # EL TECLADO SE CREA UNA VEZ, AL ARRANCAR EL MAPEADOR, no aqui.
+    #
+    # Antes se creaba al abrir el teclado en pantalla y se destruia al
+    # cerrarlo. Un teclado que aparece a mitad de partida no siempre lo coge
+    # el juego: muchos enumeran los dispositivos de entrada al arrancar y ya
+    # no vuelven a mirar. Un tester lo describio como "solo reconoce el input
+    # de un teclado real", y la diferencia era justo esa: el real ya estaba
+    # ahi antes de lanzar el juego.
+    #
+    # Si por lo que sea no llega uno hecho, se crea aqui como antes.
+    _propio = False
+    if ui_kb is None:
+        try:
+            ui_kb=_evdev.UInput({ec.EV_KEY:list(range(256))},name="TecladoVirtual_DS")
+            _propio = True
+        except Exception as e:
+            print(f"[!] UInput: {e}"); pygame.quit(); return
     def build_layout():
         keys=[]
         for ri,rw in enumerate(ROWS):
@@ -2072,12 +2272,22 @@ def _run_teclado(gamepad_device):
             if ri==r and ci==c: return rect
         return None
     def press_k(code, shift):
-        # UInput: el juego tiene foco Wayland (override-redirect + KWin activateWindow)
-        # el compositor entrega los eventos al juego directamente
-        if shift: ui_kb.write(ec.EV_KEY, ec.KEY_LEFTSHIFT, 1); ui_kb.syn()
+        # La tecla se MANTIENE pulsada un rato, no se pulsa y se suelta
+        # seguido.
+        #
+        # Tenia el mismo fallo que el tecleado de textos: la tecla estaba
+        # abajo un tiempo casi cero, y un juego que mira el teclado una vez
+        # por fotograma (16 ms a 60 FPS) se pierde casi todas. Puede que fuera
+        # esto, y no solo el foco, lo que hacia que no se escribiera nada.
+        if shift:
+            ui_kb.write(ec.EV_KEY, ec.KEY_LEFTSHIFT, 1); ui_kb.syn()
+            _tm.sleep(_HOLD / 3)
         ui_kb.write(ec.EV_KEY, code, 1); ui_kb.syn()
+        _tm.sleep(_HOLD)
         ui_kb.write(ec.EV_KEY, code, 0); ui_kb.syn()
-        if shift: ui_kb.write(ec.EV_KEY, ec.KEY_LEFTSHIFT, 0); ui_kb.syn()
+        if shift:
+            _tm.sleep(_HOLD / 3)
+            ui_kb.write(ec.EV_KEY, ec.KEY_LEFTSHIFT, 0); ui_kb.syn()
     def do_key(lb,shift):
         nonlocal preview
         if lb=='\u21e7': return 'shift'
@@ -2103,8 +2313,48 @@ def _run_teclado(gamepad_device):
        'prev':(180,220,255),'cur':(255,80,80)}
     clock=pygame.time.Clock(); running=True
     def clamp_col(r,c): return max(0,min(c,len(ROWS[r])-1))
+    _foco_avisos = {'robado': 0, 'fallo': False}
+
+    def _devolver_foco():
+        # Se repite cada pocos segundos: al dibujar, SDL puede volver a pedir
+        # el foco, y entonces las teclas dejarian de llegar al juego a mitad
+        # de escribir.
+        #
+        # Y AHORA SE MIRA ANTES: si el foco ya no es del juego, es que alguien
+        # nos lo ha quitado y hay una pelea. Sin esto no habia forma de saber
+        # si la devolucion periodica servia de algo, porque no decia nada.
+        if not _foco_previo:
+            return
+        try:
+            _d = _x11.XOpenDisplay(None)
+            if not _d:
+                return
+            _w = _ct.c_ulong(0); _rev = _ct.c_int(0)
+            _x11.XGetInputFocus(_ct.c_void_p(_d), _ct.byref(_w), _ct.byref(_rev))
+            if _w.value != _foco_previo[0]:
+                _foco_avisos['robado'] += 1
+                if _foco_avisos['robado'] in (1, 10, 50):
+                    print("[keys] El foco se ha ido de la ventana del juego "
+                          "(%d veces); devolviendolo" % _foco_avisos['robado'],
+                          flush=True)
+                _x11.XSetInputFocus(_ct.c_void_p(_d),
+                                    _ct.c_ulong(_foco_previo[0]),
+                                    _ct.c_int(_foco_previo[1]),
+                                    _ct.c_ulong(0))
+                _x11.XFlush(_ct.c_void_p(_d))
+            _x11.XCloseDisplay(_ct.c_void_p(_d))
+        except Exception as _e:
+            if not _foco_avisos['fallo']:
+                _foco_avisos['fallo'] = True
+                print("[keys] AVISO: no se puede vigilar el foco (%s)" % _e,
+                      flush=True)
+
+    _ult_foco = 0.0
     while running:
         dt=clock.tick(60)/1000.0; now=_tm.time()
+        if now - _ult_foco > 0.5:
+            _ult_foco = now
+            _devolver_foco()
         for ev in pygame.event.get():
             if ev.type==pygame.QUIT: running=False
             elif ev.type==pygame.MOUSEMOTION:
@@ -2117,22 +2367,22 @@ def _run_teclado(gamepad_device):
                     row,col=mr,mc; r=do_key(ROWS[row][col],shift)
                     if r=='shift': shift=not shift
                     elif r=='close': running=False
-        rr,_,_=_sel.select([gamepad_device],[],[],0)
-        if rr:
+        rr,_,_=_sel.select(_pads,[],[],0)
+        for _d in rr:
             try:
-                for ev in gamepad_device.read():
+                for ev in _d.read():
                     if ev.type==ec.EV_ABS: ax_val[ev.code]=ev.value
                     elif ev.type==ec.EV_KEY and ev.value==1:
-                        if ev.code==304:
+                        if ev.code==B_OK:
                             mr,mc=key_at(cx,cy)
                             if mr is not None: row,col=mr,mc
                             r=do_key(ROWS[row][col],shift)
                             if r=='shift': shift=not shift
                             elif r=='close': running=False
-                        elif ev.code==305: press_k(ec.KEY_BACKSPACE,False); preview=preview[:-1]
-                        elif ev.code==308: press_k(ec.KEY_SPACE,False); preview+=' '
-                        elif ev.code in (315,313): running=False
-                        elif ev.code in (314,312): shift=not shift
+                        elif ev.code==B_BORRA: press_k(ec.KEY_BACKSPACE,False); preview=preview[:-1]
+                        elif ev.code==B_ESP: press_k(ec.KEY_SPACE,False); preview+=' '
+                        elif ev.code in B_SALIR: running=False
+                        elif ev.code in B_MAYUS: shift=not shift
             except: pass
         rx_r=ax_val.get(ec.ABS_RX,0); ry_r=ax_val.get(ec.ABS_RY,0)
         rx_n=max(-1.0,min(1.0,rx_r/32767.0 if rx_r>=0 else rx_r/32768.0))
@@ -2171,7 +2421,12 @@ def _run_teclado(gamepad_device):
         pygame.draw.circle(surf,C['cur'],(ix,iy),6)
         pygame.draw.circle(surf,(255,255,255),(ix,iy),2)
         screen.blit(surf,(0,0)); pygame.display.flip()
-    ui_kb.close(); pygame.quit()
+    # Solo se cierra si lo hemos creado aqui: el de la sesion tiene que
+    # seguir vivo para la proxima vez, y sobre todo para que el juego lo
+    # siga viendo.
+    if _propio:
+        ui_kb.close()
+    pygame.quit()
 
 def main():
     try:
@@ -2305,13 +2560,14 @@ def main():
     for act in data.get('actions_player1', []):
         trig, target = act['trigger'], act['target']
         is_kb = (target == "TECLADO_VIRTUAL")
-        t_codes = [] if is_kb else [getattr(ecodes, t)
+        is_txt = (target == "ESCRIBIR_TEXTO")
+        t_codes = [] if (is_kb or is_txt) else [getattr(ecodes, t)
                    for t in (target if isinstance(target, list) else [target])
                    if hasattr(ecodes, t)]
         if isinstance(trig, list):
             _req = [ids.get(x, x) for x in trig]
             map_combos.append({"req": _req, "outs": t_codes,
-                               "active": False, "kb": is_kb})
+                               "active": False, "kb": is_kb, "txt": is_txt})
             # SOLO se difiere el boton que se MANTIENE, no el que completa la
             # combinacion.
             #
@@ -2351,6 +2607,37 @@ def main():
         _necesarias.update(_lista or [])
     for _c in map_combos:
         _necesarias.update(_c["outs"] or [])
+    # SI HAY TECLADO EN PANTALLA, SUS TECLAS VAN EN EL MISMO DISPOSITIVO.
+    #
+    # Antes se creaba uno aparte ("TecladoVirtual_DS") con las 256 teclas. Y
+    # ahi estaba el problema: las teclas del .keys SI llegaban al juego (el
+    # mapeo de botones funciona) y las del teclado en pantalla NO, con la
+    # misma tecnica y en el mismo proceso.
+    #
+    # En vez de seguir buscando por que ese dispositivo concreto no lo cogia
+    # el juego, se usa EL QUE YA SABEMOS QUE FUNCIONA: se le añaden a "ui" las
+    # teclas que necesita el teclado en pantalla y se escribe por ahi.
+    _texto_rapido = os.environ.get('WP_TEXTO_RAPIDO', '')
+    if any(c.get("txt") for c in map_combos) and _texto_rapido:
+        _necesarias.update(teclas_de_texto(_texto_rapido))
+        _necesarias.add(ecodes.KEY_ENTER)      # por si se pide Enter al final
+        print("[keys] Texto rapido listo (%d caracteres), sin ventana"
+              % len(_texto_rapido), flush=True)
+    if any(c.get("kb") for c in map_combos):
+        for _n in ('KEY_SPACE', 'KEY_ENTER', 'KEY_BACKSPACE', 'KEY_LEFTSHIFT',
+                   'KEY_MINUS', 'KEY_EQUAL', 'KEY_LEFTBRACE', 'KEY_RIGHTBRACE',
+                   'KEY_BACKSLASH', 'KEY_SEMICOLON', 'KEY_APOSTROPHE',
+                   'KEY_COMMA', 'KEY_DOT', 'KEY_SLASH'):
+            _c = getattr(ecodes, _n, None)
+            if _c is not None:
+                _necesarias.add(_c)
+        for _ch in 'abcdefghijklmnopqrstuvwxyz0123456789':
+            _c = getattr(ecodes, 'KEY_%s' % _ch.upper(), None)
+            if _c is not None:
+                _necesarias.add(_c)
+        print("[keys] El teclado en pantalla usa el mismo teclado virtual "
+              "que las demas teclas", flush=True)
+
     try:
         if _necesarias:
             ui = evdev.UInput({ecodes.EV_KEY: sorted(_necesarias)},
@@ -2542,9 +2829,13 @@ def main():
                                 all_pressed = all(btn in pulsados for btn in c["req"])
                                 if all_pressed and not c["active"] and event.value == 1:
                                     c["active"] = True
-                                    if c.get("kb"):
+                                    if c.get("txt"):
+                                        escribir_texto(ui, _texto_rapido)
+                                        for _b in c["req"]: pendiente.discard(_b)
+                                        pulsados.clear()
+                                    elif c.get("kb"):
                                         ui.syn()
-                                        try: launch_teclado_virtual(device)
+                                        try: launch_teclado_virtual(pads, ids, ui)
                                         except Exception as _e: print(f"[!] {_e}")
                                         for _b in c["req"]: pendiente.discard(_b)
                                         pulsados.clear()
@@ -2765,9 +3056,21 @@ MAPEOF
 }
 
 find_keys_file() {
-    # $1 = ruta del juego (wsquashfs o exe), $2 = gid. Orden del script antiguo.
+    # $1 = ruta del juego (wsquashfs o exe), $2 = gid.
+    #
+    # PRIMERO EL DE profiles/, que es el que edita el usuario.
+    #
+    # Antes iba el ultimo, detras de los que vienen junto al juego. El editor
+    # guarda SIEMPRE en profiles/, asi que en un juego que ya traia su .keys
+    # (los de Batocera lo traen) se editaba, se guardaba... y se seguia usando
+    # el original: parecia que no guardaba nada. Un tester lo describio como
+    # "se vuelve loco", y tenia toda la razon.
+    #
+    # Con este orden, el fichero del juego es el punto de partida y lo que tu
+    # cambies manda a partir de entonces. Para volver al original basta con
+    # borrar el de profiles/.
     local p="$1" gid="$2"
-    for k in "${p%.*}.keys" "$p.keys" "$PROFILE_DIR/$gid.keys"; do
+    for k in "$PROFILE_DIR/$gid.keys" "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] && { printf '%s' "$k"; return 0; }
     done
     return 1
@@ -2776,6 +3079,9 @@ find_keys_file() {
 mapeador_start() {
     # estilo de nombres del .keys (xbox | nintendo), para este juego
     export WP_KEYS_ESTILO="${KEYS_ESTILO:-xbox}"
+    export WP_TECLADO_POS="${TECLADO_POS:-abajo}"
+    export WP_TEXTO_RAPIDO="${TEXTO_RAPIDO:-}"
+    export WP_TEXTO_ENTER="${TEXTO_ENTER:-0}"
     # $1 = fichero .keys
     write_mapeador
     # evdev es imprescindible: probar el import y avisar CLARO si falta
@@ -2901,9 +3207,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py ef501abe6b12" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py db63d9ac27c0" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py ef501abe6b12
+# WPROTON_HELPER menu_pygame.py db63d9ac27c0
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -4125,6 +4431,30 @@ AYUDAS_ES = [
     ('Batocera',
      'Los nombres de los botones dentro del .keys se leen como en Batocera: '
      '"a" es el de la DERECHA y "b" el de abajo.'),
+    ('Añadir: escribir un texto',
+     'Una combinacion teclea un texto que guardas antes (tu nombre). NO abre '
+     'ninguna ventana, asi que el juego no se minimiza ni pierde el foco.'),
+    ('Cambiar el texto', 'Escribir otro texto para esa combinacion.'),
+    ('Pulsar Enter al terminar:',
+     'Acepta el nombre de una vez. Quitalo si el juego tiene mas campos: el '
+     'Enter podria saltar al siguiente o aceptar antes de tiempo.'),
+    ('Añadir: teclado en pantalla',
+     'Una combinacion que abre un teclado manejable con el mando, para los '
+     'juegos que te obligan a escribir un nombre y no soportan mando.'),
+    ('Hotkey + ',
+     'Se mantiene el hotkey (Select) y se pulsa el otro boton.'),
+    ('L1 + R1',
+     'Los dos gatillos superiores a la vez.'),
+    ('Cambiar la combinacion',
+     'Elegir otros botones para abrir el teclado en pantalla.'),
+    ('Quitarlo',
+     'Deja de abrirse el teclado en pantalla. El resto del .keys no se toca.'),
+    ('Teclado en pantalla:',
+     'Donde sale el teclado del mando. Cambialo si tapa justo el sitio donde '
+     'el juego te pide escribir.'),
+    ('abajo ',   'El teclado sale en la parte de abajo.'),
+    ('arriba ',  'El teclado sale arriba, para juegos que piden el texto abajo.'),
+    ('centro ',  'El teclado sale en mitad de la pantalla.'),
     ('Estilo Batocera',
      'Como en Batocera: "a" es el boton de la DERECHA y "b" el de abajo, al '
      'estilo Nintendo. Si los botones salen cambiados, prueba a cambiarlo.'),
@@ -8787,6 +9117,9 @@ profile_defaults() {
     PAD_SONY=auto
     # Nombres de los botones dentro del .keys: xbox | nintendo (Batocera)
     KEYS_ESTILO=xbox
+    TECLADO_POS=abajo        # donde sale el teclado en pantalla
+    TEXTO_RAPIDO=""          # texto que se teclea con una combinacion
+    TEXTO_ENTER=0            # 1 = pulsar Enter despues de escribirlo
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
     FAVORITO=0               # 1 = aparece primero en la lista
     COMPLETADO=0             # 1 = te lo has pasado
@@ -8863,6 +9196,9 @@ MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_SONY=${PAD_SONY:-auto}
 KEYS_ESTILO=${KEYS_ESTILO:-xbox}
+TECLADO_POS=${TECLADO_POS:-abajo}
+TEXTO_RAPIDO="$TEXTO_RAPIDO"
+TEXTO_ENTER=${TEXTO_ENTER:-0}
 PAD_STEAMFIX=$PAD_STEAMFIX
 NESTED_GAMESCOPE=$NESTED_GAMESCOPE
 NTSYNC=$NTSYNC
@@ -9467,6 +9803,16 @@ export_game_env() {
         # shellcheck disable=SC2163
         eval "export $AUTORUN_ENV"
     fi
+    # Que el juego NO se minimice al perder el foco.
+    #
+    # El teclado en pantalla abre su propia ventana encima, y aunque esta
+    # hecha con override_redirect (para no robar el foco), muchos juegos a
+    # pantalla completa se minimizan igual en cuanto aparece algo delante.
+    # Un tester lo vio: sacaba el teclado y el juego se iba abajo.
+    #
+    # Esta variable ya se exportaba, pero en post_game_resettle, o sea DESPUES
+    # de jugar y para nuestros menus: el juego no la veia nunca. Aqui si.
+    export SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
     [ "$WAYLAND" = 1 ]    && export PROTON_ENABLE_WAYLAND=1
     [ "$WINED3D" = 1 ]    && export PROTON_USE_WINED3D=1
     [ "$FSR" = 1 ]        && export WINE_FULLSCREEN_FSR=1 WINE_FULLSCREEN_FSR_STRENGTH=2
@@ -13069,6 +13415,9 @@ def boton(n):
 
 def tecla(n):
     n = str(n)
+    # Objetivo especial: no es una tecla, abre el teclado en pantalla.
+    if n == 'TECLADO_VIRTUAL':
+        return 'abrir el teclado en pantalla'
     corto = n[4:] if n.startswith('KEY_') else n
     if corto in TECLAS:
         return TECLAS[corto]
@@ -13113,6 +13462,248 @@ def main():
 
 sys.exit(main())
 PYKEYS
+}
+
+keys_texto_avisar_raros() {
+    # Avisa de los caracteres que NO se pueden teclear. $1 = texto
+    #
+    # Se escribe mandando codigos de tecla, y un teclado no tiene una tecla
+    # para "ñ" ni para las vocales con tilde: dependen de la distribucion que
+    # tenga el juego, que no controlamos. Mas vale decirlo AQUI que dejar que
+    # el nombre salga a medias dentro del juego.
+    local t="$1" raros
+    raros="$(printf '%s' "$t" | grep -o '[^a-zA-Z0-9 ._,@/-]' | sort -u | tr -d '\n')"
+    [ -z "$raros" ] && return 0
+    ui_info "Aviso: estos caracteres no se pueden escribir y se saltaran:
+
+  $raros
+
+Se escriben mandando teclas, y un teclado no tiene tecla para
+la ñ ni para las vocales con tilde: depende de la distribucion
+que tenga el juego. Usa solo letras sin tilde, numeros y
+espacios."
+    return 0
+}
+
+keys_texto_hay() {
+    # ¿Hay ya una combinacion que escriba el texto guardado?
+    [ -s "$1" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+for a in d.get("actions_player1") or []:
+    if isinstance(a,dict) and a.get("target")=="ESCRIBIR_TEXTO":
+        sys.stdout.write("+".join(a.get("trigger") or []) or "?")
+        sys.exit(0)
+sys.exit(1)' "$1" 2>/dev/null
+}
+
+keys_texto_fila() {
+    local combo
+    if combo="$(keys_texto_hay "$1")"; then
+        printf 'Añadir: escribir un texto   (%s -> "%s"%s)' \
+            "$(printf '%s' "$combo" | sed 's/+/ + /g')" \
+            "$(printf '%s' "${TEXTO_RAPIDO:-}" | cut -c1-16)" \
+            "$([ "${TEXTO_ENTER:-0}" = 1 ] && printf ' + Enter')"
+    else
+        printf 'Añadir: escribir un texto   (sin abrir ninguna ventana)'
+    fi
+}
+
+keys_texto_rapido() {
+    # Teclea un texto guardado con una combinacion, SIN abrir ninguna ventana.
+    # $1 = temporal de combinaciones, $2 = gid
+    #
+    # Es la alternativa al teclado en pantalla para los juegos donde este no
+    # sirve: al abrir la ventana el juego pierde el foco y se minimiza, asi
+    # que las pulsaciones ya no le llegan. Sin ventana no hay foco que perder.
+    local f="$1" gid="$2" sel
+    if [ -z "${TEXTO_RAPIDO:-}" ]; then
+        ui_info "Primero hay que escribir el texto.
+
+Se escribe AQUI, con el teclado de los menus (que si funciona
+porque no hay ningun juego delante), y luego una combinacion lo
+teclea dentro del juego."
+        TEXTO_RAPIDO="$(ask_text "Texto que se escribira en el juego (tu nombre, por ejemplo)" "")"
+        [ -z "$TEXTO_RAPIDO" ] && return 0
+        keys_texto_avisar_raros "$TEXTO_RAPIDO"
+        write_full_profile "$gid"
+    fi
+    if combo="$(keys_texto_hay "$f")"; then
+        sel="$(menu "Escribir \"$TEXTO_RAPIDO\" ($(printf '%s' "$combo" | sed 's/+/ + /g'))" \
+            "Cambiar el texto" \
+            "Pulsar Enter al terminar: $(onoff "${TEXTO_ENTER:-0}")" \
+            "Cambiar la combinacion" "Quitarlo" "<< Volver")" || return 0
+        case "$sel" in
+            "Pulsar Enter al terminar:"*)
+                TEXTO_ENTER=$((1-${TEXTO_ENTER:-0}))
+                write_full_profile "$gid"
+                if [ "$TEXTO_ENTER" = 1 ]; then
+                    ui_info "Se pulsara Enter al terminar de escribir.
+
+Si el juego tiene mas campos (apellido, equipo...), quitalo:
+el Enter podria saltar al siguiente o aceptar antes de tiempo."
+                else
+                    ui_info "No se pulsara Enter: lo aceptas tu con el mando."
+                fi
+                return 0 ;;
+            "Cambiar el texto")
+                TEXTO_RAPIDO="$(ask_text "Texto que se escribira en el juego" "$TEXTO_RAPIDO")"
+                keys_texto_avisar_raros "$TEXTO_RAPIDO"
+                write_full_profile "$gid"
+                ui_info "Texto: \"$TEXTO_RAPIDO\""
+                return 0 ;;
+            "Quitarlo")
+                keys_texto_poner "$f" "" && ui_info "Quitado."
+                return 0 ;;
+            "<< Volver"|"") return 0 ;;
+        esac
+    fi
+    sel="$(menu "¿Con que combinacion se escribe?" \
+        "Hotkey + A" "Hotkey + B" "Hotkey + L1" "Hotkey + R1" "<< Volver")" || return 0
+    local trig=""
+    case "$sel" in
+        "Hotkey + A")  trig='["hotkey","a"]' ;;
+        "Hotkey + B")  trig='["hotkey","b"]' ;;
+        "Hotkey + L1") trig='["hotkey","pageup"]' ;;
+        "Hotkey + R1") trig='["hotkey","pagedown"]' ;;
+        *) return 0 ;;
+    esac
+    if keys_texto_poner "$f" "$trig"; then
+        # Se pregunta AQUI en vez de dejarlo escondido en un submenu: es la
+        # decision natural justo despues de elegir la combinacion.
+        if ui_ask "Quieres que pulse Enter al terminar de escribir?
+
+Asi el nombre queda aceptado de una vez. Di que NO si el juego
+tiene mas campos (apellido, equipo...), porque el Enter podria
+saltar al siguiente o aceptar antes de tiempo."; then
+            TEXTO_ENTER=1
+        else
+            TEXTO_ENTER=0
+        fi
+        write_full_profile "$gid"
+        ui_info "Listo: $sel escribira \"$TEXTO_RAPIDO\"$([ "$TEXTO_ENTER" = 1 ] && printf ' y pulsara Enter').
+
+No abre ninguna ventana, asi que el juego no pierde el foco ni
+se minimiza."
+    else
+        ui_error "No se pudo guardar."
+    fi
+    return 0
+}
+
+keys_texto_poner() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" -c 'import json,sys
+f, trig = sys.argv[1], sys.argv[2]
+try:
+    d=json.load(open(f,encoding="utf-8"))
+except Exception:
+    d={"actions_player1":[]}
+acc=[a for a in (d.get("actions_player1") or [])
+     if not (isinstance(a,dict) and a.get("target")=="ESCRIBIR_TEXTO")]
+if trig:
+    acc.append({"trigger": json.loads(trig), "type": "key",
+                "target": "ESCRIBIR_TEXTO"})
+d["actions_player1"]=acc
+json.dump(d, open(f,"w",encoding="utf-8"), ensure_ascii=False)' "$1" "$2" 2>/dev/null
+}
+
+keys_teclado_hay() {
+    # ¿Ya existe una combinacion que abra el teclado en pantalla?
+    # $1 = fichero temporal con las combinaciones conservadas
+    [ -s "$1" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+for a in d.get("actions_player1") or []:
+    if isinstance(a,dict) and a.get("target")=="TECLADO_VIRTUAL":
+        sys.stdout.write("+".join(a.get("trigger") or []) or "?")
+        sys.exit(0)
+sys.exit(1)' "$1" 2>/dev/null
+}
+
+keys_teclado_fila() {
+    # La fila del editor. $1 = temporal de las combinaciones.
+    local combo
+    if combo="$(keys_teclado_hay "$1")"; then
+        printf 'Añadir: teclado en pantalla   (ya esta en %s)' \
+            "$(printf '%s' "$combo" | sed 's/+/ + /g')"
+    else
+        printf 'Añadir: teclado en pantalla   (para escribir tu nombre)'
+    fi
+}
+
+keys_teclado_virtual() {
+    # Crea (o quita) la combinacion que abre el teclado en pantalla.
+    # $1 = fichero temporal de las combinaciones.
+    #
+    # Es un objetivo ESPECIAL del mapeador: "TECLADO_VIRTUAL" no es una tecla,
+    # abre un teclado que se maneja con el mando y va escribiendo en el juego.
+    # El mapeador lo soportaba desde siempre, pero no habia forma de crearlo
+    # sin editar el .keys a mano.
+    local f="$1" combo sel
+    if combo="$(keys_teclado_hay "$f")"; then
+        sel="$(menu "Teclado en pantalla (ahora: $(printf '%s' "$combo" | sed 's/+/ + /g'))" \
+            "Cambiar la combinacion" "Quitarlo" "<< Volver")" || return 0
+        case "$sel" in
+            "Quitarlo")
+                keys_teclado_poner "$f" "" && ui_info "Quitado."
+                return 0 ;;
+            "<< Volver"|"") return 0 ;;
+        esac
+    fi
+    # Combinaciones que no chocan con la salida de emergencia (hotkey+start)
+    sel="$(menu "¿Con que combinacion se abre el teclado?" \
+        "Hotkey + X" \
+        "Hotkey + Y" \
+        "Hotkey + L1" \
+        "Hotkey + R1" \
+        "L1 + R1" \
+        "<< Volver")" || return 0
+    local trig=""
+    case "$sel" in
+        "Hotkey + X")  trig='["hotkey","x"]' ;;
+        "Hotkey + Y")  trig='["hotkey","y"]' ;;
+        "Hotkey + L1") trig='["hotkey","pageup"]' ;;
+        "Hotkey + R1") trig='["hotkey","pagedown"]' ;;
+        "L1 + R1")     trig='["pageup","pagedown"]' ;;
+        *) return 0 ;;
+    esac
+    if keys_teclado_poner "$f" "$trig"; then
+        ui_info "Listo: $sel abre el teclado en pantalla.
+
+Sirve para los juegos que piden escribir un nombre y no
+soportan mando. Se maneja con la cruceta y A."
+    else
+        ui_error "No se pudo guardar."
+    fi
+    return 0
+}
+
+keys_teclado_poner() {
+    # Mete o quita la accion en el temporal. $1 = fichero, $2 = trigger JSON
+    # (vacio = quitarla).
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    "$PY_BIN" -c 'import json,sys
+f, trig = sys.argv[1], sys.argv[2]
+try:
+    d=json.load(open(f,encoding="utf-8"))
+except Exception:
+    d={"actions_player1":[]}
+acc=[a for a in (d.get("actions_player1") or [])
+     if not (isinstance(a,dict) and a.get("target")=="TECLADO_VIRTUAL")]
+if trig:
+    acc.append({"trigger": json.loads(trig), "type": "key",
+                "target": "TECLADO_VIRTUAL"})
+d["actions_player1"]=acc
+json.dump(d, open(f,"w",encoding="utf-8"), ensure_ascii=False)' "$1" "$2" 2>/dev/null
 }
 
 keys_raton_leer() {
@@ -13334,6 +13925,8 @@ EOFCOMBIS
         # moverlo desde hace tiempo, pero no habia por donde configurarlo:
         # habia que escribir la seccion "mouse" a mano en el .keys.
         opciones="$opciones$(keys_raton_fila "$tmpr")
+$(keys_teclado_fila "$tmpc")
+$(keys_texto_fila "$tmpc")
 "
         n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
         local titulo="Teclas de $gid  ($n asignadas"
@@ -13348,6 +13941,12 @@ EOFCOMBIS
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
+                continue ;;
+            "Añadir: teclado en pantalla"*)
+                keys_teclado_virtual "$tmpc"
+                continue ;;
+            "Añadir: escribir un texto"*)
+                keys_texto_rapido "$tmpc" "$gid"
                 continue ;;
             "-- combinaciones"*|"   "*)
                 ui_info "Las combinaciones no se cambian desde aqui: esta lista es de un boton por fila.
@@ -13366,8 +13965,23 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
         [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
     done
 
-    if [ ! -s "$tmp" ]; then
-        ui_error "No has asignado ninguna tecla."
+    # Un .keys con SOLO combinaciones es valido: el caso tipico es querer nada
+    # mas el teclado en pantalla (hotkey+X) para escribir un nombre. Antes se
+    # rechazaba por "no has asignado ninguna tecla" y se perdia el trabajo.
+    #
+    # OJO: $tmpc arranca con '{"actions_player1": []}', asi que NUNCA esta
+    # vacio como fichero. Hay que contar lo que lleva dentro.
+    local n_combos=0
+    if [ -s "$tmpc" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
+        n_combos="$("$PY_BIN" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1],encoding="utf-8"))
+    print(len(d.get("actions_player1") or []))
+except Exception:
+    print(0)' "$tmpc" 2>/dev/null || echo 0)"
+    fi
+    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ]; then
+        ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton."
         rm -f "$tmp" "$tmpc" "$tmpr"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
@@ -13417,7 +14031,17 @@ PYESC
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
-        ui_info "Teclas guardadas para $gid.
+        # Se dice DONDE se ha guardado. Cuando el juego trae su propio .keys,
+        # saber que lo tuyo vive aparte evita pensar que no se guardo nada.
+        local otro=""
+        for _k in "${squash%.*}.keys" "${squash}.keys"; do
+            [ -f "$_k" ] && { otro="$(basename "$_k")"; break; }
+        done
+        ui_info "Teclas guardadas en:
+profiles/$gid.keys${otro:+
+
+Este juego traia el suyo ($otro). El tuyo manda a partir
+de ahora; para volver al original, borra profiles/$gid.keys}
 
 Se activan solas al lanzar el juego.
 Select + Start cierra el juego (Alt+F4)."
@@ -17415,6 +18039,7 @@ Poner el contador a cero?" && {
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Batocera' || printf 'Xbox')" \
+                "Teclado en pantalla: ${TECLADO_POS:-abajo}" \
                 "<< Volver")
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" "${kopts[@]}")" || kmenu=""
             case "$kmenu" in
@@ -17436,6 +18061,21 @@ Se activan solas al lanzar el juego." ;;
                     esac ;;
                 "Crear o editar las teclas"*)
                     keys_editor "$gid" "$squash" || true ;;
+                "Teclado en pantalla:"*)
+                    local tpos
+                    tpos="$(menu "¿Donde sale el teclado en pantalla?" \
+                        "abajo   (por defecto)" \
+                        "arriba  (si el juego pide el texto abajo)" \
+                        "centro  (en mitad de la pantalla)" \
+                        "<< Volver")" || tpos=""
+                    case "$tpos" in
+                        "<< Volver"|"") ;;
+                        *) TECLADO_POS="${tpos%% *}"
+                           write_full_profile "$gid"
+                           ui_info "El teclado saldra: $TECLADO_POS
+
+Cambialo si tapa justo donde el juego pide escribir." ;;
+                    esac ;;
                 "Estilo de botones:"*)
                     # Los .keys hechos en Batocera nombran los botones al
                     # estilo Nintendo: su "A" es el de la derecha y su "B" el
@@ -17443,6 +18083,9 @@ Se activan solas al lanzar el juego." ;;
                     # los botones salen cambiados, se cambia aqui.
                     if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
                         KEYS_ESTILO=xbox
+    TECLADO_POS=abajo        # donde sale el teclado en pantalla
+    TEXTO_RAPIDO=""          # texto que se teclea con una combinacion
+    TEXTO_ENTER=0            # 1 = pulsar Enter despues de escribirlo
                     else
                         KEYS_ESTILO=nintendo
                     fi
