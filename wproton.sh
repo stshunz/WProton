@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.33"
+WPROTON_VERSION="1.34"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1793,9 +1793,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 1b612fb28867" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 609c0e1d53b9" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 1b612fb28867
+# WPROTON_HELPER mapeador.py 609c0e1d53b9
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2714,6 +2714,7 @@ def main():
     _eje_umbral = {}     # lo mismo para los sticks, calculado del propio mando
     _gatillo_visto = set()   # ejes de gatillo de los que ya llego algo
     _dir_vista = set()       # (direccion, encendida) ya trazadas
+    _avisos_combo = set()    # combinaciones de las que ya se aviso
     # Resumen de lo que ha quedado cargado.
     #
     # Antes solo se decia algo CUANDO habia gatillos; si la tabla salia vacia
@@ -2725,6 +2726,17 @@ def main():
         return _n if isinstance(_n, str) else str(_c)
 
     print("[keys] Botones cargados: %d" % len(map_normal), flush=True)
+    # Las combinaciones, con los CODIGOS que esperan.
+    #
+    # Sin esto, una combinacion que no casa con lo que pulsa el usuario no se
+    # ve por ningun lado: el registro decia "Combinaciones: 3" y nada mas.
+    # Paso con "hotkey+a" en estilo Batocera, donde "a" es el boton de la
+    # derecha: el usuario pulsaba el de abajo y no ocurria nada.
+    for _c in map_combos:
+        _que = "teclado en pantalla" if _c.get("kb") else (
+               "escribir texto" if _c.get("txt") else
+               ",".join(ecodes.KEY.get(_k, str(_k)) for _k in _c["outs"]))
+        print("[keys] Combinacion %s -> %s" % (_c["req"], _que), flush=True)
     _dirs = [k for k, v in map_dirs.items() if v]
     print("[keys] Direcciones cargadas: %s"
           % (", ".join(sorted(_dirs)) if _dirs else "NINGUNA"), flush=True)
@@ -2883,6 +2895,22 @@ def main():
                             in_active_combo = any(
                                 event.code in c["req"] and c["active"] for c in map_combos
                             )
+                            # Si se pulsa un boton que sale en una combinacion
+                            # pero esta no llega a formarse, se dice UNA vez:
+                            # es la pista de que se esta pulsando el boton
+                            # equivocado.
+                            if event.value == 1 and event.code in btn_en_combo \
+                               and not in_active_combo:
+                                for _c in map_combos:
+                                    if event.code not in _c["req"]:
+                                        continue
+                                    _falta = [b for b in _c["req"]
+                                              if b != event.code and b not in pulsados]
+                                    if _falta and tuple(_c["req"]) not in _avisos_combo:
+                                        _avisos_combo.add(tuple(_c["req"]))
+                                        print("[keys] La combinacion %s espera "
+                                              "tambien %s (aun sin pulsar)"
+                                              % (_c["req"], _falta), flush=True)
                             if event.code in map_normal and not in_active_combo:
                                 if event.code not in btn_en_combo:
                                     for t in map_normal[event.code]:
@@ -3207,9 +3235,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py db63d9ac27c0" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py e28fef5cace5" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py db63d9ac27c0
+# WPROTON_HELPER menu_pygame.py e28fef5cace5
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -4441,6 +4469,17 @@ AYUDAS_ES = [
     ('Añadir: teclado en pantalla',
      'Una combinacion que abre un teclado manejable con el mando, para los '
      'juegos que te obligan a escribir un nombre y no soportan mando.'),
+    ('Select + A (abajo)',
+     'Se mantiene Select y se pulsa el boton de abajo. Si tu mando es de '
+     'Nintendo ahi pone B, pero es el mismo.'),
+    ('Select + B (derecha)', 'Se mantiene Select y se pulsa el de la derecha.'),
+    ('Select + Y (arriba)', 'Se mantiene Select y se pulsa el de arriba.'),
+    ('Select + X (izquierda)', 'Se mantiene Select y se pulsa el de la izquierda.'),
+    # La prueba recorta las opciones por el "$", asi que ve "Select +" a
+    # secas: la etiqueta real se compone en tiempo de ejecucion.
+    ('Select +', 'Se mantiene Select y se pulsa el otro boton.'),
+    ('Select + L1', 'Se mantiene Select y se pulsa el gatillo superior izquierdo.'),
+    ('Select + R1', 'Se mantiene Select y se pulsa el gatillo superior derecho.'),
     ('Hotkey + ',
      'Se mantiene el hotkey (Select) y se pulsa el otro boton.'),
     ('L1 + R1',
@@ -4663,6 +4702,9 @@ AYUDAS_ES = [
      'Lo que ocupa WProton entero: runners, prefijos, caratulas y datos.'),
     ('Limpiar cache de shaders',
      'Borra los shaders compilados. Se regeneran solos y pueden ocupar gigas.'),
+    ('Reparar carpetas tapadas',
+     'Cuando algo borra y rehace una carpeta, la superposicion tapa lo que '
+     'trae el archivo: el juego deja de ver sus idiomas o su configuracion.'),
     ('Reparar montajes colgados',
      'Limpia lo que deja un juego que se cuelga. Evita tener que reiniciar.'),
     ('Buscar prefijos y saves huerfanos',
@@ -8448,6 +8490,23 @@ mount_game() {
     # como root; sin esto, cuando fuse-overlayfs copia uno a la capa superior
     # intenta conservar el propietario y falla con "Operation not permitted"
     # (era lo que impedia a Wine escribir el registro del prefix incluido).
+    # Marcas OPACAS de la superposicion, ANTES de montar.
+    #
+    # ".wh..wh..opq" dentro de una carpeta del upper le dice a overlayfs:
+    # "esta carpeta esta completa, no enseñes lo que haya debajo". Se crea
+    # cuando algo BORRA una carpeta y la vuelve a hacer, que es justo lo que
+    # hace wineboot con las de usuario al preparar el prefijo.
+    #
+    # Efecto: el juego deja de ver ficheros QUE VIENEN EN SU PROPIO ARCHIVO.
+    # Un tester se encontro con que su juego salia en ingles porque los
+    # ficheros de idioma de AppData/Local habian quedado tapados.
+    #
+    # Solo se AVISA aqui: borrarlas por las bravas resucitaria carpetas que el
+    # juego pudiera haber querido borrar de verdad. Se arregla desde el menu.
+    # Primero se destapan las de usuario (las hace Wine, no el juego) y
+    # despues se avisa de las que queden, que si pueden ser intencionadas.
+    overlay_opacos_prevenir "$upper"
+    overlay_opacos_avisar "$upper"
     local ovl_opts="lowerdir=$MOUNT_RO,upperdir=$upper,workdir=$work"
     local ovl_squash; ovl_squash="$ovl_opts,squash_to_uid=$(id -u),squash_to_gid=$(id -g)"
     if montar_suelto "$OVERLAYFS_BIN" -o "$ovl_squash" "$MOUNT_RW"; then
@@ -11549,6 +11608,223 @@ lo que ya este puesto, asi que repetirlo es seguro."
     return 0
 }
 
+prefijo_usuario_enlazar() {
+    # Enlaza el usuario que espera el runner al que trae el archivo.
+    # $1 = carpeta del prefijo (la que tiene drive_c).
+    #
+    # BATOCERA CORRE COMO ROOT, asi que un prefijo hecho alli guarda los datos
+    # del juego en drive_c/users/root/. En un PC normal, Proton usa
+    # "steamuser" y Wine usa tu nombre: el juego mira ahi, no encuentra nada,
+    # y arranca como recien instalado. Un tester lo vio como "el juego sale en
+    # ingles" porque sus ficheros de idioma estaban en users/root.
+    #
+    # Se resuelve con un enlace, que es lo que hace todo el mundo con estos
+    # prefijos. No se copia nada: el enlace no ocupa y no duplica partidas.
+    local pfx="$1" udir="$1/drive_c/users"
+    [ -d "$udir" ] || return 0
+    local yo="${USER:-$(id -un 2>/dev/null)}"
+    # Quien tiene datos de verdad, sin contar los de siempre ni el mio
+    local d nombre origen="" cuantos=0
+    for d in "$udir"/*/; do
+        [ -d "$d" ] || continue
+        nombre="$(basename "${d%/}")"
+        case "$nombre" in
+            Public|public|steamuser|"$yo") continue ;;
+        esac
+        # que tenga algo dentro, no una carpeta vacia
+        [ -n "$(ls -A "$d" 2>/dev/null)" ] || continue
+        origen="$nombre"; cuantos=$((cuantos+1))
+    done
+    [ "$cuantos" = 1 ] || {
+        [ "$cuantos" -gt 1 ] && say "[i] El prefijo trae varios usuarios con datos;" \
+                             && say "    no se enlaza ninguno para no elegir mal."
+        return 0
+    }
+    local dest
+    for dest in steamuser "$yo"; do
+        [ -n "$dest" ] || continue
+        [ "$dest" = "$origen" ] && continue
+        [ -L "$udir/$dest" ] && continue          # ya enlazado, nada que hacer
+        if [ -d "$udir/$dest" ]; then
+            # ¿Tiene FICHEROS de verdad, o es el esqueleto vacio que crea
+            # wineboot (Documents, Downloads, Desktop...)?
+            #
+            # Mirar solo "esta vacio" no valia: a quien ya hubiera jugado una
+            # vez, el esqueleto le impedia el enlace justo cuando mas falta
+            # hacia. Lo que cuenta es si hay ficheros.
+            local nfich
+            nfich="$(find "$udir/$dest" -type f 2>/dev/null | head -n1)"
+            if [ -n "$nfich" ]; then
+                # Aqui SI hay datos suyos: no se toca, pero se avisa, porque
+                # es el caso en el que las partidas pueden acabar repartidas
+                # entre dos usuarios y el juego solo ver unas.
+                say "AVISO: el prefijo trae los datos en 'users/$origen' pero"
+                say "       'users/$dest' ya tiene ficheros tuyos. No se enlaza"
+                say "       para no mezclarlos. Si al juego le faltan cosas,"
+                say "       compara esas dos carpetas a mano."
+                continue
+            fi
+            # esqueleto vacio: fuera, y a enlazar
+            rm -rf "$udir/$dest" 2>/dev/null
+        fi
+        [ -e "$udir/$dest" ] && continue
+        if ln -s "$origen" "$udir/$dest" 2>/dev/null; then
+            say "[+] Prefix incluido: '$dest' -> '$origen' (el archivo guarda"
+            say "    los datos ahi; sin esto el juego arrancaria en blanco)"
+        fi
+    done
+    return 0
+}
+
+proton_marcar_prefijo() {
+    # Le dice a Proton que este prefijo YA esta preparado, para que no repita
+    # la preparacion en cada partida. $1 = carpeta del runner.
+    #
+    # Proton mira dos ficheros, y ninguno viene en un archivo de Batocera
+    # (que se hizo con Wine a secas):
+    #
+    #   <compatdata>/version      la version de prefijo que el maneja
+    #   <pfx>/.update-timestamp   la fecha de wine.inf, para que Wine no
+    #                             intente actualizar el prefijo por su cuenta
+    #
+    # Sin ellos, cada lanzamiento se lleva por delante wineboot, iexplore,
+    # explorer y steam.exe: no rompe nada (esa copia solo añade lo que falta)
+    # pero tarda y ensucia el registro de arranque.
+    #
+    # Se escriben COPIANDO lo que dice el propio runner, no inventando un
+    # numero: si el runner cambia, la version cambia con el y Proton hara la
+    # actualizacion que toque.
+    local rdir="$1"
+    [ "$(runner_kind "$rdir" 2>/dev/null)" = "proton" ] || return 0
+    [ -n "${WINEPREFIX:-}" ] || return 0
+    local vsrc="$rdir/version"
+    [ -f "$vsrc" ] || { say "[i] El runner no trae fichero 'version'; Proton"
+                        say "    preparara el prefijo a su manera."; return 0; }
+    # compatdata es la carpeta que contiene pfx/. Con el enlace pfx -> . que
+    # ponemos, las dos son la misma.
+    local pfx="$WINEPREFIX"
+    [ -d "$WINEPREFIX/pfx" ] && pfx="$WINEPREFIX/pfx"
+    if [ -f "$WINEPREFIX/version" ] \
+       && cmp -s "$vsrc" "$WINEPREFIX/version"; then
+        say "[+] Prefix incluido: ya marcado para $(basename "$rdir")"
+        return 0
+    fi
+    if cp -f "$vsrc" "$WINEPREFIX/version" 2>/dev/null; then
+        say "[+] Prefix incluido: marcado como preparado ($(tr -d '\n' < "$vsrc"))"
+    else
+        say "AVISO: no se pudo escribir el fichero 'version' del prefijo."
+        return 0
+    fi
+    # .update-timestamp con la fecha de wine.inf del runner, que es lo que
+    # mira Wine para decidir si actualiza.
+    local winf
+    winf="$(find "$rdir" -maxdepth 5 -name wine.inf -path '*share/wine*' 2>/dev/null | head -n1)"
+    if [ -f "$winf" ]; then
+        stat -c %Y "$winf" > "$pfx/.update-timestamp" 2>/dev/null \
+            && say "    y con la fecha de wine.inf, para que Wine no lo toque"
+    fi
+    return 0
+}
+
+overlay_opacos_listar() {
+    # Las carpetas del upper marcadas como opacas. $1 = carpeta upper.
+    [ -d "$1" ] || return 0
+    find "$1" -name '.wh..wh..opq' -printf '%h\n' 2>/dev/null | sort -u
+}
+
+overlay_opacos_prevenir() {
+    # Quita SOLO las marcas opacas de las carpetas de usuario de Windows.
+    # $1 = carpeta upper.  Se llama ANTES de montar.
+    #
+    # Esas marcas las crea wineboot al preparar el prefijo: borra y rehace
+    # drive_c/users/<usuario>/... y overlayfs lo interpreta como "esta
+    # carpeta esta completa". A partir de ahi el juego deja de ver lo que
+    # trae su propio archivo ahi dentro (idiomas, configuracion).
+    #
+    # POR QUE SOLO AHI: en drive_c/users nunca hay un borrado intencionado
+    # del juego, es Wine rehaciendo el perfil. En el resto del disco si
+    # podria haberlo, asi que ahi no se toca nada y se deja el aviso y la
+    # reparacion manual.
+    #
+    # No se borra nada del usuario: solo el fichero de marca.
+    local upper="$1" d n=0
+    [ -d "$upper/drive_c/users" ] || return 0
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        rm -f "$d/.wh..wh..opq" 2>/dev/null && n=$((n+1))
+    done <<EOFOPQ
+$(find "$upper/drive_c/users" -name '.wh..wh..opq' -printf '%h\n' 2>/dev/null)
+EOFOPQ
+    [ "$n" -gt 0 ] && say "[+] Destapadas $n carpeta(s) de usuario que Wine habia" \
+                   && say "    marcado como completas (el juego ya vera sus ficheros)"
+    return 0
+}
+
+overlay_opacos_avisar() {
+    # Avisa si hay carpetas opacas que tapen contenido del archivo. $1 = upper
+    local upper="$1" lista n
+    lista="$(overlay_opacos_listar "$upper")"
+    n="$(printf '%s' "$lista" | grep -c . || true)"
+    [ "${n:-0}" -gt 0 ] || return 0
+    say "AVISO: $n carpeta(s) de la superposicion tapan lo que trae el archivo."
+    say "       El juego NO vera sus propios ficheros ahi dentro (idiomas,"
+    say "       configuracion, datos). Se arregla en:"
+    say "       Espacio en disco -> Reparar carpetas tapadas"
+    local d
+    printf '%s\n' "$lista" | head -n 5 | while IFS= read -r d; do
+        [ -n "$d" ] && say "         ${d#"$upper"}"
+    done
+    return 0
+}
+
+overlay_opacos_reparar() {
+    # Quita las marcas opacas para que vuelva a verse lo del archivo.
+    # $gid no vale todavia si se usa en el mismo "local" (lo aviso la
+    # auditoria): se declara primero y se usa despues.
+    local gid="$1"
+    local upper="$OVERLAY_BASE/$gid/upper" lista n
+    lista="$(overlay_opacos_listar "$upper")"
+    n="$(printf '%s' "$lista" | grep -c . || true)"
+    if [ "${n:-0}" = 0 ]; then
+        ui_info "No hay ninguna carpeta tapada en $gid."
+        return 0
+    fi
+    local muestra
+    muestra="$(printf '%s\n' "$lista" | head -n 8 | sed "s|^$upper||" | sed 's/^/  /')"
+    ui_ask "En $gid hay $n carpeta(s) que tapan lo que trae el archivo:
+
+$muestra
+
+Quitar esas marcas hara que el juego vuelva a ver esos ficheros
+(idiomas, configuracion...).
+
+OJO: si el juego borro alguna de esas carpetas a proposito,
+volveran a aparecer sus ficheros originales. Tus partidas NO se
+tocan: solo se quitan las marcas, no se borra nada tuyo." || return 0
+    # Con el juego montado no se puede tocar el upper: overlayfs tiene su
+    # propia idea de lo que hay ahi y no se entera del cambio.
+    if is_mounted "$WS_DIR/tmp_mount/$gid" 2>/dev/null; then
+        ui_error "Primero hay que desmontar el juego.
+
+Usa: Detener Wine y liberar los juegos montados"
+        return 1
+    fi
+    local d hechas=0
+    printf '%s\n' "$lista" | while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        rm -f "$d/.wh..wh..opq" 2>/dev/null && say "[+] destapada: ${d#"$upper"}"
+    done
+    hechas="$(overlay_opacos_listar "$upper" | grep -c . || true)"
+    if [ "${hechas:-0}" = 0 ]; then
+        ui_info "Listo: $n carpeta(s) destapadas.
+
+Lanza el juego y comprueba si ya coge sus ficheros."
+    else
+        ui_error "Quedan ${hechas} sin poder quitar (¿permisos?)."
+    fi
+    return 0
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -11558,8 +11834,27 @@ bundled_prefix_prepare() {
     # "Library dxgi.dll not found". Batocera los reinstala al lanzar; nosotros
     # los borramos y dejamos que wineboot recree las DLLs del propio runner.
     [ "$PREFIX_MODE" = "bundled" ] || return 0
-    [ -n "${BUNDLED_PREFIX_DIR:-}" ] || return 0
+    # SE DICE POR QUE NO SE USA, en vez de salir callando.
+    #
+    # Antes esta funcion se iba en silencio si faltaba BUNDLED_PREFIX_DIR, y
+    # tampoco decia nada cuando todo iba bien: en el registro no habia ni una
+    # linea sobre el prefijo incluido, ni para bien ni para mal. Con eso no
+    # hay forma de saber si se esta usando el del archivo o uno nuevo.
+    if [ -z "${BUNDLED_PREFIX_DIR:-}" ]; then
+        say "AVISO: el juego esta puesto en 'prefijo incluido' pero no se ha"
+        say "       encontrado ninguno dentro del archivo. Se usara uno nuevo."
+        say "       Comprueba que el wsquashfs trae system.reg o user.reg."
+        return 0
+    fi
     local rdir="$1"
+    # Un resumen de lo que hay, que es lo que hacia falta para diagnosticar.
+    local _k _tiene=""
+    for _k in system.reg user.reg userdef.reg drive_c dosdevices pfx; do
+        [ -e "$WINEPREFIX/$_k" ] && _tiene="$_tiene $_k"
+    done
+    say "[+] Prefix incluido: $WINEPREFIX"
+    say "    contiene:${_tiene:- (NADA: esto no parece un prefijo)}"
+    say "    runner: $(runner_kind "$rdir" 2>/dev/null || printf '?')"
     local probe="$WINEPREFIX/.wp_write_test"
     if ! ( : > "$probe" ) 2>/dev/null; then
         say "AVISO: el prefix incluido NO es escribible; el juego puede fallar."
@@ -11658,6 +11953,33 @@ EOF2
         say "       'Instalar librerias' del menu principal."
     else
         touch "$WINEPREFIX/.wp_bundled_ready" 2>/dev/null
+    fi
+    # El usuario del archivo (Batocera guarda como root) enlazado al que
+    # espera el runner: si no, el juego no encuentra sus datos.
+    local _pfxdir="$WINEPREFIX"
+    [ -d "$WINEPREFIX/pfx/drive_c" ] && _pfxdir="$WINEPREFIX/pfx"
+    prefijo_usuario_enlazar "$_pfxdir"
+
+    # Marcar el prefijo para que Proton no lo prepare en cada partida.
+    proton_marcar_prefijo "$rdir"
+
+    # LO QUE DE VERDAD INTERESA SABER: ¿se va a usar el registro del archivo?
+    #
+    # Con un runner Proton, el prefijo se busca en $WINEPREFIX/pfx. Si ahi no
+    # estan los .reg del archivo, Proton se hace uno nuevo y lo del wsquashfs
+    # no sirve de nada, aunque este todo montado. Eso es lo que se ve en el
+    # registro como wineboot creando iexplore/explorer/steam: no es que se
+    # actualice el prefijo, es que se esta haciendo uno.
+    local _raiz="$WINEPREFIX"
+    [ -d "$WINEPREFIX/pfx" ] && _raiz="$WINEPREFIX/pfx"
+    if [ -f "$_raiz/system.reg" ]; then
+        say "[+] Prefix incluido LISTO: se usara su registro ($_raiz)"
+    else
+        say "AVISO: el prefix incluido no tiene system.reg donde lo busca el"
+        say "       runner ($_raiz). Se creara uno NUEVO y lo que trajera el"
+        say "       archivo (DLLs, ajustes, partidas del prefijo) no se usara."
+        say "       Prueba con un runner de tipo Wine, o pon el prefijo en"
+        say "       'propio del juego' para no llevarte sorpresas."
     fi
     return 0
 }
@@ -13485,6 +13807,57 @@ espacios."
     return 0
 }
 
+keys_letra_boton() {
+    # La letra que lleva SERIGRAFIADA el boton de esa posicion.
+    # $1 = abajo | derecha | arriba | izquierda
+    #
+    # SIEMPRE la disposicion de Xbox, que es la de la Steam Deck y la de casi
+    # todos los mandos de PC. El estilo del .keys NO pinta aqui: dice como se
+    # LEE el fichero, no como es tu mando. Un tester con Deck que pone estilo
+    # Batocera sigue teniendo una A serigrafiada abajo, y decirle "pulsa B"
+    # seria cambiar un lio por otro.
+    #
+    # La posicion va detras entre parentesis, que es lo unico que no depende
+    # de nada: quien tenga un mando de Nintendo vera "A (abajo)" y sabra que
+    # es el de abajo, aunque el suyo ponga B.
+    case "$1" in
+        abajo)     printf 'A (abajo)' ;;
+        derecha)   printf 'B (derecha)' ;;
+        arriba)    printf 'Y (arriba)' ;;
+        izquierda) printf 'X (izquierda)' ;;
+    esac
+}
+
+keys_clave_boton() {
+    # El nombre que hay que escribir en el .keys para un boton FISICO.
+    # $1 = posicion: abajo | derecha | arriba | izquierda
+    #
+    # Con el estilo Batocera, "a" en el .keys es el boton de la DERECHA y "b"
+    # el de abajo. Al reves que en Xbox. Los menus ofrecian "Hotkey + A" y el
+    # usuario pulsaba la A de su mando... que con ese estilo es "b", asi que
+    # la combinacion no se formaba nunca y no pasaba nada.
+    #
+    # Aqui se traduce: el menu habla de botones FISICOS y esto escribe el
+    # nombre que toca segun el estilo que tenga el juego.
+    if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
+        case "$1" in
+            abajo)     printf 'b' ;;
+            derecha)   printf 'a' ;;
+            arriba)    printf 'y' ;;
+            izquierda) printf 'x' ;;
+            *)         printf '%s' "$1" ;;
+        esac
+    else
+        case "$1" in
+            abajo)     printf 'a' ;;
+            derecha)   printf 'b' ;;
+            arriba)    printf 'x' ;;
+            izquierda) printf 'y' ;;
+            *)         printf '%s' "$1" ;;
+        esac
+    fi
+}
+
 keys_texto_hay() {
     # ¿Hay ya una combinacion que escriba el texto guardado?
     [ -s "$1" ] || return 1
@@ -13562,14 +13935,22 @@ el Enter podria saltar al siguiente o aceptar antes de tiempo."
             "<< Volver"|"") return 0 ;;
         esac
     fi
+    # Se habla de botones FISICOS ("el de abajo"), no de nombres del .keys:
+    # con el estilo Batocera la "A" del fichero es el boton de la derecha.
     sel="$(menu "¿Con que combinacion se escribe?" \
-        "Hotkey + A" "Hotkey + B" "Hotkey + L1" "Hotkey + R1" "<< Volver")" || return 0
+        "Select + $(keys_letra_boton abajo)" \
+        "Select + $(keys_letra_boton derecha)" \
+        "Select + L1" \
+        "Select + R1" \
+        "<< Volver")" || return 0
     local trig=""
     case "$sel" in
-        "Hotkey + A")  trig='["hotkey","a"]' ;;
-        "Hotkey + B")  trig='["hotkey","b"]' ;;
-        "Hotkey + L1") trig='["hotkey","pageup"]' ;;
-        "Hotkey + R1") trig='["hotkey","pagedown"]' ;;
+        "Select + $(keys_letra_boton abajo)")
+            trig="[\"hotkey\",\"$(keys_clave_boton abajo)\"]" ;;
+        "Select + $(keys_letra_boton derecha)")
+            trig="[\"hotkey\",\"$(keys_clave_boton derecha)\"]" ;;
+        "Select + L1")  trig='["hotkey","pageup"]' ;;
+        "Select + R1")  trig='["hotkey","pagedown"]' ;;
         *) return 0 ;;
     esac
     if keys_texto_poner "$f" "$trig"; then
@@ -13661,18 +14042,20 @@ keys_teclado_virtual() {
     fi
     # Combinaciones que no chocan con la salida de emergencia (hotkey+start)
     sel="$(menu "¿Con que combinacion se abre el teclado?" \
-        "Hotkey + X" \
-        "Hotkey + Y" \
-        "Hotkey + L1" \
-        "Hotkey + R1" \
+        "Select + $(keys_letra_boton arriba)" \
+        "Select + $(keys_letra_boton izquierda)" \
+        "Select + L1" \
+        "Select + R1" \
         "L1 + R1" \
         "<< Volver")" || return 0
     local trig=""
     case "$sel" in
-        "Hotkey + X")  trig='["hotkey","x"]' ;;
-        "Hotkey + Y")  trig='["hotkey","y"]' ;;
-        "Hotkey + L1") trig='["hotkey","pageup"]' ;;
-        "Hotkey + R1") trig='["hotkey","pagedown"]' ;;
+        "Select + $(keys_letra_boton arriba)")
+            trig="[\"hotkey\",\"$(keys_clave_boton arriba)\"]" ;;
+        "Select + $(keys_letra_boton izquierda)")
+            trig="[\"hotkey\",\"$(keys_clave_boton izquierda)\"]" ;;
+        "Select + L1") trig='["hotkey","pageup"]' ;;
+        "Select + R1") trig='["hotkey","pagedown"]' ;;
         "L1 + R1")     trig='["pageup","pagedown"]' ;;
         *) return 0 ;;
     esac
@@ -13733,10 +14116,32 @@ keys_raton_fila() {
 }
 
 keys_boton_nombre() {
-    # El nombre largo de un boton o stick, para no enseñar "pagedown" a secas
+    # El nombre largo de un boton o stick, para no enseñar "pagedown" a secas.
+    #
+    # Los cuatro de la derecha se traducen segun el estilo: en el fichero "a"
+    # es un nombre fijo, pero la letra que el usuario ve en su mando depende
+    # de si es estilo Xbox o Batocera. La tabla KEYS_BOTONES trae la de Xbox,
+    # asi que con Batocera decia "A (abajo)" para el boton de la derecha.
     case "$1" in
         joystick1) printf 'stick izquierdo' ;;
         joystick2) printf 'stick derecho' ;;
+        a|b)
+            # SOLO a y b. Es lo unico que el estilo intercambia de verdad
+            # ("A y B cambiados" dice el propio mapeador) y lo unico que hay
+            # confirmado: el registro de un tester enseña 304 y 305.
+            #
+            # Con x e y NO se toca nada, porque las dos tablas del proyecto se
+            # contradicen: KEYS_BOTONES dice que "x" es el de arriba, y los
+            # identificadores del perfil le dan el 307, que en evdev es
+            # BTN_NORTH mientras que "y" es 308 = BTN_WEST (izquierda). Sin
+            # saber cual es la buena, cambiarlo seria cambiar un lio por otro.
+            local pos
+            if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
+                case "$1" in a) pos=derecha ;; b) pos=abajo ;; esac
+            else
+                case "$1" in a) pos=abajo ;; b) pos=derecha ;; esac
+            fi
+            printf '%s' "$(keys_letra_boton "$pos")" ;;
         *) local n
            n="$(printf '%s\n' "$KEYS_BOTONES" | awk -F'|' -v d="$1" '$1==d{print $2}')"
            printf '%s' "${n:-$1}" ;;
@@ -15216,6 +15621,7 @@ disk_menu() {
             "Mostrar el tamaño de WProton" \
             "Tamaño por juego" \
             "Reparar montajes colgados" \
+            "Reparar carpetas tapadas (el juego no ve sus ficheros)" \
             "Limpiar cache de shaders" \
             "Buscar prefijos y saves huerfanos" \
             "Borrar copias de saves antiguas" \
@@ -15234,6 +15640,31 @@ disk_menu() {
                 fi ;;
             "Reparar montajes colgados")
                 reparar_montajes ;;
+            "Reparar carpetas tapadas"*)
+                # Se listan SOLO los juegos que las tienen: enseñar los 141
+                # para que el usuario adivine cual es no ayuda a nadie.
+                local _d _g _con=""
+                for _d in "$OVERLAY_BASE"/*/upper; do
+                    [ -d "$_d" ] || continue
+                    [ -n "$(overlay_opacos_listar "$_d")" ] || continue
+                    _con="$_con$(basename "$(dirname "$_d")")
+"
+                done
+                if [ -z "$_con" ]; then
+                    ui_info "Ningun juego tiene carpetas tapadas.
+
+Esto pasa cuando algo borra y rehace una carpeta dentro de la
+superposicion: a partir de ahi, lo que trae el archivo en esa
+carpeta deja de verse."
+                else
+                    # shellcheck disable=SC2046
+                    _g="$(IFS=$'\n'; set -f; menu "Juegos con carpetas tapadas" \
+                        $(printf '%s' "$_con") "<< Volver")" || _g=""
+                    case "$_g" in
+                        ""|"<< Volver") ;;
+                        *) overlay_opacos_reparar "$_g" ;;
+                    esac
+                fi ;;
             "Limpiar cache de shaders")
                 local csz; csz="$(dir_bytes "$CACHE_DIR")"
                 if [ "${csz:-0}" -lt 1048576 ]; then
