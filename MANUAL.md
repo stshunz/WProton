@@ -4,7 +4,6 @@ Guía práctica para empezar y para resolver los problemas más habituales.
 Si solo quieres jugar, con los tres primeros apartados tienes de sobra.
 
 ---
-
 ## 1. Primeros pasos
 
 ### Instalar
@@ -63,6 +62,21 @@ Cuando el juego esté en una carpeta, aparece este menú:
 
 Puedes probar y ajustar tantas veces como quieras antes de empaquetar. **La configuración que hagas durante las pruebas se conserva** en el juego final.
 
+### Prefijos que vienen de Batocera
+
+Batocera **corre como root**, así que un prefijo hecho allí guarda los datos
+del juego en `drive_c/users/root/`. En un PC normal, Proton usa `steamuser` y
+Wine usa tu nombre: el juego mira ahí, no encuentra nada y arranca como recién
+instalado (sin idioma, sin configuración).
+
+WProton lo enlaza solo al preparar el prefijo. Si tu `steamuser` ya tiene
+ficheros propios, no toca nada y avisa, para no mezclar partidas.
+
+También puede pasar que la superposición **tape** carpetas: Wine borra y
+rehace las de usuario, y a partir de ahí lo que trae el archivo deja de verse.
+Las de usuario se destapan solas; para el resto hay *Gestión de archivos →
+Reparar carpetas tapadas*.
+
 ### Jugar
 
 Menú principal → **Jugar**. Ahí salen todos los juegos de tu carpeta de juegos, ya sean archivos empaquetados o carpetas. Elige uno con el mando y pulsa **A**.
@@ -78,8 +92,10 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | Botón | Qué hace |
 |---|---|
 | Cruceta o stick | Moverse |
+| **Izquierda / derecha** | Saltar una pantalla entera (en la lista) |
 | **A** | Elegir |
-| **B** | Volver atrás |
+| **B** | Volver atrás un nivel |
+| **Select** | Volver al menú principal desde donde estés (y ahí, salir) |
 | **X** | Configurar el juego resaltado (en la lista de juegos) |
 | **Y** | Buscar |
 | **Select + A** | Pantalla completa / ventana |
@@ -87,6 +103,15 @@ La primera vez que lances un juego, un asistente te preguntará tres cosas: qué
 | **X** sobre *Jugar al último* | Configurar ese juego sin abrir la lista |
 | **Select** (5 s) | (con un juego abierto) Cerrarlo y volver al menú |
 | **Select + Y** | (con un juego abierto) Recuperar el foco si se ha ido detrás |
+
+Con bibliotecas grandes, **izquierda y derecha** saltan una pantalla completa en
+vez de ir de uno en uno, y el puntero se queda en la misma fila para no perder
+el hilo.
+
+**Select** vuelve al menú principal esté donde esté, sin tener que ir dando
+atrás con **B** menú por menú. Y estando ya en el principal, **cierra WProton**
+(preguntando antes). Es una pulsación corta: mantenerlo sigue siendo lo que
+cierra un juego.
 
 **Buscar entre muchos juegos**: pulsa **Y** y aparece un teclado en pantalla; o, si tienes teclado, empieza a escribir directamente. Se filtran los juegos cuyo nombre *empiece* por lo que escribas.
 
@@ -219,6 +244,19 @@ lo guarda ahí y no en un menú. Antes de aplicarlo te enseña qué lleva dentro
 **guarda una copia del registro** en `wp_registro_<fecha>/` dentro del prefijo,
 porque una vez importado no hay deshacer.
 
+**Proton oficial de Steam** — en *Runners y herramientas → Descargar runners*.
+
+Valve **no publica Proton para descargar por su cuenta**: solo se consigue a
+través de Steam. Así que WProton no lo descarga: busca los que Steam ya tiene
+instalados —incluidos los de la tarjeta o de otro disco— y los enlaza.
+
+No ocupa nada, porque es un enlace a la copia de Steam, y se actualiza cuando
+Steam lo actualice. Si algún día desinstalas ese Proton desde Steam, el enlace
+se queda apuntando a la nada: basta con volver y elegir otro.
+
+> Si no aparece ninguno, instálalo desde Steam: *Biblioteca → Herramientas →
+> Proton*.
+
 **Instalar librerías** — los redistribuibles de Windows. Está en la pantalla
 de ajustes del juego y también en *Herramientas del prefijo*: desde ahí va
 directo al prefijo de ese juego, sin tener que volver a elegirlo. (En el menú
@@ -342,21 +380,105 @@ Combinado con la vista de rejilla y las carátulas, queda como un lanzador de co
 
 ---
 
-## 8. Espacio en disco
+## 8. Gestión de archivos
 
-*Espacio en disco* en el menú principal:
+*Gestión de archivos* en el menú principal:
 
 - **Mostrar el tamaño de WProton** — desglose por partes y espacio libre.
 - **Tamaño por juego** — cada juego con sus partidas y su prefijo.
 - **Limpiar caché de shaders** — se puede borrar sin miedo: se regenera sola.
 - **Buscar prefijos y partidas huérfanas** — restos de juegos que ya borraste.
 - **Borrar copias de partidas antiguas** — conserva las tres más recientes de cada juego.
+- **Reparar carpetas tapadas** — cuando algo borra y rehace una carpeta, el juego
+  deja de ver lo que trae su propio archivo (idiomas, configuración).
+- **Copiar o mover ficheros** — ver abajo.
 
 Antes de importar o empaquetar, WProton comprueba que haya sitio y avisa si no lo hay.
 
+### Copiar o mover ficheros
+
+Para llevar algo de un sitio a otro sin salir de WProton: una partida guardada,
+un `.keys`, una carátula, un fichero que le falte a un juego.
+
+Eliges **qué** copiar y **dónde** ponerlo, y ya. Vale tanto para ficheros sueltos
+como para carpetas enteras.
+
+**No borra nada.** Si te equivocas, el original sigue donde estaba. Y hay tres
+avisos por si acaso: no deja copiar algo sobre sí mismo, ni una carpeta dentro de
+sí misma —se copiaría sin fin hasta llenar el disco—, y pregunta antes de
+reemplazar algo que ya exista.
+
+> Si borras un prefijo desde aquí, WProton guarda antes una copia de lo que haya
+> en `users/` (partidas y configuración). En el compartido son las de **todos** los
+> juegos que lo usen.
+
 ---
 
-## 9. Formatos de archivo
+## 9. Juegos de Linux
+
+Un `.wsquashfs` no tiene por qué llevar un juego de Windows. Si dentro hay un
+juego de **Linux**, WProton lo detecta y lo lanza tal cual: sin Wine, sin
+Proton y sin prefijo.
+
+No hay que hacer nada especial. Añades el juego como cualquier otro —eligiendo
+su `.sh` o su ejecutable— y WProton se encarga del resto:
+
+- **Lo detecta solo.** Si hay algún `.exe` por medio, lo trata como juego de
+  Windows: eso manda siempre.
+- **No pregunta qué ejecutar.** Estos juegos tienen un lanzador y punto.
+- **No escribe `autorun.cmd`**, que es una convención de Wine y aquí no pinta
+  nada.
+
+### Dónde guardan sus cosas
+
+Un juego de Linux escribe sus ajustes y partidas en tu carpeta personal
+(`~/.config`, `~/.local`). WProton los desvía a una carpeta propia, como hace
+el prefijo con los juegos de Windows:
+
+- **`WProton.home`** — una sola para todos, si el juego usa el prefijo
+  compartido (lo normal).
+- **`<juego>.home`** — solo suya, si le pones *prefijo propio del juego*.
+
+Así tu carpeta personal no se llena, y para llevarte un juego a otro sitio te
+llevas su carpeta.
+
+> Las opciones de Wine —runner, prefijo, librerías, GAMEID— no aparecen en la
+> configuración de estos juegos: ahí no hacen nada.
+
+**Si un juego no arranca** y el registro habla de `GLIBC` o de una biblioteca
+que falta, es que se compiló para otra distribución. Eso no lo arregla WProton;
+suele resolverse con una versión del juego más reciente.
+
+---
+
+## 10. Juegos de TeknoParrot
+
+Los juegos de recreativa que usan **TeknoParrot** funcionan sin preparar nada.
+
+Estos juegos suelen venir de Batocera con un `.bat` que comprueba en qué ruta
+está la ISO y copia uno de dos perfiles ya rellenos. Esas rutas no existen aquí
+—el juego se monta en una carpeta temporal distinta cada vez—, así que WProton
+lo resuelve por su cuenta al lanzarlo:
+
+- Da a la carpeta del juego **su propia unidad** (`D:`), para que las rutas del
+  perfil sean cortas, que es lo que TeknoParrot reconoce.
+- Rellena la ruta del juego en el perfil de `UserProfiles`, aunque venga vacía.
+- Se salta el `.bat` y llama a TeknoParrot directamente con ese perfil.
+
+**El fichero original no se pierde.** Antes de tocar nada se guarda una copia
+(`<perfil>.xml.wproton_original`) y al salir del juego se devuelve a su sitio,
+así que **el juego sigue funcionando en Batocera** sin hacer nada. Si WProton se
+cierra de golpe, se restaura al arrancar la próxima vez.
+
+> TeknoParrot es un **lanzador**: su ventana se queda abierta mientras el juego
+> corre. Para volver a WProton, ciérrala o mantén **Select**.
+
+Si el perfil pide un fichero que no está en el juego, WProton lo dice con el
+nombre en vez de fallar en silencio.
+
+---
+
+## 11. Formatos de archivo
 
 WProton puede empaquetar en dos formatos (*Biblioteca y preferencias → Formato al empaquetar*):
 
@@ -367,7 +489,7 @@ Los dos se montan igual de rápido y se usan exactamente igual. Puedes tener jue
 
 ---
 
-## 10. Preguntas frecuentes
+## 12. Preguntas frecuentes
 
 **¿Puedo mover WProton a otro sitio o a un pendrive?**
 Sí. Si en `settings.conf` usas una ruta relativa —`GAMES_PATH="games"`— puedes mover la carpeta entera y todo seguirá funcionando.
@@ -434,6 +556,36 @@ Ver las teclas asignadas  (4)
     L1                         ->  E
     Stick izq. arriba          ->  Flecha arriba
 ```
+
+Si el `.keys` **sustituye al mando** —es decir, si asigna teclas al movimiento:
+sticks, cruceta o gatillos— WProton captura el mando para que el juego solo vea
+el teclado, que es lo que hace Batocera. Sin eso, un juego con soporte de mando
+usa el mando e ignora las teclas.
+
+Se decide solo mirando el fichero, así que normalmente no hay que tocar nada. Si
+un juego concreto lo lleva mal, está en *Mapeador .keys → El juego NO ve el mando*, con tres opciones y una explicación de cada una.
+
+> El ratón también funciona: si el `.keys` asigna un stick al ratón, WProton
+> crea un ratón virtual. Los clics (`BTN_LEFT`) van por ahí, no por el teclado.
+
+**El teclado en pantalla** resuelve los juegos que te obligan a escribir un
+nombre y no soportan mando: una combinación abre un teclado que se maneja con
+la cruceta y A, y va escribiendo en el juego.
+
+Se añade desde el editor, *Añadir: teclado en pantalla*, eligiendo la
+combinación (Hotkey + X, L1 + R1…). Las que se ofrecen no chocan con la salida
+de emergencia.
+
+**Si el juego se minimiza al abrir el teclado**, usa *Añadir: escribir un
+texto*. Guardas el texto (tu nombre) en los ajustes y una combinación lo
+teclea dentro del juego, **sin abrir ninguna ventana**: así el juego no pierde
+el foco. Opcionalmente pulsa Enter al terminar.
+
+> La ñ y las vocales con tilde no se pueden escribir así: se mandan códigos de
+> tecla y un teclado no tiene tecla para «ñ». Se avisa al guardar.
+
+Si algún juego se pierde letras, sube `WP_TECLEO_MS` en `settings.conf` (60 por
+defecto): es cuánto se mantiene pulsada cada tecla.
 
 También se puede **usar el mando como ratón**: un stick mueve el puntero y un
 botón hace clic. Va bien en juegos de estrategia, aventuras gráficas e
@@ -535,7 +687,7 @@ tocan.
 
 ---
 
-## 11. Salir de un juego con el mando
+## 13. Salir de un juego con el mando
 
 Mantén **Select cinco segundos** durante la partida y el juego se cierra. Son
 cinco y no dos a propósito: es una salida de emergencia y no debe dispararse
@@ -550,7 +702,7 @@ Se puede cambiar el tiempo y la combinación en `settings.conf`
 
 ---
 
-## 12. Dónde está cada cosa
+## 14. Dónde está cada cosa
 
 | Carpeta | Contiene |
 |---|---|
@@ -566,3 +718,13 @@ Se puede cambiar el tiempo y la combinación en `settings.conf`
 | `lang/` | Idiomas |
 
 Los ajustes generales están en `settings.conf`, que es un fichero de texto normal y corriente, comentado, por si prefieres editarlo a mano.
+
+---
+
+## Licencia
+
+WProton es software libre bajo la **GPL-3.0 o posterior**. Puedes usarlo,
+estudiarlo, modificarlo y compartirlo; si distribuyes una versión modificada,
+tiene que ir con la misma licencia y con su código fuente.
+
+El texto completo está en el fichero `LICENSE` del proyecto.

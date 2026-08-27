@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.30** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.45** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
 
@@ -50,6 +50,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 ### Runners
 - **Runner propio de WProton** (GE-Custom), que se instala de serie.
 - Descarga desde el menú: **GE-Proton**, **Soda** y **Caffe** (Bottles), **Proton-CachyOS**, **DWProton**, **Wine-LG**, **Proton-LG**, **Wine-GE** y **Kron4ek**.
+- **Los Proton oficiales de Valve**, si tienes Steam: no se descargan (Valve no los publica fuera de Steam), se enlazan los que ya tengas instalados —también los de la tarjeta o de otro disco—, así que no ocupan sitio y se actualizan con Steam.
 - **Auto-descarga**: si el perfil de un juego pide un runner que no tienes, se descarga solo antes de lanzar.
 - En Batocera detecta los Wine del sistema y los de `/userdata/system/wine/custom`.
 
@@ -69,7 +70,7 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 - **Importar un fichero `.reg`** al prefijo, por ejemplo para cambiar el idioma de un juego que lo guarda en el registro. Enseña lo que lleva dentro antes de aplicarlo y **guarda una copia del registro**, porque no hay deshacer.
 - **Instalar librerías en cualquier prefijo**, no solo en el compartido, con una **barra que avanza de verdad**: los redistribuibles se instalan de uno en uno y se ve por cuál va. Si uno falla, sigue con el resto y dice cuál falló.
 - La primera vez que se estrena el prefijo compartido, ofrece dejarle instalado **Visual C++ 2015-2022**, que es lo que piden casi todos los juegos de Windows y sin lo cual muchos arrancan y se cierran sin dar ningún error.
-- El **mapeador `.keys`** enseña las teclas que ya tiene asignadas un juego sin tener que abrir el fichero, conserva las combinaciones al editarlo, y permite **usar el mando como ratón** (un stick mueve el puntero y un botón hace clic), útil en juegos de estrategia y aventuras gráficas.
+- El **mapeador `.keys`** enseña las teclas que ya tiene asignadas un juego sin tener que abrir el fichero, conserva las combinaciones al editarlo, y permite **usar el mando como ratón** (un stick mueve el puntero y un botón hace clic) y **abrir un teclado en pantalla** con una combinación, para los juegos que obligan a escribir un nombre.
 
 ### Mantenimiento
 - **Espacio en disco**: qué ocupa cada cosa, tamaño por juego, limpieza de cachés y detección de prefijos y partidas huérfanas.
@@ -178,4 +179,17 @@ Metacritic. Las carátulas, de [SteamGridDB](https://www.steamgriddb.com/).
 
 ## Licencia
 
-*(Pendiente de elegir — GPL-3.0 encajaría con el ecosistema del que bebe el proyecto.)*
+WProton es software libre bajo la **GPL-3.0 o posterior**. El texto completo
+está en [LICENSE](LICENSE).
+
+En corto: puedes usarlo, estudiarlo, modificarlo y compartirlo. Si distribuyes
+una versión modificada, tiene que ir con la misma licencia y con su código
+fuente, para que quien la reciba tenga las mismas libertades que tú.
+
+Se eligió la GPL porque es la del ecosistema del que bebe el proyecto
+—PortProton y Batocera son GPL— y porque la idea es que nadie pueda coger esto,
+cerrarlo y venderlo sin devolver nada.
+
+> Los runners, las herramientas de montaje y las librerías que WProton
+> **descarga** al usarlos mantienen cada uno su propia licencia: no se
+> distribuyen con él, se bajan en tu equipo cuando hacen falta.

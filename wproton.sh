@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.45"
+WPROTON_VERSION="1.46"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1803,9 +1803,9 @@ MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 349669345a43" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 96f288c7d1e9" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 349669345a43
+# WPROTON_HELPER mapeador.py 96f288c7d1e9
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2569,6 +2569,26 @@ def main():
 
     _saltadas = 0
     _mouse_eje = None          # stick declarado como raton en las acciones
+
+    # SOLO LEIAMOS actions_player1.
+    #
+    # La documentacion de Batocera dice que un mismo .keys puede traer los
+    # perfiles de VARIOS jugadores: actions_player1, actions_player2... Con un
+    # fichero de dos jugadores, el segundo se quedaba sin mapeo y sin aviso.
+    #
+    # WProton mapea UN mando (el jugador 1), asi que las acciones de los demas
+    # no se aplican, pero al menos se dice: antes desaparecian en silencio y
+    # nadie sabia por que el segundo mando no respondia.
+    _otros = [k for k in data
+              if k.startswith('actions_player') and k != 'actions_player1']
+    if _otros:
+        print("[keys] El fichero trae tambien %s. WProton mapea el mando del"
+              " jugador 1; el resto no se aplica."
+              % ", ".join(sorted(_otros)), flush=True)
+    if data.get('actions_gun1'):
+        print("[keys] El fichero trae acciones de pistola optica"
+              " (actions_gun1): no se aplican.", flush=True)
+
     for act in data.get('actions_player1', []):
         # UNA ACCION MAL FORMADA NO PUEDE TUMBAR EL MAPEADOR ENTERO.
         #
@@ -2589,6 +2609,23 @@ def main():
             # Yo lo trataba como fichero mal formado y lo cantaba como aviso,
             # asustando por nada. El raton se configura por su bloque
             # "mouse", asi que aqui basta con saltarlo en silencio.
+            if str(act.get('type', '')).lower() == 'exec':
+                # ORDENES DEL SISTEMA: SE RECONOCEN, NO SE EJECUTAN.
+                #
+                # Batocera admite {"type":"exec"} para lanzar una orden con un
+                # boton (batocera-screenshot y similares). Aqui no se ejecuta,
+                # y a proposito:
+                #
+                #   - esas ordenes son de Batocera y en otro sistema no
+                #     existen, asi que fallarian igual;
+                #   - y ejecutar lo que ponga un fichero que viene DENTRO de
+                #     un juego descargado es correr codigo ajeno sin avisar.
+                #
+                # Se dice, que es lo que faltaba: antes se contaba como accion
+                # rota y el aviso no aclaraba nada.
+                print("[keys] Orden del sistema por '%s' (%s): no se ejecuta."
+                      % (act.get('trigger'), act.get('target')), flush=True)
+                continue
             if str(act.get('type', '')).lower() == 'mouse':
                 # EL RATON TAMBIEN SE DECLARA COMO ACCION.
                 #
@@ -3382,10 +3419,37 @@ find_keys_file() {
     # Con este orden, el fichero del juego es el punto de partida y lo que tu
     # cambies manda a partir de entonces. Para volver al original basta con
     # borrar el de profiles/.
-    local p="$1" gid="$2"
+    # Y EN UNA CARPETA, EL QUE VA DENTRO.
+    #
+    # Batocera coloca el .keys en dos sitios distintos segun el formato, y es
+    # logico: en un .wsquashfs va FUERA, con el nombre del juego, porque
+    # dentro no se puede escribir; en una carpeta .pc va DENTRO, junto al
+    # autorun.cmd, y ahi el nombre del juego no pinta nada.
+    #
+    # Nosotros solo mirabamos fuera, asi que los juegos en carpeta con su
+    # .keys dentro se lanzaban sin mapeo: el mismo juego funcionaba
+    # comprimido y no en carpeta.
+    local p="$1" gid="$2" k
     for k in "$PROFILE_DIR/$gid.keys" "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] && { printf '%s' "$k"; return 0; }
     done
+    # Dentro de la carpeta del juego. "padto.keys" es el nombre que usa
+    # Batocera; se aceptan variantes por si cambia, pero SOLO si hay uno: con
+    # varios no se adivina cual es el bueno.
+    local dir=""
+    [ -d "$p" ] && dir="$p"
+    if [ -n "$dir" ]; then
+        for k in "$dir/padto.keys" "$dir/pad2key.keys" "$dir/padtokey.keys"; do
+            [ -f "$k" ] && { printf '%s' "$k"; return 0; }
+        done
+        local sueltos n
+        sueltos="$(find "$dir" -maxdepth 1 -type f -name '*.keys' 2>/dev/null)"
+        n="$(printf '%s\n' "$sueltos" | grep -c .)"
+        if [ "$n" = 1 ]; then
+            printf '%s' "$sueltos"
+            return 0
+        fi
+    fi
     return 1
 }
 
@@ -11321,7 +11385,13 @@ Configurar juego -> Comprobar integridad"
 
     EXE_PATH=""; EXE_ARGS=""
     AUTORUN_ENV=""; AUTORUN_LANG=""     # que no se hereden del juego anterior
-    if [ -n "${WP_NATIVO:-}" ] && [ "$mode" = "auto" ]; then
+    # EN MODO MANUAL TAMBIEN, si es un juego de Linux.
+    #
+    # "manual" quiere decir "deja que el usuario elija el ejecutable", y por
+    # eso se exigia modo auto. Pero con --exe desde la linea de ordenes el
+    # modo es manual, y en un juego de Linux eso acababa pidiendo un .exe que
+    # no existe. Ahi no hay nada que elegir: hay un lanzador y ya.
+    if [ -n "${WP_NATIVO:-}" ]; then
         # JUEGO DE LINUX: el ejecutable ya lo encontro juego_es_nativo.
         #
         # Aqui se exigia ademas que EXE_OVERRIDE estuviera VACIO, y el
@@ -13617,6 +13687,52 @@ teknoparrot_lanzador() {
     local tkp; tkp="$(find "$root" -maxdepth 2 -iname 'TeknoParrotUi.exe' \
         2>/dev/null | head -n1)"
     [ -n "$tkp" ] || return 1
+
+    # SOLO SE SALTA EL .bat SI DE VERDAD MORIRIA.
+    #
+    # El salto se invento para los .bat que empiezan comprobando si la ISO
+    # esta en una ruta de Batocera y se paran si no la encuentran. Pero hay
+    # .bat que no comprueban nada:
+    #
+    #   start /wait TeknoParrotUi.exe --profile=X.xml --startMinimized
+    #   taskkill /im Juego.exe
+    #
+    # Ese funciona tal cual, y saltarlo era peor: se perdia el "taskkill" que
+    # cierra el juego al salir, y sus argumentos aparecian en el campo
+    # "Argumentos" del perfil, que el usuario no habia escrito. Un tester lo
+    # describio como "pilla parametros de dentro y los pone en argumentos".
+    #
+    # La regla ahora: si el .bat NO tiene comprobaciones de rutas, se ejecuta
+    # tal cual. Solo se salta si las tiene y ninguna se cumple aqui.
+    local n_checks=0 n_ok=0 linea ruta
+    while IFS= read -r linea; do
+        case "$linea" in
+            *[Ii][Ff]*[Ee][Xx][Ii][Ss][Tt]*) ;;
+            *) continue ;;
+        esac
+        n_checks=$((n_checks+1))
+        # La ruta que comprueba, en formato Windows; se pasa a Linux para ver
+        # si existe de verdad.
+        ruta="$(printf '%s' "$linea" | sed -n 's/.*[Ee][Xx][Ii][Ss][Tt] *"\([^"]*\)".*/\1/p')"
+        [ -n "$ruta" ] || continue
+        ruta="$(printf '%s' "$ruta" | tr '\\' '/')"
+        case "$ruta" in
+            [A-Za-z]:*) ruta="${ruta#?:}" ;;
+        esac
+        # Relativa al juego, o absoluta del sistema.
+        if [ -e "$root/$ruta" ] || [ -e "$ruta" ]; then
+            n_ok=$((n_ok+1))
+        fi
+    done < "$exe"
+    if [ "$n_checks" = 0 ]; then
+        say "[i] TeknoParrot: el .bat no comprueba rutas, se ejecuta tal cual"
+        return 1
+    fi
+    if [ "$n_ok" -gt 0 ]; then
+        say "[i] TeknoParrot: el .bat encuentra sus rutas, se ejecuta tal cual"
+        return 1
+    fi
+    say "[i] TeknoParrot: el .bat busca rutas que aqui no existen ($n_checks)"
     # El perfil que el .bat pasa con --profile. Se saca de ahi para respetar
     # el que el juego use de verdad.
     local perfil
@@ -19094,6 +19210,84 @@ EOFCN
     return 1
 }
 
+cover_exacta() {
+    # La caratula propia de la forma pedida, SIN el apaño de usar la vertical.
+    # $1 = gid, $2 = forma (vertical/wide/43).
+    #
+    # cover_for devuelve la vertical cuando no hay panoramica, y eso esta bien
+    # como ultimo recurso pero tapa lo que pueda haber en el escaneo. Aqui se
+    # pregunta por la forma exacta y ya.
+    local d e nom
+    d="$(covers_dir_de "${2:-vertical}")"
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            [ -f "$d/$nom.$e" ] && { printf '%s' "$d/$nom.$e"; return 0; }
+        done
+    done <<EOFCX
+$(cover_nombres "$1")
+EOFCX
+    return 1
+}
+
+cover_escaneo() {
+    # Caratula del escaneo de ES-DE / EmulationStation, junto al juego.
+    # $1 = ruta del juego (carpeta o fichero), $2 = tipo (vertical/wide/43).
+    #
+    # POR QUE HACE FALTA:
+    #
+    # Quien viene de Batocera o ES-DE ya tiene sus caratulas escaneadas, en
+    # una carpeta "images" (o "media") junto a los juegos. Nosotros solo
+    # mirabamos en NUESTRA carpeta covers/, asi que esos juegos salian sin
+    # caratula aunque estuviera ahi al lado. Un tester copio la carpeta
+    # entera del escaneo y no se veia ninguna.
+    #
+    # El escaneo guarda "<juego>-image.png", "<juego>-cover.png" y demas,
+    # segun el programa y la version. Se prueban las formas conocidas.
+    local juego="$1" tipo="${2:-vertical}"
+    # EL NOMBRE, CON Y SIN EXTENSION.
+    #
+    # Una carpeta de juego se llama "Blade Arcus.pc", pero el escaneo guarda
+    # "Blade Arcus-image.png": para ES-DE el juego se llama sin el ".pc". Con
+    # los .wsquashfs pasa igual.
+    #
+    # Antes solo se quitaba la extension a los ficheros, no a las carpetas, y
+    # los juegos en carpeta se quedaban sin caratula. Se prueban las dos.
+    local dir base base2
+    dir="$(dirname "$juego")"
+    base="$(basename "$juego")"
+    base2="${base%.*}"
+    [ "$base2" = "$base" ] && base2=''
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+
+    # Sufijos segun el tipo de caratula que se pida.
+    local sufijos
+    case "$tipo" in
+        wide)  sufijos="-fanart -screenshot -titlescreen -image" ;;
+        43)    sufijos="-screenshot -titlescreen -image" ;;
+        *)     sufijos="-cover -box2dfront -boxart -thumb -image" ;;
+    esac
+
+    local carpeta suf e nom
+    for carpeta in "$dir/images" "$dir/media" "$dir/downloaded_images" \
+                   "$dir/covers" "$dir/boxart"; do
+        [ -d "$carpeta" ] || continue
+        while IFS= read -r nom; do
+            [ -n "$nom" ] || continue
+            for suf in $sufijos ""; do
+                for e in png jpg jpeg webp; do
+                    [ -f "$carpeta/$nom$suf.$e" ] && {
+                        printf '%s' "$carpeta/$nom$suf.$e"; return 0; }
+                done
+            done
+        done <<EOFCE
+$(cover_nombres "$base"; [ -n "$base2" ] && cover_nombres "$base2")
+EOFCE
+    done
+    return 1
+}
+
 cover_for() {
     # $1 = gid, $2 = "wide" para la carátula horizontal (opcional).
     #
@@ -20341,6 +20535,7 @@ biblioteca_lenta() {
         printf '%s\n' "$etq" >> "$salida"
         gid3="$(game_id "$rel3")"
         cov3="$(cover_for "$gid3" "${LIST_COVER:-vertical}")" || cov3=""
+        [ -n "$cov3" ] || cov3="$(cover_escaneo "$rel3" "${LIST_COVER:-vertical}")" || cov3=""
         mt3="$(game_meta "$rel3")"
         fv3="${mt3%%|*}"; mt3="${mt3#*|}"; sc3="${mt3#*|}"
         pc3="$(profile_get "$gid3" PLAY_COUNT)" || pc3=""
@@ -20373,7 +20568,18 @@ rejilla_lenta() {
         t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
         # con la vista de caratulas anchas se pide la horizontal; si el
         # juego no la tiene, cover_for devuelve la vertical
-        cov="$(cover_for "$gid2" "$aspecto")" || cov=""
+        # LA FORMA EXACTA MANDA, VENGA DE DONDE VENGA.
+        #
+        # cover_for, si le pides la panoramica y no la hay, devuelve la
+        # VERTICAL -mejor deformada que un hueco-. Pero entonces nunca se
+        # miraba el escaneo, y quien tuviera ahi una panoramica DE VERDAD veia
+        # nuestra vertical estirada en su lugar.
+        #
+        # Asi que primero se busca la forma pedida en los dos sitios, y solo
+        # si no aparece se acepta el apaño de cover_for.
+        cov="$(cover_exacta "$gid2" "$aspecto")" || cov=""
+        [ -n "$cov" ] || cov="$(cover_escaneo "$rel" "$aspecto")" || cov=""
+        [ -n "$cov" ] || cov="$(cover_for "$gid2" "$aspecto")" || cov=""
         info=""
         mt="$(game_meta "$rel")"
         fv="${mt%%|*}"; mt="${mt#*|}"; lp="${mt%%|*}"; sc="${mt#*|}"
