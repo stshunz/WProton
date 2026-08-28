@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.46"
+WPROTON_VERSION="1.47"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -1800,12 +1800,13 @@ Se restauro la copia previa."
 }
 
 MAPEADOR_PY="$RUNTIME_DIR/mapeador.py"
+MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 96f288c7d1e9" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py fb9e467fa1cf" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 96f288c7d1e9
+# WPROTON_HELPER mapeador.py fb9e467fa1cf
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2534,6 +2535,25 @@ def main():
         device = _con_perfil[0]
     print("[+] Perfil de botones segun: %s" % device.name, flush=True)
     perfil_actual = get_perfil(device.name)
+    # QUE PERFIL SE HA ELEGIDO, en el registro.
+    #
+    # El perfil decide de donde se lee cada control, y la CRUCETA es el que
+    # mas cambia: en un mando normal llega como eje (ABS_HAT0), en la Deck
+    # llega como botones y ese eje es el touchpad. Con el perfil equivocado,
+    # la cruceta del .keys no responde y no hay forma de saber por que.
+    #
+    # Un tester tenia un .keys de solo cruceta y no le funcionaba: sin esta
+    # linea no habia manera de saber si el problema era el perfil o el
+    # fichero.
+    _nom_perfil = next((k for k, v in PERFILES.items() if v is perfil_actual),
+                       "?")
+    print("[keys] Mando: \"%s\" -> perfil %s" % (device.name, _nom_perfil),
+          flush=True)
+    _ejes = perfil_actual.get("abs_map") or {}
+    print("[keys] La cruceta se lee %s"
+          % ("como eje (ABS_HAT0)"
+             if (ecodes.ABS_HAT0X in _ejes or ecodes.ABS_HAT0Y in _ejes)
+             else "como botones"), flush=True)
     ids            = perfil_actual["ids"]
     abs_map_actual = perfil_actual["abs_map"]
     threshold      = perfil_actual["threshold"]
@@ -2850,8 +2870,17 @@ def main():
           Need for Speed III  sticks + cruceta + gatillos -> capturar
           DRIV3R              solo combinaciones          -> no capturar
         """
-        if map_dirs:                      # sticks o cruceta
-            return True, "el .keys mapea el movimiento (sticks/cruceta)"
+        # LA CRUCETA SOLA NO SUSTITUYE AL MANDO.
+        #
+        # Antes bastaba con map_dirs, que incluye la cruceta. Pero hay .keys
+        # que mapean SOLO la cruceta para AÑADIRLA a un juego que ya funciona
+        # con el stick: capturar ahi le quita el stick, que era lo unico que
+        # le iba. Un tester se quedo sin cruceta Y sin stick.
+        #
+        # Sustituir al mando es mapear los STICKS o los gatillos.
+        _sticks = [k for k in map_dirs if k.startswith('joystick') and map_dirs[k]]
+        if _sticks:
+            return True, "el .keys mapea los sticks"
         for _n in ("l2", "r2"):           # gatillos
             _c = ids.get(_n)
             if _c is not None and map_normal.get(_c):
@@ -3405,6 +3434,439 @@ if __name__ == "__main__":
 MAPEOF
 }
 
+write_mando_virtual() {
+    # El mando virtual va en su propio fichero, igual que el mapeador: son
+    # cosas distintas y conviene que se puedan tocar por separado.
+    grep -q "WPROTON_HELPER mando_virtual.py f688c180b8d1" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
+# WPROTON_HELPER mando_virtual.py f688c180b8d1
+# -*- coding: utf-8 -*-
+"""Mando virtual: presenta al juego un mando distinto del que tienes.
+
+QUE PROBLEMA RESUELVE
+
+Hay juegos que solo leen una parte del mando. El caso que lo motivo: un juego
+que solo hace caso al stick izquierdo, asi que la cruceta no sirve para nada.
+Con un .keys se puede convertir la cruceta en teclas, pero muchos juegos, al
+detectar un mando activo, DEJAN DE LEER EL TECLADO: no llega ni una cosa ni la
+otra.
+
+La solucion es no traducir a teclado sino a MANDO: se crea un mando virtual
+-un Xbox 360 normal y corriente- y se le copia todo lo del mando fisico, pero
+haciendo que la cruceta mueva tambien el stick izquierdo. El juego ve un solo
+mando, perfectamente normal, en el que la cruceta funciona.
+
+COMO CONVIVE CON EL RESTO
+
+Esto NO toca el mapeador de teclas: son cosas distintas y pueden usarse a la
+vez o por separado. El mapeador convierte el mando en TECLAS; esto convierte
+un mando en OTRO MANDO.
+
+El mando fisico se captura (grab) para que el juego no vea los dos a la vez y
+se le dupliquen los controles.
+
+USO
+
+    mando_virtual.py <modo> [dispositivo]
+
+        modo         cruceta_stick | copia
+        dispositivo  /dev/input/eventN (si no, se busca solo)
+
+Se para con SIGTERM, y al hacerlo suelta el mando fisico.
+"""
+
+import errno
+import os
+import signal
+import sys
+import time
+
+try:
+    import evdev
+    from evdev import ecodes
+except ImportError:
+    sys.stderr.write("mando_virtual: falta python-evdev\n")
+    sys.exit(2)
+
+
+# QUE MANDO FINGIMOS.
+#
+# Por defecto un Xbox 360, que es el que todos los juegos entienden sin
+# configurar nada. Pero hay juegos que se portan mejor con uno de Sony -o que
+# simplemente enseñan los botones correctos-, asi que tambien se puede fingir
+# un DualShock 4.
+#
+# Lo que decide como te ve un juego NO es el nombre, sino el par
+# vendor/product: es lo que miran SDL y Wine para saber que mando es y que
+# iconos dibujar. Por eso se cambian los tres numeros y no solo el texto.
+MANDOS = {
+    "xbox": ("Microsoft X-Box 360 pad", 0x045E, 0x028E, 0x0114),
+    "ds4":  ("Sony Interactive Entertainment Wireless Controller",
+             0x054C, 0x09CC, 0x8111),
+}
+NOMBRE_VIRTUAL = MANDOS["xbox"][0]
+VENDOR, PRODUCT, VERSION = MANDOS["xbox"][1:]
+
+# Todos los nombres que puede tener el mando virtual. Hace falta para no
+# leernos a nosotros mismos: si lo hicieramos, cada evento volveria a entrar y
+# se formaria un bucle.
+NOMBRES_VIRTUALES = tuple(v[0] for v in MANDOS.values())
+
+# UN MANDO COMPLETO, no solo lo imprescindible.
+#
+# Se declara todo lo que un mando moderno puede tener, aunque el fisico no lo
+# traiga: declarar de mas no molesta -el juego simplemente nunca recibe ese
+# boton- y declarar de MENOS si, porque lo que no esta declarado el kernel lo
+# descarta EN SILENCIO. Ese fallo ya nos mordio con los clics del raton.
+BOTONES = [
+    # Cara
+    ecodes.BTN_SOUTH, ecodes.BTN_EAST, ecodes.BTN_NORTH, ecodes.BTN_WEST,
+    # Hombros y gatillos como boton (hay juegos que leen esto en vez del eje)
+    ecodes.BTN_TL, ecodes.BTN_TR, ecodes.BTN_TL2, ecodes.BTN_TR2,
+    # Centrales
+    ecodes.BTN_SELECT, ecodes.BTN_START, ecodes.BTN_MODE,
+    # Sticks pulsables
+    ecodes.BTN_THUMBL, ecodes.BTN_THUMBR,
+    # LA CRUCETA COMO BOTONES.
+    #
+    # Es la que mas cambia de un mando a otro: unos la mandan como eje
+    # (ABS_HAT0) y otros como botones. La Steam Deck y las Anbernic la mandan
+    # como BOTONES, y ahi ese eje es el TOUCHPAD. Sin declararla asi, esta
+    # opcion no funcionaria justo en la Deck.
+    ecodes.BTN_DPAD_UP, ecodes.BTN_DPAD_DOWN,
+    ecodes.BTN_DPAD_LEFT, ecodes.BTN_DPAD_RIGHT,
+    # Paletas traseras y botones extra (la Deck tiene cuatro)
+    ecodes.BTN_TRIGGER_HAPPY1, ecodes.BTN_TRIGGER_HAPPY2,
+    ecodes.BTN_TRIGGER_HAPPY3, ecodes.BTN_TRIGGER_HAPPY4,
+]
+
+# La cruceta cuando llega como BOTON: a que direccion del eje corresponde.
+# El primer valor es el eje y el segundo lo que vale al pulsarlo.
+DPAD_BOTON = {
+    ecodes.BTN_DPAD_UP:    (ecodes.ABS_HAT0Y, -1),
+    ecodes.BTN_DPAD_DOWN:  (ecodes.ABS_HAT0Y, 1),
+    ecodes.BTN_DPAD_LEFT:  (ecodes.ABS_HAT0X, -1),
+    ecodes.BTN_DPAD_RIGHT: (ecodes.ABS_HAT0X, 1),
+}
+
+# Rango de los sticks de un Xbox 360. Se declara explicito para que el juego
+# calibre igual que con uno de verdad.
+EJE_MIN, EJE_MAX = -32768, 32767
+GAT_MIN, GAT_MAX = 0, 255
+
+EJES = [
+    (ecodes.ABS_X,     (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_Y,     (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_RX,    (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_RY,    (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_Z,     (GAT_MIN, GAT_MAX, 0, 0)),
+    (ecodes.ABS_RZ,    (GAT_MIN, GAT_MAX, 0, 0)),
+    (ecodes.ABS_HAT0X, (-1, 1, 0, 0)),
+    (ecodes.ABS_HAT0Y, (-1, 1, 0, 0)),
+]
+
+
+# UN MANDO DE LOS DE ANTES, para juegos de DirectInput.
+#
+# De emular DirectInput ya se encarga Wine: cualquier mando de Linux aparece
+# ahi. El problema de los juegos viejos es otro: ven un mando DEMASIADO
+# moderno y se lian.
+#
+#   - Los GATILLOS como eje no existian entonces. Un juego de los 90 ve un eje
+#     que en reposo esta en un extremo y cree que lo estas empujando: se
+#     acelera solo, o el menu se va corriendo hacia un lado.
+#   - Muchos solo miran los cuatro primeros ejes.
+#   - Y algunos no manejan mas de diez o doce botones.
+#
+# Este perfil declara lo que tenia un mando de aquella epoca: dos sticks, la
+# cruceta como POV, y los gatillos COMO BOTONES, que es lo que eran.
+BOTONES_CLASICO = [
+    ecodes.BTN_SOUTH, ecodes.BTN_EAST, ecodes.BTN_NORTH, ecodes.BTN_WEST,
+    ecodes.BTN_TL, ecodes.BTN_TR, ecodes.BTN_TL2, ecodes.BTN_TR2,
+    ecodes.BTN_SELECT, ecodes.BTN_START,
+    ecodes.BTN_THUMBL, ecodes.BTN_THUMBR,
+]
+
+EJES_CLASICO = [
+    (ecodes.ABS_X,     (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_Y,     (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_RX,    (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_RY,    (EJE_MIN, EJE_MAX, 16, 128)),
+    (ecodes.ABS_HAT0X, (-1, 1, 0, 0)),
+    (ecodes.ABS_HAT0Y, (-1, 1, 0, 0)),
+]
+
+# A partir de que punto un gatillo cuenta como pulsado, cuando se convierte en
+# boton. La mitad del recorrido: ni un roce ni hay que hundirlo del todo.
+GATILLO_UMBRAL = (GAT_MAX - GAT_MIN) // 2
+
+
+def capacidades(clasico=False):
+    """Lo que el mando virtual dice saber hacer."""
+    botones = BOTONES_CLASICO if clasico else BOTONES
+    ejes = EJES_CLASICO if clasico else EJES
+    abs_caps = []
+    for codigo, (mn, mx, fuzz, flat) in ejes:
+        abs_caps.append((codigo, evdev.AbsInfo(value=0, min=mn, max=mx,
+                                               fuzz=fuzz, flat=flat,
+                                               resolution=0)))
+    return {ecodes.EV_KEY: botones, ecodes.EV_ABS: abs_caps}
+
+
+def es_mando(dev):
+    """¿Este dispositivo es un mando y no un teclado o un raton?
+
+    Se mira que tenga botones DE MANDO y ejes: un teclado tiene teclas pero no
+    ejes, y un raton tiene ejes relativos, no absolutos.
+    """
+    try:
+        caps = dev.capabilities()
+    except (OSError, IOError):
+        return False
+    teclas = caps.get(ecodes.EV_KEY) or []
+    ejes = [e[0] if isinstance(e, tuple) else e
+            for e in (caps.get(ecodes.EV_ABS) or [])]
+    tiene_boton = (ecodes.BTN_SOUTH in teclas or ecodes.BTN_A in teclas
+                   or ecodes.BTN_GAMEPAD in teclas)
+    # Un mando cuya cruceta son BOTONES puede no tener ABS_HAT0, y uno de
+    # cruceta sin sticks puede no tener ABS_X. Vale cualquiera de las tres
+    # señales: exigir una concreta dejaria fuera mandos que si lo son.
+    tiene_eje = (ecodes.ABS_X in ejes or ecodes.ABS_HAT0X in ejes
+                 or ecodes.BTN_DPAD_UP in teclas)
+    return tiene_boton and tiene_eje
+
+
+def buscar_mando():
+    """El primer mando legible del sistema, saltando el nuestro.
+
+    Saltar el virtual es importante: si nos leyeramos a nosotros mismos, cada
+    evento volveria a entrar y se formaria un bucle.
+    """
+    for ruta in sorted(evdev.list_devices()):
+        try:
+            dev = evdev.InputDevice(ruta)
+        except (OSError, IOError):
+            continue
+        if dev.name in NOMBRES_VIRTUALES:
+            dev.close()
+            continue
+        if es_mando(dev):
+            return dev
+        dev.close()
+    return None
+
+
+def cruceta_a_stick(valor_hat, eje_actual):
+    """El valor de stick que corresponde a una cruceta pulsada.
+
+    La cruceta es -1, 0 o 1. El stick va de -32768 a 32767. Se manda el
+    extremo, que es lo que hace un jugador al empujar el stick del todo.
+
+    Si el stick FISICO ya esta movido, manda el stick: quien lo esta usando
+    no quiere que la cruceta le corrija la direccion.
+    """
+    if abs(eje_actual) > 8000:
+        return eje_actual
+    if valor_hat < 0:
+        return EJE_MIN
+    if valor_hat > 0:
+        return EJE_MAX
+    return 0
+
+
+def main():
+    modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
+    # El modo clasico lleva sufijo, para poder combinarlo:
+    #   cruceta_stick            mando moderno, cruceta al stick
+    #   clasico                  mando de los de antes, tal cual
+    #   clasico_cruceta_stick    de los de antes y ademas cruceta al stick
+    clasico = modo.startswith("clasico")
+    cruceta_al_stick = modo.endswith("cruceta_stick")
+    # Que mando fingir. "ds4" en cualquier parte del modo: asi se combina con
+    # lo demas sin inventar una lista de modos por cada cruce. Cualquier otra
+    # cosa -"xbox", "cruceta_stick", "clasico"...- es un Xbox, que es el que
+    # todos los juegos entienden.
+    tipo = "ds4" if "ds4" in modo else "xbox"
+    nombre, vendor, product, version = MANDOS[tipo]
+    ruta = sys.argv[2] if len(sys.argv) > 2 else ""
+
+    if ruta:
+        try:
+            fisico = evdev.InputDevice(ruta)
+        except (OSError, IOError) as e:
+            sys.stderr.write("mando_virtual: no se puede abrir %s (%s)\n"
+                             % (ruta, e))
+            return 1
+    else:
+        fisico = buscar_mando()
+    if fisico is None:
+        sys.stderr.write("mando_virtual: no hay ningun mando que leer\n")
+        return 1
+
+    try:
+        virtual = evdev.UInput(capacidades(clasico), name=nombre,
+                               vendor=vendor, product=product,
+                               version=version)
+    except (OSError, IOError) as e:
+        if getattr(e, "errno", None) in (errno.EACCES, errno.EPERM):
+            sys.stderr.write("mando_virtual: sin permiso para /dev/uinput\n")
+        else:
+            sys.stderr.write("mando_virtual: no se pudo crear (%s)\n" % e)
+        return 1
+
+    # El fisico se captura: si no, el juego veria DOS mandos y cada boton
+    # contaria dos veces.
+    capturado = False
+    try:
+        fisico.grab()
+        capturado = True
+    except (OSError, IOError) as e:
+        sys.stderr.write("mando_virtual: no se pudo capturar el mando (%s);"
+                         " el juego puede ver los dos\n" % e)
+
+    print('[mando] "%s" -> %s (%s)' % (fisico.name, nombre, modo), flush=True)
+
+    def soltar(*_):
+        try:
+            if capturado:
+                fisico.ungrab()
+        except (OSError, IOError):
+            pass
+        try:
+            virtual.close()
+        except Exception:
+            pass
+        print("[mando] mando virtual retirado", flush=True)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, soltar)
+    signal.signal(signal.SIGINT, soltar)
+
+    # Estado de los ejes fisicos, para saber si el stick esta en uso cuando
+    # llega la cruceta.
+    ejes = {ecodes.ABS_X: 0, ecodes.ABS_Y: 0}
+    hat = {ecodes.ABS_HAT0X: 0, ecodes.ABS_HAT0Y: 0}
+
+    try:
+        for ev in fisico.read_loop():
+            if ev.type == ecodes.EV_KEY:
+                virtual.write(ecodes.EV_KEY, ev.code, ev.value)
+                # LA CRUCETA QUE LLEGA COMO BOTON.
+                #
+                # En la Steam Deck y las Anbernic la cruceta no es un eje: son
+                # cuatro botones. Sin esto, en esos mandos la opcion no haria
+                # nada, que es justo donde mas falta hace.
+                #
+                # Se manda ademas como EJE, para que el juego la vea de las
+                # dos formas, y se mueve el stick igual que con la otra.
+                if ev.code in DPAD_BOTON:
+                    # SIEMPRE de las dos formas, se pida o no lo del stick.
+                    #
+                    # Esto estaba dentro del "si se ha pedido la cruceta al
+                    # stick", y era un error: en una Steam Deck la cruceta son
+                    # botones, asi que sin esto llegaria SOLO como boton y un
+                    # juego que espere el eje -que son casi todos- seguiria
+                    # sin verla. Emular el mando bien es precisamente esto.
+                    eje, direccion = DPAD_BOTON[ev.code]
+                    valor = direccion if ev.value else 0
+                    hat[eje] = valor
+                    virtual.write(ecodes.EV_ABS, eje, valor)
+                    # Y mover el stick, eso si, solo si se ha pedido.
+                    if cruceta_al_stick:
+                        destino = (ecodes.ABS_X if eje == ecodes.ABS_HAT0X
+                                   else ecodes.ABS_Y)
+                        virtual.write(ecodes.EV_ABS, destino,
+                                      cruceta_a_stick(valor,
+                                                      ejes.get(destino, 0)))
+                virtual.syn()
+                continue
+
+            if ev.type != ecodes.EV_ABS:
+                continue
+
+            if ev.code in (ecodes.ABS_X, ecodes.ABS_Y):
+                ejes[ev.code] = ev.value
+
+            if ev.code in hat:
+                hat[ev.code] = ev.value
+                virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+                # Y TAMBIEN COMO BOTONES, que es la otra forma de leerla.
+                #
+                # Un mando manda la cruceta de una forma u otra, pero el juego
+                # puede esperar cualquiera de las dos. Emular el mando bien es
+                # ofrecer las dos y que el juego coja la que entienda.
+                for _btn, (_eje, _dir) in DPAD_BOTON.items():
+                    if _eje != ev.code:
+                        continue
+                    virtual.write(ecodes.EV_KEY, _btn,
+                                  1 if ev.value == _dir else 0)
+                if cruceta_al_stick:
+                    destino = (ecodes.ABS_X if ev.code == ecodes.ABS_HAT0X
+                               else ecodes.ABS_Y)
+                    virtual.write(ecodes.EV_ABS, destino,
+                                  cruceta_a_stick(ev.value,
+                                                  ejes.get(destino, 0)))
+                virtual.syn()
+                continue
+
+            # LOS GATILLOS, EN MODO CLASICO, SE MANDAN COMO BOTON.
+            #
+            # En un mando de aquella epoca los gatillos eran botones. Si se
+            # mandan como eje, el juego ve uno que en reposo esta en un
+            # extremo y cree que lo estas empujando: se acelera solo.
+            if clasico and ev.code in (ecodes.ABS_Z, ecodes.ABS_RZ):
+                boton = (ecodes.BTN_TL2 if ev.code == ecodes.ABS_Z
+                         else ecodes.BTN_TR2)
+                virtual.write(ecodes.EV_KEY, boton,
+                              1 if ev.value > GATILLO_UMBRAL else 0)
+                virtual.syn()
+                continue
+            # Y un eje que este mando no declara no se manda: el kernel lo
+            # descartaria igualmente, pero asi queda dicho.
+            if clasico and ev.code not in [c for c, _ in EJES_CLASICO]:
+                continue
+
+            # Cualquier otro eje se copia tal cual.
+            virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+            # Si el stick vuelve al centro pero la cruceta sigue pulsada, se
+            # mantiene la direccion de la cruceta: si no, soltar el stick
+            # anularia la cruceta.
+            if (cruceta_al_stick
+                    and ev.code in (ecodes.ABS_X, ecodes.ABS_Y)
+                    and abs(ev.value) <= 8000):
+                origen = (ecodes.ABS_HAT0X if ev.code == ecodes.ABS_X
+                          else ecodes.ABS_HAT0Y)
+                if hat.get(origen):
+                    virtual.write(ecodes.EV_ABS, ev.code,
+                                  cruceta_a_stick(hat[origen], 0))
+            virtual.syn()
+    except (OSError, IOError) as e:
+        sys.stderr.write("mando_virtual: se perdio el mando (%s)\n" % e)
+        soltar()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+MVIROF
+}
+
+keys_copiar_a_profiles() {
+    # Copia a profiles/ el .keys que venia dentro del juego. $1 = origen,
+    # $2 = gid. Devuelve 0 si a partir de ahora hay que usar el de profiles/.
+    #
+    # El original NO se toca: sigue dentro del juego para Batocera.
+    local origen="$1" gid="$2"
+    [ -f "$origen" ] && [ -n "$gid" ] || return 1
+    local destino="$PROFILE_DIR/$gid.keys"
+    [ -f "$destino" ] && return 1          # ya hay uno tuyo: ese manda
+    mkdir -p "$PROFILE_DIR" 2>/dev/null || return 1
+    cp -f "$origen" "$destino" 2>/dev/null || return 1
+    say "[+] Teclas del juego copiadas a profiles/$gid.keys"
+    say "    (el original se queda dentro del juego; lo que edites aqui manda)"
+    return 0
+}
+
 find_keys_file() {
     # $1 = ruta del juego (wsquashfs o exe), $2 = gid.
     #
@@ -3433,6 +3895,22 @@ find_keys_file() {
     for k in "$PROFILE_DIR/$gid.keys" "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] && { printf '%s' "$k"; return 0; }
     done
+    # Y EL QUE SE ENCUENTRE DENTRO SE COPIA A profiles/.
+    #
+    # Un tester descubrio que asignando el mismo fichero desde el menu -que lo
+    # guarda en profiles/ con el nombre del juego- le funcionaba, y dejandolo
+    # dentro de la carpeta no. Sea cual sea el motivo de fondo, copiarlo tiene
+    # ventajas por si solo:
+    #
+    #   - el editor guarda SIEMPRE en profiles/, asi que a partir de ahi lo
+    #     que cambies manda y no vuelve a ganar el original;
+    #   - el original se queda intacto dentro del juego, para Batocera;
+    #   - y en un .wsquashfs el de dentro vive en un montaje temporal, con lo
+    #     que la copia es lo unico que persiste.
+    #
+    # Solo la primera vez: si ya hay uno en profiles/, ese manda (se busca
+    # antes, arriba) y no se pisa.
+    #
     # Dentro de la carpeta del juego. "padto.keys" es el nombre que usa
     # Batocera; se aceptan variantes por si cambia, pero SOLO si hay uno: con
     # varios no se adivina cual es el bueno.
@@ -3440,17 +3918,60 @@ find_keys_file() {
     [ -d "$p" ] && dir="$p"
     if [ -n "$dir" ]; then
         for k in "$dir/padto.keys" "$dir/pad2key.keys" "$dir/padtokey.keys"; do
-            [ -f "$k" ] && { printf '%s' "$k"; return 0; }
+            [ -f "$k" ] || continue
+            keys_copiar_a_profiles "$k" "$gid" && k="$PROFILE_DIR/$gid.keys"
+            printf '%s' "$k"
+            return 0
         done
         local sueltos n
         sueltos="$(find "$dir" -maxdepth 1 -type f -name '*.keys' 2>/dev/null)"
         n="$(printf '%s\n' "$sueltos" | grep -c .)"
         if [ "$n" = 1 ]; then
+            keys_copiar_a_profiles "$sueltos" "$gid" \
+                && sueltos="$PROFILE_DIR/$gid.keys"
             printf '%s' "$sueltos"
             return 0
         fi
     fi
     return 1
+}
+
+mando_virtual_start() {
+    # Arranca el mando virtual si el juego lo tiene activado. $1 = modo.
+    #
+    # Es una via APARTE del mapeador de teclas: aquel convierte el mando en
+    # teclas y este convierte un mando en OTRO MANDO. Pueden usarse a la vez.
+    #
+    # Apagado por defecto: solo se enciende en los juegos que lo necesiten.
+    WP_MANDO_VIRTUAL_PID=""
+    local modo="${1:-0}"
+    [ -n "$modo" ] && [ "$modo" != 0 ] || return 0
+    [ -f "$MANDO_VIRTUAL_PY" ] || {
+        say "AVISO: falta mando_virtual.py; no se activa"; return 1; }
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || {
+        say "AVISO: sin Python para el mando virtual"; return 1; }
+    if [ ! -w /dev/uinput ] && [ ! -w /dev/input/uinput ]; then
+        say "AVISO: sin permiso sobre /dev/uinput: no se puede crear el mando"
+        say "       virtual. (No hace falta root para jugar; solo para esto.)"
+        return 1
+    fi
+    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo")" \
+        || WP_MANDO_VIRTUAL_PID=""
+    if [ -n "$WP_MANDO_VIRTUAL_PID" ]; then
+        say "[+] Mando virtual activado ($modo)"
+    else
+        say "AVISO: el mando virtual no arranco (mira el registro)"
+    fi
+    return 0
+}
+
+mando_virtual_stop() {
+    # Se para SIEMPRE al terminar: si se quedara vivo, el mando fisico
+    # seguiria capturado y el escritorio no responderia al mando.
+    [ -n "${WP_MANDO_VIRTUAL_PID:-}" ] || return 0
+    matar_con_hijos "$WP_MANDO_VIRTUAL_PID"
+    WP_MANDO_VIRTUAL_PID=""
+    return 0
 }
 
 mapeador_start() {
@@ -3468,6 +3989,7 @@ mapeador_start() {
     export WP_TEXTO_ENTER="${TEXTO_ENTER:-0}"
     # $1 = fichero .keys
     write_mapeador
+    write_mando_virtual
     # evdev es imprescindible: probar el import y avisar CLARO si falta
     # evdev puede venir de tres sitios: instalado por pip (CachyOS con
     # compilador), de una carpeta evmapy/ con el modulo ya compilado (el caso
@@ -3591,9 +4113,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py e78027c58988" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py e91322b187e2" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py e78027c58988
+# WPROTON_HELPER menu_pygame.py e91322b187e2
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -4904,16 +5426,54 @@ AYUDAS_ES = [
      'Elegir otros botones para abrir el teclado en pantalla.'),
     ('Quitarlo',
      'Deja de abrirse el teclado en pantalla. El resto del .keys no se toca.'),
+    ('Siempre: el juego solo vera las teclas',
+     'El mando se captura: el juego solo recibe las teclas del .keys. Para '
+     'juegos que traen su propio soporte de mando y lo usan en vez de las '
+     'teclas.'),
+    ('Nunca: el juego vera el mando y las teclas',
+     'El juego recibe las dos cosas. Para .keys que solo traen atajos, o si '
+     'el juego ya funcionaba bien con el mando.'),
     ('Automatico (recomendado)',
      'Se mira el propio .keys: si mapea el movimiento (sticks, cruceta, '
      'gatillos) se captura el mando; si solo trae atajos, no.'),
-    ('Nunca: solo las teclas del .keys',
+    ('Nunca (viejo): solo las teclas del .keys',
      'El mando se captura siempre. El juego solo vera las teclas.'),
-    ('Siempre: mando y teclas a la vez',
+    ('Siempre (viejo): mando y teclas a la vez',
      'El mando no se captura nunca. Ojo: un juego con soporte de mando puede '
      'ignorar las teclas.'),
     ('¿Que significa esto?',
      'Explica cuando conviene capturar el mando y cuando no.'),
+    ('¿Que es esto?',
+     'Explica para que sirve cada modo del mando virtual.'),
+    ('Mando virtual:',
+     'Crea un mando de mentira y le copia lo del tuyo, cambiando algo por el '
+     'camino. Distinto del .keys: aqui el juego sigue viendo un mando.'),
+    ('No usar mando virtual',
+     'El juego ve tu mando tal cual, sin que WProton toque nada.'),
+    ('Mando Xbox (probar esto primero)',
+     'El juego vera un Xbox 360, que es el que todos entienden. Se le pasa '
+     'todo tal cual pero como un mando de libro: la cruceta va como eje y '
+     'como botones. Arregla los mandos que llegan de forma rara, como la '
+     'Steam Deck, que manda la cruceta como botones.'),
+    ('Mando DualShock',
+     'El juego vera un mando de Sony. Algunos se portan mejor con uno que con '
+     'otro, y otros enseñan los botones correctos (X, circulo, cuadrado).'),
+    ('Mando Xbox + cruceta al stick',
+     'Un Xbox y ademas la cruceta moviendo el stick izquierdo, para juegos '
+     'que leen bien la cruceta pero solo hacen caso al stick.'),
+    ('Mando DualShock + cruceta al stick',
+     'Un mando de Sony y ademas la cruceta moviendo el stick izquierdo.'),
+    ('Mando clasico (para juegos antiguos)',
+     'Finge un mando de los de antes: los gatillos van como botones y se '
+     'quitan los ejes de mas. Para juegos de DirectInput que se lian con un '
+     'mando moderno y se aceleran solos.'),
+    ('Mando clasico + cruceta al stick',
+     'Las dos cosas: mando de los de antes y la cruceta moviendo el stick.'),
+
+    ('Volver a instalar lo que trae el juego (.bat)',
+     'Algunos juegos instalan cosas la primera vez con un .bat. WProton lo '
+     'hace una sola vez y luego abre el juego directo. Con esto se repite la '
+     'instalacion, por si se corto a medias.'),
     ('El juego NO ve el mando:',
      'Captura el mando en exclusiva mientras el .keys esta activo, como hace '
      'Batocera. Sin esto, un juego con soporte de mando ignora las teclas.'),
@@ -7361,10 +7921,10 @@ GTKEOF
 BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
 
 write_biblioteca() {
-    grep -q "WPROTON_HELPER biblioteca.py d351fb5045b4" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER biblioteca.py e36e1eb94e43" "$BIBLIOTECA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
-# WPROTON_HELPER biblioteca.py d351fb5045b4
+# WPROTON_HELPER biblioteca.py e36e1eb94e43
 # -*- coding: utf-8 -*-
 # WProton - composicion rapida de la biblioteca
 #
@@ -7448,11 +8008,76 @@ def etiqueta(ruta, raices):
 
 
 def nombres_posibles(gid):
-    """El identificador cambia los espacios por guiones bajos; quien copia su
-    coleccion a mano conserva los espacios. Se prueban las dos formas."""
-    yield gid
-    if '_' in gid:
-        yield gid.replace('_', ' ')
+    """Nombres con los que puede estar guardada la caratula.
+
+    El identificador cambia los espacios por guiones bajos; quien copia su
+    coleccion a mano conserva los espacios. Se prueban las dos formas.
+
+    Y TAMBIEN SIN LA EXTENSION DE LA CARPETA: game_id se la quita a los
+    ficheros pero no a las carpetas, asi que un juego en "Alien Stars.pc"
+    tiene el identificador "Alien_Stars.pc" mientras que su caratula se llama
+    "Alien Stars.png", sin el .pc. Sin esto, los juegos en carpeta no
+    encontraban ni su propia caratula en covers/.
+    """
+    vistos = []
+    base = gid
+    sin_ext = gid.rsplit('.', 1)[0] if '.' in gid else gid
+    for g in (base, sin_ext):
+        if not g or g in vistos:
+            continue
+        vistos.append(g)
+        yield g
+        con_espacios = g.replace('_', ' ')
+        if con_espacios != g and con_espacios not in vistos:
+            vistos.append(con_espacios)
+            yield con_espacios
+
+
+# Sufijos con los que el escaneo de ES-DE guarda cada forma de caratula.
+SUFIJOS_ESCANEO = {
+    'wide': ('-fanart', '-screenshot', '-titlescreen', '-image'),
+    '43':   ('-screenshot', '-titlescreen', '-image'),
+}
+SUFIJOS_ESCANEO_VERTICAL = ('-cover', '-box2dfront', '-boxart', '-thumb',
+                            '-image')
+CARPETAS_ESCANEO = ('images', 'media', 'downloaded_images', 'covers', 'boxart')
+
+
+def buscar_cover_escaneo(ruta, forma):
+    """Caratula del escaneo de ES-DE que este junto al juego.
+
+    Quien viene de Batocera o ES-DE ya tiene sus caratulas ahi. Esto ya estaba
+    en la version en bash, pero la biblioteca RAPIDA -que es la que se usa de
+    verdad- no lo hacia: los juegos en carpeta .pc seguian saliendo sin
+    caratula.
+
+    El nombre se prueba con y sin extension: una carpeta se llama "Juego.pc"
+    pero el escaneo guarda "Juego-image.png".
+    """
+    if not ruta:
+        return ''
+    carpeta = os.path.dirname(ruta)
+    if not carpeta or not os.path.isdir(carpeta):
+        return ''
+    base = os.path.basename(ruta)
+    bases = [base]
+    sin_ext = os.path.splitext(base)[0]
+    if sin_ext != base:
+        bases.append(sin_ext)
+
+    sufijos = SUFIJOS_ESCANEO.get(forma, SUFIJOS_ESCANEO_VERTICAL) + ('',)
+    for sub in CARPETAS_ESCANEO:
+        dir_esc = os.path.join(carpeta, sub)
+        if not os.path.isdir(dir_esc):
+            continue
+        for b in bases:
+            for nom in nombres_posibles(b):
+                for suf in sufijos:
+                    for ext in EXTS_IMAGEN:
+                        p = os.path.join(dir_esc, '%s%s.%s' % (nom, suf, ext))
+                        if os.path.isfile(p):
+                            return p
+    return ''
 
 
 def buscar_cover(gid, carpeta, carpeta_vertical, legacy_wide=False):
@@ -7554,6 +8179,10 @@ def rejilla(f_manifiesto, juegos, raices, perfiles):
         gid = game_id(ruta)
         cov = buscar_cover(gid, carpeta_cover, covers,
                            legacy_wide=(forma == 'wide'))
+        # Si no hay caratula nuestra, la del escaneo que este junto al juego.
+        # La nuestra manda: quien pone una en covers/ quiere esa.
+        if not cov:
+            cov = buscar_cover_escaneo(ruta, forma)
         fav, _veces, segs, ultima, _comp = perfiles.get(gid, SIN_PERFIL)
 
         info = ''
@@ -7612,6 +8241,10 @@ def main():
         gid = game_id(ruta)
         cov = buscar_cover(gid, carpeta_cover, covers,
                            legacy_wide=(forma == 'wide'))
+        # Si no hay caratula nuestra, la del escaneo que este junto al juego.
+        # La nuestra manda: quien pone una en covers/ quiere esa.
+        if not cov:
+            cov = buscar_cover_escaneo(ruta, forma)
         fav, veces, segs, _ultima, completado = perfiles.get(gid, SIN_PERFIL)
 
         ficha = os.path.join(datos_dir, '%s.info.json' % gid)
@@ -9402,6 +10035,7 @@ cleanup_all() {
     pad_bridge_stop
     log "Cierre: parando el mapeador"
     mapeador_stop
+    mando_virtual_stop
     log "Cierre: parando el vigilante"
     guardia_salida_stop
     # Estos dos existian pero el cierre no los llamaba: la barra de progreso
@@ -9675,6 +10309,57 @@ args_etiqueta() {
     else
         printf 'ninguno'
     fi
+    return 0
+}
+
+bat_juego_real() {
+    # El EXE del juego que lanza un .bat de instalacion. $1 = ruta del .bat.
+    #
+    # Hay .bat que instalan dependencias la primera vez y luego arrancan el
+    # juego:
+    #
+    #   IF EXIST c:\marca\ ( ) ELSE ( "dependencies\VC_redist.x64.exe" ... )
+    #   START "" "Tatsunoko.exe"
+    #
+    # Su comprobacion vive DENTRO del prefijo de Wine, asi que en cuanto el
+    # prefijo cambia -o si la comprobacion esta mal escrita, que pasa- vuelve
+    # a instalar en cada arranque: minutos de espera cada vez.
+    #
+    # La linea START dice cual es el juego de verdad. Con eso, WProton puede
+    # ejecutar el .bat UNA vez y despues ir directo al juego.
+    local bat="$1"
+    [ -f "$bat" ] || return 1
+    # La ultima linea START gana: si el .bat lanza varias cosas, el juego es
+    # lo ultimo que abre.
+    local linea
+    linea="$(grep -iE '^[[:space:]]*start[[:space:]]' "$bat" 2>/dev/null \
+        | tail -n1 | tr -d '\r')"
+    [ -n "$linea" ] || return 1
+    # START ["titulo"] "programa" [args]  -> se quita el titulo si lo hay.
+    local resto
+    resto="$(printf '%s' "$linea" | sed -E 's/^[[:space:]]*[Ss][Tt][Aa][Rr][Tt][[:space:]]+//')"
+    resto="$(printf '%s' "$resto" | sed -E 's/^"[^"]*"[[:space:]]+//')"
+    local exe
+    exe="$(printf '%s' "$resto" | sed -E 's/^"([^"]+)".*/\1/; t; s/^([^[:space:]]+).*/\1/')"
+    [ -n "$exe" ] || return 1
+    printf '%s' "$exe"
+    return 0
+}
+
+bat_ya_instalado() {
+    # ¿Ya se ejecuto el .bat de instalacion de este juego? $1 = gid.
+    #
+    # La marca es NUESTRA y va en profiles/, no dentro del prefijo: asi
+    # sobrevive a que el prefijo se rehaga, que es justo lo que hacia que
+    # estos juegos reinstalaran una y otra vez.
+    [ -n "${1:-}" ] || return 1
+    [ -f "$PROFILE_DIR/.$1.instalado" ]
+}
+
+bat_marcar_instalado() {
+    [ -n "${1:-}" ] || return 1
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    : > "$PROFILE_DIR/.$1.instalado" 2>/dev/null
     return 0
 }
 
@@ -10070,6 +10755,9 @@ profile_defaults() {
     KEYS_ESTILO=xbox
     TECLADO_POS=abajo        # donde sale el teclado en pantalla
     KEYS_EXCLUSIVO=auto      # auto | 1 (el juego no ve el mando) | 0
+    # Mando virtual: apagado por defecto. Es una via NUEVA y aparte del
+    # mapeador de teclas; solo se enciende en los juegos que lo necesiten.
+    MANDO_VIRTUAL=0          # 0 | cruceta_stick
     TEXTO_RAPIDO=""          # texto que se teclea con una combinacion
     TEXTO_ENTER=0            # 1 = pulsar Enter despues de escribirlo
     NTSYNC=0                 # sincronizacion NT por kernel (necesita /dev/ntsync)
@@ -10161,6 +10849,7 @@ PAD_SONY=${PAD_SONY:-auto}
 KEYS_ESTILO=${KEYS_ESTILO:-xbox}
 TECLADO_POS=${TECLADO_POS:-abajo}
 KEYS_EXCLUSIVO=${KEYS_EXCLUSIVO:-auto}
+MANDO_VIRTUAL=${MANDO_VIRTUAL:-0}
 TEXTO_RAPIDO="$TEXTO_RAPIDO"
 TEXTO_ENTER=${TEXTO_ENTER:-0}
 PAD_STEAMFIX=$PAD_STEAMFIX
@@ -10607,6 +11296,17 @@ Se ignorara. Puedes rehacerlo desde los ajustes del juego."
     # El estilo decide como se leen los nombres de los botones DENTRO del
     # .keys: en Batocera, "a" es el boton de la derecha (como en Nintendo) y
     # en Xbox es el de abajo. Con el estilo equivocado todo sale cambiado.
+    #
+    # PERO SOLO IMPORTA SI EL FICHERO USA BOTONES DE LA CARA.
+    #
+    # Hay .keys que solo mapean la cruceta y un atajo de salida: ahi el estilo
+    # no cambia nada -arriba es arriba en los dos- y preguntar es hacer
+    # trabajar al usuario para nada. Se comprueba antes de preguntar.
+    if ! keys_usa_botones_cara "$kf"; then
+        say "[i] El .keys no usa botones de la cara (A/B/X/Y): el estilo no"
+        say "    cambia nada, asi que no se pregunta."
+        return 0
+    fi
     local sel
     sel="$(menu "Este juego trae teclas para el mando ($n asignadas)" \
         "Estilo Xbox        (A abajo, B derecha)" \
@@ -10690,6 +11390,38 @@ o pulsando X sobre el juego en la lista."
 # ----------------------------------------------------------------------------
 # 13. ENTORNO PORTABLE + LANZAMIENTO
 # ----------------------------------------------------------------------------
+keys_usa_botones_cara() {
+    # ¿El .keys asigna algo a A, B, X o Y? $1 = fichero.
+    #
+    # Es lo unico que cambia con el estilo de botones: en Batocera "a" es el
+    # de la derecha y en Xbox el de abajo. La cruceta, los gatillos y los
+    # hombros se llaman igual en los dos, asi que si el fichero solo usa esos
+    # no hay nada que elegir.
+    local kf="$1"
+    [ -f "$kf" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 0   # sin Python, se pregunta
+    "$PY_BIN" - "$kf" <<'EOFCARA' 2>/dev/null
+import json
+import sys
+
+CARA = {"a", "b", "x", "y"}
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        datos = json.load(fh)
+except Exception:
+    sys.exit(0)                      # ilegible: mejor preguntar
+
+for accion in datos.get("actions_player1") or []:
+    if not isinstance(accion, dict):
+        continue
+    disparo = accion.get("trigger")
+    for t in (disparo if isinstance(disparo, list) else [disparo]):
+        if str(t or "").lower() in CARA:
+            sys.exit(0)              # si usa botones de la cara
+sys.exit(1)
+EOFCARA
+}
+
 keys_sustituye_al_mando() {
     # ¿El .keys de este juego reemplaza al mando? $1 = ruta del .keys
     #
@@ -10707,7 +11439,20 @@ try:
     d=json.load(open(sys.argv[1],encoding="utf-8"))
 except Exception:
     sys.exit(1)
-MOV = {"up","down","left","right","l2","r2"}
+# LA CRUCETA SOLA NO SUSTITUYE AL MANDO.
+#
+# Aqui entraban tambien up/down/left/right, o sea la cruceta. Pero hay .keys
+# que mapean SOLO la cruceta para AÑADIRLA a un juego que ya funciona con el
+# stick: capturar el mando ahi es lo contrario de lo que se quiere, porque le
+# quita el stick, que era lo unico que le iba.
+#
+# Un tester lo describio exacto: "el padto.keys lo que hace es poder usar la
+# cruceta porque el juego solo deja usar el stick izq" -y con la captura no le
+# iba ni una cosa ni la otra-.
+#
+# Sustituir al mando es mapear los STICKS o los gatillos: ahi el juego esta
+# pensado para el teclado. La cruceta sola es un añadido.
+MOV = {"l2","r2"}
 for a in d.get("actions_player1") or []:
     if not isinstance(a,dict):
         continue
@@ -10918,12 +11663,48 @@ export_game_env() {
     local mandos_del_runner=0
     local _hidraw_cerrado=0
     hidraw_sin_permiso >/dev/null && _hidraw_cerrado=1
-    if [ "${PAD_SONY:-auto}" = auto ] && [ "${PAD_SDL:-auto}" = auto ] \
-       && [ "$_hidraw_cerrado" = 0 ] \
+    # SI EL USUARIO DICE "NO TOQUES NADA", NO SE TOCA.
+    #
+    # Con hidraw cerrado dejamos de apartarnos y aplicamos nuestros ajustes de
+    # SDL. Eso arreglo el caso de un tester que no veia NINGUN mando... pero a
+    # quien SI le funcionaba se lo empeoro: le quitamos al runner un mando que
+    # sabia manejar. Y lo peor, no habia forma de volver atras: la condicion
+    # exigia que las dos opciones estuvieran en "auto", asi que ponerlas en
+    # "Nunca" tampoco servia.
+    #
+    # Ahora, con las dos en "Nunca" (0), WProton se aparta pase lo que pase:
+    # es la manera de decir "deja el mando en paz".
+    if [ "${PAD_SONY:-auto}" = 0 ] && [ "${PAD_SDL:-auto}" = 0 ] \
        && runner_gestiona_mandos "$(basename "$rdir")"; then
         mandos_del_runner=1
         unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
-        say "[+] Mandos: los gestiona $(basename "$rdir"), WProton no interviene"
+        say "[+] Mandos: los gestiona $(basename "$rdir") (lo has pedido tu:"
+        say "    'Mando Sony' y 'Mando via SDL' estan en Nunca)"
+    elif [ "${PAD_SONY:-auto}" = auto ] && [ "${PAD_SDL:-auto}" = auto ] \
+       && { [ "$_hidraw_cerrado" = 0 ] || mando_utilizable; } \
+       && runner_gestiona_mandos "$(basename "$rdir")"; then
+        # EN AUTOMATICO, LA PREGUNTA BUENA NO ES HIDRAW: ES SI HAY MANDO.
+        #
+        # Antes se miraba solo si /dev/hidraw se podia leer, y con eso se
+        # mezclaban dos casos opuestos:
+        #
+        #   - sin ningun mando legible -> forzar SDL lo arreglaba;
+        #   - con el mando funcionando por el runner -> forzar SDL se lo
+        #     quitaba, y a un tester le dejo sin mando un juego que le iba.
+        #
+        # Los dos tienen hidraw cerrado, asi que eso no distingue nada. Lo que
+        # distingue es si el nodo del MANDO se puede leer: si se puede, el
+        # runner lo vera igual que lo vemos nosotros y no hay nada que
+        # arreglar. Se decide solo, sin que el usuario toque ajustes.
+        mandos_del_runner=1
+        unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
+        if [ "$_hidraw_cerrado" = 1 ]; then
+            say "[+] Mandos: los gestiona $(basename "$rdir"), WProton no interviene"
+            say "    (/dev/hidraw esta cerrado, pero el mando SI se puede leer:"
+            say "     el runner lo vera igual, asi que no se toca nada)"
+        else
+            say "[+] Mandos: los gestiona $(basename "$rdir"), WProton no interviene"
+        fi
     fi
     # Y si nos hemos quedado por hidraw, se dice: si no, el usuario ve que
     # WProton "interviene" en unos juegos y en otros no, sin saber por que.
@@ -10932,6 +11713,12 @@ export_game_env() {
         say "[+] Mandos por SDL: $(basename "$rdir") los leeria por"
         say "    /dev/hidraw, pero esos nodos no se pueden leer aqui."
         say "    SDL no los necesita y no hace falta tocar permisos."
+        # Y la salida, por si este juego iba bien ANTES de que hicieramos
+        # esto: sin decirla, nadie deduce que hay que poner dos opciones en
+        # "Nunca" para que WProton no toque el mando.
+        say "    Si el mando iba bien antes y ahora no, pon 'Mando Sony' y"
+        say "    'Mando via SDL' en Nunca (Configurar -> Arreglos rapidos):"
+        say "    asi WProton no toca nada y lo gestiona el runner."
     fi
     local pad_sony_activo=0
     [ "$mandos_del_runner" = 1 ] || case "${PAD_SONY:-auto}" in
@@ -11148,8 +11935,19 @@ export_game_env() {
         if [ "$(runner_kind "$_rdir_env" 2>/dev/null)" = "proton" ]; then
             WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}winebus.sys=d"
             export WINEDLLOVERRIDES
+            # SE DICE QUE FICHERO LO MANDA Y COMO DESHACERLO.
+            #
+            # Este aviso no decia CUAL era el .keys ni como quitarlo. Y desde
+            # que buscamos tambien el "padto.keys" que va dentro de la
+            # carpeta, hay juegos a los que de pronto se les aplica uno que
+            # antes se ignoraba: un juego que usaba el mando de siempre pasa a
+            # no verlo, y desde fuera parece que WProton rompio el mando.
             say "[+] El juego no vera ningun mando (solo en este lanzamiento):"
             say "    el .keys lo sustituye, asi que se usa el teclado."
+            say "    Fichero: ${WP_KEYS_CULPABLE:-?}"
+            say "    Si este juego YA funcionaba con el mando, es esto:"
+            say "    Configurar -> Arreglos rapidos -> El juego NO ve el mando"
+            say "    -> 'Nunca'. (O borra ese .keys.)"
         else
             say "[i] Runner de tipo Wine: no se desactiva winebus (lo tumbaria)."
             say "    El mando esta capturado igual, asi que no le llegan eventos."
@@ -11330,6 +12128,7 @@ Configurar juego -> Comprobar integridad"
             batocera_play "$abs_squash"
             local brc=$?
             mapeador_stop
+            mando_virtual_stop
     # Los perfiles de TeknoParrot, como estaban: estos juegos suelen estar
     # en una carpeta compartida con Batocera, y alli el original es el bueno.
     teknoparrot_restaurar "${WP_TKP_RAIZ:-}"; WP_TKP_RAIZ=""
@@ -11413,6 +12212,34 @@ Configurar juego -> Comprobar integridad"
         find_exe "$merged" "$mode" || { cleanup_mount; return 1; }
         [ -n "$ARGS_OVERRIDE" ] && EXE_ARGS="$ARGS_OVERRIDE"
     fi
+    # UN .bat DE INSTALACION SOLO SE EJECUTA LA PRIMERA VEZ.
+    #
+    # Estos .bat instalan dependencias y luego arrancan el juego. Su
+    # comprobacion de "ya instalado" vive DENTRO del prefijo de Wine, asi que
+    # en cuanto el prefijo cambia -o si esta mal escrita, que pasa- vuelven a
+    # instalar en cada arranque: minutos de espera cada vez.
+    #
+    # WProton lo ejecuta UNA vez, lo apunta en profiles/ (fuera del prefijo,
+    # para que sobreviva) y a partir de ahi va directo al juego, que el propio
+    # .bat dice cual es en su linea START.
+    case "$(printf '%s' "$EXE_PATH" | tr 'A-Z' 'a-z')" in
+        *.bat|*.cmd)
+            local _bjuego
+            if _bjuego="$(bat_juego_real "$EXE_PATH")" && [ -n "$_bjuego" ]; then
+                local _bdir _bexe
+                _bdir="$(dirname "$EXE_PATH")"
+                _bexe="$_bdir/$(printf '%s' "$_bjuego" | tr '\\' '/')"
+                if bat_ya_instalado "$gid" && [ -f "$_bexe" ]; then
+                    say "[+] Ya se instalo antes: se abre el juego directamente"
+                    say "    ($_bjuego, sin repetir la instalacion del .bat)"
+                    EXE_PATH="$_bexe"
+                elif [ -f "$_bexe" ]; then
+                    say "[i] Primera vez: se ejecuta el .bat (instala lo suyo)."
+                    say "    Las proximas veces se abrira $_bjuego directamente."
+                    bat_marcar_instalado "$gid"
+                fi
+            fi ;;
+    esac
     say "Ejecutable: $EXE_PATH"
     [ -n "$EXE_ARGS" ] && say "Argumentos: $EXE_ARGS"
 
@@ -11439,9 +12266,13 @@ Configurar juego -> Comprobar integridad"
     case "${KEYS_EXCLUSIVO:-auto}" in
         1) WP_OCULTAR_MANDO=1 ;;
         0) WP_OCULTAR_MANDO=0 ;;
-        *) local _kf
-           _kf="$(find_keys_file "$abs_squash" "$gid")" \
-               && keys_sustituye_al_mando "$_kf" && WP_OCULTAR_MANDO=1 ;;
+        *) # Se guarda cual es para poder NOMBRARLO en el aviso: sin eso,
+           # quien vea "el juego no vera ningun mando" no sabe que fichero
+           # se lo esta quitando ni donde buscarlo.
+           WP_KEYS_CULPABLE="$(find_keys_file "$abs_squash" "$gid")" || WP_KEYS_CULPABLE=""
+           [ -n "$WP_KEYS_CULPABLE" ] \
+               && keys_sustituye_al_mando "$WP_KEYS_CULPABLE" \
+               && WP_OCULTAR_MANDO=1 ;;
     esac
     if [ -n "$WP_NATIVO" ]; then
         # JUEGO DE LINUX: su carpeta personal en vez de un prefijo.
@@ -11536,6 +12367,9 @@ Configurar juego -> Comprobar integridad"
     local keys_file=""
     if keys_file="$(find_keys_file "$abs_squash" "$gid")"; then
         mapeador_start "$keys_file"
+        # El mando virtual va aparte del mapeador: uno convierte el mando en
+        # teclas y el otro en otro mando. Se pueden usar los dos.
+        mando_virtual_start "${MANDO_VIRTUAL:-0}"
     else
         say "[i] Sin .keys para $gid (buscado: ${abs_squash%.*}.keys | $abs_squash.keys | profiles/$gid.keys)"
     fi
@@ -11643,6 +12477,7 @@ EOFRA
     # Antes solo se paraba en la limpieza final, asi que seguia actuando
     # durante todo el rato que estuvieras navegando despues de jugar.
     mapeador_stop
+    mando_virtual_stop
     dll_informe
     WP_JUGANDO=0
     trap cleanup_all INT TERM        # se vuelve a atender las senales
@@ -11700,6 +12535,7 @@ $(tail -n 8 "$LOG_FILE")"
     # aparecia como superviviente en la comprobacion del cierre.
     matar_con_hijos "$trig"
     mapeador_stop
+    mando_virtual_stop
     stats_record "$gid" "$(( $(date +%s) - ${STATS_T0:-$(date +%s)} ))"
     saves_detect_end "$gid"
     # Los perfiles de TeknoParrot, como estaban: estos juegos suelen estar
@@ -13572,12 +14408,31 @@ prefijo_incluido_a_disco() {
         local _delrunner="$destino/.dll_del_runner"
         : > "$_delrunner"
         if [ -n "$rdir" ]; then
+            # NO SOLO LAS .dll: el runner tambien enlaza EJECUTABLES.
+            #
+            # Proton enlaza sus ficheros de windows/ al prefijo, y si nosotros
+            # ya copiamos uno con ese nombre, muere:
+            #
+            #   FileExistsError: ... winhlp32.exe
+            #
+            # Lo arreglamos para las .dll y se quedo ahi. Pero en esas mismas
+            # carpetas hay .exe (winhlp32, notepad, regedit...) y con ellos
+            # pasaba igual: el juego no arrancaba y el error no hablaba de
+            # ningun juego, asi que parecia cosa del mando.
             find "$rdir" \( -path '*x86_64-windows*' -o -path '*i386-windows*' \) \
-                -name '*.dll' -printf '%f\n' 2>/dev/null | sort -u > "$_delrunner"
+                \( -name '*.dll' -o -name '*.exe' -o -name '*.drv' \
+                   -o -name '*.ocx' -o -name '*.sys' \) \
+                -printf '%f\n' 2>/dev/null | sort -u > "$_delrunner"
         fi
         local _n_fuera=0 _sysdir _dll
         if [ -s "$_delrunner" ]; then
-            for _sysdir in "$destino/drive_c/windows/system32" \
+            # Y EN LA PROPIA windows/, no solo en system32.
+            #
+            # El error real era con "drive_c/windows/winhlp32.exe": ahi
+            # tambien enlaza Proton, y nosotros solo limpiabamos las dos
+            # carpetas de sistema.
+            for _sysdir in "$destino/drive_c/windows" \
+                           "$destino/drive_c/windows/system32" \
                            "$destino/drive_c/windows/syswow64"; do
                 [ -d "$_sysdir" ] || continue
                 while IFS= read -r _dll; do
@@ -14093,17 +14948,39 @@ for perfil in perfiles:
     for campo in CAMPOS:
         patron = r'<%s>(.*?)</%s>' % (campo, campo)
         for m in reversed(list(re.finditer(patron, texto2, re.S))):
+            # Se declara SIEMPRE: si la ruta no existe y el campo no es
+            # GamePath, se llegaba abajo sin haberla definido y el mapeador
+            # moria con NameError. Lo caza la prueba de Street Fighter.
+            nombre = ''
             actual = m.group(1).strip()
             if actual:
                 # Solo lo que PARECE una ruta: hay campos con parametros
                 # sueltos ("-t") y esos no se tocan.
                 if '\\' not in actual and '/' not in actual:
                     continue
+                # PRIMERO, LA RUTA TAL CUAL: si ya apunta a un fichero que existe,
+                # se usa ESA y no se busca por nombre.
+                #
+                # Un perfil traia ".\game\...\StreetFighterV.exe", una ruta
+                # RELATIVA que ya era correcta. Nosotros nos quedabamos solo con el
+                # nombre del fichero: si hay dos con ese nombre -un lanzador y el
+                # juego de verdad-, se cogia el que no era. La ruta buena estaba
+                # delante y la tirabamos.
+                _rel = actual.replace('\\', '/').lstrip('./')
+                _cand = os.path.join(raiz, _rel)
+                if os.path.isfile(_cand):
+                    _nv = a_windows(_cand)
+                    if actual != _nv:
+                        texto2 = texto2[:m.start(1)] + _nv + texto2[m.end(1):]
+                        tocado = True
+                    continue
                 nombre = re.split(r'[\\/]', actual)[-1]
             elif campo == 'GamePath' and nombre_exe:
                 # Vacio: se rellena con lo que diga <ExecutableName>.
                 nombre = re.split(r'[\\/]', nombre_exe)[-1]
             else:
+                continue
+            if not nombre:
                 continue
             real = indice.get(nombre.lower())
             if not real:
@@ -15882,6 +16759,7 @@ EOFRB
     matar_con_hijos "$trig"
     guardia_salida_stop
     mapeador_stop
+    mando_virtual_stop
     stats_record "$gid" "$(( $(date +%s) - st0 ))"
     saves_detect_end "$gid"
     # Los perfiles de TeknoParrot, como estaban: estos juegos suelen estar
@@ -18989,6 +19867,49 @@ puesto, crea una antes con:  passwd"
     return 0
 }
 
+mando_utilizable() {
+    # ¿Hay un mando que el juego VAYA A PODER LEER?
+    #
+    # Es la pregunta que separa los dos casos que teniamos mezclados:
+    #
+    #   - Un tester no veia NINGUN mando: sus nodos no se podian leer, y
+    #     forzar SDL lo arreglo.
+    #   - Otro SI tenia el mando funcionando por el runner, y forzar SDL se lo
+    #     quito. Para el, lo correcto es no tocar nada.
+    #
+    # Los dos tienen /dev/hidraw cerrado, asi que eso no distingue. Lo que
+    # distingue es si el nodo del PROPIO MANDO se puede leer: si se puede, el
+    # runner lo vera igual que lo vemos nosotros y no hay que hacer nada.
+    #
+    # Se mira en /proc/bus/input/devices, que dice que evento corresponde a
+    # cada dispositivo y si tiene botones de mando.
+    # El fichero se puede cambiar para las pruebas: sin eso no hay forma de
+    # comprobar esta funcion sin un mando conectado de verdad.
+    local devs="${WP_INPUT_DEVICES:-/proc/bus/input/devices}"
+    [ -r "$devs" ] || return 1
+    local linea ev tiene_pad=0
+    while IFS= read -r linea; do
+        case "$linea" in
+            "B: KEY="*)
+                # Los mandos declaran BTN_GAMEPAD (0x130). En la mascara de
+                # teclas eso cae en un grupo que los teclados no tienen.
+                case "$linea" in
+                    *" 7cdb000000000000 "*|*"7cdb000000000000"*) tiene_pad=1 ;;
+                    *) tiene_pad=0 ;;
+                esac ;;
+            "H: Handlers="*)
+                case "$linea" in
+                    *js*) ev="$(printf '%s' "$linea" | grep -oE 'event[0-9]+' | head -n1)"
+                          if [ -n "$ev" ] && [ -r "/dev/input/$ev" ]; then
+                              return 0        # un mando, y se puede leer
+                          fi ;;
+                esac ;;
+        esac
+    done < "$devs"
+    [ "$tiene_pad" = 0 ] || return 1
+    return 1
+}
+
 hidraw_sin_permiso() {
     # ¿Cuantos nodos /dev/hidraw no podemos leer? GE-Proton 11-4 y siguientes
     # leen ahi los mandos de Sony; sin permiso, no los ven.
@@ -19179,11 +20100,24 @@ cover_nombres() {
     # -> "Blade_Arcus"), que es como las guarda la descarga automatica. Pero
     # quien copia su propia coleccion conserva los espacios, y asi no casaba
     # ninguna. Se prueban las dos formas.
-    local gid="$1"
-    printf '%s\n' "$gid"
-    case "$gid" in
-        *_*) printf '%s\n' "$(printf '%s' "$gid" | tr '_' ' ')" ;;
-    esac
+    # Y SIN LA EXTENSION DE LA CARPETA.
+    #
+    # game_id quita la extension a los FICHEROS pero no a las carpetas, asi
+    # que un juego en "Alien Stars.pc" tiene el identificador
+    # "Alien_Stars.pc". Y la caratula se llama "Alien Stars.png", sin el .pc:
+    # asi las guarda el escaneo y asi las tiene la gente.
+    #
+    # Resultado: los juegos en carpeta no encontraban NI SU PROPIA caratula en
+    # covers/. Se prueban tambien los nombres sin ese sufijo.
+    local gid="$1" g
+    for g in "$gid" "${gid%.*}"; do
+        [ -n "$g" ] || continue
+        printf '%s\n' "$g"
+        case "$g" in
+            *_*) printf '%s\n' "$(printf '%s' "$g" | tr '_' ' ')" ;;
+        esac
+        [ "$g" = "${gid%.*}" ] && break
+    done
 }
 
 cover_tipo_real() {
@@ -19896,9 +20830,25 @@ sort_games() {
             jugados)
                 printf '%d %012d\t%s\n' "$((1-fav))" "$(( 999999999 - ${secs:-0} ))" "$rel" ;;
             *)
-                printf '%d %s\t%s\n' "$((1-fav))" "$(printf '%s' "$rel" | tr 'A-Z' 'a-z')" "$rel" ;;
+                # POR NOMBRE, IGNORANDO GUIONES Y PUNTUACION.
+                #
+                # Antes se ordenaba por el nombre tal cual, y eso deja el
+                # orden en manos del idioma del sistema: con LC_ALL=C el
+                # guion va ANTES que cualquier letra, asi que "R-Type" se
+                # colaba arriba de la R; con un idioma de verdad la
+                # puntuacion se ignora y quedaba entre "Ratchet" y "Rayman".
+                # El mismo WProton ordenaba distinto en dos equipos.
+                #
+                # Ahora la clave se limpia: solo letras y numeros. Asi
+                # "R-Type" va donde iria "RType", que es donde la gente lo
+                # busca, y sale igual en todas partes.
+                printf '%d %s\t%s\n' "$((1-fav))" \
+                    "$(printf '%s' "$rel" | tr 'A-Z' 'a-z' \
+                        | tr -cd 'a-z0-9/\n')" "$rel" ;;
         esac
-    done | sort | cut -f2-
+    # LC_ALL=C: se ordena por bytes, siempre igual, sin depender del idioma
+    # que tenga puesto cada uno.
+    done | LC_ALL=C sort | cut -f2-
 }
 
 discos_sin_montar() {
@@ -21528,6 +22478,8 @@ Poner el contador a cero?" && {
             kopts+=("Crear o editar las teclas de este juego" \
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
+            "Volver a instalar lo que trae el juego (.bat)" \
+            "Mando virtual: $([ "${MANDO_VIRTUAL:-0}" = 0 ] && printf 'no' || printf '%s' "$MANDO_VIRTUAL")" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Batocera' || printf 'Xbox')" \
                 "Teclado en pantalla: ${TECLADO_POS:-abajo}" \
                 "El juego NO ve el mando: $(case "${KEYS_EXCLUSIVO:-auto}" in \
@@ -21536,6 +22488,70 @@ Poner el contador a cero?" && {
                 "<< Volver")
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" "${kopts[@]}")" || kmenu=""
             case "$kmenu" in
+                "Mando virtual:"*)
+                    # Convierte tu mando en OTRO mando, en vez de en teclas.
+                    # Hay dos problemas distintos y por eso hay dos modos:
+                    #
+                    #   - juegos que solo leen el stick y se saltan la cruceta
+                    #   - juegos VIEJOS que ven un mando demasiado moderno y
+                    #     se lian con los gatillos y los ejes de mas
+                    local _mv
+                    _mv="$(menu "Mando virtual para $gid" \
+                        "No usar mando virtual" \
+                        "Mando Xbox (probar esto primero)" \
+                        "Mando DualShock" \
+                        "Mando Xbox + cruceta al stick" \
+                        "Mando DualShock + cruceta al stick" \
+                        "Mando clasico (para juegos antiguos)" \
+                        "Mando clasico + cruceta al stick" \
+                        "¿Que es esto?" \
+                        "<< Volver")" || _mv=""
+                    case "$_mv" in
+                        "No usar"*)      MANDO_VIRTUAL=0 ;;
+                        "Mando Xbox (probar"*)  MANDO_VIRTUAL=xbox ;;
+                        "Mando DualShock")      MANDO_VIRTUAL=ds4 ;;
+                        "Mando Xbox + "*)       MANDO_VIRTUAL=cruceta_stick ;;
+                        "Mando DualShock + "*)  MANDO_VIRTUAL=ds4_cruceta_stick ;;
+                        "Mando clasico (para"*) MANDO_VIRTUAL=clasico ;;
+                        "Mando clasico + "*)    MANDO_VIRTUAL=clasico_cruceta_stick ;;
+                        "¿Que es esto?")
+                            ui_info "WProton puede crear un mando 'de mentira' y
+copiarle lo del tuyo, cambiando algunas cosas por el camino.
+
+LA CRUCETA MUEVE EL STICK: para juegos que leen bien la
+cruceta pero no la usan, porque su codigo solo mira el
+stick. Aqui no basta con emular bien el mando.
+
+MANDO CLASICO: para juegos antiguos (DirectInput). Los
+mandos de entonces no tenian gatillos analogicos, y un
+juego viejo ve ese eje en un extremo y cree que lo estas
+empujando: se acelera solo. En este modo los gatillos se
+mandan como botones y se quitan los ejes de mas.
+
+DUALSHOCK 4: finge un mando de Sony en vez de uno de Xbox.
+Algunos juegos se portan mejor con uno que con otro, y
+otros enseñan los botones correctos (X, circulo, cuadrado)
+en vez de los de Xbox.
+
+Es distinto del .keys: aqui el juego sigue viendo un mando,
+no un teclado. Necesita permiso sobre /dev/uinput."
+                            _mv="" ;;
+                        *) _mv="" ;;
+                    esac
+                    [ -n "$_mv" ] && write_full_profile "$gid" ;;
+                "Volver a instalar lo que trae el juego"*)
+                    # Por si la instalacion se corto a medias o el juego se
+                    # actualiza: se olvida la marca y el .bat vuelve a correr.
+                    if [ -f "$PROFILE_DIR/.$gid.instalado" ]; then
+                        rm -f "$PROFILE_DIR/.$gid.instalado" 2>/dev/null
+                        ui_info "Hecho.
+
+La proxima vez se ejecutara el .bat del juego otra vez,
+con su instalacion."
+                    else
+                        ui_info "Este juego no tiene ninguna instalacion hecha
+por WProton, o no usa un .bat de instalacion."
+                    fi ;;
                 "Ver las teclas asignadas"*)
                     case "$kres" in
                         '!ROTO')
@@ -21558,14 +22574,26 @@ Se activan solas al lanzar el juego." ;;
                     local _ex
                     _ex="$(menu "¿El juego debe ver el mando?" \
                         "Automatico (recomendado)" \
-                        "Nunca: solo las teclas del .keys" \
-                        "Siempre: mando y teclas a la vez" \
+                        "Siempre: el juego solo vera las teclas" \
+                        "Nunca: el juego vera el mando y las teclas" \
                         "¿Que significa esto?" \
                         "<< Volver")" || _ex=""
+                    # LAS OPCIONES ESTABAN AL REVES.
+                    #
+                    # La fila de arriba enseña 1="siempre" y 0="nunca", que es
+                    # lo correcto (1 = el juego NO ve el mando). Pero aqui
+                    # "Nunca" guardaba 1 y "Siempre" guardaba 0: elegir
+                    # "Siempre" dejaba la opcion en "nunca" y no habia forma
+                    # de activarla. Un tester lo describio exacto: "automatico
+                    # y nunca si, pero siempre no".
+                    #
+                    # Y las etiquetas tampoco ayudaban: "Nunca: solo las
+                    # teclas del .keys" describe precisamente CAPTURAR el
+                    # mando, que es lo contrario de nunca.
                     case "$_ex" in
                         "Automatico"*) KEYS_EXCLUSIVO=auto ;;
-                        "Nunca:"*)     KEYS_EXCLUSIVO=1 ;;
-                        "Siempre:"*)   KEYS_EXCLUSIVO=0 ;;
+                        "Siempre:"*)   KEYS_EXCLUSIVO=1 ;;
+                        "Nunca:"*)     KEYS_EXCLUSIVO=0 ;;
                         "¿Que significa"*)
                             ui_info "Cuando un .keys esta activo, el mando puede
 capturarse para que el juego SOLO vea las teclas.
@@ -21611,6 +22639,9 @@ Cambialo si tapa justo donde el juego pide escribir." ;;
                         KEYS_ESTILO=xbox
     TECLADO_POS=abajo        # donde sale el teclado en pantalla
     KEYS_EXCLUSIVO=auto      # auto | 1 (el juego no ve el mando) | 0
+    # Mando virtual: apagado por defecto. Es una via NUEVA y aparte del
+    # mapeador de teclas; solo se enciende en los juegos que lo necesiten.
+    MANDO_VIRTUAL=0          # 0 | cruceta_stick
     TEXTO_RAPIDO=""          # texto que se teclea con una combinacion
     TEXTO_ENTER=0            # 1 = pulsar Enter despues de escribirlo
                     else
