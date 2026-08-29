@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.47"
+WPROTON_VERSION="1.48"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -104,8 +104,13 @@ PAD_EXIT=1                               # cerrar el juego con el mando
 PAD_EXIT_COMBO=select                    # select | l3r3 | start
 PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacion
 GAMES_PATHS_EXTRA=""                     # carpetas de juegos adicionales
-GE_CUSTOM_NAME="GE-Custom"               # nombre del runner propio
-GE_CUSTOM_URL="https://www.mediafire.com/file/oqprcy5dpju5m1k/ge-custom.tar.gz/file"
+# EL RUNNER QUE SE INSTALA DE SERIE, ademas del ultimo GE-Proton.
+#
+# Antes era un GE-Custom propio. Se cambio a Proton Frankenstein porque en las
+# pruebas resulto mas eficaz, y ademas es un nombre que la gente reconoce, asi
+# que no hace falta explicar que es.
+GE_CUSTOM_NAME="Proton7-38-Frankenstein"
+GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Frankenstein.tar.gz/file"
 # RUNNERS QUE ALOJAMOS NOSOTROS.
 #
 # Una LISTA, no una variable por runner. Con dos ya se veia venir: cada uno
@@ -226,8 +231,8 @@ PAD_EXIT_SEGUNDOS="$PAD_EXIT_SEGUNDOS"
 # --------------------------------------------------------------------------
 GAMES_PATHS_EXTRA="$GAMES_PATHS_EXTRA"
 # --------------------------------------------------------------------------
-# RUNNER PROPIO DE WPROTON
-#   Se descarga en la instalacion, junto al ultimo GE-Proton.
+# RUNNER QUE SE INSTALA DE SERIE
+#   Proton Frankenstein, ademas del ultimo GE-Proton.
 #   Deja GE_CUSTOM_URL vacio si no lo quieres.
 # --------------------------------------------------------------------------
 GE_CUSTOM_NAME="$GE_CUSTOM_NAME"
@@ -1804,9 +1809,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py fb9e467fa1cf" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 29647228fc46" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py fb9e467fa1cf
+# WPROTON_HELPER mapeador.py 29647228fc46
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2549,6 +2554,33 @@ def main():
                        "?")
     print("[keys] Mando: \"%s\" -> perfil %s" % (device.name, _nom_perfil),
           flush=True)
+
+    # ¿ES EL MANDO VIRTUAL DE STEAM?
+    #
+    # Steam no le pasa a los juegos el mando fisico: crea uno VIRTUAL y les da
+    # ese. Se reconoce por su identificador, 28DE:11FF, que es el unico dato
+    # fiable -por el nombre no, porque se hace pasar por un Xbox 360-.
+    #
+    # Importa saberlo porque ese mando tiene "modos de accion": en el modo
+    # ESCRITORIO no manda botones de mando, sino TECLADO Y RATON -la cruceta
+    # son flechas, A es Enter, B es Escape-. Un juego que espere un mando no
+    # recibe NADA, aunque el mando se vea perfectamente.
+    try:
+        _info = device.info
+        _es_steam = (_info.vendor == 0x28DE and _info.product == 0x11FF)
+    except Exception:
+        _es_steam = False
+    if _es_steam:
+        print("[keys] Es el mando VIRTUAL de Steam (28DE:11FF), no el fisico.",
+              flush=True)
+        print("[keys] Si el juego no responde a ningun boton, puede estar en"
+              " el modo", flush=True)
+        print("[keys] ESCRITORIO de Steam, donde el mando manda teclas en vez"
+              " de botones:", flush=True)
+        print("[keys] manten pulsado Start unos segundos para cambiarlo, o"
+              " ponle una", flush=True)
+        print("[keys] distribucion de MANDO en los ajustes de Steam del juego.",
+              flush=True)
     _ejes = perfil_actual.get("abs_map") or {}
     print("[keys] La cruceta se lee %s"
           % ("como eje (ABS_HAT0)"
@@ -3437,9 +3469,9 @@ MAPEOF
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py f688c180b8d1" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py 43af77f029d1" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py f688c180b8d1
+# WPROTON_HELPER mando_virtual.py 43af77f029d1
 # -*- coding: utf-8 -*-
 """Mando virtual: presenta al juego un mando distinto del que tienes.
 
@@ -3613,6 +3645,66 @@ def capacidades(clasico=False):
     return {ecodes.EV_KEY: botones, ecodes.EV_ABS: abs_caps}
 
 
+# EL MODO ESCRITORIO DE STEAM, TRADUCIDO DE VUELTA A MANDO.
+#
+# Steam trae dos "modos de accion". En el de ESCRITORIO los botones no mandan
+# botones de mando: mandan TECLADO Y RATON. Es lo que llaman "modo lagarto", y
+# la tabla por defecto esta documentada:
+#
+#     A -> Enter        Y -> Espacio      Cruceta -> flechas
+#     B -> Escape       R2 -> clic izq.   L2 -> clic der.
+#
+# Un juego que espere un mando no recibe NADA, aunque el mando se vea
+# perfectamente. Se cambia manteniendo Start, pero eso hay que saberlo: aqui
+# se traduce de vuelta y ya.
+#
+# (La X abre el teclado en pantalla, que es una accion interna de Steam y no
+# manda ninguna tecla: esa no se puede recuperar.)
+TECLA_A_BOTON = {
+    ecodes.KEY_ENTER:      ecodes.BTN_SOUTH,
+    ecodes.KEY_KPENTER:    ecodes.BTN_SOUTH,
+    ecodes.KEY_ESC:        ecodes.BTN_EAST,
+    ecodes.KEY_SPACE:      ecodes.BTN_NORTH,
+    ecodes.KEY_TAB:        ecodes.BTN_SELECT,
+}
+
+# Las flechas van a la cruceta: eje y boton, como todo lo demas.
+TECLA_A_CRUCETA = {
+    ecodes.KEY_UP:    (ecodes.ABS_HAT0Y, -1, ecodes.BTN_DPAD_UP),
+    ecodes.KEY_DOWN:  (ecodes.ABS_HAT0Y, 1,  ecodes.BTN_DPAD_DOWN),
+    ecodes.KEY_LEFT:  (ecodes.ABS_HAT0X, -1, ecodes.BTN_DPAD_LEFT),
+    ecodes.KEY_RIGHT: (ecodes.ABS_HAT0X, 1,  ecodes.BTN_DPAD_RIGHT),
+}
+
+# Los clics son los gatillos.
+RATON_A_BOTON = {
+    ecodes.BTN_LEFT:  (ecodes.ABS_RZ, ecodes.BTN_TR2),
+    ecodes.BTN_RIGHT: (ecodes.ABS_Z,  ecodes.BTN_TL2),
+}
+
+VENDOR_STEAM = 0x28DE
+
+
+def es_teclado_de_steam(dev):
+    """¿Es el teclado VIRTUAL que crea Steam, y no el del usuario?
+
+    Esto importa mucho: para traducir el modo escritorio hay que leer -y
+    capturar- un teclado. Capturar el teclado DE VERDAD dejaria al usuario sin
+    poder escribir, asi que solo se toca si es de Steam.
+
+    Se mira el fabricante, 0x28DE, que es el unico dato fiable.
+    """
+    try:
+        if dev.info.vendor != VENDOR_STEAM:
+            return False
+        caps = dev.capabilities()
+    except (OSError, IOError):
+        return False
+    teclas = caps.get(ecodes.EV_KEY) or []
+    # Un teclado tiene letras; un mando no.
+    return ecodes.KEY_A in teclas or ecodes.KEY_ENTER in teclas
+
+
 def es_mando(dev):
     """¿Este dispositivo es un mando y no un teclado o un raton?
 
@@ -3674,6 +3766,47 @@ def cruceta_a_stick(valor_hat, eje_actual):
     return 0
 
 
+def traducir_escritorio(virtual, teclados):
+    """Lee los teclados virtuales de Steam y emite MANDO. Nunca vuelve.
+
+    Se usa selectors en vez de un read_loop por dispositivo porque Steam crea
+    varios -teclado y raton van separados- y hay que atenderlos a la vez.
+    """
+    import selectors
+
+    sel = selectors.DefaultSelector()
+    for d in teclados:
+        sel.register(d, selectors.EVENT_READ)
+
+    while True:
+        for clave, _ in sel.select():
+            for ev in clave.fileobj.read():
+                if ev.type != ecodes.EV_KEY:
+                    continue
+                valor = 1 if ev.value else 0
+
+                if ev.code in TECLA_A_BOTON:
+                    virtual.write(ecodes.EV_KEY, TECLA_A_BOTON[ev.code], valor)
+                    virtual.syn()
+                    continue
+
+                if ev.code in TECLA_A_CRUCETA:
+                    eje, direccion, boton = TECLA_A_CRUCETA[ev.code]
+                    virtual.write(ecodes.EV_ABS, eje,
+                                  direccion if valor else 0)
+                    virtual.write(ecodes.EV_KEY, boton, valor)
+                    virtual.syn()
+                    continue
+
+                if ev.code in RATON_A_BOTON:
+                    # Los clics son los gatillos: se manda el eje al maximo y
+                    # el boton, porque unos juegos leen uno y otros el otro.
+                    eje, boton = RATON_A_BOTON[ev.code]
+                    virtual.write(ecodes.EV_ABS, eje, GAT_MAX if valor else 0)
+                    virtual.write(ecodes.EV_KEY, boton, valor)
+                    virtual.syn()
+
+
 def main():
     modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
     # El modo clasico lleva sufijo, para poder combinarlo:
@@ -3689,6 +3822,60 @@ def main():
     tipo = "ds4" if "ds4" in modo else "xbox"
     nombre, vendor, product, version = MANDOS[tipo]
     ruta = sys.argv[2] if len(sys.argv) > 2 else ""
+
+    # MODO ESCRITORIO: se leen los teclados virtuales de Steam, no un mando.
+    if modo.startswith("escritorio"):
+        teclados = []
+        for r in sorted(evdev.list_devices()):
+            try:
+                d = evdev.InputDevice(r)
+            except (OSError, IOError):
+                continue
+            if es_teclado_de_steam(d):
+                teclados.append(d)
+            else:
+                d.close()
+        if not teclados:
+            sys.stderr.write("mando_virtual: no hay teclado virtual de Steam;"
+                             " el modo escritorio no aplica aqui\n")
+            return 1
+        try:
+            virtual = evdev.UInput(capacidades(False), name=NOMBRE_VIRTUAL,
+                                   vendor=VENDOR, product=PRODUCT,
+                                   version=VERSION)
+        except (OSError, IOError) as e:
+            sys.stderr.write("mando_virtual: no se pudo crear (%s)\n" % e)
+            return 1
+        # Se capturan para que el juego no reciba ADEMAS las teclas: si no,
+        # cada boton contaria dos veces (una como tecla y otra como boton).
+        for d in teclados:
+            try:
+                d.grab()
+            except (OSError, IOError):
+                pass
+
+        def soltar_esc(*_):
+            for dd in teclados:
+                try:
+                    dd.ungrab()
+                except (OSError, IOError):
+                    pass
+            try:
+                virtual.close()
+            except Exception:
+                pass
+            print("[mando] traductor del modo escritorio retirado", flush=True)
+            sys.exit(0)
+
+        signal.signal(signal.SIGTERM, soltar_esc)
+        signal.signal(signal.SIGINT, soltar_esc)
+        print("[mando] Modo escritorio de Steam -> mando (%d dispositivo(s))"
+              % len(teclados), flush=True)
+        try:
+            traducir_escritorio(virtual, teclados)
+        except (OSError, IOError) as e:
+            sys.stderr.write("mando_virtual: se perdio el teclado (%s)\n" % e)
+        soltar_esc()
 
     if ruta:
         try:
@@ -4113,9 +4300,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py e91322b187e2" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 37336ca4563b" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py e91322b187e2
+# WPROTON_HELPER menu_pygame.py 37336ca4563b
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5443,8 +5630,6 @@ AYUDAS_ES = [
      'ignorar las teclas.'),
     ('¿Que significa esto?',
      'Explica cuando conviene capturar el mando y cuando no.'),
-    ('¿Que es esto?',
-     'Explica para que sirve cada modo del mando virtual.'),
     ('Mando virtual:',
      'Crea un mando de mentira y le copia lo del tuyo, cambiando algo por el '
      'camino. Distinto del .keys: aqui el juego sigue viendo un mando.'),
@@ -5463,6 +5648,10 @@ AYUDAS_ES = [
      'que leen bien la cruceta pero solo hacen caso al stick.'),
     ('Mando DualShock + cruceta al stick',
      'Un mando de Sony y ademas la cruceta moviendo el stick izquierdo.'),
+    ('Traducir el modo escritorio de Steam',
+     'En el modo escritorio de Steam los botones mandan TECLAS, no botones: A '
+     'es Enter, B es Escape, la cruceta son las flechas. Un juego que espere '
+     'un mando no recibe nada. Esto lo traduce de vuelta a mando.'),
     ('Mando clasico (para juegos antiguos)',
      'Finge un mando de los de antes: los gatillos van como botones y se '
      'quitan los ejes de mas. Para juegos de DirectInput que se lian con un '
@@ -6926,6 +7115,20 @@ def run_session():
         def tcols(r):
             return len(TACT) if r == len(TROWS) else len(TROWS[r])
 
+        def col_al_entrar(fila, col):
+            """En que columna cae el puntero al llegar a una fila.
+
+            En la fila de acciones se va a ACEPTAR, no a la columna que
+            tuvieras. Antes se conservaba la columna y, viniendo de la derecha
+            del teclado, caia en CANCELAR: justo lo contrario de lo que uno
+            quiere despues de escribir algo.
+            """
+            if fila == len(TROWS):
+                for k, a in enumerate(TACT):
+                    if a in ('ACEPTAR', 'ACCEPT'):
+                        return k
+            return min(col, tcols(fila) - 1)
+
         def t_press():
             global TXT, shift, tr_r, tr_c
             if tr_r == len(TROWS):
@@ -6954,9 +7157,11 @@ def run_session():
                 if time.time() - t_open2 < 0.35:
                     continue
                 if ev.key == pygame.K_UP:
-                    tr_r = (tr_r - 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+                    tr_r = (tr_r - 1) % (len(TROWS) + 1)
+                    tr_c = col_al_entrar(tr_r, tr_c)
                 elif ev.key == pygame.K_DOWN:
-                    tr_r = (tr_r + 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+                    tr_r = (tr_r + 1) % (len(TROWS) + 1)
+                    tr_c = col_al_entrar(tr_r, tr_c)
                 elif ev.key == pygame.K_LEFT:
                     tr_c = (tr_c - 1) % tcols(tr_r)
                 elif ev.key == pygame.K_RIGHT:
@@ -8629,11 +8834,22 @@ ge_tags_curated() {
     all="$(curl -fsSL "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases?per_page=100" \
         | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
     [ -z "$all" ] && return 1
+    # La serie anterior a la mas nueva: si la ultima es GE-Proton11-x, la 10.
+    local serie_prev
+    serie_prev="$(printf '%s\n' "$all" | grep -E '^GE-Proton[0-9]+-[0-9]+$' \
+        | sed -E 's/^GE-Proton([0-9]+)-.*/\1/' | sort -n | uniq | tail -n2 \
+        | head -n1)"
     {
         printf '%s\n' "$all" | head -n 8
         printf '%s\n' "$all" | grep -E '^GE-Proton[0-9]+-[0-9]+$' | sort -V \
             | awk '{m=$0; sub(/^GE-Proton/,"",m); sub(/-.*/,"",m); last[m]=$0}
                    END{for (k in last) print last[k]}'
+        # Todas las de la serie ANTERIOR: son las que piden los juegos que no
+        # van con la ultima. Antes solo salia la ultima de cada serie, asi que
+        # de la 10 aparecia la 10-15 y ninguna mas; un tester necesitaba la
+        # 10-10 y no habia forma de bajarla desde aqui.
+        [ -n "$serie_prev" ] && printf '%s\n' "$all" \
+            | grep -E "^GE-Proton${serie_prev}-[0-9]+$"
     } | sort -Vr | awk '!seen[$0]++'
 }
 
@@ -9169,9 +9385,14 @@ Mira dentro de: $RUNNERS_DIR"
 }
 
 setup_proton_custom() {
-    # Runner propio de WProton. Se descarga en la instalacion junto al ultimo
-    # GE-Proton, y tambien se puede pedir desde "Descargar runners".
-    local nombre="${GE_CUSTOM_NAME:-GE-Custom}"
+    # Runner que se instala de serie, junto al ultimo GE-Proton, y que tambien
+    # se puede pedir desde "Descargar runners".
+    #
+    # Es Proton Frankenstein: sustituyo al GE-Custom propio porque en las
+    # pruebas resulto mas eficaz, y ademas la gente lo conoce por ese nombre.
+    # El de respaldo tiene que ser el MISMO: si settings.conf viene sin el
+    # ajuste, se instalaria una cosa y se buscaria otra.
+    local nombre="${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}"
     runner_desde_url "${GE_CUSTOM_URL:-}" "$nombre" \
         "Descargando el runner propio de WProton..." || return 1
     [ -n "${RUNNER_TMP:-}" ] || return 0      # ya estaba instalado
@@ -9422,7 +9643,22 @@ list_runners() {
         name="$(basename "$d")"
         case "$name" in .*) continue ;; esac
         kind="$(runner_kind "$d")" || continue
-        printf '%s [%s]\n' "$name" "$kind"
+        # EL GE-Custom VIEJO SE MARCA, PERO NO SE BORRA.
+        #
+        # Era el runner que WProton instalaba de serie; ahora lo es Proton
+        # Frankenstein, que en las pruebas resulto mas eficaz. Quien ya tenia
+        # el viejo lo sigue teniendo en runners/ y le seguiria apareciendo
+        # aqui como una opcion mas.
+        #
+        # Borrarlo sin avisar seria peor: puede tener juegos con ese runner
+        # guardado en su perfil y quedarian sin runner. Asi que se deja, pero
+        # se dice, para que nadie lo elija pensando que es el recomendado.
+        case "$name" in
+            GE-Custom|ge-custom)
+                printf '%s [%s] - ANTIGUO, usa Proton7-38-Frankenstein\n' \
+                    "$name" "$kind" ;;
+            *)  printf '%s [%s]\n' "$name" "$kind" ;;
+        esac
     done | sort -V
     sys_wine_runners
 }
@@ -11495,7 +11731,11 @@ teknoparrot_restaurar_pendientes() {
         while IFS= read -r orig; do
             [ -n "$orig" ] || continue
             perfil="${orig%.wproton_original}"
-            if cp -f "$orig" "$perfil" 2>/dev/null; then
+            # Solo las rutas, igual que al salir de un juego: el perfil lleva
+            # tambien la configuracion de los botones y devolverlo entero la
+            # borraria. Que la sesion anterior muriera de mala manera no es
+            # motivo para tirarle al usuario el mando que configuro.
+            if teknoparrot_devolver_rutas "$orig" "$perfil"; then
                 rm -f "$orig" 2>/dev/null
                 n=$((n+1))
             fi
@@ -11698,6 +11938,21 @@ export_game_env() {
         # arreglar. Se decide solo, sin que el usuario toque ajustes.
         mandos_del_runner=1
         unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
+        # STEAM PUEDE ESTAR OCULTANDO EL MANDO, Y HAY QUE DECIRLO.
+        #
+        # Al lanzar desde Steam -o desde el modo Juego- Steam deja puesta
+        # SDL_GAMECONTROLLER_IGNORE_DEVICES con cientos de mandos dentro. Un
+        # juego que use SDL los ignora TODOS obedeciendo a esa lista.
+        #
+        # Nosotros, al apartarnos, la dejabamos tal cual. Resultado: el
+        # lanzador ve el mando -porque lo lee por su cuenta- y el juego no.
+        # Le paso a un tester con TeknoParrot: "en TeknoParrot reconoce el
+        # mando, pero al ir a jugar no lo ve".
+        #
+        # No se quita sola: hacerlo puede ser contraproducente si el mando
+        # fisico no se puede leer y el que funciona es el virtual de Steam.
+        # Pero se AVISA, que es lo que faltaba.
+        pad_avisar_steam_oculta
         if [ "$_hidraw_cerrado" = 1 ]; then
             say "[+] Mandos: los gestiona $(basename "$rdir"), WProton no interviene"
             say "    (/dev/hidraw esta cerrado, pero el mando SI se puede leer:"
@@ -11717,7 +11972,7 @@ export_game_env() {
         # esto: sin decirla, nadie deduce que hay que poner dos opciones en
         # "Nunca" para que WProton no toque el mando.
         say "    Si el mando iba bien antes y ahora no, pon 'Mando Sony' y"
-        say "    'Mando via SDL' en Nunca (Configurar -> Arreglos rapidos):"
+        say "    'Mando via SDL' en Nunca, en Ajustes del juego:"
         say "    asi WProton no toca nada y lo gestiona el runner."
     fi
     local pad_sony_activo=0
@@ -11824,7 +12079,8 @@ export_game_env() {
                 say "    Con este arreglo el juego busca el mando FISICO, que"
                 say "    aqui no se puede leer, en vez del virtual de Steam."
                 say "    Si el juego no ve el mando, prueba a DESACTIVARLO:"
-                say "    Configurar -> Arreglos rapidos -> Arreglo mando SteamOS"
+                say "    Ajustes del juego -> Rendimiento y compatibilidad ->"
+                say "    Arreglo mando SteamOS (Steam Input)"
             fi
         else
             say "[i] Arreglo de Steam Input activado, pero Steam NO estaba"
@@ -11946,8 +12202,8 @@ export_game_env() {
             say "    el .keys lo sustituye, asi que se usa el teclado."
             say "    Fichero: ${WP_KEYS_CULPABLE:-?}"
             say "    Si este juego YA funcionaba con el mando, es esto:"
-            say "    Configurar -> Arreglos rapidos -> El juego NO ve el mando"
-            say "    -> 'Nunca'. (O borra ese .keys.)"
+            say "    Ajustes del juego -> Mapeador .keys ->"
+            say "    El juego NO ve el mando -> 'Nunca'. (O borra ese .keys.)"
         else
             say "[i] Runner de tipo Wine: no se desactiva winebus (lo tumbaria)."
             say "    El mando esta capturado igual, asi que no le llegan eventos."
@@ -14614,6 +14870,64 @@ teknoparrot_lanzador() {
     return 0
 }
 
+teknoparrot_devolver_rutas() {
+    # Devuelve al perfil las rutas que tenia el original, dejando el resto
+    # como este ahora. $1 = copia intacta, $2 = perfil actual.
+    #
+    # Lo que cambiamos nosotros son <GamePath> y <GamePath2>. Todo lo demas
+    # -y sobre todo la configuracion de los botones- es del usuario y no se
+    # toca: si lo devolvieramos entero, cada partida le borraria el mando que
+    # acaba de configurar.
+    local orig="$1" perfil="$2"
+    [ -f "$orig" ] && [ -f "$perfil" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || {
+        # Sin Python no hay forma de hacerlo fino: se devuelve entero, que es
+        # lo que se hacia antes, y se dice.
+        say "AVISO: sin Python; se devuelve el perfil entero de TeknoParrot"
+        say "       (si habias configurado el mando ahi, revisalo)"
+        cp -f "$orig" "$perfil" 2>/dev/null
+        return $?
+    }
+    "$PY_BIN" - "$orig" "$perfil" <<'EOFTKPR' 2>/dev/null
+import re
+import sys
+
+CAMPOS = ("GamePath", "GamePath2")
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        original = fh.read()
+    with open(sys.argv[2], encoding="utf-8", errors="replace") as fh:
+        actual = fh.read()
+except OSError:
+    sys.exit(1)
+
+nuevo = actual
+for campo in CAMPOS:
+    patron = r"<%s>(.*?)</%s>" % (campo, campo)
+    viejos = re.findall(patron, original, re.S)
+    if not viejos:
+        continue
+    # Se sustituyen en el mismo orden en que aparecen.
+    it = iter(viejos)
+
+    def _rep(m, campo=campo, it=it):
+        try:
+            return "<%s>%s</%s>" % (campo, next(it), campo)
+        except StopIteration:
+            return m.group(0)
+
+    nuevo = re.sub(patron, _rep, nuevo, flags=re.S)
+
+if nuevo != actual:
+    try:
+        with open(sys.argv[2], "w", encoding="utf-8") as fh:
+            fh.write(nuevo)
+    except OSError:
+        sys.exit(1)
+sys.exit(0)
+EOFTKPR
+}
+
 teknoparrot_restaurar() {
     # Devuelve los perfiles de TeknoParrot a como estaban. $1 = raiz del juego.
     #
@@ -14634,7 +14948,20 @@ teknoparrot_restaurar() {
         perfil="${orig%.wproton_original}"
         # Se restaura y se quita la copia: si el juego vuelve a lanzarse, se
         # hara una copia nueva del fichero original, que es lo correcto.
-        if cp -f "$orig" "$perfil" 2>/dev/null; then
+        # SOLO SE DEVUELVEN LAS RUTAS, NO EL PERFIL ENTERO.
+        #
+        # El perfil no lleva solo el <GamePath>: lleva TAMBIEN la
+        # configuracion de los botones (JoystickButtons, BindName,
+        # BindNameXi). Si el usuario entra en TeknoParrot, asigna su mando y
+        # sale, restaurar la copia intacta le BORRA esa configuracion.
+        #
+        # Un tester lo describio exacto: "en TeknoParrot reconoce el mando,
+        # pero a la de ir a jugar no lo ve". Claro: lo veia al configurarlo y
+        # nosotros le tirabamos la asignacion al salir.
+        #
+        # Ahora se copian del original SOLO las etiquetas de ruta, y el resto
+        # del fichero se queda como lo haya dejado el.
+        if teknoparrot_devolver_rutas "$orig" "$perfil"; then
             rm -f "$orig" 2>/dev/null
             n=$((n+1))
         fi
@@ -19910,6 +20237,34 @@ mando_utilizable() {
     return 1
 }
 
+pad_avisar_steam_oculta() {
+    # ¿Steam esta ocultando mandos con sus variables de SDL?
+    #
+    # Solo avisa: la decision de quitarlas es del usuario, porque en algunos
+    # equipos quitarlas empeora las cosas (si /dev/hidraw no se puede leer, el
+    # unico mando que funciona es el virtual de Steam, y esa lista es lo que
+    # hace que el juego use ese).
+    local v val n=0
+    for v in SDL_GAMECONTROLLER_IGNORE_DEVICES \
+             SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
+             SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES \
+             SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES_EXCEPT; do
+        eval "val=\${$v:-}"
+        [ -n "$val" ] && n=$((n+1))
+    done
+    [ "$n" -gt 0 ] || return 0
+    [ "${PAD_STEAMFIX:-0}" = 1 ] && return 0    # ya se esta quitando
+    # LA RUTA, TAL Y COMO SE VE EN PANTALLA.
+    #
+    # Un aviso que manda a un sitio que no existe es peor que no avisar: el
+    # usuario da vueltas por los menus y acaba pensando que la opcion no esta.
+    say "[!] Steam esta ocultando mandos a los juegos ($n variables SDL)."
+    say "    Si el lanzador ve el mando pero el JUEGO no, es esto:"
+    say "    Ajustes del juego -> Rendimiento y compatibilidad ->"
+    say "    Arreglo mando SteamOS (Steam Input)."
+    return 0
+}
+
 hidraw_sin_permiso() {
     # ¿Cuantos nodos /dev/hidraw no podemos leer? GE-Proton 11-4 y siguientes
     # leen ahi los mandos de Sony; sin permiso, no los ven.
@@ -22502,9 +22857,9 @@ Poner el contador a cero?" && {
                         "Mando DualShock" \
                         "Mando Xbox + cruceta al stick" \
                         "Mando DualShock + cruceta al stick" \
+                        "Traducir el modo escritorio de Steam" \
                         "Mando clasico (para juegos antiguos)" \
                         "Mando clasico + cruceta al stick" \
-                        "¿Que es esto?" \
                         "<< Volver")" || _mv=""
                     case "$_mv" in
                         "No usar"*)      MANDO_VIRTUAL=0 ;;
@@ -22512,30 +22867,10 @@ Poner el contador a cero?" && {
                         "Mando DualShock")      MANDO_VIRTUAL=ds4 ;;
                         "Mando Xbox + "*)       MANDO_VIRTUAL=cruceta_stick ;;
                         "Mando DualShock + "*)  MANDO_VIRTUAL=ds4_cruceta_stick ;;
+                        "Traducir el modo escritorio"*) MANDO_VIRTUAL=escritorio ;;
                         "Mando clasico (para"*) MANDO_VIRTUAL=clasico ;;
                         "Mando clasico + "*)    MANDO_VIRTUAL=clasico_cruceta_stick ;;
-                        "¿Que es esto?")
-                            ui_info "WProton puede crear un mando 'de mentira' y
-copiarle lo del tuyo, cambiando algunas cosas por el camino.
 
-LA CRUCETA MUEVE EL STICK: para juegos que leen bien la
-cruceta pero no la usan, porque su codigo solo mira el
-stick. Aqui no basta con emular bien el mando.
-
-MANDO CLASICO: para juegos antiguos (DirectInput). Los
-mandos de entonces no tenian gatillos analogicos, y un
-juego viejo ve ese eje en un extremo y cree que lo estas
-empujando: se acelera solo. En este modo los gatillos se
-mandan como botones y se quitan los ejes de mas.
-
-DUALSHOCK 4: finge un mando de Sony en vez de uno de Xbox.
-Algunos juegos se portan mejor con uno que con otro, y
-otros enseñan los botones correctos (X, circulo, cuadrado)
-en vez de los de Xbox.
-
-Es distinto del .keys: aqui el juego sigue viendo un mando,
-no un teclado. Necesita permiso sobre /dev/uinput."
-                            _mv="" ;;
                         *) _mv="" ;;
                     esac
                     [ -n "$_mv" ] && write_full_profile "$gid" ;;
