@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.48"
+WPROTON_VERSION="1.49"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -122,8 +122,7 @@ GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Franken
 # El nombre es el de la carpeta que quedara en runtime/proton/. Si la URL
 # esta vacia, esa fila NI SIQUIERA SALE en el menu: mas vale no ofrecerla que
 # ofrecer algo que no descarga nada.
-RUNNERS_ALOJADOS="Proton-Experimental|https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file|el oficial de Valve, alojado por nosotros
-Proton7-38-Frankenstein|https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Frankenstein.tar.gz/file|a medida para juegos que no van con los normales"
+RUNNERS_ALOJADOS="Proton-Experimental|https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file|el oficial de Valve, alojado por nosotros"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
@@ -372,7 +371,6 @@ write_lang_en() {
  "Desarrollo": "Developer",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
  "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
- "Descargando el runner propio de WProton...": "Downloading WProton's own runner...",
  "Descargar carátulas (SteamGridDB)": "Download covers (SteamGridDB)",
  "Descargar extractores GOG (innoextract + innounp)": "Download GOG extractors (innoextract + innounp)",
  "Descargar herramientas DwarFS (mkdwarfs + driver)": "Download DwarFS tools (mkdwarfs + driver)",
@@ -513,6 +511,7 @@ write_lang_en() {
  "Tema de los menus": "Menu theme",
  "Tiempo": "Time",
  "Todas (las tres formas)": "All three shapes",
+ "UMU-Proton [proton] - Open Wine Components, el de umu": "UMU-Proton [proton] - Open Wine Components, umu's own",
  "Usar la carpeta games/ de WProton": "Use WProton's games/ folder",
  "Variables extra": "Extra variables",
  "Ver donde guarda las partidas": "Show where saves are stored",
@@ -520,7 +519,7 @@ write_lang_en() {
  "Vertical (2:3)": "Vertical (2:3)",
  "Vista de juegos": "Games view",
  "Volviendo al menú...": "Back to the menu...",
- "WProton Custom [proton] - el runner propio de WProton": "WProton Custom [proton] - WProton's own runner",
+ "WProton Custom [proton] - ${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}": "WProton Custom [proton] - ${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}",
  "Wayland nativo": "Native Wayland",
  "Wine Caffe [wine] - Bottles, Wine TKG estable": "Wine Caffe [wine] - Bottles, stable Wine TKG",
  "Wine Kron4ek [wine] - vanilla / staging / tkg": "Wine Kron4ek [wine] - vanilla / staging / tkg",
@@ -4300,9 +4299,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 37336ca4563b" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py ecb57585e091" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 37336ca4563b
+# WPROTON_HELPER menu_pygame.py ecb57585e091
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5531,6 +5530,10 @@ AYUDAS_ES = [
     ('Prefijo:',
      'La "instalacion de Windows" del juego. Compartido: una para todos. '
      'Propio: solo para este. Incluido: el que trae el archivo dentro.'),
+    ('Librerias de este juego:',
+     'Las que se le han instalado y quedaron apuntadas. Si su prefijo se '
+     'rehace o se borra, WProton se las vuelve a poner solo. Desde aqui se '
+     'pueden olvidar.'),
     ('Instalar librerias en el prefijo:',
      'Instala redistribuibles directamente en el prefijo de este juego, sin '
      'tener que elegirlo otra vez desde el menu principal.'),
@@ -5788,7 +5791,9 @@ AYUDAS_ES = [
     ('DWProton',
      'Proton con apanos para juegos anime y gacha.'),
     ('WProton Custom',
-     'El runner propio de WProton.'),
+     'El runner que WProton instala de serie: Proton Frankenstein. Si lo has '
+     'borrado, desde aqui vuelve. No aparece en la lista de descarga porque '
+     'se instala solo al principio.'),
     ('Wine-GE',
      'Wine de GloriousEggroll, pensado para juegos que no son de Steam.'),
     ('Wine Kron4ek',
@@ -9394,12 +9399,12 @@ setup_proton_custom() {
     # ajuste, se instalaria una cosa y se buscaria otra.
     local nombre="${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}"
     runner_desde_url "${GE_CUSTOM_URL:-}" "$nombre" \
-        "Descargando el runner propio de WProton..." || return 1
+        "Descargando $nombre..." || return 1
     [ -n "${RUNNER_TMP:-}" ] || return 0      # ya estaba instalado
     local tmp="$RUNNER_TMP"
     mv -f "$tmp/runner.tar.gz" "$tmp/ge-custom.tar.gz"
     if ! extract_archive "$tmp/ge-custom.tar.gz" "$RUNNERS_DIR"; then
-        rm -rf "$tmp"; say "AVISO: fallo extrayendo el runner propio"; return 1
+        rm -rf "$tmp"; say "AVISO: fallo extrayendo $nombre"; return 1
     fi
     rm -rf "$tmp"
     # si el tar traia otro nombre de carpeta, se respeta: solo se avisa
@@ -9531,6 +9536,7 @@ EOFAL
         $(printf '%s' "$filas_aloj") \
         "GE-Proton [proton] - GloriousEggroll, el estandar" \
         "Proton-CachyOS [proton] - optimizado x86-64-v3" \
+        "UMU-Proton [proton] - Open Wine Components, el de umu" \
         "DWProton [proton] - Dawn Winery, fixes anime/gacha" \
         "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)" \
         "Proton-LG [proton] - Castro-Fidel, basado en GE" \
@@ -9538,7 +9544,7 @@ EOFAL
         "Wine Kron4ek [wine] - vanilla / staging / tkg" \
         "Wine Soda [wine] - Bottles, basado en el Wine de Valve" \
         "Wine Caffe [wine] - Bottles, Wine TKG estable" \
-        "WProton Custom [proton] - el runner propio de WProton" \
+        "WProton Custom [proton] - ${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}" \
         "<< Volver")" || return
     case "$src" in
         *)
@@ -9551,7 +9557,16 @@ EOFAL
     esac
     case "$src" in
         "WProton Custom"*)
-            setup_proton_custom || ui_error "No se pudo descargar el runner propio.
+            # EL HUECO DEL RUNNER DE SERIE.
+            #
+            # Aqui se instalaba el GE-Custom; ahora instala Proton
+            # Frankenstein. Es el MISMO sitio a proposito: el Frankenstein no
+            # esta en la lista de descarga suelta -seria ofrecerlo dos veces-,
+            # asi que si alguien lo borra, vuelve por aqui.
+            #
+            # Lo que instale lo dice GE_CUSTOM_NAME, en settings.conf: quien
+            # quiera otro solo tiene que cambiar ese ajuste.
+            setup_proton_custom || ui_error "No se pudo descargar el runner.
 
 Mira el registro: lo mas probable es que el enlace de descarga
 haya cambiado. Puedes poner otro en GE_CUSTOM_URL, dentro de
@@ -9562,6 +9577,11 @@ settings.conf."
     case "$src" in
         "GE-Proton"*)      repo="GloriousEggroll/proton-ge-custom" ;;
         "Proton-CachyOS"*) repo="CachyOS/proton-cachyos" ;;
+        # El Proton que usa umu-launcher por defecto. Las publicaciones
+        # viejas se llaman ULWGL-Proton, del nombre anterior del proyecto:
+        # sin filtro saldrian mezcladas y no aportan nada hoy.
+        "UMU-Proton"*)     repo="Open-Wine-Components/umu-proton"
+                           tagfilter="^UMU-Proton-" ;;
         "DWProton"*)       repo="dawn-winery/dwproton-mirror"; dwproton=1 ;;
         "Wine-LG"*)        repo="Castro-Fidel/wine_builds"; tagfilter="^WINE_LG_" ;;
         "Proton-LG"*)      repo="Castro-Fidel/wine_builds"; tagfilter="^PROTON_" ;;
@@ -10548,6 +10568,47 @@ args_etiqueta() {
     return 0
 }
 
+bat_resolver_instalacion() {
+    # Decide si hay que ejecutar el .bat de instalacion o ir al juego.
+    # $1 = gid. Trabaja sobre EXE_PATH y lo cambia si toca.
+    #
+    # ESTO VIVE EN UNA FUNCION A PROPOSITO.
+    #
+    # Estaba escrito dentro de launch_game, y por ahi NO pasan los juegos en
+    # carpeta: esos van por launch_loose_exe. Resultado: a quien tenia el juego
+    # en una carpeta .pc le reinstalaba las dependencias en CADA arranque, que
+    # es justo lo que esto venia a evitar.
+    #
+    # Es el mismo error que ya cometi con los juegos de Linux: poner la logica
+    # en un solo camino de lanzamiento habiendo tres.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 0
+    case "$(printf '%s' "${EXE_PATH:-}" | tr 'A-Z' 'a-z')" in
+        *.bat|*.cmd) ;;
+        *) return 0 ;;
+    esac
+    local bjuego
+    bjuego="$(bat_juego_real "$EXE_PATH")" || return 0
+    [ -n "$bjuego" ] || return 0
+    local bexe
+    bexe="$(dirname "$EXE_PATH")/$(printf '%s' "$bjuego" | tr '\\' '/')"
+    [ -f "$bexe" ] || {
+        say "[i] El .bat abre '$bjuego', pero ese fichero no esta aqui:"
+        say "    se ejecuta el .bat tal cual."
+        return 0
+    }
+    if bat_ya_instalado "$gid"; then
+        say "[+] Ya se instalo antes: se abre el juego directamente"
+        say "    ($bjuego, sin repetir la instalacion del .bat)"
+        EXE_PATH="$bexe"
+    else
+        say "[i] Primera vez: se ejecuta el .bat (instala lo suyo)."
+        say "    Las proximas veces se abrira $bjuego directamente."
+        bat_marcar_instalado "$gid"
+    fi
+    return 0
+}
+
 bat_juego_real() {
     # El EXE del juego que lanza un .bat de instalacion. $1 = ruta del .bat.
     #
@@ -11017,6 +11078,9 @@ profile_defaults() {
     LAA=0                    # 1 = Large Address Aware (32bit >2GB RAM)
     GAMESCOPE=""             # args de gamescope (vacio = desactivado)
     DLL_OVERRIDES=""         # WINEDLLOVERRIDES, ej: d3d9,ddraw=n,b
+    # Librerias que este juego necesita en su prefijo. Se apuntan solas al
+    # instalarlas y se reponen si el prefijo se rehace (ver redist_del_juego).
+    REDIST_JUEGO=""
     GAME_LANG="es_ES.UTF-8"  # el juego arranca en espanol salvo que se cambie
                              # (vacio = el del sistema)
     EXTRA_ENV=""
@@ -11111,6 +11175,7 @@ FSR=$FSR
 LAA=$LAA
 GAMESCOPE="$GAMESCOPE"
 DLL_OVERRIDES="$DLL_OVERRIDES"
+REDIST_JUEGO="$REDIST_JUEGO"
 GAME_LANG="$GAME_LANG"
 EXTRA_ENV="$EXTRA_ENV"
 EOF
@@ -11148,6 +11213,34 @@ acquire_game_root() {
 release_game_root() {
     [ "${ACQ_MOUNTED:-0}" = 1 ] && cleanup_mount
     ACQ_MOUNTED=0
+}
+
+prefijo_es_32() {
+    # ¿Este prefijo es de 32 bits? $1 = carpeta del prefijo.
+    #
+    # Hay paquetes con prefijos de 32 bits -juegos viejos, PES 6 entre ellos-.
+    # Si se lanzan sin decirselo a Wine, muere con:
+    #
+    #   wine: '...' is a 32-bit installation, it cannot support 64-bit apps
+    #   wine: could not load kernel32.dll, status c0000135
+    #
+    # Se mira de dos formas, y con una basta:
+    #   1. system.reg trae la linea "#arch=win32", que la escribe Wine.
+    #   2. no existe syswow64, la carpeta de 32 bits que SOLO tienen los
+    #      prefijos de 64 (en uno de 32, system32 ya es de 32).
+    local pfx="$1"
+    [ -n "$pfx" ] && [ -d "$pfx" ] || return 1
+    # El prefijo puede venir con pfx/ dentro (formato de Proton).
+    [ -d "$pfx/pfx" ] && pfx="$pfx/pfx"
+    if [ -f "$pfx/system.reg" ] \
+       && grep -qi '^#arch=win32' "$pfx/system.reg" 2>/dev/null; then
+        return 0
+    fi
+    if [ -d "$pfx/drive_c/windows/system32" ] \
+       && [ ! -d "$pfx/drive_c/windows/syswow64" ]; then
+        return 0
+    fi
+    return 1
 }
 
 has_bundled_prefix() {
@@ -11352,7 +11445,7 @@ aplicar_toggles_basicos() {
     # es exactamente lo que llego a pasar.
     local sel="$1"
     MANGOHUD=0; GAMEMODE=0; FSYNC=0; DXVK_ASYNC=0; WAYLAND=0
-    PAD_SDL=0; NTSYNC=0; DLL_OVERRIDES=""
+    PAD_SDL=0; NTSYNC=0; DLL_OVERRIDES=""; REDIST_JUEGO=""
     case "$sel" in *MangoHud*)  MANGOHUD=1 ;; esac
     case "$sel" in *GameMode*)  GAMEMODE=1 ;; esac
     case "$sel" in *Fsync*)     FSYNC=1 ;; esac
@@ -11581,6 +11674,26 @@ first_run_wizard() {
     HAS_BUNDLED_RUNNER=0
     local wiz_brun; wiz_brun="$(find_bundled_runner "$root")"
     [ -n "$wiz_brun" ] && HAS_BUNDLED_RUNNER=1
+    # UN JUEGO DE LINUX NO NECESITA RUNNER NI PREFIJO.
+    #
+    # El asistente empezaba pidiendo "Paso 1/3 - Elige Proton/Wine" antes de
+    # mirar QUE es el juego. A un juego nativo le preguntaba por Proton, que
+    # no va a usar, y luego por el prefijo, que tampoco tiene. Un tester
+    # cancelo ahi mismo, con razon.
+    #
+    # Se comprueba con la carpeta ya montada, que es lo que hace launch_game.
+    if juego_es_nativo "$root" >/dev/null 2>&1; then
+        say "[+] Juego de Linux: no hace falta runner ni prefijo."
+        RUNNER=""
+        PREFIX_MODE=shared
+        # Los mismos pasos que en el camino de Windows, en el mismo orden y
+        # con las mismas condiciones, quitando los dos que no aplican:
+        # el runner y el prefijo. wizard_dlls tampoco: son DLL de Windows.
+        wizard_pick_exe "$root" || return 1
+        wizard_toggles || return 1
+        [ -n "$juego" ] && wizard_keys "$gid" "$juego"
+        return 0
+    fi
     wizard_pick_runner || return 1
     if [ "$HAS_BUNDLED_RUNNER" = 1 ] && [ "$RUNNER" != "bundled" ] && [ -z "$RUNNER" ]; then
         : # eligio automático pudiendo elegir el incluido: respetar
@@ -11855,6 +11968,42 @@ export_game_env() {
     local _rdir_env="${2:-}"
     local gid="$1"
     export WINEPREFIX; WINEPREFIX="$(prefix_path "$gid")"
+    # UN PREFIJO DE 32 BITS HAY QUE DECLARARLO.
+    #
+    # Hay paquetes con prefijos de 32 bits -juegos viejos, el PES 6 entre
+    # ellos-. Sin decirselo a Wine, este lo trata como de 64 y muere:
+    #
+    #   wine: '...' is a 32-bit installation, it cannot support 64-bit apps
+    #   wine: could not load kernel32.dll, status c0000135
+    #
+    # Y el mensaje no dice que el problema sea la arquitectura, asi que
+    # parecia un juego roto.
+    if prefijo_es_32 "$WINEPREFIX"; then
+        export WINEARCH=win32
+        say "[+] El prefijo es de 32 bits: WINEARCH=win32"
+        # PROTON NO SABE USAR UN PREFIJO DE 32 BITS.
+        #
+        # Proton crea y espera siempre prefijos de 64 (con su syswow64 para
+        # los juegos de 32). Con uno de 32 muere igual aunque le pongamos
+        # WINEARCH, y el mensaje no dice que el problema sea ese.
+        #
+        # Con Wine si funciona, asi que se dice: es un cambio de una linea en
+        # los ajustes del juego y no hay forma de adivinarlo desde el error.
+        # El tipo de runner se mira con el argumento, NO con RUNNER_KIND: esa
+        # variable se fija DESPUES de llamar aqui, asi que estaria vacia y el
+        # aviso no saldria nunca. Es la misma razon por la que la funcion
+        # recibe el runner.
+        if [ "$(runner_kind "$_rdir_env" 2>/dev/null)" = "proton" ]; then
+            say "[!] Pero el runner es PROTON, y Proton no admite prefijos de"
+            say "    32 bits: el juego no arrancara."
+            say "    Cambia el runner a uno de tipo WINE en"
+            say "    Ajustes del juego -> Runner (Proton/Wine)."
+        fi
+    else
+        # Se quita por si venia puesta de otro juego: con WINEARCH=win32 en un
+        # prefijo de 64, Wine tampoco arranca.
+        unset WINEARCH
+    fi
     mkdir -p "$WINEPREFIX"
     export UMU_RUNTIME_PATH="$RUNTIME_DIR/steamrt"
     export XDG_DATA_HOME="$RUNTIME_DIR/xdg-data"
@@ -12478,24 +12627,7 @@ Configurar juego -> Comprobar integridad"
     # WProton lo ejecuta UNA vez, lo apunta en profiles/ (fuera del prefijo,
     # para que sobreviva) y a partir de ahi va directo al juego, que el propio
     # .bat dice cual es en su linea START.
-    case "$(printf '%s' "$EXE_PATH" | tr 'A-Z' 'a-z')" in
-        *.bat|*.cmd)
-            local _bjuego
-            if _bjuego="$(bat_juego_real "$EXE_PATH")" && [ -n "$_bjuego" ]; then
-                local _bdir _bexe
-                _bdir="$(dirname "$EXE_PATH")"
-                _bexe="$_bdir/$(printf '%s' "$_bjuego" | tr '\\' '/')"
-                if bat_ya_instalado "$gid" && [ -f "$_bexe" ]; then
-                    say "[+] Ya se instalo antes: se abre el juego directamente"
-                    say "    ($_bjuego, sin repetir la instalacion del .bat)"
-                    EXE_PATH="$_bexe"
-                elif [ -f "$_bexe" ]; then
-                    say "[i] Primera vez: se ejecuta el .bat (instala lo suyo)."
-                    say "    Las proximas veces se abrira $_bjuego directamente."
-                    bat_marcar_instalado "$gid"
-                fi
-            fi ;;
-    esac
+    bat_resolver_instalacion "$gid"
     say "Ejecutable: $EXE_PATH"
     [ -n "$EXE_ARGS" ] && say "Argumentos: $EXE_ARGS"
 
@@ -12584,6 +12716,26 @@ Configurar juego -> Comprobar integridad"
     # Aqui y no antes: hace falta el runner resuelto y WINEPREFIX exportado.
     loading_say "Comprobando las librerias del prefijo compartido..."
     redist_base_compartido "$rdir"
+    # LAS LIBRERIAS DE ESTE JUEGO, SI FALTAN.
+    #
+    # Lo que se instala en el prefijo propio de un juego se apunta en su
+    # perfil. Si el prefijo se rehace -o se borra, o el juego se copia a otro
+    # equipo- esas librerias ya no estan, pero el perfil si.
+    #
+    # Antes se perdian en silencio: el juego dejaba de arrancar y habia que
+    # acordarse de que un dia se le instalo algo.
+    if [ -n "${REDIST_JUEGO:-}" ]; then
+        local _falta
+        if _falta="$(redist_juego_pendientes "$WINEPREFIX")"; then
+            say "[+] Este juego necesita: $_falta"
+            say "    No estan en su prefijo; se instalan ahora."
+            loading_say "Instalando las librerias de este juego..."
+            WP_PREFIX_VERBOS="$_falta"
+            winetricks_uno_a_uno "$rdir"
+            WP_PREFIX_VERBOS=""
+            redist_juego_marcar "$WINEPREFIX"
+        fi
+    fi
     fi          # fin de la rama de Windows
 
     guardia_salida_start
@@ -14161,6 +14313,19 @@ run_in_prefix() {
     if [ -n "${WP_PREFIX_VERBOS:-}" ]; then
         # lote de redistribuibles: uno a uno, con barra de verdad
         winetricks_uno_a_uno "$rdir"
+        # SE APUNTA EN EL PERFIL LO QUE SE HA INSTALADO.
+        #
+        # Asi, si el prefijo se rehace -o se borra, o el juego se lleva a otro
+        # equipo-, WProton sabe que librerias necesitaba y las repone solo.
+        # Antes esa informacion se perdia con el prefijo y habia que acordarse
+        # de volver a instalarlas a mano.
+        #
+        # Solo para el prefijo PROPIO: en el compartido ya hay su propia marca
+        # y apuntarlo en un juego seria mentir, porque lo instalado vale para
+        # todos.
+        if [ "${PREFIX_MODE:-shared}" = "own" ] && [ -n "${gid:-}" ]; then
+            redist_juego_apuntar "$gid" "$WP_PREFIX_VERBOS"
+        fi
     elif [ "$RUNNER_KIND" = "wine" ] && [ "$1" = "winetricks" ]; then
         command -v winetricks >/dev/null 2>&1 || { ui_info "winetricks no esta instalado en el host"; return 1; }
         WINE="$(runner_wine_bin "$rdir")" winetricks "${@:2}" >> "$LOG_FILE" 2>&1
@@ -14168,6 +14333,72 @@ run_in_prefix() {
         "${RUN_CMD[@]}" "$@" >> "$LOG_FILE" 2>&1
     fi
     [ "$mounted_here" = 1 ] && release_game_root
+    return 0
+}
+
+redist_juego_apuntar() {
+    # Añade al perfil del juego las librerias que se le acaban de instalar.
+    # $1 = gid, $2 = librerias (separadas por espacios).
+    #
+    # Se ACUMULAN: quien instala d3dx9 hoy y xact mañana quiere las dos, no la
+    # ultima. Y sin repetir, que la lista se lee.
+    local gid="$1" nuevas="$2" v
+    [ -n "$gid" ] && [ -n "$nuevas" ] || return 0
+    local lista=" ${REDIST_JUEGO:-} "
+    local cambia=0
+    for v in $nuevas; do
+        case "$lista" in
+            *" $v "*) ;;
+            *) lista="$lista$v "; cambia=1 ;;
+        esac
+    done
+    [ "$cambia" = 1 ] || return 0
+    # Los espacios de los extremos, fuera. Se hace con un bucle porque la
+    # lista empieza y acaba con espacio por construccion, y quitar solo uno
+    # dejaba " d3dx9 xact" con el espacio delante en el perfil.
+    while :; do
+        case "$lista" in
+            " "*) lista="${lista# }" ;;
+            *" ") lista="${lista% }" ;;
+            *) break ;;
+        esac
+    done
+    REDIST_JUEGO="$lista"
+    write_full_profile "$gid" || return 1
+    say "[+] Apuntado en el perfil: $REDIST_JUEGO"
+    say "    Si el prefijo se rehace, se instalan solas."
+    return 0
+}
+
+redist_juego_pendientes() {
+    # Que librerias del perfil FALTAN en el prefijo actual. Imprime la lista.
+    #
+    # La marca vive DENTRO del prefijo, asi que si el prefijo se rehace o se
+    # borra, todo vuelve a estar pendiente, que es justo lo que se quiere.
+    local pfx="$1"
+    [ -n "${REDIST_JUEGO:-}" ] || return 1
+    [ -n "$pfx" ] && [ -d "$pfx" ] || return 1
+    local puestas=""
+    [ -f "$pfx/.wp_redist_juego" ] \
+        && puestas=" $(cat "$pfx/.wp_redist_juego" 2>/dev/null) "
+    local falta="" v
+    for v in $REDIST_JUEGO; do
+        case "$puestas" in
+            *" $v "*) ;;
+            *) falta="$falta$v " ;;
+        esac
+    done
+    falta="${falta% }"
+    [ -n "$falta" ] || return 1
+    printf '%s' "$falta"
+    return 0
+}
+
+redist_juego_marcar() {
+    # Deja constancia en el prefijo de lo que ya tiene puesto. $1 = prefijo.
+    local pfx="$1"
+    [ -n "$pfx" ] && [ -d "$pfx" ] || return 1
+    printf '%s\n' "${REDIST_JUEGO:-}" > "$pfx/.wp_redist_juego" 2>/dev/null
     return 0
 }
 
@@ -14201,32 +14432,69 @@ redist_base_compartido() {
     # cosa e instalas cuatro, la espera no cuadra con lo anunciado.
     if ! ui_ask "Es la primera vez que se usa el prefijo compartido.
 
-Instalar ahora Visual C++ 2015-2022 (vcrun2022)?
+Instalar ahora las librerias que piden casi todos los juegos?
 
-Lo piden casi todos los juegos de Windows. Sin el, muchos
-arrancan y se cierran sin dar ningun error.
+  vcrun2022       Visual C++. Sin el, muchos juegos arrancan
+                  y se cierran sin dar ningun error.
+  d3dx9           DirectX 9. Los juegos de los 2000 no
+                  arrancan sin el.
+  d3dcompiler_47  Lo piden bastantes motores modernos.
+  xact            Audio de XNA. Hay juegos que no arrancan
+                  sin el.
+  openal          Sonido 3D. Sin el, algunos juegos van
+                  mudos o no arrancan.
+  wmp11           Windows Media Player. Para los videos de
+                  introduccion.
 
-Tarda un par de minutos y necesita conexion. Puedes hacerlo
-mas tarde desde 'Instalar librerias'."; then
+Tarda VARIOS MINUTOS y necesita conexion, pero solo pasa una
+vez. Puedes hacerlo mas tarde desde 'Instalar librerias'."; then
         : > "$marca" 2>/dev/null      # dijo que no: no se vuelve a preguntar
         say "Prefijo compartido: sin redistribuibles de base (elegido por el usuario)"
         return 0
     fi
 
-    # SOLO vcrun2022, y esto ya estaba decidido.
+    # QUE SE INSTALA DE SALIDA, Y POR QUE.
     #
-    # Yo añadi aqui d3dx9, d3dcompiler_47 y xact porque a un juego de 2005 le
-    # faltaba DirectX 9 tras rehacer el prefijo. El caso era real, pero la
-    # solucion no: el compartido lo usan TODOS los juegos, y meterle de oficio
-    # librerias que la mayoria no necesita lo ensucia para todos y alarga el
-    # primer arranque a varios minutos -un tester lo vio como "se queda en
-    # preparando el entorno de Windows"-.
+    #   vcrun2022       Visual C++ 2015-2022: lo pide casi todo
+    #   d3dx9           DirectX 9: los juegos de los 2000 no arrancan sin el
+    #   d3dcompiler_47  lo piden bastantes motores modernos
+    #   xact            audio de XNA/XACT: hay juegos que no arrancan sin el
+    #   openal          sonido 3D: sin el, muchos juegos van mudos
+    #   wmp11           Windows Media Player: los videos de introduccion
     #
-    # El comentario de arriba ya explicaba por que no van aqui, y lo cambie
-    # sin leerlo. Los d3dx* se instalan cuando un juego los pida, desde
-    # "Instalar librerias", que es donde tocaba desde el principio.
-    local _verbos="vcrun2022"
+    # EL CRITERIO, QUE ES DEL PROYECTO Y NO UNA CASUALIDAD:
+    #
+    # En la PRIMERA instalacion se prefiere la estabilidad a la rapidez. Se
+    # paga una espera UNA vez, y a cambio los juegos arrancan a la primera sin
+    # que nadie tenga que averiguar que libreria les falta. Un usuario que
+    # espera cinco minutos instalando lo entiende; uno cuyo juego se cierra
+    # sin decir nada, no.
+    #
+    # Y ESTO NO SE TOCA SIN HABLARLO. Lo digo porque ya me equivoque:
+    #
+    # Habia un comentario antiguo diciendo que los d3dx* no debian ir de
+    # oficio. Lo lei y los QUITE. Pero el proyecto ya habia decidido lo
+    # contrario DESPUES, con dos casos reales delante: un juego de 2005 que
+    # dejo de arrancar al rehacer el prefijo, y otro que no arrancaba sin
+    # xact. Deshice una decision tomada citando el comentario que esa decision
+    # ya habia superado, y encima escribi una prueba que defendia mi error.
+    #
+    # Un comentario explica por que se hizo algo; no autoriza a deshacerlo.
+    # Antes de quitar nada de esta lista, mirar si se pidio y por que.
+    #
+    # winetricks salta lo que ya este puesto, asi que no hay riesgo de
+    # duplicar. Se instalan uno a uno: si uno falla, los demas siguen.
+    local _verbos="vcrun2022 d3dx9 d3dcompiler_47 xact openal wmp11"
     say "[+] Preparando el prefijo compartido ($_verbos)..."
+    # QUE SE VEA QUE VA A TARDAR.
+    #
+    # Son seis librerias y la primera vez lleva varios minutos. Sin decirlo,
+    # un tester lo vio como "se queda en preparando el entorno de Windows" y
+    # penso que estaba colgado. La espera es la misma; lo que cambia es saber
+    # que es normal.
+    say "    Son seis librerias: la primera vez tarda unos minutos."
+    say "    Solo pasa una vez, y despues ningun juego vuelve a esperar."
+    loading_say "Instalando librerias en el prefijo compartido (unos minutos)..."
     WP_PREFIX_VERBOS="$_verbos"
     WP_REDIST_FALLIDOS=""
     winetricks_uno_a_uno "$rdir"
@@ -17068,6 +17336,15 @@ launch_loose_exe() {
     # launch_game, asi que en un exe suelto no se podia salir manteniendo
     # Select y no habia ninguna razon para esa diferencia.
     guardia_salida_start
+    # EL .bat DE INSTALACION, TAMBIEN POR AQUI.
+    #
+    # Por este camino pasan los juegos en CARPETA, y a ellos les reinstalaba
+    # las dependencias en cada arranque porque la comprobacion estaba solo en
+    # launch_game. La funcion trabaja sobre EXE_PATH, asi que se le presta y
+    # se recoge lo que decida.
+    EXE_PATH="$exe"
+    bat_resolver_instalacion "$gid"
+    exe="$EXE_PATH"
     say "Lanzando exe suelto con $(basename "$rdir") [$RUNNER_KIND]"
     local st0; st0=$(date +%s)
     saves_detect_start
@@ -23125,12 +23402,17 @@ game_config_menu() {
         local r_runner="Runner (Proton/Wine): ${RUNNER:-auto (último GE-Proton)}"
         local r_prefijo="Prefijo: $(prefix_label)"
         local r_libs="Instalar librerias en el prefijo: $(prefix_label)"
+        # Lo que se le ha instalado a ESTE juego, para poder verlo y quitarlo.
+        # Sin esta fila, la lista solo se veia en el registro al lanzarlo.
+        local r_redist=""
+        [ -n "${REDIST_JUEGO:-}" ] \
+            && r_redist="Librerias de este juego: $REDIST_JUEGO"
         local r_gameid="GAMEID (protonfixes): $GAMEID"
         local r_umudb="Buscar en la base de umu (identificador automático)"
         local r_packpfx="Empaquetar con su prefijo (archivo autosuficiente)"
         if juego_es_nativo "$squash" >/dev/null 2>&1; then
             r_runner=""; r_prefijo=""; r_libs=""
-            r_gameid=""; r_umudb=""; r_packpfx=""
+            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""
         fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
@@ -23143,6 +23425,7 @@ game_config_menu() {
             "Argumentos: $(args_etiqueta "$squash")" \
             "$r_prefijo" \
             "$r_libs" \
+            "$r_redist" \
             "$r_gameid" \
             "$r_umudb" \
             "Carátula: elegir una imagen (vertical u horizontal)" \
@@ -23900,8 +24183,8 @@ Runners y herramientas -> Descargar herramientas FUSE portables."
         # hubiera borrado a proposito o de quien le fallara la descarga.
         # Despues siempre se puede pedir en "Descargar runners".
         if [ -n "${GE_CUSTOM_URL:-}" ]; then
-            progress_set 90 "Descargando el runner propio de WProton..."
-            setup_proton_custom || say "Se continua sin el runner propio"
+            progress_set 90 "Descargando ${GE_CUSTOM_NAME:-el runner de WProton}..."
+            setup_proton_custom || say "Se continua sin ${GE_CUSTOM_NAME:-el runner de WProton}"
         fi
     fi
     progress_set 100 "Listo"
