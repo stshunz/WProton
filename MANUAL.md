@@ -6,6 +6,18 @@ Si solo quieres jugar, con los tres primeros apartados tienes de sobra.
 ---
 ## 1. Primeros pasos
 
+### Antes de empezar
+
+**Hace falta conexión a internet para instalar.** WProton se descarga a sí
+mismo: su propio Python, los menús, umu-launcher, un GE-Proton y Proton
+Frankenstein. Son unos cuantos cientos de megas, así que conviene hacerlo con
+wifi y sin prisa.
+
+**Para jugar no hace falta.** Una vez instalado, los juegos que ya tengas
+funcionan sin conexión. Sí la necesitan cosas concretas: descargar más
+runners, buscar carátulas, consultar la base de umu y traer las fichas de los
+juegos.
+
 ### Instalar
 
 Copia `wproton.sh` a una carpeta (por ejemplo `~/WProton`), dale permisos y ejecútalo:
@@ -17,9 +29,11 @@ chmod +x wproton.sh
 
 O más sencillo: **doble clic en `wproton.sh`** desde el explorador de archivos. Las dos formas hacen exactamente lo mismo; con doble clic te ahorras abrir la terminal.
 
-`--setup` descarga lo que WProton necesita —su propio Python, los menús, umu-launcher y un GE-Proton— **dentro de su carpeta**. No instala nada en el sistema ni pide contraseña.
+`--setup` descarga todo eso **dentro de su carpeta**. No instala nada en el
+sistema ni pide contraseña, y para desinstalarlo basta con borrar la carpeta.
 
-La primera vez tarda unos minutos. Después, arranca con:
+La primera vez tarda unos minutos, según tu conexión. Si se corta a medias,
+vuelve a lanzar `--setup`: continúa desde donde estaba. Después, arranca con:
 
 ```bash
 ./wproton.sh
@@ -345,6 +359,11 @@ En *Ajustes de un juego → Partidas guardadas*:
 
 ## 6. Personalizar el aspecto
 
+Si vienes de Batocera o ES-DE y ya tienes tus carátulas escaneadas, WProton las
+usa tal cual: busca la carpeta `images` (o `media`) junto a los juegos. No hay
+que copiar nada. Si además pones una carátula propia en `covers/`, esa manda.
+
+
 En *Biblioteca y preferencias*:
 
 - **Vista de juegos**: lista o **rejilla de carátulas**. En la lista, el panel de la derecha muestra la carátula del juego resaltado y sus datos.
@@ -543,8 +562,25 @@ sudo steamos-readonly enable
 
 Después, desconecta y vuelve a conectar el mando.
 
+**El mando se ve pero el juego no responde a ningún botón.**
+Puede ser el modo escritorio de Steam: ahí los botones mandan teclas, no
+botones, así que un juego que espere un mando no recibe nada. Mantén pulsado
+Start unos segundos para cambiarlo, o usa *Ajustes del juego → Mapeador .keys
+→ Mando virtual → Traducir el modo escritorio de Steam*.
+
+**El juego no hace caso a la cruceta, o mi mando le llega raro.**
+En *Ajustes del juego → Mapeador .keys → Mando virtual*. WProton crea un mando
+"de mentira" y le copia el tuyo. Empieza por **Mando Xbox**, que arregla los
+mandos que llegan de forma rara sin cambiar nada más. Si el juego lee la
+cruceta pero no la usa, prueba **+ cruceta al stick**. Y para juegos antiguos
+que se aceleran solos, **Mando clásico**.
+
 **Quiero que un juego responda a teclas concretas del teclado.**
-En *Ajustes del juego → Mapeador .keys*. Si el juego ya tiene un `.keys`, lo
+En *Ajustes del juego → Mapeador .keys*.
+
+Si el juego ya trae uno de Batocera, WProton lo encuentra solo, esté donde
+esté: junto al `.wsquashfs` con el nombre del juego, o dentro de la carpeta
+`.pc` llamado `padto.keys`. Lo que edites tú manda sobre los dos. Si el juego ya tiene un `.keys`, lo
 primero que ofrece es **ver las teclas que tiene asignadas**, sin abrir el
 fichero:
 

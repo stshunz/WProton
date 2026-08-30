@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# WProton - generador de wproton.sh
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # ----------------------------------------------------------------------------
 # build.sh - genera wproton.sh a partir de wproton.base.sh y src/
 #
@@ -113,7 +122,8 @@ PY
         esac
     done < "$BASE"
 
-    [ "$n" -eq 6 ] || { rojo "Se esperaban 6 inserciones y hubo $n"; exit 1; }
+    # 7 con mando_virtual.py, que va en su propio fichero como el mapeador.
+    [ "$n" -eq 7 ] || { rojo "Se esperaban 7 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -132,7 +142,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'
@@ -175,6 +185,7 @@ ruta, src = sys.argv[1], sys.argv[2]
 s = open(ruta, encoding='utf-8').read()
 for var, fin, dest in (('MENU_PYGAME_PY','PGEOF','menu_pygame.py'),
                        ('MAPEADOR_PY','MAPEOF','mapeador.py'),
+                       ('MANDO_VIRTUAL_PY','MVIROF','mando_virtual.py'),
                        ('STEAM_ADD_PY','SAEOF','steam_add.py'),
                        ('MENU_GTK_PY','GTKEOF','menu_gtk.py'),
                        ('BIBLIOTECA_PY','BIBEOF','biblioteca.py')):
