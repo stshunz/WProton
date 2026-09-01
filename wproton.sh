@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.49"
+WPROTON_VERSION="1.50"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -100,6 +100,8 @@ OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
+DIAG_TIEMPOS=0                           # 1 = cronometrar menus (WProton y el servidor)
+DIAG_RUTAS=0                             # 1 = diagnostico de rutas (lento: usa Wine)
 PAD_EXIT=1                               # cerrar el juego con el mando
 PAD_EXIT_COMBO=select                    # select | l3r3 | start
 PAD_EXIT_SEGUNDOS=5                      # cuanto hay que mantener la combinacion
@@ -220,6 +222,11 @@ DIAG_MANDO="$DIAG_MANDO"
 # Vigilar que queda en pantalla tras cerrar (para depurar): 0 = no, 1 = si
 DIAG_CIERRE="$DIAG_CIERRE"
 DIAG_DLL="$DIAG_DLL"
+# Cronometrar los menus. Cuesta poco, pero deja una linea por menu.
+DIAG_TIEMPOS="$DIAG_TIEMPOS"
+# Diagnostico de rutas de Wine. OJO: lanza varias invocaciones de Wine antes de
+# cada partida y se nota en la carga. Solo para depurar.
+DIAG_RUTAS="$DIAG_RUTAS"
 PAD_EXIT="$PAD_EXIT"
 PAD_EXIT_COMBO="$PAD_EXIT_COMBO"
 PAD_EXIT_SEGUNDOS="$PAD_EXIT_SEGUNDOS"
@@ -4299,9 +4306,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py ecb57585e091" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 8f529a5fd20c" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py ecb57585e091
+# WPROTON_HELPER menu_pygame.py 8f529a5fd20c
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5412,9 +5419,18 @@ def es_ancha(path):
         try:
             img = pygame.image.load(path)
             w, h = img.get_size()
-            _forma_cache[path] = (w > h)
+            forma = (w > h)
         except Exception:
-            _forma_cache[path] = False
+            forma = False
+        # CON TOPE, como las demas caches de este fichero.
+        #
+        # Guardaba una entrada por caratula vista y no se vaciaba nunca. En una
+        # sesion larga, paseando por una biblioteca grande, eso crece sin
+        # parar. Las otras caches (COVER_CACHE, _rcache, _imgcache) ya tenian
+        # su limite; estas dos se quedaron sin el.
+        if len(_forma_cache) > 300:
+            _forma_cache.clear()
+        _forma_cache[path] = forma
     return _forma_cache[path]
 
 def cover_surface(ruta, ancho):
@@ -5438,6 +5454,19 @@ def cover_surface(ruta, ancho):
         COVER_CACHE.clear()
     COVER_CACHE[clave] = img
     return img
+
+def caches_resumen():
+    """Cuantas entradas tiene cada cache. Para el diagnostico.
+
+    Se pidio reducir la memoria del servidor de menus y lo primero era saber
+    cuanto de los ~200 MiB son caches nuestras y cuanto es el suelo de pygame
+    (superficie de pantalla, fuentes, SDL). Suponerlo habria sido otra ronda
+    perdida.
+    """
+    return 'covers=%d img=%d fit=%d texto=%d forma=%d' % (
+        len(COVER_CACHE), len(_imgcache), len(_fitcache),
+        len(_rcache), len(_forma_cache))
+
 
 def fmt_horas(seg):
     try:
@@ -6263,7 +6292,16 @@ def rtext(font, txt, color):
     surf = _rcache.get(k)
     if surf is None:
         surf = font.render(txt, True, color)
-        if len(_rcache) > 900:
+        # TOPE BAJADO DE 900 A 300.
+        #
+        # Medido en la Deck: con 857 entradas la memoria del servidor sube de
+        # 207 a 226 MiB, o sea unos 22 KiB por linea renderizada. Bajando el
+        # tope se recorta la mayor parte de ese crecimiento.
+        #
+        # Se pierde algo de cache y habra que redibujar mas texto, pero eso es
+        # justo lo que esta cache hace rapido: preparar un menu tarda 0-3 ms
+        # segun el registro, asi que hay margen de sobra.
+        if len(_rcache) > 300:
             _rcache.clear()
         _rcache[k] = surf
     return surf
@@ -6676,6 +6714,12 @@ def fit_label(txt, font, maxw):
     k = (txt, maxw)
     if k in _fitcache:
         return _fitcache[k]
+    # CON TOPE. Guardaba una entrada por CADA etiqueta distinta de CADA menu, y
+    # no se vaciaba nunca: en una sesion larga son miles, y son las etiquetas
+    # enteras, no un identificador. Las demas caches del fichero ya tenian su
+    # limite.
+    if len(_fitcache) > 900:
+        _fitcache.clear()
     if rtext(font, txt, FG).get_width() <= maxw:
         _fitcache[k] = txt
         return txt
@@ -6696,6 +6740,13 @@ def grid_img(path):
     clave = (path, GIMG_W, GIMG_H)
     if clave in _imgcache:
         return _imgcache[clave]
+    # CON TOPE DE TAMAÑO, no solo vaciandose al cambiar el tema.
+    #
+    # Guardaba una superficie escalada por cada caratula vista y solo se
+    # vaciaba al cambiar de tema o de tamaño de casilla. Con una biblioteca
+    # grande son cientos de superficies vivas a la vez.
+    if len(_imgcache) > 120:
+        _imgcache.clear()
     if not path or not os.path.isfile(path):
         _imgcache[clave] = None
         return None
@@ -7650,8 +7701,25 @@ def serve(dirpath):
                             arg4 if arg4 != '' else None,
                             kind or 'file', ax == '1', manif or None,
                             presel or None, favf or None, aspec or None)
+                # CUANTO TARDA EN APARECER EL MENU.
+                #
+                # Es el numero que faltaba. Los tiempos que medi­a WProton
+                # incluyen la espera del usuario, asi que no dicen nada sobre
+                # si una transicion es lenta. Este mide desde que llega la
+                # peticion hasta que el menu esta listo para dibujarse, que es
+                # lo unico que podemos mejorar.
+                #
+                # Se escribe en la salida de errores, que va al registro de
+                # WProton, y solo con DIAG_TIEMPOS=1: en el uso normal seria
+                # una linea por menu y solo ensucia.
+                _t_prep = time.time()
                 load_request_data()
                 compute_layout()
+                if os.environ.get('DIAG_TIEMPOS') == '1':
+                    sys.stderr.write(
+                        'menu_pygame: preparado en %d ms | %s\n'
+                        % ((time.time() - _t_prep) * 1000, caches_resumen()))
+                    sys.stderr.flush()
                 try:
                     rc = run_session()
                 except SessionEnd as e:
@@ -8131,10 +8199,10 @@ GTKEOF
 BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
 
 write_biblioteca() {
-    grep -q "WPROTON_HELPER biblioteca.py e36e1eb94e43" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER biblioteca.py a556af1f7ab0" "$BIBLIOTECA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
-# WPROTON_HELPER biblioteca.py e36e1eb94e43
+# WPROTON_HELPER biblioteca.py a556af1f7ab0
 # -*- coding: utf-8 -*-
 # WProton - composicion rapida de la biblioteca
 #
@@ -8290,6 +8358,27 @@ def buscar_cover_escaneo(ruta, forma):
     return ''
 
 
+def buscar_cover_exacta(gid, carpeta):
+    """La caratula de la forma pedida, SIN el apaño de usar la vertical.
+
+    Es el equivalente de cover_exacta() en wproton.sh, y hace falta por lo
+    mismo: buscar_cover, si le pides la panoramica y no la hay, devuelve la
+    vertical -mejor deformada que un hueco-. Muy comodo para dibujar, pero
+    tapa lo que pueda haber en el escaneo: quien tuviera ahi una panoramica DE
+    VERDAD veia nuestra vertical estirada en su lugar.
+
+    Aqui se pregunta por la forma exacta y ya.
+    """
+    if not carpeta or not os.path.isdir(carpeta):
+        return ''
+    for nom in nombres_posibles(gid):
+        for ext in EXTS_IMAGEN:
+            p = os.path.join(carpeta, '%s.%s' % (nom, ext))
+            if os.path.isfile(p):
+                return p
+    return ''
+
+
 def buscar_cover(gid, carpeta, carpeta_vertical, legacy_wide=False):
     """Ruta de la caratula, o cadena vacia."""
     for nom in nombres_posibles(gid):
@@ -8387,12 +8476,28 @@ def rejilla(f_manifiesto, juegos, raices, perfiles):
     for ruta in juegos:
         etq = etiqueta_rejilla(ruta, raices)
         gid = game_id(ruta)
-        cov = buscar_cover(gid, carpeta_cover, covers,
-                           legacy_wide=(forma == 'wide'))
-        # Si no hay caratula nuestra, la del escaneo que este junto al juego.
-        # La nuestra manda: quien pone una en covers/ quiere esa.
+        # LA FORMA EXACTA MANDA, VENGA DE DONDE VENGA.
+        #
+        # Tres pasos, y en este orden (los mismos que rejilla_lenta):
+        #
+        #   1. la caratula de la forma pedida en NUESTRA carpeta;
+        #   2. la de la forma pedida en el escaneo que este junto al juego;
+        #   3. y solo si no aparece, el apaño: la nomenclatura anterior
+        #      (covers/<juego>.wide.*) y, en ultimo lugar, la vertical.
+        #
+        # Antes aqui se llamaba directo a buscar_cover, que YA cae a la
+        # vertical, asi que el paso 2 no se alcanzaba nunca: quien tenia una
+        # panoramica de verdad en el escaneo veia nuestra vertical estirada.
+        # La via lenta hacia lo correcto y esta no, y esta es la que se usa.
+        #
+        # Con forma vertical los tres pasos miran la misma carpeta, asi que el
+        # resultado no cambia; el arreglo solo afecta a "wide" y "43".
+        cov = buscar_cover_exacta(gid, carpeta_cover)
         if not cov:
             cov = buscar_cover_escaneo(ruta, forma)
+        if not cov:
+            cov = buscar_cover(gid, carpeta_cover, covers,
+                               legacy_wide=(forma == 'wide'))
         fav, _veces, segs, ultima, _comp = perfiles.get(gid, SIN_PERFIL)
 
         info = ''
@@ -8492,6 +8597,10 @@ BIBEOF
 # 5. HELPERS DE MENU (seleccion via fichero temporal, nunca $( ) crudo con GUIs)
 # ----------------------------------------------------------------------------
 menu() {
+    # Cronometro del menu: se apunta al entrar. Lo que se mide DESPUES no es
+    # util -incluye lo que tarde el usuario en decidir-, asi que lo que
+    # interesa es cuanto tarda en APARECER, y eso se mide en el servidor.
+    local _t_menu; _t_menu="$(ahora_ms)"
     # $1 = titulo; resto = opciones (una por argumento). Imprime la elegida.
     # IMPORTANTE: se traduce solo para MOSTRAR; lo que se devuelve es siempre
     # la cadena original en castellano, para que los case de los llamadores
@@ -8648,6 +8757,13 @@ menu() {
                 break
             fi
         done
+    fi
+    # EL TIEMPO TOTAL INCLUYE AL USUARIO, asi que se registra aparte y solo si
+    # DIAG_TIEMPOS esta puesto: en el registro normal seria ruido, y ademas
+    # invita a confundir "el menu tardo 8 segundos" con "el usuario estuvo 8
+    # segundos mirando".
+    if [ "${DIAG_TIEMPOS:-0}" = 1 ]; then
+        log "MENU-TIEMPO [$title] $(( $(ahora_ms) - _t_menu )) ms (incluye la espera del usuario)"
     fi
     log "MENU [$title] -> [$sel]"
     printf '%s' "$sel"
@@ -11035,6 +11151,57 @@ profile_defaults() {
     RUNNER=""                # carpeta en runtime/proton/ (vacio = auto)
     EXE_OVERRIDE=""; ARGS_OVERRIDE=""
     PREFIX_MODE="shared"     # shared = prefixes/default (comun) | own = por juego
+    # DE DONDE SALIO EL PREFIJO. Es un hecho aparte de donde vive.
+    #
+    #   nuevo   - lo hizo Proton/Wine aqui, de cero
+    #   bundled - se saco del wsquashfs (Batocera) a prefixes/<gid>/
+    #
+    # Va en un campo propio y NO como un cuarto valor de PREFIX_MODE porque
+    # son dos preguntas distintas: "donde vive" y "de donde vino". Un juego
+    # con prefijo sacado del archivo vive en prefixes/<gid>/ igual que
+    # cualquier otro propio -por eso PREFIX_MODE es "own"-, pero hay que
+    # saber que se reconstruye desde el archivo y no de cero.
+    #
+    # Ademas, prefix_path() decide con un "case" cuyo caso por defecto es el
+    # prefijo COMPARTIDO: un valor nuevo ahi se iria al de todos sin decir
+    # nada. Con un campo aparte, todo lo que ya compara PREFIX_MODE sigue
+    # funcionando sin tocarlo.
+    #
+    # OJO: se lee SIEMPRE como ${PREFIX_ORIGEN:-nuevo}. Los perfiles escritos
+    # antes de la 1.50 no traen esta linea, y con set -u leerla a pelo mata el
+    # script en silencio.
+    PREFIX_ORIGEN="nuevo"
+    # UNA UNIDAD DE WINDOWS PARA ESTE JUEGO.
+    #
+    # Hay juegos -sobre todo de los 90 y de recopilatorios en CD- que solo
+    # funcionan desde una unidad concreta: buscan "F:\DATA\..." y no hay forma
+    # de convencerlos. En Wine una unidad es solo un enlace en dosdevices/, asi
+    # que se les puede dar la que pidan.
+    #
+    # Vacio = ninguna, que es lo normal. Con letra = se crea al lanzar, cada
+    # vez: si el prefijo se rehace, el enlace se va con el.
+    # VARIAS letras separadas por espacios: hay juegos que piden mas de una.
+    # Otomedius necesita E: Y F: -lo documenta el autor de su traduccion- y
+    # crea en ellas sus carpetas GGG y nvmem.
+    UNIDAD_JUEGO=""          # vacio | letras separadas por espacio ("e f")
+    UNIDAD_CD=0              # 1 = ademas se declaran como CD-ROM
+    # A DONDE APUNTAN.
+    #
+    #   juego - a la carpeta del juego. Para los que exigen estar EN esa
+    #           unidad ("F:\DATA\...").
+    #   datos - a una carpeta propia, vacia y escribible, una por letra. Para
+    #           los que solo necesitan que la unidad EXISTA y poder escribir
+    #           en ella: contabilidad, memoria no volatil, guardados de arcade.
+    #           Sin esto, un juego de solo lectura no puede crear nada y falla
+    #           con errores que no mencionan la escritura.
+    UNIDAD_DESTINO="juego"   # juego | datos
+    # UN EJECUTABLE QUE TIENE QUE ESTAR ABIERTO A LA VEZ.
+    #
+    # Algunos arcades no arrancan solos: piden un programa acompañante
+    # corriendo. La ruta se guarda RELATIVA a la carpeta del juego para que el
+    # perfil siga valiendo se monte donde se monte.
+    EXE_ACOMPANA=""          # p.ej. "bin/bms_GGG.exe"
+    ACOMPANA_ESPERA=3        # segundos antes de lanzar el juego
     MANGOHUD=0; GAMEMODE=1; FSYNC=1; ESYNC=1; DXVK_ASYNC=1; WAYLAND=0
     ENV_EXTRA=""             # variables sueltas (VAR=valor), como en ProtonDB
     HDR=0                    # rango dinamico alto (necesita gamescope o Wayland)
@@ -11078,6 +11245,16 @@ profile_defaults() {
     LAA=0                    # 1 = Large Address Aware (32bit >2GB RAM)
     GAMESCOPE=""             # args de gamescope (vacio = desactivado)
     DLL_OVERRIDES=""         # WINEDLLOVERRIDES, ej: d3d9,ddraw=n,b
+    # EL DIALOGO DE WINE MONO: APAGADO POR DEFECTO.
+    #
+    # Wine pregunta si instalar Mono en cuanto un ejecutable menciona .NET,
+    # aunque no lo use para nada. En una consola de mano eso es un dialogo que
+    # hay que cerrar con el mando cada vez que se estrena un prefijo, y casi
+    # ningun juego lo necesita de verdad.
+    #
+    # Con esto se desactiva mscoree y Wine ni pregunta. Si un juego SI necesita
+    # .NET, se enciende esto y se instala dotnet desde "Instalar librerias".
+    MONO_PEDIR=0             # 0 = no preguntar por Mono | 1 = comportamiento de Wine
     # Librerias que este juego necesita en su prefijo. Se apuntan solas al
     # instalarlas y se reponen si el prefijo se rehace (ver redist_del_juego).
     REDIST_JUEGO=""
@@ -11143,6 +11320,12 @@ RUNNER="$RUNNER"
 EXE_OVERRIDE="$EXE_OVERRIDE"
 ARGS_OVERRIDE="$ARGS_OVERRIDE"
 PREFIX_MODE="$PREFIX_MODE"
+PREFIX_ORIGEN="${PREFIX_ORIGEN:-nuevo}"
+UNIDAD_JUEGO="${UNIDAD_JUEGO:-}"
+UNIDAD_CD="${UNIDAD_CD:-0}"
+UNIDAD_DESTINO="${UNIDAD_DESTINO:-juego}"
+EXE_ACOMPANA="${EXE_ACOMPANA:-}"
+ACOMPANA_ESPERA="${ACOMPANA_ESPERA:-3}"
 MANGOHUD=$MANGOHUD
 PAD_SDL=$PAD_SDL
 PAD_SONY=${PAD_SONY:-auto}
@@ -11175,6 +11358,7 @@ FSR=$FSR
 LAA=$LAA
 GAMESCOPE="$GAMESCOPE"
 DLL_OVERRIDES="$DLL_OVERRIDES"
+MONO_PEDIR="${MONO_PEDIR:-0}"
 REDIST_JUEGO="$REDIST_JUEGO"
 GAME_LANG="$GAME_LANG"
 EXTRA_ENV="$EXTRA_ENV"
@@ -11249,6 +11433,9 @@ has_bundled_prefix() {
 }
 
 BUNDLED_PREFIX_DIR=""
+WP_PID_ACOMPANA=""       # pid del ejecutable acompañante, si el juego pide uno
+WP_PID_UNIDADES=""       # pid del que repone las unidades tras el wineboot de Proton
+UNIDADES_DIR="$BASE_DIR/unidades"        # <gid>/<letra> para las unidades de datos
 BUNDLED_RUNNER_DIR=""
 
 find_bundled_runner() {
@@ -11260,7 +11447,14 @@ find_bundled_runner() {
 
 prefix_label() {
     case "$PREFIX_MODE" in
-        own)     printf 'propio del juego' ;;
+        own)
+            # De donde vino solo se dice cuando NO es lo normal: "propio" a
+            # secas ya se entiende, y añadirle "(nuevo)" a todos seria ruido.
+            if [ "${PREFIX_ORIGEN:-nuevo}" = "bundled" ]; then
+                printf 'propio del juego (sacado del archivo)'
+            else
+                printf 'propio del juego'
+            fi ;;
         bundled) printf 'incluido en el wsquashfs' ;;
         *)       printf 'compartido (default)' ;;
     esac
@@ -12371,12 +12565,31 @@ export_game_env() {
     [ "$WINED3D" = 1 ]    && export PROTON_USE_WINED3D=1
     [ "$FSR" = 1 ]        && export WINE_FULLSCREEN_FSR=1 WINE_FULLSCREEN_FSR_STRENGTH=2
     [ "$LAA" = 1 ]        && export PROTON_FORCE_LARGE_ADDRESS_AWARE=1
+    # MONO: SE DESACTIVA ANTES DE EXPORTAR, no se pisa lo que haya puesto el
+    # usuario. Si el ya escribio algo con mscoree, manda lo suyo.
+    if [ "${MONO_PEDIR:-0}" != 1 ]; then
+        case ";${DLL_OVERRIDES:-};" in
+            *mscoree*) ;;
+            *) DLL_OVERRIDES="${DLL_OVERRIDES:+$DLL_OVERRIDES;}mscoree=d" ;;
+        esac
+    fi
     if [ -n "$DLL_OVERRIDES" ]; then
         export WINEDLLOVERRIDES="$DLL_OVERRIDES"
         # Se escribe en el registro a proposito. Antes se exportaba en
         # silencio y no habia forma de saber si se estaba aplicando: la unica
         # pista era que el juego fuera distinto, que no es una pista.
         say "[+] WINEDLLOVERRIDES=$DLL_OVERRIDES"
+        # SE DEJA DICHO QUE MONO ESTA APAGADO.
+        #
+        # Sin esta linea, un juego que SI necesite .NET falla con un error de
+        # DLL que no menciona Mono por ningun sitio, y no hay forma de atarlo a
+        # un ajuste que ademas viene puesto de fabrica. Con la linea, el
+        # registro lo dice y se sabe donde mirar.
+        case ";$DLL_OVERRIDES;" in
+            *mscoree=d*)
+                say "    (Mono desactivado: Wine no preguntara por el. Si el"
+                say "     juego necesita .NET, activalo en Ajustes del juego)" ;;
+        esac
         # OJO: EXTRA_ENV se exporta DESPUES, asi que si trae otro
         # WINEDLLOVERRIDES gana ese y este se pierde entero (no se suman).
         case "${EXTRA_ENV:-}" in
@@ -12471,6 +12684,44 @@ build_runner_cmd() {
             say "[+] Proton leera la version del prefijo en: $STEAM_COMPAT_DATA_PATH/version"
         fi
         export GAMEID STORE
+        # DONDE ESTA EL JUEGO, PARA QUE PROTON LE DE UNA UNIDAD.
+        #
+        # Proton monta una unidad de Windows para la carpeta del juego. La
+        # saca de STEAM_COMPAT_INSTALL_PATH; si no esta, la deduce del
+        # ejecutable que le pasamos. Y ahi hay un agujero:
+        #
+        #   Un juego que arranca por .bat se lanza con "cmd /c juego.bat", asi
+        #   que el ejecutable que ve Proton es "cmd", que resuelve a
+        #   C:\windows\system32\cmd.exe. Como eso SI esta dentro del prefijo,
+        #   Proton dice "Executable is inside wine prefix, launching normally"
+        #   y NO monta ninguna unidad para el juego.
+        #
+        # Sin unidad, todo lo que resuelva rutas desde la carpeta del juego se
+        # queda sin sitio. Un tester lo vio con ReShade: no encontraba sus
+        # .fx aunque estaban en el paquete. El mismo juego lanzado por .exe
+        # funcionaba, y por eso parecia cosa del prefijo y no lo era.
+        #
+        # Comprobado en dos registros del mismo WProton:
+        #   OutRun (.exe):      "Executable is a unix path" -> unidad montada
+        #   Sega Rally (.bat):  "inside wine prefix"        -> sin unidad
+        #
+        # Se apunta a la CARPETA DEL EJECUTABLE, que es lo que Steam pone ahi
+        # (la carpeta de instalacion del juego).
+        #
+        # Y SE PISA SIEMPRE, no solo si viene vacia. Dos motivos:
+        #
+        #   - En una sesion se lanzan varios juegos seguidos. Como es una
+        #     variable exportada, la del primero seguiria puesta y el segundo
+        #     heredaria la carpeta equivocada.
+        #   - Si WProton se abre DESDE Steam, Steam la trae puesta apuntando a
+        #     la carpeta de WProton, que no es la del juego.
+        if [ -n "${EXE_PATH:-}" ]; then
+            local _juego_dir; _juego_dir="$(dirname "$EXE_PATH")"
+            if [ -d "$_juego_dir" ]; then
+                export STEAM_COMPAT_INSTALL_PATH="$_juego_dir"
+                say "[+] Carpeta del juego para Proton: $_juego_dir"
+            fi
+        fi
         RUN_CMD+=("$PY_BIN" "$UMU_BIN")
     else
         local wbin; wbin="$(runner_wine_bin "$rdir")"
@@ -12587,7 +12838,7 @@ Configurar juego -> Comprobar integridad"
         say "    No hace falta Wine ni prefijo."
     fi
 
-    EXE_PATH=""; EXE_ARGS=""
+    EXE_PATH=""; EXE_ARGS=""; EXE_WIN=""
     AUTORUN_ENV=""; AUTORUN_LANG=""     # que no se hereden del juego anterior
     # EN MODO MANUAL TAMBIEN, si es un juego de Linux.
     #
@@ -12691,6 +12942,15 @@ Configurar juego -> Comprobar integridad"
     build_runner_cmd "$rdir"
     pad_sdl_prefix_setup "$rdir"
     bundled_prefix_prepare "$rdir"
+    # Con el prefijo ya listo y la ruta del ejecutable definitiva: se deja
+    # dicho en el registro que ruta de Windows le toca al juego. Va aqui y no
+    # dentro de bundled_prefix_prepare porque esa se sale antes por varios
+    # sitios, y entonces no se veria justo en los casos que interesan.
+    # La unidad que pida el juego, antes de convertir su ruta: si el juego
+    # arranca desde ella, tiene que existir ya.
+    unidad_juego_preparar "$(dirname "${EXE_PATH:-}")"
+    diag_rutas_wine "$rdir"
+    exe_a_ruta_windows "$rdir"
     # Los perfiles de TeknoParrot llevan la ruta del juego dentro y aqui se
     # monta en otro sitio distinto cada vez. Se corrigen al vuelo.
     # CADA PASO LENTO DICE QUE ESTA HACIENDO.
@@ -12714,7 +12974,14 @@ Configurar juego -> Comprobar integridad"
         loading_say "Revisando el prefijo del juego..."
         proton_marcar_prefijo "$rdir"; }
     # Aqui y no antes: hace falta el runner resuelto y WINEPREFIX exportado.
-    loading_say "Comprobando las librerias del prefijo compartido..."
+    # EL MENSAJE DICE EL PREFIJO QUE SE ESTA MIRANDO.
+    #
+    # Ponia siempre "del prefijo compartido", tambien cuando el juego usaba el
+    # suyo. Y como redist_base_compartido se ejecuta igual -aunque se sale
+    # enseguida si el prefijo no es el compartido-, en el registro parecia que
+    # se estaban tocando las librerias de un prefijo propio, que es justo lo
+    # que NO se hace nunca. Un tester lo leyo asi, con razon.
+    loading_say "Comprobando las librerias del prefijo $(prefix_label)..."
     redist_base_compartido "$rdir"
     # LAS LIBRERIAS DE ESTE JUEGO, SI FALTAN.
     #
@@ -12834,6 +13101,9 @@ Configurar juego -> Comprobar integridad"
     #
     # Con el PID se puede cerrar su arbol entero, que es lo que hace
     # matar_con_hijos y lo que hacia falta desde el principio.
+    # El acompañante ANTES del juego: el juego lo busca nada mas arrancar.
+    acompanante_start "$(dirname "${EXE_PATH:-}")"
+    unidad_juego_reaplicar "$(dirname "${EXE_PATH:-}")"
     WP_PID_JUEGO=""
     (
         cd "$(dirname "$EXE_PATH")" || exit 1
@@ -12867,7 +13137,7 @@ Configurar juego -> Comprobar integridad"
         else
         # los .bat/.cmd se lanzan con "cmd /c"
         while IFS= read -r _a; do [ -n "$_a" ] && PRE+=("$_a"); done <<EOFRA
-$(run_args_for "$EXE_PATH")
+$(run_args_for "${EXE_WIN:-$EXE_PATH}")
 EOFRA
         # shellcheck disable=SC2086
         "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
@@ -12877,6 +13147,10 @@ EOFRA
     wait "$WP_PID_JUEGO"
     local rc=$?
     WP_PID_JUEGO=""
+    # Y se cierra al terminar, con su arbol: si sobrevive mantiene vivo el
+    # prefijo y WProton se queda esperando a alguien que no va a morir.
+    acompanante_stop
+    unidad_juego_reaplicar_stop
     guardia_salida_stop
     # El mapeador tiene que parar AQUI, al terminar el juego, no al cerrar
     # WProton. Mientras siga vivo convierte los botones del mando en teclas
@@ -14077,6 +14351,13 @@ redist_lista() {
 0|vcrun2008 (VC++ 2008)
 0|vcrun2005 (VC++ 2005)
 0|dotnet48 (.NET 4.8 - instalacion LENTA)
+0|dotnet472 (.NET 4.7.2)
+0|dotnet462 (.NET 4.6.2)
+0|dotnet452 (.NET 4.5.2)
+0|dotnet40 (.NET 4.0 - juegos de 2010-2013)
+0|dotnet35sp1 (.NET 3.5 SP1 - juegos mas viejos)
+0|dotnetdesktop8 (.NET 8 escritorio - aplicaciones modernas)
+0|dotnetdesktop6 (.NET 6 escritorio)
 EOFVC
             ;;
     esac
@@ -14084,7 +14365,20 @@ EOFVC
         "DirectX y shaders"*|"Verlo todo"*)
             cat <<'EOFDX'
 0|directx_todo (pack: D3DX 9/10/11 + los dos compiladores)
-0|d3dx9 (DirectX 9 - D3DX)
+0|d3dx9 (DirectX 9 - D3DX: instala TODAS las d3dx9_XX)
+0|d3dx9_43 (solo esa version)
+0|d3dx9_42 (solo esa version)
+0|d3dx9_41 (solo esa version)
+0|d3dx9_40 (solo esa version)
+0|d3dx9_39 (solo esa version)
+0|d3dx9_38 (solo esa version)
+0|d3dx9_37 (solo esa version)
+0|d3dx9_36 (solo esa version)
+0|d3dx9_35 (solo esa version)
+0|d3dx9_34 (solo esa version)
+0|d3dx9_33 (solo esa version)
+0|d3dx9_32 (solo esa version)
+0|d3dx9_31 (solo esa version)
 0|d3dx10 (DirectX 10 - D3DX)
 0|d3dx11_43 (DirectX 11 - D3DX)
 0|d3dcompiler_43 (compilador de shaders, juegos DX9/DX11)
@@ -15652,6 +15946,582 @@ EOFTK
     return 0
 }
 
+unidad_juego_reaplicar() {
+    # Vuelve a poner las unidades UN RATO DESPUES de arrancar el juego.
+    #
+    # POR QUE HACE FALTA
+    #
+    # Las unidades se crean antes de lanzar, que es lo correcto. Pero Proton
+    # inicializa el prefijo AL ARRANCAR el juego, y wineboot reconstruye
+    # dosdevices: se lleva por delante nuestros enlaces.
+    #
+    # La primera vez hay inicializacion completa -prefijo nuevo, o cambio de
+    # version del runner- y las unidades desaparecen justo cuando el juego las
+    # busca. De la segunda en adelante ya no hay inicializacion y sobreviven.
+    # Un tester lo describio asi: "la primera vez no va bien".
+    #
+    # Crear un enlace no cuesta nada, asi que se repiten unas cuantas veces
+    # durante el primer medio minuto. No es elegante, pero la alternativa es
+    # que Proton no reconstruya dosdevices, y eso no esta en nuestra mano.
+    WP_PID_UNIDADES=""
+    [ -n "${UNIDAD_JUEGO:-}" ] || return 0
+    local carpeta="${1:-}"
+    (
+        local i
+        for i in 5 10 20 30; do
+            sleep "$i"
+            # En silencio: la primera vez ya se dijo en el registro, y repetir
+            # cuatro veces lo mismo solo ensucia.
+            unidad_juego_preparar "$carpeta" >/dev/null 2>&1 || true
+        done
+    ) >/dev/null 2>&1 &
+    WP_PID_UNIDADES=$!
+    return 0
+}
+
+unidad_juego_reaplicar_stop() {
+    [ -n "${WP_PID_UNIDADES:-}" ] || return 0
+    matar_con_hijos "$WP_PID_UNIDADES"
+    WP_PID_UNIDADES=""
+    return 0
+}
+
+acompanante_start() {
+    # Lanza un SEGUNDO ejecutable que tiene que estar corriendo mientras el
+    # juego funciona, y lo deja en segundo plano.
+    #
+    # PARA QUE SIRVE
+    #
+    # Hay juegos -arcades de Konami sobre todo- que no arrancan solos: piden un
+    # programa acompañante abierto a la vez. Otomedius quiere "bms_GGG.exe"
+    # corriendo mientras se lanza "Otomedius.exe"; si no esta, el juego sale con
+    # un "APPLICATION ERROR" que no dice nada.
+    #
+    # Hasta ahora habia que hacerse un lanzador propio (un AHK compilado, por
+    # ejemplo) que abriera los dos. Eso funciona, pero obliga a meter un
+    # ejecutable extra dentro del juego y a mantenerlo.
+    #
+    # $1 = carpeta del juego (donde se busca el acompañante y desde donde se
+    #      lanza, que es lo que estos programas esperan)
+    WP_PID_ACOMPANA=""
+    local raiz="${1:-}"
+    [ -n "${EXE_ACOMPANA:-}" ] || return 0
+    [ -n "$raiz" ] && [ -d "$raiz" ] || {
+        say "AVISO: no se puede lanzar el acompañante: falta la carpeta del juego."
+        return 1; }
+
+    # La ruta se guarda RELATIVA a la carpeta del juego: asi el perfil sigue
+    # valiendo se monte el juego donde se monte, y se puede compartir.
+    local ruta="$raiz/$EXE_ACOMPANA"
+    [ -f "$ruta" ] || {
+        say "AVISO: el acompañante no esta donde dice el perfil:"
+        say "       $EXE_ACOMPANA"
+        say "       El juego se lanza igual, pero puede que no arranque."
+        return 1; }
+
+    say "[+] Acompañante: $EXE_ACOMPANA (se abre antes del juego)"
+    (
+        cd "$(dirname "$ruta")" || exit 1
+        local -a PRE_A=()
+        while IFS= read -r _l; do [ -n "$_l" ] && PRE_A+=("$_l"); done <<EOFAC
+$(run_args_for "$ruta")
+EOFAC
+        "${RUN_CMD[@]}" "${PRE_A[@]}" >> "$LOG_FILE" 2>&1
+    ) &
+    WP_PID_ACOMPANA=$!
+
+    # UN RESPIRO ANTES DEL JUEGO.
+    #
+    # Estos programas tardan un momento en registrarse -abren su ventana, dejan
+    # su fichero o su tuberia- y el juego los busca nada mas arrancar. Sin la
+    # espera, el juego gana la carrera y falla igual que si no estuviera.
+    local espera="${ACOMPANA_ESPERA:-3}"
+    case "$espera" in ''|*[!0-9]*) espera=3 ;; esac
+    [ "$espera" -gt 30 ] && espera=30
+    say "    esperando ${espera}s a que este listo"
+    sleep "$espera"
+
+    # Si se ha muerto en la espera, mejor decirlo ahora que dejar al usuario
+    # con un error del juego que no apunta a ningun sitio.
+    if ! kill -0 "$WP_PID_ACOMPANA" 2>/dev/null; then
+        say "AVISO: el acompañante se cerro solo. Mira el registro:"
+        say "       puede que le falte alguna libreria."
+        WP_PID_ACOMPANA=""
+    fi
+    return 0
+}
+
+acompanante_stop() {
+    # Se cierra CON SU ARBOL al terminar el juego.
+    #
+    # "kill" sobre el subshell no alcanza a lo que tiene dentro, y estos
+    # programas dejan hijos. Si sobrevive, mantiene vivo el prefijo y WProton
+    # se queda esperando a que muera alguien que no va a morir.
+    [ -n "${WP_PID_ACOMPANA:-}" ] || return 0
+    say "[i] Cerrando el acompañante"
+    matar_con_hijos "$WP_PID_ACOMPANA"
+    WP_PID_ACOMPANA=""
+    return 0
+}
+
+unidad_juego_preparar() {
+    # Crea la unidad de Windows que el juego pida (UNIDAD_JUEGO).
+    #
+    # PARA QUE SIRVE
+    #
+    # Hay juegos que solo funcionan desde una unidad concreta: buscan
+    # "F:\DATA\..." con la letra escrita a fuego, y no hay ajuste que valga.
+    # En Wine una unidad es un enlace en dosdevices/, asi que se le da.
+    #
+    # SE CREA EN CADA ARRANQUE, a proposito. El enlace vive DENTRO del prefijo:
+    # si el prefijo se rehace -o se borra, o el juego viaja a otro equipo- se
+    # va con el. El perfil dice que unidad quiere el juego; el enlace es la
+    # consecuencia, no el dato.
+    #
+    # $1 = carpeta a la que apunta la unidad (la del juego)
+    local carpeta_juego="${1:-}"
+    local letras; letras="$(printf '%s' "${UNIDAD_JUEGO:-}" | tr 'A-Z' 'a-z')"
+    [ -n "$letras" ] || return 0
+    [ -n "$carpeta_juego" ] && [ -d "$carpeta_juego" ] || {
+        say "AVISO: no se pueden crear las unidades: la carpeta del juego"
+        say "       no esta disponible."
+        return 1; }
+
+    local _fallos=0 letra destino
+    for letra in $letras; do
+
+    # UNA SOLA LETRA, Y NI c NI z.
+    #
+    # c: es drive_c -sin el no hay Windows- y z: es la raiz del sistema, que
+    # Wine crea siempre. Pisar cualquiera de las dos rompe el prefijo entero, y
+    # el usuario que se equivoque de tecla no tiene por que pagarlo.
+    case "$letra" in
+        [d-y]) ;;
+        c|z)
+            say "AVISO: la unidad $letra: no se puede cambiar (es del sistema)."
+            _fallos=1; continue ;;
+        *)
+            say "AVISO: '$letra' no es una letra de unidad valida (d..y)."
+            _fallos=1; continue ;;
+    esac
+
+    # A DONDE APUNTA ESTA LETRA.
+    #
+    # Con "datos", cada letra tiene su carpeta propia y escribible. No se
+    # comparten: el juego crea lo suyo en cada una -Otomedius pone GGG y nvmem
+    # en las dos- y mezclarlas es pedir problemas.
+    if [ "${UNIDAD_DESTINO:-juego}" = "datos" ]; then
+        destino="$UNIDADES_DIR/${WP_GID_ACTUAL:-juego}/$letra"
+        mkdir -p "$destino" 2>/dev/null || {
+            say "AVISO: no se ha podido crear la carpeta de datos de $letra:"
+            _fallos=1; continue; }
+    else
+        destino="$carpeta_juego"
+    fi
+
+    local dd="$WINEPREFIX/dosdevices"
+    [ -d "$WINEPREFIX/pfx/dosdevices" ] && dd="$WINEPREFIX/pfx/dosdevices"
+    [ -d "$dd" ] || mkdir -p "$dd" 2>/dev/null || {
+        say "AVISO: el prefijo no tiene dosdevices/ y no se ha podido crear."
+        _fallos=1; continue; }
+
+    # SI ESA LETRA YA ESTA COGIDA Y APUNTA A OTRO SITIO, SE DICE.
+    #
+    # Proton crea sus propias unidades al arrancar. Pisar una sin avisar deja
+    # al juego funcionando y a otra cosa rota, y eso no se diagnostica nunca.
+    local previo=""
+    [ -L "$dd/$letra:" ] && previo="$(readlink "$dd/$letra:" 2>/dev/null)"
+    if [ -n "$previo" ] && [ "$previo" != "$destino" ]; then
+        say "[i] La unidad $letra: apuntaba a $previo; se cambia a la del juego."
+    fi
+
+    ln -sfn "$destino" "$dd/$letra:" 2>/dev/null || {
+        say "AVISO: no se ha podido crear la unidad $letra:"
+        _fallos=1; continue; }
+
+    # EL CD-ROM ES OTRO FICHERO, con dos puntos.
+    #
+    # Wine mira "dosdevices/f::" para saber que esa unidad es un CD. Muchos
+    # juegos de los 90 comprueban el tipo de unidad antes de arrancar: con el
+    # enlace normal ven un disco duro y se niegan a jugar pidiendo el disco.
+    if [ "${UNIDAD_CD:-0}" = 1 ]; then
+        ln -sfn "$destino" "$dd/$letra::" 2>/dev/null \
+            && say "[+] Unidad $letra: -> $destino (declarada como CD-ROM)" \
+            || say "AVISO: unidad $letra: creada, pero no como CD-ROM"
+    else
+        rm -f "$dd/$letra::" 2>/dev/null
+        say "[+] Unidad $letra: -> $destino"
+    fi
+    done
+    [ "$_fallos" = 0 ] || return 1
+    return 0
+}
+
+exe_a_ruta_windows() {
+    # SE LE DA A PROTON LA RUTA DE WINDOWS, NO LA DE LINUX.
+    #
+    # QUE PASABA
+    #
+    # Le pasabamos la ruta de Linux del ejecutable. Proton lo dice en el
+    # registro: "Executable is a unix path, launching with 'umu.exe'", y
+    # entonces el lanzador la convierte por su cuenta. Al convertirla RESUELVE
+    # el enlace de la carpeta del juego, aterriza en el montaje, y le asigna la
+    # letra que cubra esa ruta real (X: -> /home/dani en la maquina del tester).
+    #
+    # El juego arranca igual, pero cree que vive en X:\...\tmp_mount\..., y
+    # todo lo que el paquete tiene escrito para C:\ deja de casar. ReShade lo
+    # enseñaba clarisimo: buscaba sus .fx en X: en vez de en C:.
+    #
+    # LO QUE DESHIZO EL NUDO
+    #
+    # El diagnostico de rutas: winepath contesta "C:\SEGA RALLY 2". O sea que
+    # Wine SI resuelve el enlace bien y la ruta buena existe. El enlace no era
+    # el problema -eso lo dimos por hecho dos veces sin comprobarlo-: el
+    # problema es que la conversion la hacia el lanzador en vez de Wine.
+    #
+    # Asi que se convierte aqui, con winepath, y se le pasa ya convertida.
+    EXE_WIN=""
+    [ -n "${EXE_PATH:-}" ] || return 0
+    # Solo con prefijos que salen del archivo. En los demas el juego vive fuera
+    # del prefijo a proposito y su ruta de Linux es la correcta.
+    [ "${PREFIX_ORIGEN:-nuevo}" = "bundled" ] || return 0
+    local wbin; wbin="$(runner_wine_bin "${1:-}" 2>/dev/null)"
+    [ -n "$wbin" ] && [ -x "$wbin" ] || return 0
+    local w
+    w="$("$wbin" winepath -w "$EXE_PATH" 2>/dev/null | tr -d '\r' | head -n1)"
+    case "$w" in
+        [Cc]:*)
+            EXE_WIN="$w"
+            say "[+] Se lanza con su ruta de Windows: $EXE_WIN" ;;
+        *)
+            # Si no cae en C:, convertirla no arregla nada y ademas taparia el
+            # aviso del diagnostico. Se deja la ruta de siempre.
+            [ -n "$w" ] && say "[i] La ruta de Windows no cae en C: ($w): se lanza como antes" ;;
+    esac
+    return 0
+}
+
+diag_rutas_wine() {
+    # QUE RUTA DE WINDOWS LE TOCA AL JUEGO. En el registro, en cada arranque.
+    #
+    # POR QUE EXISTE ESTO
+    #
+    # Un prefijo sacado de un wsquashfs de Batocera espera que el juego este en
+    # C:\<carpeta>, porque en el archivo el drive_c ES el drive_c del prefijo.
+    # Todo lo que el paquete lleva escrito -su ReShade.ini, su .bat, las rutas
+    # del system.reg- cuenta con eso.
+    #
+    # WProton enlaza la carpeta del juego dentro del prefijo en vez de
+    # copiarla, para no gastar los gigas dos veces. Pero un ENLACE no es una
+    # carpeta: Wine lo resuelve, aterriza en el montaje, ve que eso no cae bajo
+    # C: y le asigna otra letra. Resultado: C:\<carpeta> no existe para el
+    # juego por mucho que exista en el disco.
+    #
+    # Eso costo tres intentos de diagnostico a ciegas, mirando la carpeta de
+    # ReShade y la letra de la unidad, que no eran el problema. Con estas
+    # cuatro lineas en el registro se ve de una vez y no hay que adivinar.
+    local rdir="${1:-}"
+    # APAGADO POR DEFECTO, Y NO ES UN CAPRICHO.
+    #
+    # Este diagnostico lanza hasta OCHO invocaciones de Wine antes de arrancar
+    # el juego -winepath, dir, dir de los .fx...- y cada una carga Wine y
+    # levanta el wineserver. En una consola de mano eso son segundos, en CADA
+    # partida. Un tester noto que los juegos tardaban mas en cargar y tenia
+    # razon: lo puse siempre activo mientras depurabamos una ruta a ciegas, y
+    # se me olvido apagarlo cuando aquello se resolvio.
+    #
+    # Se enciende cuando haga falta, con DIAG_RUTAS=1 en settings.conf.
+    [ "${DIAG_RUTAS:-0}" = 1 ] || return 0
+    [ -n "${EXE_PATH:-}" ] || return 0
+    # DOS CASOS EN LOS QUE LA RUTA IMPORTA:
+    #
+    #   - prefijos que salen del archivo, donde el paquete espera C:\<carpeta>;
+    #   - juegos con UNIDAD propia, donde el juego espera una letra concreta y
+    #     casi siempre TAMBIEN una carpeta concreta dentro de ella. Otomedius,
+    #     por ejemplo, quiere estar en F:\GGG: con la letra bien puesta pero la
+    #     carpeta en otro sitio, falla igual y el mensaje no dice por que.
+    #
+    # En un prefijo propio normal y sin unidad, el juego vive fuera y ya se
+    # espera que asi sea: ahi este diagnostico solo seria ruido.
+    if [ "${PREFIX_ORIGEN:-nuevo}" != "bundled" ] \
+       && [ -z "${UNIDAD_JUEGO:-}" ]; then
+        return 0
+    fi
+
+    local dir; dir="$(dirname "$EXE_PATH")"
+    say "[rutas] ejecutable: $EXE_PATH"
+    if [ -L "$dir" ]; then
+        say "[rutas] la carpeta del juego es un ENLACE -> $(readlink "$dir")"
+    elif [ -d "$dir" ]; then
+        say "[rutas] la carpeta del juego es un directorio de verdad"
+    else
+        say "[rutas] AVISO: la carpeta del juego no existe"
+    fi
+
+    # LO QUE DE VERDAD INTERESA: como la ve Wine.
+    #
+    # winepath hace la conversion con las mismas reglas que usara el juego, asi
+    # que su respuesta no es una suposicion nuestra: es la ruta que el juego va
+    # a ver.
+    local wbin; wbin="$(runner_wine_bin "$rdir" 2>/dev/null)"
+    if [ -n "$wbin" ] && [ -x "$wbin" ]; then
+        local wp
+        wp="$("$wbin" winepath -w "$dir" 2>/dev/null | tr -d '\r' | head -n1)"
+        if [ -z "$wp" ]; then
+            say "[rutas] winepath no contesto (no se puede saber la ruta de Windows)"
+        else
+            say "[rutas] Wine la ve como: $wp"
+            case "$wp" in
+                [Cc]:*) say "[rutas] OK: el juego esta en C:, como espera el paquete" ;;
+                *)  say "[rutas] AVISO: el juego NO esta en C:. Lo que el paquete"
+                    say "        tenga escrito para C:\\ no se va a encontrar"
+                    say "        (ReShade, rutas del .bat, entradas del registro)." ;;
+            esac
+        fi
+    else
+        say "[rutas] sin binario de wine en el runner: no se comprueba la ruta"
+    fi
+
+    # LAS UNIDADES DEL JUEGO, UNA A UNA.
+    #
+    # Un tester monto E: y F: iguales y el juego escribia en E: pero no en F:.
+    # Desde Linux las dos carpetas son normales y escribibles, asi que mirarlas
+    # desde aqui no dice nada: hay que probar a ESCRIBIR POR LA LETRA, que es
+    # lo que hace el juego. Y de paso ver si Wine se cree que alguna es un
+    # CD-ROM, porque entonces es de solo lectura y no lo dice nadie.
+    if [ -n "${UNIDAD_JUEGO:-}" ] && [ -n "$wbin" ] && [ -x "$wbin" ]; then
+        local _u _dest_u _dd_u="$WINEPREFIX/dosdevices"
+        [ -d "$WINEPREFIX/pfx/dosdevices" ] && _dd_u="$WINEPREFIX/pfx/dosdevices"
+        for _u in $(printf '%s' "$UNIDAD_JUEGO" | tr 'A-Z' 'a-z'); do
+            _dest_u="$(readlink "$_dd_u/$_u:" 2>/dev/null)"
+            if [ -z "$_dest_u" ]; then
+                say "[rutas] unidad $_u: NO EXISTE en el prefijo"
+                continue
+            fi
+            # ¿La cree Wine un CD-ROM? Entonces no se puede escribir en ella
+            # por mucho que la carpeta de Linux si lo permita.
+            if [ -e "$_dd_u/$_u::" ]; then
+                say "[rutas] unidad $_u: declarada CD-ROM (de solo lectura)"
+            fi
+            # Desde Linux.
+            if ( : > "$_dest_u/.wp_u_test" ) 2>/dev/null; then
+                rm -f "$_dest_u/.wp_u_test" 2>/dev/null
+                say "[rutas] unidad $_u: escribible desde Linux"
+            else
+                say "[rutas] unidad $_u: NO escribible desde Linux ($_dest_u)"
+            fi
+            # Y DESDE WINE, que es lo que cuenta. Se escribe por la letra y se
+            # mira desde Linux si el fichero ha aparecido de verdad: fiarse de
+            # lo que conteste cmd es fiarse de un codigo de salida que estos
+            # juegos tampoco miran.
+            rm -f "$_dest_u/wp_test.tmp" 2>/dev/null
+            "$wbin" cmd /c "echo wp > $(printf '%s' "$_u" | tr 'a-z' 'A-Z'):\\wp_test.tmp" \
+                >/dev/null 2>&1
+            if [ -f "$_dest_u/wp_test.tmp" ]; then
+                say "[rutas] unidad $_u: Wine SI puede escribir en ella"
+                rm -f "$_dest_u/wp_test.tmp" 2>/dev/null
+            else
+                say "[rutas] unidad $_u: WINE NO PUEDE ESCRIBIR. El juego"
+                say "        tampoco podra guardar nada ahi."
+            fi
+        done
+    fi
+
+    # Y a que apunta cada unidad, para no tener que adivinar de donde sale la
+    # letra que aparezca arriba.
+    local dd="$WINEPREFIX/dosdevices"
+    [ -d "$WINEPREFIX/pfx/dosdevices" ] && dd="$WINEPREFIX/pfx/dosdevices"
+    if [ -d "$dd" ]; then
+        local u destino
+        for u in "$dd"/*:; do
+            [ -L "$u" ] || continue
+            destino="$(readlink "$u" 2>/dev/null)"
+            say "[rutas] $(basename "$u") -> ${destino:-?}"
+        done
+    else
+        say "[rutas] el prefijo no tiene dosdevices/"
+    fi
+
+    # LO QUE VE LINUX CONTRA LO QUE VE WINE.
+    #
+    # Con la ruta ya correcta, si el juego sigue sin encontrar sus ficheros
+    # solo quedan dos explicaciones, y hay que poder distinguirlas:
+    #
+    #   a) ahi de verdad no estan (cosa del paquete, no nuestra);
+    #   b) estan, pero Wine no puede LISTAR la carpeta a traves del enlace al
+    #      montaje (cosa nuestra, y entonces el enlace si habria que cambiarlo).
+    #
+    # Contar por los dos lados las separa sin lugar a dudas. Sin esto se puede
+    # estar otra ronda entera dando vueltas, que es lo que ya paso.
+    # LA BARRA FINAL NO SOBRA, y el contador tampoco es capricho:
+    #
+    #   - "find <enlace>" NO entra en el enlace: informa del enlace y para. Con
+    #     la barra si entra. Sin ella esto contaba 0 aunque la carpeta
+    #     estuviera llena, y habria acusado a Wine de no poder listarla.
+    #   - "grep -c ." imprime 0 y ADEMAS devuelve error, asi que con un
+    #     "|| printf 0" detras salia "0\n0" y la comparacion numerica reventaba.
+    #     wc -l imprime el numero y no falla.
+    local n_linux
+    n_linux="$(find "$dir/" -maxdepth 1 -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
+    say "[rutas] la carpeta del juego tiene $n_linux elemento(s) segun Linux"
+    # QUE HAY DENTRO, por nombre. Los juegos que piden una unidad suelen pedir
+    # tambien una carpeta concreta dentro de ella (F:\GGG y parecidos), y sin
+    # ver los nombres no hay forma de saber si esta.
+    if [ "${n_linux:-0}" -gt 0 ] && [ "${n_linux:-0}" -le 40 ]; then
+        local _dentro
+        _dentro="$(find "$dir/" -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null)"
+        [ -n "$_dentro" ] && say "[rutas] contiene: $_dentro"
+    fi
+    if [ -n "${wp:-}" ] && [ -n "$wbin" ] && [ -x "$wbin" ]; then
+        local n_wine
+        n_wine="$("$wbin" cmd /c dir /b "$wp" 2>/dev/null \
+                  | tr -d '\r' | grep -c '[^[:space:]]' | tr -d ' ')"
+        say "[rutas] y $n_wine segun Wine (dir de $wp)"
+        if [ "${n_linux:-0}" -gt 0 ] && [ "${n_wine:-0}" = 0 ]; then
+            say "[rutas] AVISO: Wine NO puede listar la carpeta aunque tiene"
+            say "        contenido. Es el enlace al montaje: habria que montarla"
+            say "        en vez de enlazarla."
+        fi
+    fi
+
+    # Y donde estan los shaders, si los hay. Muchos paquetes traen ReShade y su
+    # carpeta es lo primero que se echa en falta cuando algo va mal.
+    local fx
+    fx="$(find "$dir/" -iname '*.fx' -printf '%h\n' 2>/dev/null \
+          | sort -u | head -n3)"
+    if [ -n "$fx" ]; then
+        # Nada de "printf | while": el bucle correria en una subshell y los
+        # avisos se perderian. Es el patron que ya usa el resto del fichero.
+        local f
+        while IFS= read -r f; do
+            [ -n "$f" ] && say "[rutas] hay ficheros .fx en: $f"
+        done <<EOFFX
+$fx
+EOFFX
+        # Y LA COMPROBACION QUE DE VERDAD IMPORTA: esa carpeta concreta, vista
+        # por Wine, con el mismo comodin que usa el juego.
+        #
+        # Contar la carpeta del JUEGO no bastaba: salio 48 contra 48 y aun asi
+        # ReShade no encontraba nada. Lo que hay que medir es la carpeta donde
+        # estan los .fx, no la de encima. Un nivel de mas y el diagnostico
+        # decia "todo bien" mientras el juego fallaba.
+        local fx1 fx1_win n_fx_linux n_fx_wine
+        fx1="$(printf '%s\n' "$fx" | head -n1)"
+        n_fx_linux="$(find "$fx1/" -maxdepth 1 -iname '*.fx' 2>/dev/null \
+                      | wc -l | tr -d ' ')"
+        fx1_win="$("$wbin" winepath -w "$fx1" 2>/dev/null | tr -d '\r' | head -n1)"
+        if [ -n "$fx1_win" ]; then
+            n_fx_wine="$("$wbin" cmd /c dir /b "$fx1_win\\*.fx" 2>/dev/null \
+                         | tr -d '\r' | grep -c '[^[:space:]]' | tr -d ' ')"
+            say "[rutas] esa carpeta es $fx1_win"
+            say "[rutas] .fx que ve Linux: $n_fx_linux | que ve Wine: $n_fx_wine"
+            if [ "${n_fx_linux:-0}" -gt 0 ] && [ "${n_fx_wine:-0}" = 0 ]; then
+                say "[rutas] AVISO: los .fx estan pero Wine no los lista. El juego"
+                say "        tampoco los vera por mucho que la ruta sea correcta."
+            fi
+            # ¿SE PUEDE ESCRIBIR AHI?
+            #
+            # Es lo ultimo que queda de nuestro lado cuando la ruta es correcta
+            # y los ficheros se ven. ReShade compila los efectos y deja su
+            # cache junto a ellos, y con el autoguardado ademas reescribe su
+            # preset. Sobre un montaje de SOLO LECTURA eso falla, y hay
+            # versiones que lo cuentan como "no encontre efectos" en vez de
+            # decir que no puede escribir.
+            #
+            # ¿ESTA EL COMPILADOR DE SHADERS?
+            #
+            # Lo que ReShade necesita de DirectX es d3dcompiler_47.dll: sin el
+            # no puede compilar los .fx. WProton ya lo repone del runner al
+            # preparar un prefijo del archivo, pero si esa reposicion fallo,
+            # instalar "directx" entero por si acaso es media hora perdida
+            # cuando lo que falta es UN fichero. Aqui se dice si esta.
+            local dc32="" dc64=""
+            [ -e "$WINEPREFIX/drive_c/windows/system32/d3dcompiler_47.dll" ] && dc64="si"
+            [ -e "$WINEPREFIX/drive_c/windows/syswow64/d3dcompiler_47.dll" ] && dc32="si"
+            say "[rutas] d3dcompiler_47.dll: 64 bits=${dc64:-NO} | 32 bits=${dc32:-NO}"
+            if [ -z "$dc64" ] && [ -z "$dc32" ]; then
+                say "        Es lo que ReShade usa para compilar los .fx."
+                say "        Si falta, instalalo en Herramientas del prefijo."
+            fi
+            # ¿SE PUEDE ESCRIBIR AHI?
+            #
+            # ReShade compila los efectos y deja su cache junto a ellos, y con
+            # el autoguardado ademas reescribe su preset. Sobre un montaje de
+            # SOLO LECTURA eso falla, y hay versiones que lo cuentan como "no
+            # encontre efectos" en vez de decir que no puede escribir.
+            #
+            # Se prueba creando y borrando un fichero: los permisos y el "ro"
+            # de un montaje no se deducen mirando, hay que intentarlo.
+            if ( : > "$fx1/.wp_escritura_test" ) 2>/dev/null; then
+                rm -f "$fx1/.wp_escritura_test" 2>/dev/null
+                say "[rutas] esa carpeta SI se puede escribir"
+            else
+                say "[rutas] esa carpeta es de SOLO LECTURA"
+                say "        ReShade no podra dejar ahi su cache ni su preset."
+                say "        Si el juego dice que no encuentra los efectos"
+                say "        teniendolos delante, es por esto."
+            fi
+        fi
+    else
+        say "[rutas] no hay ningun .fx dentro de la carpeta del juego"
+    fi
+    return 0
+}
+
+exe_dentro_del_prefijo() {
+    # Cuando el prefijo se saca del archivo a disco, el JUEGO hay que lanzarlo
+    # por su ruta DENTRO del prefijo, no por la del montaje.
+    #
+    # POR QUE, que costo verlo.
+    #
+    # En un paquete de Batocera el drive_c del archivo ES el drive_c del
+    # prefijo. O sea que para el juego -y para todo lo que lleva dentro: su
+    # ReShade.ini, su .bat, las rutas escritas en system.reg- el juego vive en
+    #
+    #     C:\SEGA RALLY 2\...
+    #
+    # WProton saca el prefijo a prefixes/<gid>/ y enlaza ahi la carpeta del
+    # juego, asi que C:\SEGA RALLY 2 existe y funciona. Pero seguia lanzando
+    # el ejecutable por la ruta del MONTAJE, y entonces Wine lo ve en otra
+    # unidad:
+    #
+    #     S:\drive_c\SEGA RALLY 2\...      (o X:\..., segun lo que mapee)
+    #
+    # Misma carpeta de verdad, ruta de Windows distinta. Y todo lo que el
+    # paquete tiene escrito para C:\ deja de casar: un tester lo vio con
+    # ReShade, que buscaba sus .fx en S:\drive_c\... y no los encontraba.
+    # Ademas el juego corria desde el montaje, que es de SOLO LECTURA, asi que
+    # lo que el .bat intentara copiar ahi al arrancar fallaba en silencio
+    # ("Archivo no encontrado" en el registro).
+    #
+    # $1 = raiz del prefijo dentro del archivo (el montaje)
+    # $2 = el prefijo ya sacado a disco
+    local origen="$1" destino="$2" resto
+    [ -n "${EXE_PATH:-}" ] || return 0
+    [ -n "$origen" ] && [ -n "$destino" ] || return 0
+    # Solo si el ejecutable cuelga del prefijo del archivo. Si viniera de otro
+    # sitio no hay nada que reescribir.
+    case "$EXE_PATH" in
+        "$origen"/*) resto="${EXE_PATH#"$origen"/}" ;;
+        *) return 0 ;;
+    esac
+    # Y solo si existe de verdad por el otro lado. La carpeta del juego dentro
+    # del prefijo es un ENLACE al montaje, asi que normalmente si; pero si
+    # algo salio mal al enlazar, mejor dejarlo como estaba que apuntar a la
+    # nada.
+    [ -e "$destino/$resto" ] || {
+        say "AVISO: el juego no aparece dentro del prefijo ($resto);"
+        say "       se lanza desde el montaje, como antes."
+        return 0; }
+    EXE_PATH="$destino/$resto"
+    say "[+] El juego se lanza desde su prefijo (C:\\${resto#drive_c/})"
+    # La carpeta del juego que se le dijo a Proton tambien cambia: se fijo en
+    # build_runner_cmd, que corre ANTES que esto.
+    local _d; _d="$(dirname "$EXE_PATH")"
+    [ -d "$_d" ] && export STEAM_COMPAT_INSTALL_PATH="$_d"
+    return 0
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -15660,7 +16530,93 @@ bundled_prefix_prepare() {
     # error=80, ERROR_FILE_EXISTS) pero no puede cargarlo y el juego muere con
     # "Library dxgi.dll not found". Batocera los reinstala al lanzar; nosotros
     # los borramos y dejamos que wineboot recree las DLLs del propio runner.
-    [ "$PREFIX_MODE" = "bundled" ] || return 0
+
+    # PRIMERO: ¿HAY QUE REHACER UN PREFIJO QUE YA SE SACO DEL ARCHIVO?
+    #
+    # Este es el caso de una maquina donde el .conf ha llegado de fuera
+    # -compartido por GitHub, copiado de otro equipo, restaurado de una copia
+    # de seguridad-. El perfil dice "propio, sacado del archivo", pero aqui
+    # prefixes/<gid>/ no existe todavia.
+    #
+    # Sin esto, PREFIX_MODE="own" hacia que Proton creara un prefijo VACIO: se
+    # perdia todo lo que el archivo traia hecho -registro, DLL, dependencias
+    # instaladas- y el juego fallaba de formas que no apuntaban a esto.
+    #
+    # Y ADEMAS ES NECESARIO EN LA PROPIA MAQUINA, no solo al compartir: el
+    # prefijo sacado NO es autosuficiente. AppData y el resto de drive_c
+    # quedan como ENLACES al montaje, asi que si alguien borra prefixes/<gid>/
+    # para "empezar de cero", lo correcto es volver a sacarlo del archivo, no
+    # hacer uno nuevo.
+    #
+    # Es idempotente: prefijo_incluido_a_disco no repite el trabajo si ya
+    # existe su marca .wp_copia_completa.
+    local _rehecho_ok=0
+    if [ "${PREFIX_MODE:-}" = "own" ] && [ "${PREFIX_ORIGEN:-nuevo}" = "bundled" ]; then
+        local _dest="$PREFIX_DIR/${WP_GID_ACTUAL:-}"
+        if [ -n "${WP_GID_ACTUAL:-}" ] && [ ! -f "$_dest/.wp_copia_completa" ]; then
+            if [ -n "${BUNDLED_PREFIX_DIR:-}" ]; then
+                say "[i] El perfil dice que este prefijo sale del archivo y aqui"
+                say "    no esta hecho todavia: se saca ahora."
+                local _rehecho
+                local _origen_pfx="$BUNDLED_PREFIX_DIR"
+                if _rehecho="$(prefijo_incluido_a_disco "$WP_GID_ACTUAL" \
+                        "$BUNDLED_PREFIX_DIR" "$1")" && [ -n "$_rehecho" ]; then
+                    export WINEPREFIX="$_rehecho"
+                    exe_dentro_del_prefijo "$_origen_pfx" "$_rehecho"
+                    # A LA COPIA, como en el camino de la primera vez: lo que
+                    # viene despues usa BUNDLED_PREFIX_DIR para saber que hay
+                    # un prefijo del archivo con el que trabajar.
+                    BUNDLED_PREFIX_DIR="$_rehecho"
+                    _rehecho_ok=1
+                    say "[+] Prefijo rehecho desde el archivo: $WINEPREFIX"
+                else
+                    say "AVISO: no se ha podido sacar el prefijo del archivo."
+                    say "       El juego arrancara con un prefijo nuevo y vacio."
+                fi
+            else
+                # El perfil pide algo que este archivo no puede dar. Se dice, y
+                # se sigue: un prefijo nuevo es mejor que no arrancar. NO se
+                # cambia PREFIX_ORIGEN: si el fallo es que hoy falta el
+                # archivo bueno, mañana con el archivo correcto se arregla
+                # solo. Borrar el dato haria el problema permanente.
+                say "AVISO: el perfil dice que el prefijo sale del archivo, pero"
+                say "       este wsquashfs no trae ninguno. Se usa el que haya."
+            fi
+        fi
+    fi
+
+    # EL JUEGO SE LANZA DESDE SU PREFIJO SIEMPRE, NO SOLO LA VEZ QUE SE SACA.
+    #
+    # Esto estaba enganchado a los dos sitios donde el prefijo se saca del
+    # archivo, y por eso no servia de nada: en un arranque normal el prefijo YA
+    # existe, no se saca nada, y ademas con PREFIX_MODE="own" esta funcion se
+    # sale en la guarda de abajo antes de llegar a ninguno de los dos. Solo
+    # habria funcionado la primerisima vez.
+    #
+    # La condicion de verdad no es "acabo de sacarlo" sino "este prefijo SALE
+    # del archivo", que es justo lo que dice PREFIX_ORIGEN. Va aqui, antes de
+    # la guarda, para que se aplique en todos los arranques.
+    if [ "${PREFIX_MODE:-}" = "own" ] \
+       && [ "${PREFIX_ORIGEN:-nuevo}" = "bundled" ] \
+       && [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ -n "${WINEPREFIX:-}" ]; then
+        exe_dentro_del_prefijo "$BUNDLED_PREFIX_DIR" "$WINEPREFIX"
+    fi
+
+    # SACAR EL PREFIJO NO BASTA: HAY QUE PREPARARLO.
+    #
+    # Este corte estaba mal puesto y por eso el prefijo rehecho no servia. Un
+    # prefijo recien sacado del archivo NO esta listo para usarse: le faltan
+    # los pasos que vienen debajo -quitar los enlaces rotos de DXVK que
+    # apuntan a rutas de Batocera, wineboot para actualizarlo al runner
+    # elegido, y reponer las DLL de Direct3D-. Sin ellos el juego arranca y
+    # falla.
+    #
+    # En la primera ejecucion no se notaba: alli se entra con PREFIX_MODE en
+    # "bundled", se pasa este corte, y todo lo de abajo se ejecuta. Al
+    # rehacerlo el modo ya es "own", asi que la funcion se salia AQUI y se
+    # saltaba todo. Los dos caminos tienen que acabar igual.
+    [ "$PREFIX_MODE" = "bundled" ] || [ "$_rehecho_ok" = 1 ] || return 0
+
     # CON PROTON, EL PREFIJO SE SACA A DISCO.
     #
     # Dentro del wsquashfs las carpetas del usuario son de solo lectura, y
@@ -15675,29 +16631,66 @@ bundled_prefix_prepare() {
     # dentro de esa capa funciona sin problema.
     #
     # Copiar entonces sobra, y ademas tira por tierra el ahorro de espacio.
-    local _hay_steamuser=0
-    [ -d "$WINEPREFIX/drive_c/users/steamuser" ] && _hay_steamuser=1
-    [ -d "$WINEPREFIX/pfx/drive_c/users/steamuser" ] && _hay_steamuser=1
-    if [ "$(runner_kind "$1" 2>/dev/null)" = "proton" ] \
+    # SE PREGUNTA AL ARCHIVO, NO AL OVERLAY.
+    #
+    # Esto miraba $WINEPREFIX, que apunta a la vista MEZCLADA del overlay. Y el
+    # overlay es escribible: la primera vez que arranca, Proton crea el mismo
+    # users/steamuser en la capa de escritura. En el segundo arranque la
+    # comprobacion lo encontraba y daba el juego por "trae steamuser", asi que
+    # lo copiaba a disco y lo pasaba a prefijo propio... aunque el wsquashfs
+    # solo tuviera users/root.
+    #
+    # Resultado: juegos de Batocera puro convertidos sin necesidad, gastando el
+    # espacio dos veces. Lo vieron los testers.
+    #
+    # La pregunta correcta es "que TRAE el archivo", y eso solo lo sabe la capa
+    # de solo lectura (MOUNT_RO). Si por lo que sea no esta montada -modo solo
+    # lectura, o un camino que no pasa por el overlay- se cae a la vista de
+    # siempre, que es lo que habia hasta ahora.
+    local _hay_steamuser=0 _base_su="${MOUNT_RO:-}"
+    if [ -z "$_base_su" ] || [ ! -d "$_base_su" ]; then
+        _base_su="$WINEPREFIX"
+    fi
+    [ -d "$_base_su/drive_c/users/steamuser" ] && _hay_steamuser=1
+    [ -d "$_base_su/pfx/drive_c/users/steamuser" ] && _hay_steamuser=1
+    # El "_rehecho_ok = 0" es lo que evita sacarlo dos veces: si ya se rehizo
+    # arriba, este bloque no tiene nada que hacer y ademas volveria a decir en
+    # pantalla que lo esta copiando.
+    if [ "$_rehecho_ok" = 0 ] \
+       && [ "$(runner_kind "$1" 2>/dev/null)" = "proton" ] \
        && [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ "$_hay_steamuser" = 1 ]; then
-        local _copia
+        local _copia _origen_pfx="$WINEPREFIX"
         if _copia="$(prefijo_incluido_a_disco "${WP_GID_ACTUAL:-juego}" "$WINEPREFIX" "$1")" \
            && [ -n "$_copia" ]; then
             export WINEPREFIX="$_copia"
+            exe_dentro_del_prefijo "$_origen_pfx" "$_copia"
             # A LA COPIA, no vacio: si se vacia, el resto de esta misma
             # funcion cree que no hay prefijo incluido y se queja.
             BUNDLED_PREFIX_DIR="$_copia"
-            # EL PERFIL PASA A "PROPIO", ahi mismo.
+            # EL PERFIL PASA A "PROPIO", ahi mismo, PERO SE APUNTA DE DONDE VINO.
             #
             # Una vez sacado, ya es un prefijo propio como cualquier otro: sus
             # partidas, sus cambios, y Proton puede renombrar lo que quiera.
             # Dejarlo como "incluido" obligaria a repetir la comprobacion cada
             # vez y a mantener dos caminos para lo mismo.
+            #
+            # Lo que hasta la 1.50 se perdia aqui era DE DONDE SALIO. El
+            # perfil quedaba como un "propio" cualquiera, y con eso:
+            #
+            #   - no habia forma de saber si tocaba rehacerlo del archivo o
+            #     de cero;
+            #   - y al compartir el .conf (GitHub), la otra maquina leia
+            #     "own", no tenia prefixes/<gid>/, y se hacia uno vacio: el
+            #     prefijo del archivo no se sacaba nunca.
+            #
+            # PREFIX_ORIGEN lo deja dicho, y asi el .conf describe COMO SE
+            # RECONSTRUYE en vez de que habia en esta maquina.
             if [ "${PREFIX_MODE:-}" = "bundled" ] && [ -n "${WP_GID_ACTUAL:-}" ]; then
                 PREFIX_MODE="own"
+                PREFIX_ORIGEN="bundled"
                 write_full_profile "$WP_GID_ACTUAL" 2>/dev/null \
-                    && say "[+] El juego pasa a 'prefijo propio': ya no hace falta" \
-                    && say "    tocar el del archivo. (Configurar -> Prefijo)"
+                    && say "[+] El juego pasa a 'prefijo propio (sacado del archivo)':" \
+                    && say "    ya no hace falta tocar el del archivo. (Configurar -> Prefijo)"
             fi
             say "[+] Se usara el prefijo: $WINEPREFIX"
         else
@@ -15856,8 +16849,20 @@ EOF2
     # En los dos tamaños: un juego de 32 bits carga las de syswow64, y
     # comprobar solo system32 daba por bueno un prefijo que a el le faltaba
     # todo.
+    # LO QUE SE REPONE Y LO QUE SE COMPRUEBA TIENEN QUE SER LA MISMA LISTA.
+    #
+    # d3dcompiler_47.dll estaba en la lista de arriba -la de reponer- pero no
+    # en esta. Si el runner no la trae, la reposicion se salta ese fichero en
+    # silencio y aqui nadie lo echaba en falta.
+    #
+    # Un tester se paso una tarde con ReShade sin encontrar sus efectos, y era
+    # eso: d3dcompiler_47 es el compilador de shaders, sin el no se puede
+    # compilar ni un .fx. El juego no dice "me falta el compilador", dice "no
+    # encuentro efectos", que es un sintoma que apunta a otro sitio.
     local miss="" lib
-    for lib in dxgi.dll d3d9.dll d3d11.dll wined3d.dll libvkd3d-utils-1.dll; do
+    for lib in dxgi.dll d3d9.dll d3d11.dll wined3d.dll libvkd3d-utils-1.dll \
+               libvkd3d-1.dll libvkd3d-shader-1.dll d3dcompiler_47.dll \
+               opengl32.dll wineopenxr.dll; do
         [ -e "$WINEPREFIX/drive_c/windows/system32/$lib" ] || miss="$miss $lib"
     done
     if [ -d "$WINEPREFIX/drive_c/windows/syswow64" ]; then
@@ -15870,6 +16875,16 @@ EOF2
         say "AVISO: el prefix incluido sigue sin:$miss"
         say "       Prueba con prefijo 'propio' o instala DXVK desde el menu"
         say "       'Instalar librerias' del menu principal."
+        # El compilador de shaders se nombra aparte: su falta no se parece a
+        # nada. El juego arranca y se ve bien, pero ReShade (y cualquier cosa
+        # que compile shaders en caliente) dice que no encuentra sus efectos.
+        case "$miss" in
+            *d3dcompiler_47*)
+                say "       OJO con d3dcompiler_47.dll: es el compilador de"
+                say "       shaders. Sin el, ReShade dira que NO ENCUENTRA sus"
+                say "       efectos aunque esten todos ahi. Instalalo en"
+                say "       Herramientas del prefijo -> Instalar librerias." ;;
+        esac
     else
         touch "$WINEPREFIX/.wp_bundled_ready" 2>/dev/null
     fi
@@ -17208,6 +18223,17 @@ launch_loose_exe() {
     # Lanzar un exe suelto (sin squash) con el perfil del nombre dado
     local gid="$1" exe="$2"
     gid="$(printf '%s' "$gid" | tr ' /' '__')"
+    # EL IDENTIFICADOR, TAMBIEN AQUI.
+    #
+    # launch_game lo dejaba en WP_GID_ACTUAL y este camino no, asi que todo lo
+    # que se apoya en el caia en su valor de respaldo. Lo vio un tester: las
+    # unidades del juego acabaron en "unidades/juego/f" en vez de
+    # "unidades/<juego>/f", o sea que TODOS los juegos habrian compartido las
+    # mismas unidades y sus datos de arcade.
+    #
+    # Es el fallo repetido del proyecto otra vez, y esta vez en una variable en
+    # vez de en una llamada: por eso la lista COMUNES no lo caza.
+    WP_GID_ACTUAL="$gid"
     # ¿ES UN JUEGO DE LINUX? Entonces aqui no pinta nada Proton.
     #
     # launch_game ya lo miraba, pero por AQUI pasan las carpetas sueltas y lo
@@ -17324,6 +18350,30 @@ launch_loose_exe() {
     # de los juegos de TeknoParrot, que son los que se quedaban colgados.
     RUNNER_DIR_ACTUAL="$rdir"
     build_runner_cmd "$rdir"
+    # LO MISMO QUE EN launch_game, Y POR EL MISMO MOTIVO.
+    #
+    # Este es el camino de los juegos en CARPETA y los ejecutables sueltos, y
+    # se me olvido al añadir la unidad por juego: un tester la puso en un
+    # juego .pc, no paso nada, y en el registro no habia ni una linea porque
+    # esto no llegaba a ejecutarse.
+    #
+    # Es el fallo mas repetido del proyecto -logica correcta en un solo camino-
+    # y lo he cometido yo despues de escribir la suite que lo vigila. La lista
+    # COMUNES de probar_caminos.sh ahora incluye estas funciones.
+    # EL ORDEN IMPORTA: EXE_PATH PRIMERO.
+    #
+    # diag_rutas_wine se sale en su primera linea si EXE_PATH esta vacia, y
+    # aqui se fijaba DESPUES: por este camino el diagnostico no decia nada
+    # nunca. Un tester mando el registro de un juego con dos unidades puestas y
+    # no habia ni una linea [rutas], que era justo lo que hacia falta para
+    # saber si el juego podia escribir en ellas.
+    EXE_PATH="$exe"
+    unidad_juego_preparar "$(dirname "$exe")"
+    diag_rutas_wine "$rdir"
+    exe_a_ruta_windows "$rdir"
+    # OJO: "exe" NO se pisa con la ruta de Windows. Mas abajo hay un
+    # cd "$(dirname "$exe")" y el directorio de trabajo lo pone el shell, no
+    # Wine. La de Windows se usa solo al construir la orden.
     pad_sdl_prefix_setup "$rdir"
     pad_bridge_stop
     local keys_file=""
@@ -17352,10 +18402,14 @@ launch_loose_exe() {
     [ -n "$loose_args" ] && say "Argumentos: $loose_args"
     local -a PRE=()
     while IFS= read -r _a; do [ -n "$_a" ] && PRE+=("$_a"); done <<EOFRB
-$(run_args_for "$exe")
+$(run_args_for "${EXE_WIN:-$exe}")
 EOFRB
     # shellcheck disable=SC2086
+    acompanante_start "$(dirname "$exe")"
+    unidad_juego_reaplicar "$(dirname "$exe")"
     ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 )
+    acompanante_stop
+    unidad_juego_reaplicar_stop
     local rc=$?
     # Al subshell Y a lo que tenga dentro: "kill" sobre un subshell de bash no
     # alcanza a sus hijos, asi que el "sleep 8" seguia vivo hasta agotarse y
@@ -18808,7 +19862,13 @@ menu_server_start() {
     write_menu_pygame
     local dir; dir="$(menusrv_dir)"
     rm -rf "$dir"; mkdir -p "$dir"
+    # DIAG_TIEMPOS SE LE PASA AL SERVIDOR.
+    #
+    # Es OTRO PROCESO: una variable del shell no le llega. El cronometro del
+    # servidor -"preparado en N ms", que es el unico que mide sin la espera del
+    # usuario- no aparecia en el registro por esto, y no porque no midiera.
     MENUSRV_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+        DIAG_TIEMPOS="${DIAG_TIEMPOS:-0}" \
         lanzar_suelto env -u LD_PRELOAD "$PY_BIN" "$MENU_PYGAME_PY" server "$dir")"
     disown "$MENUSRV_PID" 2>/dev/null || true
     printf '%s' "$MENUSRV_PID" > "$(menusrv_pidfile)" 2>/dev/null
@@ -21447,7 +22507,7 @@ sort_games() {
     # Los favoritos van SIEMPRE primero. Para los criterios descendentes
     # (recientes / más jugados) se INVIERTE la clave numerica en vez de usar
     # "sort -r", que también invertiria la prioridad de los favoritos.
-    local rel meta fav last secs n
+    local rel meta fav last secs n clave
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
         meta="$(game_meta "$rel")"
@@ -21455,9 +22515,15 @@ sort_games() {
         last="${meta%%|*}"; secs="${meta#*|}"
         case "${GAMES_SORT:-nombre}" in
             recientes)
-                n="$(printf '%s' "${last:-}" | tr -cd '0-9')"
+                # SIN LANZAR PROCESOS: expansion de bash, no "tr" en subshell.
+                #
+                # Esto se hace UNA VEZ POR JUEGO. Con 43 juegos eran unos 170
+                # procesos solo para ordenar, y el registro lo dejo claro:
+                # 2,5 segundos para ordenar 43 juegos, mas que buscarlos.
+                # En bash puro son 4 ms y el resultado es identico.
+                n="${last:-}"; n="${n//[^0-9]/}"
                 [ -z "$n" ] && n=0
-                n="$(printf '%012d' "${n:0:12}")"
+                n="${n:0:12}"
                 printf '%d %012d\t%s\n' "$((1-fav))" "$(( 999999999999 - 10#$n ))" "$rel" ;;
             jugados)
                 printf '%d %012d\t%s\n' "$((1-fav))" "$(( 999999999 - ${secs:-0} ))" "$rel" ;;
@@ -21474,9 +22540,10 @@ sort_games() {
                 # Ahora la clave se limpia: solo letras y numeros. Asi
                 # "R-Type" va donde iria "RType", que es donde la gente lo
                 # busca, y sale igual en todas partes.
-                printf '%d %s\t%s\n' "$((1-fav))" \
-                    "$(printf '%s' "$rel" | tr 'A-Z' 'a-z' \
-                        | tr -cd 'a-z0-9/\n')" "$rel" ;;
+                # Igual que arriba: en bash, sin dos "tr" por juego.
+                clave="${rel,,}"
+                clave="${clave//[^a-z0-9\/]/}"
+                printf '%d %s\t%s\n' "$((1-fav))" "$clave" "$rel" ;;
         esac
     # LC_ALL=C: se ordena por bytes, siempre igual, sin depender del idioma
     # que tenga puesto cada uno.
@@ -21970,7 +23037,10 @@ es_juego_carpeta() {
     esac
     [ -f "$d/autorun.cmd" ] && return 0
     [ -d "$d/drive_c" ] && return 0
-    [ -n "$(find "$d" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | head -n1)" ] && return 0
+    # -print -quit en vez de "| head -n1": find para en cuanto encuentra uno, y
+    # ademas se ahorra un proceso. Se ejecuta una vez POR CARPETA de la
+    # biblioteca, asi que con muchos juegos se nota.
+    [ -n "$(find "$d" -maxdepth 1 -type f -name '*.sh' -print -quit 2>/dev/null)" ] && return 0
     # OJO con la profundidad: sin limite, una carpeta SIN ejecutable se
     # recorre entera. Con juegos de miles de ficheros y una biblioteca
     # grande, eso son minutos de espera al abrir la lista. Cuatro niveles
@@ -21985,6 +23055,46 @@ es_juego_carpeta() {
             ! -iname '*.jpeg' ! -iname '*.txt' ! -iname '*.pdf' ! -iname '*.md' \
             -print -quit 2>/dev/null)" ] && return 0
     return 1
+}
+
+memoria_ms() {
+    # Memoria residente de WProton y del servidor de menus, en MiB.
+    #
+    # POR QUE ESTA AQUI
+    #
+    # Se pidio medir el consumo y yo conteste que no podia: es verdad que no
+    # puedo medirlo desde fuera, pero WProton SI puede medirse a si mismo. Un
+    # dato que hay que pedir a mano es un dato que no se tiene.
+    #
+    # Sirve sobre todo para ver si algo CRECE: las caches del servidor de
+    # menus se acotaron precisamente porque dos de ellas no se vaciaban nunca,
+    # y sin esta linea no habia forma de verlo en un registro.
+    local propio=0 srv=0 pid
+    propio="$(awk '/^VmRSS:/{print int($2/1024)}' /proc/self/status 2>/dev/null)"
+    pid="$(menusrv_pid 2>/dev/null)"
+    if [ -n "$pid" ] && [ -r "/proc/$pid/status" ]; then
+        srv="$(awk '/^VmRSS:/{print int($2/1024)}' "/proc/$pid/status" 2>/dev/null)"
+    fi
+    printf 'WProton %s MiB | menus %s MiB' "${propio:-?}" "${srv:-0}"
+}
+
+ahora_ms() {
+    # Milisegundos desde el arranque. Para cronometrar dentro de WProton.
+    #
+    # Las medidas se tomaban con "date +%s", en SEGUNDOS: abrir la biblioteca
+    # tarda decimas, asi que el registro decia "en 0s" siempre y no medi­a nada.
+    # Estaba la instrumentacion pero no servia para decidir que optimizar.
+    #
+    # EPOCHREALTIME lo trae bash 5 sin lanzar ningun proceso, que es lo que
+    # interesa: si cronometrar cuesta mas que lo cronometrado, la medida miente.
+    if [ -n "${EPOCHREALTIME:-}" ]; then
+        local _e="${EPOCHREALTIME/,/.}"
+        printf '%s' "$(( ${_e%%.*} * 1000 + 10#${_e##*.} / 1000 ))"
+    else
+        # Sin bash 5: se cae a segundos, que al menos no miente sobre lo que
+        # mide (sera 0 o 1000, pero no un numero inventado).
+        printf '%s' "$(( $(date +%s) * 1000 ))"
+    fi
 }
 
 lista_juegos() {
@@ -22321,18 +23431,20 @@ pick_squash_una_vez() {
     # identifica al juego. La etiqueta que se MUESTRA se calcula aparte.
     # Se cronometra cada fase. Con bibliotecas grandes abrir la lista puede
     # tardar mucho, y sin medirlo no hay forma de saber que parte es la lenta.
-    local _t0 _t1 _n
+    local _t0 _t1 _tm _n
     WP_N_RAICES="$(games_paths | grep -c . || echo 1)"
     export WP_N_RAICES
+    _tm="$(ahora_ms)"
     metas_cargar        # una sola lectura de todos los perfiles
-    _t0="$(date +%s)"
+    _t0="$(ahora_ms)"
+    log "Biblioteca: perfiles leidos en $((_t0-_tm)) ms"
     local _crudo; _crudo="$(lista_juegos)"
-    _t1="$(date +%s)"
+    _t1="$(ahora_ms)"
     _n="$(printf '%s' "$_crudo" | grep -c . || true)"
-    log "Biblioteca: $_n juegos encontrados en $((_t1-_t0))s"
+    log "Biblioteca: $_n juegos encontrados en $((_t1-_t0)) ms"
     list="$(printf '%s' "$_crudo" | sort | sort_games)"
-    _t0="$(date +%s)"
-    log "Biblioteca: ordenada en $((_t0-_t1))s"
+    _t0="$(ahora_ms)"
+    log "Biblioteca: ordenada en $((_t0-_t1)) ms"
     # Biblioteca vacia: antes se volvia al menu principal SIN DECIR NADA, y
     # quien acababa de instalar WProton no entendia por que "Jugar" y
     # "Ajustes de un juego" no hacian nada.
@@ -22431,8 +23543,11 @@ Tienes tres formas de añadir juegos:
     etiquetas="$(cat "$etqfile")"
     rm -f "$etqfile"
     local favfile; favfile="$(mktemp)"
-    _t1="$(date +%s)"
-    log "Biblioteca: datos de los juegos en $((_t1-_t0))s"
+    _t1="$(ahora_ms)"
+    log "Biblioteca: datos de los juegos en $((_t1-_t0)) ms"
+    # La memoria se apunta CADA VEZ que se abre la biblioteca: comparando dos
+    # aperturas de la misma sesion se ve enseguida si algo crece.
+    log "Biblioteca: memoria -> $(memoria_ms)"
     export WP_LIST_INFO="$infofile" WP_FAV_FILE="$favfile"
     # shellcheck disable=SC2046
     local titulo_lista="Elige un juego  [$GAMES_PATH]"
@@ -22562,7 +23677,11 @@ cfg_rendimiento_menu() {
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
-            *) cfg_aplicar "$sel" "$gid" "$squash" ;;
+            *) cfg_aplicar "$sel" "$gid" "$squash"
+               # Si se han borrado TODOS los datos del juego, aqui ya no queda
+               # nada que configurar: se sale sin dar mas vueltas, y sobre todo
+               # sin que nadie vuelva a escribir el perfil.
+               [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0 ;;
         esac
     done
 }
@@ -22704,6 +23823,32 @@ Arrancar el juego una vez para que Wine lo asiente."
     return 0
 }
 
+cfg_rarezas_menu() {
+    # CASOS ESPECIALES: lo que hace falta en muy pocos juegos.
+    #
+    # Unidades de Windows, un segundo ejecutable, la ventana con el foco y el
+    # dialogo de Mono. Todo esto vivia en el menu principal de ajustes y lo
+    # estaba llenando: quien solo quiere cambiar el runner tenia que pasar por
+    # encima de cuatro opciones que no va a usar nunca.
+    local gid="$1" squash="${2:-}"
+    while true; do
+        local sel
+        sel="$(menu "Casos especiales - $gid
+
+Cosas que necesitan MUY pocos juegos. Si el tuyo va bien,
+aqui no hay nada que tocar." \
+            "Unidades del juego: ${UNIDAD_JUEGO:-ninguna}$([ -n "${UNIDAD_JUEGO:-}" ] && [ "${UNIDAD_CD:-0}" = 1 ] && printf ' (CD-ROM)')" \
+            "Ejecutable acompañante: ${EXE_ACOMPANA:-ninguno}" \
+            "Preguntar por Wine Mono (.NET): $([ "${MONO_PEDIR:-0}" = 1 ] && printf 'si' || printf 'NO (recomendado)')" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver") return 0 ;;
+            *) cfg_aplicar "$sel" "$gid" "$squash"
+               [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0 ;;
+        esac
+    done
+}
+
 cfg_prefijo_menu() {
     # Todo lo que toca el prefijo de Wine, junto y en un sitio logico
     local gid="$1" squash="${2:-}" sel
@@ -22717,12 +23862,212 @@ cfg_prefijo_menu() {
             "Configurar dgVoodoo (Cpl)" \
             "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
             "Borrar prefijo (reinstala DLLs)" \
+            "Borrar TODOS los datos de este juego" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
-            *) cfg_aplicar "$sel" "$gid" "$squash" ;;
+            *) cfg_aplicar "$sel" "$gid" "$squash"
+               # Si se han borrado TODOS los datos del juego, aqui ya no queda
+               # nada que configurar: se sale sin dar mas vueltas, y sobre todo
+               # sin que nadie vuelva a escribir el perfil.
+               [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0 ;;
         esac
     done
+}
+
+borrar_datos_juego() {
+    # Borra TODO lo que WProton guarda de un juego, dejandolo como si nunca se
+    # hubiera lanzado: perfil, mapeo del mando, prefijo propio, overlay,
+    # caratulas y fichas.
+    #
+    # LO QUE NO BORRA, Y HAY QUE DECIRLO CLARO
+    #
+    # El juego. "Borrar los datos del juego" se puede entender como "borrar el
+    # juego", y no es eso: el .wsquashfs o la carpeta se quedan donde estan.
+    # Por eso el aviso lo dice con todas las letras antes de preguntar.
+    #
+    # TRES COSAS QUE NO SE PUEDEN EQUIVOCAR AQUI:
+    #
+    #   1. El prefijo COMPARTIDO no se toca nunca. Es de todos los juegos, y
+    #      un rm -rf ahi se lleva las partidas de la biblioteca entera. Solo
+    #      se borra prefixes/<gid>, y solo si el juego lo usa de verdad.
+    #   2. El identificador vacio seria "rm -rf $PREFIX_DIR/", o sea todos los
+    #      prefijos. Se comprueba antes de nada.
+    #   3. Las partidas se copian ANTES de borrar, como en "Borrar prefijo".
+    #      Aqui hay mas en juego: se borran el prefijo Y el overlay, que es
+    #      donde viven las de los juegos empaquetados.
+    local gid="$1"
+    # TRAZA DESDE LA PRIMERA LINEA.
+    #
+    # Un tester eligio esta opcion y WProton se cerro sin borrar nada y sin
+    # escribir NADA en el registro: entre la linea del menu y el cierre no
+    # habia ni un mensaje. Con eso no se puede saber ni si la funcion llego a
+    # entrar. Estas trazas lo contestan en el proximo registro.
+    say "[borrado] entrando, juego='$gid'"
+    # (1 de 3) SIN IDENTIFICADOR NO SE BORRA NADA.
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+
+    # QUE HAY, ANTES DE PREGUNTAR.
+    #
+    # Un "¿seguro?" a secas no deja decidir: no es lo mismo tirar un perfil
+    # recien hecho que uno con 40 horas y las partidas dentro. Se cuenta y se
+    # enseña.
+    local lista="" pfx="" n_saves=0 ov="$OVERLAY_BASE/$gid/upper"
+    local n_ov=0 f
+
+    [ -f "$PROFILE_DIR/$gid.conf" ] && lista="$lista
+  - ajustes del juego (perfil)"
+    [ -f "$PROFILE_DIR/$gid.keys" ] && lista="$lista
+  - mapeo del mando (.keys)"
+
+    # (2 de 3) EL PREFIJO, SOLO SI ES SUYO.
+    #
+    # prefix_path devuelve el COMPARTIDO cuando el juego usa ese, asi que no
+    # vale con llamarla: hay que mirar el modo. Con "bundled" el prefijo vive
+    # dentro del archivo y tampoco es nuestro para borrarlo.
+    if [ "${PREFIX_MODE:-shared}" = "own" ] && [ -d "$PREFIX_DIR/$gid" ]; then
+        pfx="$PREFIX_DIR/$gid"
+        [ -d "$pfx/drive_c/users" ] \
+            && n_saves="$(find "$pfx/drive_c/users" -type f 2>/dev/null | grep -c . || printf 0)"
+        lista="$lista
+  - prefijo propio ($(du -sh "$pfx" 2>/dev/null | cut -f1))"
+    fi
+
+    if [ -d "$ov" ]; then
+        n_ov="$(find "$ov" -type f 2>/dev/null | grep -c . || printf 0)"
+        lista="$lista
+  - overlay del wsquashfs ($n_ov fichero(s): partidas y cambios)"
+    fi
+
+    local n_cov=0 nom e
+    # LINEA A LINEA, NO CON "for nom in $(...)".
+    #
+    # cover_nombres devuelve tambien la forma con espacios ("Blade Arcus"),
+    # que es como las guarda quien copia su coleccion a mano. Con la
+    # sustitucion sin comillas, el shell parte ese nombre en dos palabras y se
+    # buscan caratulas llamadas "Blade" y "Arcus": no casa ninguna, y las de
+    # verdad se quedaban sin borrar.
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            for f in "$COVERS_DIR/$nom.$e" "$COVERS_DIR/$nom.wide.$e" \
+                     "$COVERS_WIDE_DIR/$nom.$e" "$COVERS_43_DIR/$nom.$e"; do
+                [ -f "$f" ] && n_cov=$((n_cov + 1))
+            done
+        done
+    done <<EOF
+$(cover_nombres "$gid")
+EOF
+    [ "$n_cov" -gt 0 ] && lista="$lista
+  - $n_cov caratula(s)"
+
+    local n_meta=0
+    for f in "$DATOS_DIR/$gid.info.json" "$DATOS_DIR/$gid.hltb" \
+             "$DATOS_DIR/$gid.rawg.json"; do
+        [ -f "$f" ] && n_meta=$((n_meta + 1))
+    done
+    [ "$n_meta" -gt 0 ] && lista="$lista
+  - ficha y datos descargados"
+
+    if [ -z "$lista" ]; then
+        ui_info "De '$gid' no hay nada guardado: no se ha jugado todavia
+o ya se borro. No hay nada que hacer."
+        return 0
+    fi
+
+    local total_saves=$((n_saves + n_ov))
+    # EL DETALLE VA AL REGISTRO, EL DIALOGO CORTO.
+    #
+    # El aviso tenia quince lineas. En una pantalla de mano no se lee, y ademas
+    # el titulo viaja por el protocolo del servidor de menus: cuanto mas corto,
+    # menos cosas pueden salir mal. Lo que se borra queda escrito en el
+    # registro, que es donde hace falta para diagnosticar despues.
+    say "[borrado] se borrara de '$gid':$lista"
+    say "[borrado] ficheros que pueden ser partidas: $total_saves"
+
+    ui_ask "Borrar TODOS los datos de '$gid'?
+
+El JUEGO NO se borra, solo lo que WProton guarda de el:
+ajustes, prefijo, partidas, caratulas y ficha.
+$([ "$total_saves" -gt 0 ] && printf 'Las partidas se copian a backups/ antes de borrar.' || printf 'Arrancara como la primera vez.')" || {
+        say "[borrado] cancelado por el usuario"
+        return 0; }
+
+    # (3 de 3) LAS PARTIDAS, PRIMERO.
+    #
+    # Si la copia falla NO se borra nada. Es preferible dejarlo todo como
+    # estaba a borrar las partidas de alguien porque el disco estaba lleno.
+    if [ "$total_saves" -gt 0 ]; then
+        local dest="$BACKUP_DIR/${gid}_borrado_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$dest" 2>/dev/null || {
+            ui_error "No se pudo crear la copia en backups/. NO se borra nada."
+            return 1; }
+        if [ "$n_saves" -gt 0 ] && ! cp -a "$pfx/drive_c/users" "$dest/" 2>/dev/null; then
+            ui_error "No se pudo copiar users/ del prefijo. NO se borra nada.
+
+Copia a mano esta carpeta si te interesa:
+$pfx/drive_c/users"
+            return 1
+        fi
+        if [ "$n_ov" -gt 0 ] && ! cp -a "$ov" "$dest/overlay" 2>/dev/null; then
+            ui_error "No se pudo copiar el overlay. NO se borra nada.
+
+Copia a mano esta carpeta si te interesa:
+$ov"
+            return 1
+        fi
+        say "[+] Copia guardada en: $dest"
+    fi
+
+    # A partir de aqui ya se borra. Se cuenta lo que sale bien para poder
+    # decir la verdad al final: "borrado" a secas cuando algo ha fallado es
+    # justo lo que hace que la gente no se fie.
+    local fallos=0
+    rm -f "$PROFILE_DIR/$gid.conf" "$PROFILE_DIR/$gid.keys" \
+          "$PROFILE_DIR/.$gid.instalado" "$PROFILE_DIR/.$gid.nocomm" 2>/dev/null || fallos=$((fallos+1))
+    if [ -n "$pfx" ]; then
+        rm -rf "${pfx:?}" 2>/dev/null || fallos=$((fallos+1))
+        rm -rf "$PREFIX_DIR/$gid.home" 2>/dev/null
+    fi
+    [ -d "$OVERLAY_BASE/$gid" ] && { rm -rf "${OVERLAY_BASE:?}/$gid" 2>/dev/null || fallos=$((fallos+1)); }
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        for e in png jpg jpeg webp; do
+            rm -f "$COVERS_DIR/$nom.$e" "$COVERS_DIR/$nom.wide.$e" \
+                  "$COVERS_WIDE_DIR/$nom.$e" "$COVERS_43_DIR/$nom.$e" 2>/dev/null
+        done
+    done <<EOF
+$(cover_nombres "$gid")
+EOF
+    rm -f "$DATOS_DIR/$gid.info.json" "$DATOS_DIR/$gid.hltb" \
+          "$DATOS_DIR/$gid.rawg.json" 2>/dev/null
+
+    log "Datos borrados del juego: $gid"
+    # QUE NADIE VUELVA A ESCRIBIR EL PERFIL DETRAS DE NOSOTROS.
+    #
+    # Un tester borro los datos y le quedo el .conf. No es que el borrado lo
+    # respetara: lo BORRA. Lo que pasaba es que al salir de los ajustes,
+    # game_config_menu hace write_full_profile para guardar los cambios, y ahi
+    # el perfil renacia con los valores que hubiera en memoria.
+    #
+    # Una marca global, no un valor de retorno: entre el borrado y esa
+    # escritura hay dos menus por medio, y cada uno tendria que ir pasandose el
+    # dato hacia arriba. La marca la lee quien va a escribir.
+    WP_BORRADO_TOTAL=1
+    if [ "$fallos" -gt 0 ]; then
+        ui_error "Se ha borrado casi todo, pero $fallos cosa(s) han fallado.
+Mira el registro para ver cual."
+        return 1
+    fi
+    ui_info "Datos de '$gid' borrados.$([ "$total_saves" -gt 0 ] && printf '\n\nLas partidas estan en backups/.')
+
+El juego sigue en su sitio: la proxima vez que lo lances
+preguntara el runner y el prefijo como la primera vez."
+    return 0
 }
 
 cfg_aplicar() {
@@ -22782,13 +24127,25 @@ ordenes: pegadas como argumento no harian nada."
                 "Propio del juego (prefixes/$gid)" \
                 "Incluido en el wsquashfs (estilo Batocera)")" || psel=""
             case "$psel" in
-                "Compartido"*) PREFIX_MODE="shared"; write_full_profile "$gid" ;;
-                "Propio"*)     PREFIX_MODE="own";    write_full_profile "$gid" ;;
+                # ELEGIR A MANO BORRA EL ORIGEN, y a proposito.
+                #
+                # Quien entra aqui y pide "Compartido" o "Propio" esta pidiendo
+                # ESE prefijo, no el que salio del archivo. Si se conservara
+                # PREFIX_ORIGEN=bundled, al lanzar se volveria a sacar el del
+                # archivo encima y la eleccion no habria servido de nada.
+                #
+                # Con "Incluido" tampoco se pone: el origen se apunta cuando el
+                # prefijo se saca DE VERDAD, no cuando se pide.
+                "Compartido"*) PREFIX_MODE="shared"; PREFIX_ORIGEN="nuevo"
+                               write_full_profile "$gid" ;;
+                "Propio"*)     PREFIX_MODE="own";    PREFIX_ORIGEN="nuevo"
+                               write_full_profile "$gid" ;;
                 "Incluido"*)
                     acquire_game_root "$squash" "$gid" ro
                     local ro2="$MOUNT_POINT"
                     if has_bundled_prefix "$ro2"; then
-                        PREFIX_MODE="bundled"; write_full_profile "$gid"
+                        PREFIX_MODE="bundled"; PREFIX_ORIGEN="nuevo"
+                        write_full_profile "$gid"
                         release_game_root
                         ui_info "Prefix incluido activado."
                     else
@@ -23249,13 +24606,6 @@ Cambialo si tapa justo donde el juego pide escribir." ;;
                     # los botones salen cambiados, se cambia aqui.
                     if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
                         KEYS_ESTILO=xbox
-    TECLADO_POS=abajo        # donde sale el teclado en pantalla
-    KEYS_EXCLUSIVO=auto      # auto | 1 (el juego no ve el mando) | 0
-    # Mando virtual: apagado por defecto. Es una via NUEVA y aparte del
-    # mapeador de teclas; solo se enciende en los juegos que lo necesiten.
-    MANDO_VIRTUAL=0          # 0 | cruceta_stick
-    TEXTO_RAPIDO=""          # texto que se teclea con una combinacion
-    TEXTO_ENTER=0            # 1 = pulsar Enter despues de escribirlo
                     else
                         KEYS_ESTILO=nintendo
                     fi
@@ -23287,6 +24637,147 @@ El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
             release_game_root
             load_profile "$gid"
             ui_ask "Lanzar el juego ahora?" && launch_game "$squash" "auto" ;;
+        "Preguntar por Wine Mono"*)
+            if [ "${MONO_PEDIR:-0}" = 1 ]; then
+                MONO_PEDIR=0; write_full_profile "$gid"
+                ui_info "Wine no preguntara por Mono.
+
+Es lo recomendado: casi ningun juego lo necesita y el
+dialogo hay que cerrarlo con el mando cada vez que se
+estrena un prefijo."
+            else
+                MONO_PEDIR=1; write_full_profile "$gid"
+                ui_info "Wine volvera a preguntar por Mono.
+
+Actívalo solo si este juego usa .NET de verdad. Si es
+asi, mejor instalar dotnet desde 'Instalar librerias':
+es mas fiable que el Mono que ofrece Wine."
+            fi ;;
+        "Ejecutable acompañante:"*)
+            # Algunos arcades no arrancan solos: piden otro programa abierto a
+            # la vez. Se elige de una lista de los .exe del juego, no se
+            # escribe a mano: la ruta tiene que ser exacta y relativa.
+            if [ -n "${EXE_ACOMPANA:-}" ]; then
+                if ui_ask "Acompañante actual: $EXE_ACOMPANA
+
+Quitarlo?"; then
+                    EXE_ACOMPANA=""; write_full_profile "$gid"
+                    ui_info "Sin acompañante."
+                    return 0
+                fi
+            fi
+            acquire_game_root "$squash" "$gid" ro
+            local raiz_a="$MOUNT_POINT" lista_a=""
+            lista_a="$( (cd "$raiz_a" 2>/dev/null && \
+                find . -maxdepth 3 -iname '*.exe' 2>/dev/null \
+                    | sed 's|^\./||' | sort | head -n 30) )"
+            release_game_root
+            if [ -z "$lista_a" ]; then
+                ui_error "No se ha encontrado ningun .exe en este juego."
+                return 0
+            fi
+            local asel
+            # shellcheck disable=SC2086
+            asel="$(menu "Que programa tiene que estar abierto mientras juegas?
+
+Se lanza ANTES del juego y se cierra al salir." $lista_a "<< Volver")" || asel=""
+            case "$asel" in
+                ""|"<< Volver") ;;
+                *)  EXE_ACOMPANA="$asel"; write_full_profile "$gid"
+                    ui_info "Acompañante: $asel
+
+Se abrira antes del juego y se cerrara al terminar." ;;
+            esac ;;
+        "Unidades del juego:"*)
+            local usel
+            usel="$(menu "Unidades de Windows para $gid
+
+Solo hace falta con juegos que buscan una letra concreta
+('F:\\DATA\\...'). Casi ninguno lo necesita." \
+                "Ninguna (lo normal)" \
+                "Elegir una letra" \
+                "Elegir una letra y declararla CD-ROM" \
+                "<< Volver")" || usel=""
+            case "$usel" in
+                "Ninguna"*)
+                    UNIDAD_JUEGO=""; UNIDAD_CD=0
+                    write_full_profile "$gid"
+                    ui_info "Sin unidad propia. El juego usara C: como siempre." ;;
+                "Elegir"*)
+                    local _cd=0
+                    case "$usel" in *CD-ROM*) _cd=1 ;; esac
+                    local letra
+                    # De la D a la Y. La C es drive_c y la Z la raiz del
+                    # sistema: cambiarlas rompe el prefijo, asi que ni se
+                    # ofrecen.
+                    # EN BUCLE: se añaden varias sin salir del menu.
+                    #
+                    # Antes habia que volver a entrar por cada letra, y un
+                    # tester que necesitaba dos acabo con una sola: al volver a
+                    # entrar perdio la primera. Los juegos que piden unidades
+                    # suelen pedir mas de una.
+                    while true; do
+                    letra="$(menu "Que letra quiere el juego?
+
+Se pueden añadir varias, una a una: hay juegos que piden
+mas de una (Otomedius necesita E: y F:).
+
+Ahora: ${UNIDAD_JUEGO:-ninguna}" \
+                        D E F G H I J K L M N O P Q R S T U V W X Y \
+                        "Quitar todas" "<< Volver")" \
+                        || letra=""
+                    case "$letra" in
+                        ""|"<< Volver") break ;;
+                        "Quitar todas")
+                            UNIDAD_JUEGO=""; UNIDAD_CD=0
+                            write_full_profile "$gid"
+                            ui_info "Sin unidades propias."
+                            break ;;
+                        *)
+                            local _l _nueva
+                            _nueva="$(printf '%s' "$letra" | tr 'A-Z' 'a-z')"
+                            # Se AÑADE a las que ya hubiera, sin repetir: el
+                            # menu deja elegir de una en una y quien pide dos
+                            # unidades no quiere perder la primera al poner la
+                            # segunda.
+                            case " ${UNIDAD_JUEGO:-} " in
+                                *" $_nueva "*) ;;
+                                *) UNIDAD_JUEGO="$(printf '%s' "${UNIDAD_JUEGO:-} $_nueva" \
+                                       | sed 's/^ *//;s/ *$//')" ;;
+                            esac
+                            UNIDAD_CD="$_cd"
+                            # A donde apuntan, que decide si el juego puede
+                            # ESCRIBIR en ellas.
+                            local dsel
+                            dsel="$(menu "A donde apuntan las unidades?" \
+                                "A la carpeta del juego (el juego vive en esa unidad)" \
+                                "A una carpeta de datos vacia y escribible" \
+                                "Dejarlo como esta")" || dsel=""
+                            case "$dsel" in
+                                "A la carpeta del juego"*) UNIDAD_DESTINO="juego" ;;
+                                "A una carpeta de datos"*) UNIDAD_DESTINO="datos" ;;
+                            esac
+                            write_full_profile "$gid"
+                            ui_info "Unidades del juego: $(printf '%s' "$UNIDAD_JUEGO" | tr 'a-z' 'A-Z')$([ "$_cd" = 1 ] && printf ' (CD-ROM)')
+
+$([ "${UNIDAD_DESTINO:-juego}" = "datos" ] \
+   && printf 'Cada una con su carpeta propia, vacia y escribible.' \
+   || printf 'Apuntan a la carpeta del juego.')
+Se crean al arrancar. Elige otra letra si el juego pide mas,
+o '<< Volver' para terminar.$([ "${PREFIX_MODE:-shared}" = "shared" ] && printf '\n\nOJO: este juego usa el prefijo COMPARTIDO, asi que esas\nunidades las veran tambien los demas juegos que lo usen.\nCon prefijo propio solo las ve este.')" ;;
+                    esac
+                    done ;;
+            esac ;;
+        "Borrar TODOS los datos"*)
+            # VA ANTES QUE "Borrar prefijo" a proposito: las dos empiezan por
+            # "Borrar", y el case coge la PRIMERA rama que casa. Si "Borrar
+            # prefijo"* fuera antes no habria problema -no casan entre si-,
+            # pero cualquiera que añada mañana un "Borrar"* generico rompe la
+            # de arriba sin enterarse. Con la mas larga primero, no.
+            borrar_datos_juego "$gid"
+            # El perfil ya no existe: se vuelve a los valores de fabrica para
+            # que el menu no siga enseñando los ajustes del juego borrado.
+            profile_defaults ;;
         "Borrar prefijo"*)
             if [ "$PREFIX_MODE" = "bundled" ]; then
                 ui_info "Con el prefix incluido, los cambios viven en el overlay:
@@ -23383,6 +24874,10 @@ game_config_menu() {
         fi
     fi
     load_profile "$gid"
+    # A CERO AL ENTRAR: la marca vale para ESTA visita a los ajustes. Si se
+    # quedara puesta de un juego anterior, el siguiente saldria solo y sin
+    # guardar sus cambios.
+    WP_BORRADO_TOTAL=0
 
     while true; do
         local bat_row=" "
@@ -23407,12 +24902,29 @@ game_config_menu() {
         local r_redist=""
         [ -n "${REDIST_JUEGO:-}" ] \
             && r_redist="Librerias de este juego: $REDIST_JUEGO"
+        local r_unidad="Unidades del juego: ${UNIDAD_JUEGO:-ninguna}$([ -n "${UNIDAD_JUEGO:-}" ] && [ "${UNIDAD_CD:-0}" = 1 ] && printf ' (CD-ROM)')"
+        local r_mono="Preguntar por Wine Mono (.NET): $([ "${MONO_PEDIR:-0}" = 1 ] && printf 'si' || printf 'NO (recomendado)')"
+        # UN SUBMENU PARA LO RARO.
+        #
+        # Estas cuatro opciones -unidades, acompañante, foco y Mono- hacen
+        # falta en muy pocos juegos, pero estaban en el menu principal de
+        # ajustes junto a lo de todos los dias. El menu se estaba llenando y lo
+        # habitual quedaba enterrado.
+        #
+        # Se resume en la fila lo que hay puesto: asi se ve de un vistazo si un
+        # juego tiene algo raro configurado sin tener que entrar.
+        local _raro=""
+        [ -n "${UNIDAD_JUEGO:-}" ] && _raro="$_raro unidades"
+        [ -n "${EXE_ACOMPANA:-}" ] && _raro="$_raro acompañante"
+            [ "${MONO_PEDIR:-0}" = 1 ] && _raro="$_raro mono"
+        local r_rarezas="Casos especiales >>${_raro:+ ($(printf '%s' "$_raro" | sed 's/^ //'))}"
+        local r_acomp="Ejecutable acompañante: ${EXE_ACOMPANA:-ninguno}"
         local r_gameid="GAMEID (protonfixes): $GAMEID"
         local r_umudb="Buscar en la base de umu (identificador automático)"
         local r_packpfx="Empaquetar con su prefijo (archivo autosuficiente)"
         if juego_es_nativo "$squash" >/dev/null 2>&1; then
             r_runner=""; r_prefijo=""; r_libs=""
-            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""
+            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""; r_unidad=""; r_acomp=""; r_mono=""; r_rarezas=""
         fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
@@ -23426,6 +24938,7 @@ game_config_menu() {
             "$r_prefijo" \
             "$r_libs" \
             "$r_redist" \
+            "$r_rarezas" \
             "$r_gameid" \
             "$r_umudb" \
             "Carátula: elegir una imagen (vertical u horizontal)" \
@@ -23455,13 +24968,25 @@ game_config_menu() {
             "<< Volver")" || return
 
         case "$sel" in
-            "<< Volver") write_full_profile "$gid"; return 0 ;;
+            "<< Volver")
+                # NO se guarda si se acaban de borrar los datos: seria
+                # resucitar el .conf que el usuario acaba de tirar.
+                [ "${WP_BORRADO_TOTAL:-0}" = 1 ] || write_full_profile "$gid"
+                return 0 ;;
             "Rendimiento y compatibilidad >>")
                 cfg_rendimiento_menu "$gid" "$squash"; continue ;;
+            "Casos especiales >>"*)
+                cfg_rarezas_menu "$gid" "$squash"
+                [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0
+                continue ;;
             "Herramientas del prefijo >>")
-                cfg_prefijo_menu "$gid" "$squash"; continue ;;
+                cfg_prefijo_menu "$gid" "$squash"
+                # De ahi dentro se puede haber borrado el juego entero.
+                [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0
+                continue ;;
         esac
         cfg_aplicar "$sel" "$gid" "$squash"
+        [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0
     done
 }
 
