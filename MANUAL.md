@@ -145,9 +145,22 @@ Arriba está lo del día a día. Lo que casi nunca se toca vive en dos submenús
 
 Lo más útil:
 
-**Ejecutable** — qué se lanza. Si el juego arranca con un `.bat` en vez de un `.exe` (habitual en ports y juegos antiguos), elígelo aquí: aparece en la lista junto a los ejecutables y WProton lo lanza con el intérprete de comandos de Windows.
+**Ejecutable** — qué se lanza. **Lo que elijas aquí es lo que arranca**: si ese fichero no está, WProton avisa y no arranca ningún otro, porque jugar a algo distinto de lo que elegiste es peor que no jugar. Déjalo en «automático» si prefieres que decida él.
+
+Si el juego arranca con un `.bat`, elígelo igual: WProton lo **lee** y hace lo que dice —abrir el ejecutable que menciona, con sus argumentos— en vez de ejecutarlo. Si el `.bat` instala algo (copia ficheros, toca el registro), eso se hace una sola vez y después se abre el juego directamente. Lo mismo con los lanzadores `.ahk` de AutoHotkey, habituales en los recopilatorios: se leen y se traducen a ajustes del perfil.
 
 **Runner (Proton/Wine)** — con qué se ejecuta. Si un juego no arranca, esto es lo primero que conviene cambiar: prueba otro GE-Proton o una versión más antigua.
+
+**Casos especiales** — lo que solo necesita algún juego raro. La fila resume lo que tengas puesto:
+
+- **Unidades de Windows**: darle al juego una letra propia (`D:`, `E:`…), para los que buscan sus datos en una ruta corta.
+- **El juego debe estar en `C:\`**: para los que miran `C:\<carpeta>\...` con la ruta escrita a fuego. La carpeta se enlaza dentro de `C:`, no se copia.
+- **Ejecutable acompañante**: un programa que se abre antes del juego y se cierra con él.
+- **Versión de Windows**: de 98 a 11. Algunos juegos viejos se niegan a arrancar en «Windows 10»; algunos modernos no arrancan en XP.
+- **Escritorio virtual**: encierra el juego en una ventana con su propio escritorio, para los que cambian la resolución y dejan la pantalla rota.
+- **OpenGL por Vulkan (Zink)**: para juegos OpenGL antiguos cuyos shaders el driver normal no consigue compilar.
+
+Nada de esto añade ajustes nuevos al perfil: se guarda con los que ya había.
 
 **Argumentos** — parámetros que necesita el juego, por ejemplo `-novr` o `-windowed`.
 
@@ -333,8 +346,28 @@ Prueba en este orden:
 1. **Otro runner.** Muchos fallos se arreglan con un GE-Proton distinto. Los juegos antiguos suelen ir mejor con versiones antiguas (por ejemplo GE-Proton 9-27).
 2. **Instalar librerías.** *Runners y herramientas → Instalar librerías de Windows*. Marca `vcrun2022`; si el juego es de Unreal, también el pack de prerrequisitos; PhysX si lo pide.
 3. **Argumentos.** Algunos juegos necesitan `-novr` u otros parámetros para no arrancar en un modo que no tienes.
-4. **Prefijo propio.** Si sospechas que otro juego le ha ensuciado el prefijo compartido.
+4. **Prefijo propio.** Si sospechas que otro juego le ha ensuciado el prefijo compartido. Con una excepción: si el juego trae **su propio prefijo** (los de Batocera), no lo cambies — trae el registro y las DLL que necesita.
 5. **Mirar el registro.** *Ver el registro de la última sesión*: las últimas líneas suelen decir qué falta (una DLL, una librería…).
+
+### WProton te dice qué hacer
+
+Cuando un juego falla, WProton lee el final del registro y, si reconoce el
+fallo, **dice qué hacer y dónde**, en vez de enseñarte un código. Cada caso que
+reconoce es uno que ya le pasó a alguien:
+
+| Lo que ves | Lo que es |
+|---|---|
+| `rc=53` y nada más | El juego es de .NET y Mono está apagado |
+| «No encuentro los efectos» (ReShade) | Falta `d3dcompiler_47` |
+| Un error genérico al arrancar | Falta un `d3dx9_XX` concreto, o un Visual C++ de una versión concreta |
+| `rc=1` a los pocos segundos | El prefijo es de 32 bits y el runner no lo admite |
+| El juego se sale solo al rato | Se acabó la memoria de 32 bits, o los shaders no compilan |
+| Se cierra limpio en segundos | El lanzador arrancó y el juego reventó |
+
+También avisa cuando el registro **repite la misma línea miles de veces**,
+aunque la partida haya durado minutos: eso siempre significa que algo va mal.
+
+Y si **no** reconoce el fallo, no se inventa nada.
 
 Si un juego se cierra en menos de diez segundos, WProton te enseña automáticamente el final del registro.
 
@@ -494,6 +527,54 @@ cierra de golpe, se restaura al arrancar la próxima vez.
 
 Si el perfil pide un fichero que no está en el juego, WProton lo dice con el
 nombre en vez de fallar en silencio.
+
+### Lo que WProton hace solo
+
+Tres cosas que hacían falta y no eran evidentes:
+
+**GameMode y MangoHud se apagan.** El cargador de los juegos de Raw Thrills
+(BudgieLoader) **se cierra al leer los avisos** que esos dos programas escriben
+en la salida: los toma por errores fatales. Se apagan solo cuando el lanzador es
+TeknoParrot, y sin tocar tus ajustes.
+
+**Los prefijos de 32 bits funcionan.** Los `.wsquashfs` que vienen de Batocera
+traen prefijos de 32 bits. Antes fallaban con `rc=1` a los pocos segundos porque
+WProton exportaba `WINEARCH=win32`, que es lo que hace que los Wine modernos se
+nieguen a arrancar. Ya no se exporta: la arquitectura está en el registro del
+prefijo y Wine la lee de ahí.
+
+**Lo que el paquete trae en `drive_c` se ve desde `C:\`.** El perfil XML de un
+juego suele decir `C:\game\game.exe`. Si usas un prefijo distinto del incluido,
+ese `C:` es otro sitio y el juego no encontraría nada: WProton enlaza las
+carpetas del paquete dentro del `C:` que se esté usando.
+
+### Un prefijo para todos los juegos de TeknoParrot
+
+En **Biblioteca y preferencias → Prefijo de TeknoParrot** se crea uno con todas
+sus librerías —Visual C++, compiladores de shaders, XACT, varios .NET y DXVK— de
+una vez y sin preguntar. Tarda un rato la primera vez; después cualquier juego
+lo elige en **Ajustes del juego → Prefijo → TeknoParrot** y lo reutiliza.
+
+Si alguna librería falla, el prefijo se marca como listo igual —con las demás
+funciona— y la fila del menú dice cuál falta, para reintentar solo esa.
+
+### Qué se sabe de cada juego
+
+**Biblioteca y preferencias → Base de datos de arcades.** Reúne lo documentado
+sobre TeknoParrot, JConfig, RConfig, iDMac, DemulShooter, Taito Type X, Sega
+Ring y bastantes títulos concretos. Se busca por nombre —del juego, del
+ejecutable o de la plataforma— o se mira el listado entero, y **cada ficha dice
+de qué fuente sale**.
+
+Con un juego delante, la ficha está en **Ajustes del juego → Instalar librerías
+→ Qué se sabe de este juego**, con la opción de instalar lo que necesite.
+
+Un par de cosas que están ahí y ahorran tiempo:
+
+- **JConfig**: si no hay un mando conectado al arrancar, el juego se cierra con
+  el error **1280**. Conecta el mando antes de lanzar.
+- **Sega Rally 3, la serie WMMT y Mario Kart GP DX** necesitan **GStreamer y sus
+  plugins instalados en el sistema** para los vídeos.
 
 ---
 
@@ -738,7 +819,21 @@ Se puede cambiar el tiempo y la combinación en `settings.conf`
 
 ---
 
-## 14. Dónde está cada cosa
+## 14. Actualizar WProton
+
+Cuando hay versión nueva, **la fila del menú principal cambia de texto**:
+
+```
+Buscar actualizaciones [v1.55]      ->      *** ACTUALIZAR A v1.56 ***
+```
+
+No hay que entrar a comprobarlo. La consulta se hace en segundo plano al
+arrancar, así que el menú nunca espera a la red; si aún no ha llegado la
+respuesta, no avisa y ya lo hará en el siguiente arranque.
+
+---
+
+## 15. Dónde está cada cosa
 
 | Carpeta | Contiene |
 |---|---|

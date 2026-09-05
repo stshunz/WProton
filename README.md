@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.49** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.55** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
 
@@ -23,7 +23,8 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **Varias carpetas de juegos**: útil si los tienes repartidos entre discos.
 - **Empaquetado autosuficiente**: un solo archivo con el juego y su prefijo dentro, listo para llevar a otro equipo.
 - **Importación** de `zip`, `7z`, `rar` (incluido multiparte), `.wtgz` e **instaladores de GOG**, que se convierten al formato que elijas.
-- **Prefijo incluido**: si el archivo trae su propio `drive_c` (estilo Batocera), se puede usar tal cual; si además trae su propio Wine, también.
+- **Prefijo incluido**: si el archivo trae su propio `drive_c` (estilo Batocera), se puede usar tal cual; si además trae su propio Wine, también. Y lo que traiga en su `drive_c` se ve desde `C:\` aunque el juego use otro prefijo.
+- **Lanzadores `.bat` y `.ahk`**: se leen y se hace lo que dicen —instalar unas librerías la primera vez, abrir un programa acompañante y lanzar el juego— en vez de ejecutarlos.
 
 ### Menús con mando
 - Lectura directa de `/dev/input`: funciona sin foco de ventana, con detección al vuelo, filtro de acelerómetros y soporte de crucetas de cualquier tipo.
@@ -58,6 +59,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).
 
 - **DLL overrides con menú**: se marcan de una lista con las más habituales (`dinput8`, `d3d9`, `dxgi`, `winhttp`, `winmm`), las que ya tengas puestas y las que encuentre junto al ejecutable del juego. Nada de recordar el formato ni de perder por el camino lo que dejaron dgVoodoo2 u OptiScaler.
+- **Casos especiales**: unidades de Windows por juego, ejecutable acompañante, el juego dentro de `C:\`, versión de Windows (de 98 a 11), escritorio virtual y OpenGL por Vulkan (Zink). Todo se guarda con los ajustes que ya existían, sin campos nuevos por opción.
 - **Idioma del juego** de una lista, en **español por defecto**. Avisa si el sistema no tiene ese idioma generado, que es la causa más común de que un juego siga saliendo en inglés.
 - **HDR**: pone las variables que hacen falta y se lo pide a gamescope. Y dice en el propio menú si va a poder verse: sin gamescope ni sesión Wayland no hay HDR, por mucho que se active.
 - El **asistente de añadir un juego** deja listos también los DLL overrides y el prefijo, sin tener que entrar después por *Configurar*.
@@ -69,6 +71,9 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 
 - **Importar un fichero `.reg`** al prefijo, por ejemplo para cambiar el idioma de un juego que lo guarda en el registro. Enseña lo que lleva dentro antes de aplicarlo y **guarda una copia del registro**, porque no hay deshacer.
 - **Instalar librerías en cualquier prefijo**, no solo en el compartido, con una **barra que avanza de verdad**: los redistribuibles se instalan de uno en uno y se ve por cuál va. Si uno falla, sigue con el resto y dice cuál falló.
+- **Capa gráfica**: `dxvk`, `vkd3d`, `d7vk` (DirectDraw y Direct3D 1-7 sobre Vulkan, para juegos de los 90), `dgvoodoo2`, `galliumnine` y los compiladores de shaders, en su propia categoría.
+- **Base de datos de arcades**: qué se sabe de TeknoParrot, JConfig, RConfig, Taito Type X, Sega Ring y de títulos concretos bajo Linux. Se consulta por nombre o de un listado, y cada ficha dice de qué fuente sale.
+- **Prefijo de TeknoParrot**: se crea de una vez con sus 16 librerías y lo comparten todos los juegos de TeknoParrot.
 - La primera vez que se estrena el prefijo compartido, ofrece dejarle instalado **Visual C++ 2015-2022**, que es lo que piden casi todos los juegos de Windows y sin lo cual muchos arrancan y se cierran sin dar ningún error.
 - El **mapeador `.keys`** enseña las teclas que ya tiene asignadas un juego sin tener que abrir el fichero, conserva las combinaciones al editarlo, y permite **usar el mando como ratón** (un stick mueve el puntero y un botón hace clic) y **abrir un teclado en pantalla** con una combinación, para los juegos que obligan a escribir un nombre.
 
@@ -81,6 +86,11 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 - **Auto-actualización** desde este repositorio, validando el fichero antes de reemplazar nada.
 
 ---
+
+### Cuando algo no arranca
+
+- **WProton dice qué hacer**, no un código de error. Lee el final del registro y reconoce los fallos que ya han pasado: falta una librería concreta, el juego es de .NET y Mono está apagado, el prefijo está roto, no hay Vulkan, es un programa de 16 bits, se acabó la memoria de 32 bits… Y si no reconoce el fallo, **no se inventa nada**.
+- **Aviso de versión nueva** en el menú principal, sin esperar a la red.
 
 ## Instalación
 
