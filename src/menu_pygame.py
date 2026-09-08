@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# WProton - menus con mando
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # Menu/explorador de WProton en pygame: mando via hilo evdev (sin foco),
 # navegador persistente, y BUSQUEDA: teclado real (type-ahead) o teclado
 # virtual en pantalla para el mando (boton Y).
@@ -10,7 +19,12 @@
 #   progress <titulo> <fichero_estado>     (el fichero lleva "pct|texto")
 #   text   <titulo> <salida> <valor_inicial>  (teclado en pantalla)
 #   canvas <titulo> <fichero_estado>       (fondo persistente del modo Juego)
-import json, os, sys, time
+import json
+import re, os, sys, time
+# math a nivel de modulo: lo usa el latido del reposo. Estaba importado solo
+# DENTRO de draw_estrella, asi que fuera de ella no existia y el try de la
+# animacion se lo habria tragado en silencio: nunca se habria visto.
+import math
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 LIBS = os.path.join(BASE, 'libs_py%d.%d' % sys.version_info[:2])
@@ -92,12 +106,35 @@ def leer_ficha(ruta):
     for trozo in str(fecha).replace(',', ' ').split():
         if trozo.isdigit() and len(trozo) == 4:
             ano = trozo
+    # La sinopsis viene con etiquetas HTML y entidades: la ficha de Steam es
+    # una pagina web, no texto plano.
+    sinopsis = d.get('short_description') or ''
+    if sinopsis:
+        sinopsis = re.sub(r'<[^>]+>', ' ', sinopsis)
+        for ent, car in (('&amp;', '&'), ('&quot;', '"'), ('&#39;', "'"),
+                         ('&lt;', '<'), ('&gt;', '>'), ('&nbsp;', ' ')):
+            sinopsis = sinopsis.replace(ent, car)
+        sinopsis = ' '.join(sinopsis.split())
     return {'nombre': d.get('name', ''),
             'ano': ano,
             'dev': lista('developers'),
             'edi': lista('publishers'),
             'gen': lista('genres'),
-            'nota': str((d.get('metacritic') or {}).get('score', '') or '')}
+            'nota': str((d.get('metacritic') or {}).get('score', '') or ''),
+            'sinopsis': sinopsis}
+
+def leer_rawg(ruta):
+    # La ficha de RAWG, la fuente secundaria. Formato plano, lo escribe
+    # rawg_completar en wproton.sh.
+    if not ruta or not os.path.isfile(ruta):
+        return {}
+    try:
+        with open(ruta, encoding='utf-8') as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in d.items() if v}
+
 
 def leer_duracion(ruta):
     # "21.5|44" -> texto para el panel
@@ -112,16 +149,33 @@ def leer_duracion(ruta):
         hist = float(partes[0]) if partes and partes[0] else 0
     except ValueError:
         hist = 0
-    return ('%g h' % hist) if hist else ''
+    if not hist:
+        return ''
+    # "18.69 h" es demasiada precision y ademas no casa con la fila de
+    # "Tiempo" justo debajo, que va en "4 h 20 min". Se enseña igual que
+    # aquella: HowLongToBeat da horas con decimales, no un cronometro.
+    horas = int(hist)
+    minutos = int(round((hist - horas) * 60))
+    if minutos == 60:
+        horas, minutos = horas + 1, 0
+    if horas and minutos:
+        return '%d h %d min' % (horas, minutos)
+    if horas:
+        return '%d h' % horas
+    return '%d min' % minutos
+# .sh: los juegos de LINUX se lanzan con su propio script. Sin esto no
+# aparecian en el navegador y no habia forma de elegirlos.
 EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
-               '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz')
+               '.001', '.z01', '.exe', '.bat', '.cmd', '.wtgz', '.sh',
+               '.appimage', '.AppImage')
 
 # Al IMPORTAR un juego no se enseñan los ya empaquetados (.wsquashfs y
 # .dwarfs): esos ya salen solos en la biblioteca, y verlos aqui solo confunde
 # —parece que hay que añadirlos otra vez—. Quedan los formatos que si hay que
 # importar: comprimidos, ejecutables y carpetas.
 EXTS_IMPORTAR = ('.zip', '.7z', '.rar', '.001', '.z01',
-                 '.exe', '.bat', '.cmd', '.wtgz')
+                 '.exe', '.bat', '.cmd', '.wtgz', '.sh',
+                 '.appimage', '.AppImage')
 
 def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
                 manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
@@ -151,12 +205,18 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
                     campos = linea.rstrip('\n').split('|')
                     if not campos or not campos[0].strip():
                         continue
-                    while len(campos) < 6:
+                    while len(campos) < 9:
                         campos.append('')
                     d = {'cov': campos[1], 'fav': campos[2],
                          'veces': campos[3], 'segs': campos[4],
-                         'ficha': campos[5], 'hltb': campos[6] if len(campos) > 6 else ''}
+                         'ficha': campos[5], 'hltb': campos[6],
+                         'completado': campos[7], 'rawg': campos[8]}
                     d.update(leer_ficha(campos[5]))
+                    # RAWG solo RELLENA: lo de Steam manda, porque trae la
+                    # sinopsis en español y datos mas completos.
+                    for _k, _v in leer_rawg(campos[8]).items():
+                        if not d.get(_k):
+                            d[_k] = _v
                     d['dur'] = leer_duracion(d.get('hltb', ''))
                     LIST_INFO[campos[0]] = d
         except Exception:
@@ -166,10 +226,17 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
     BROWSE_KIND = browse_kind
     if browse_kind == 'keys':
         BROWSE_EXTS = ('.keys',)
+    elif browse_kind == 'reg':
+        BROWSE_EXTS = ('.reg',)
     elif browse_kind == 'image':
         BROWSE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
     elif browse_kind == 'importar':
         BROWSE_EXTS = EXTS_IMPORTAR
+    elif browse_kind == 'cualquiera':
+        # Gestor de ficheros: se ve TODO, con extension o sin ella. Para
+        # copiar o mover no se puede filtrar por tipo -una partida guardada
+        # puede llamarse "save000" a secas-.
+        BROWSE_EXTS = ()
     else:
         BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
@@ -229,9 +296,11 @@ def load_dir(path):
     items = []
     if BROWSE_KIND == 'dir':
         items.append([K_HDR, '>> USAR ESTA CARPETA <<', False])
+    elif BROWSE_KIND == 'cualquiera':
+        items.append([K_HDR, '>> ESTA CARPETA ENTERA <<', False])
     elif BROWSE_KIND == 'play':
         items.append([K_HDR, '>> JUGAR ESTA CARPETA <<', False])
-    elif BROWSE_KIND not in ('keys', 'image'):
+    elif BROWSE_KIND not in ('keys', 'image', 'reg'):
         items.append([K_HDR, '>> IMPORTAR ESTA CARPETA <<', False])
     items.append([K_UP2, '.. (subir)', False])
     items.append([K_CANCEL, '<< Cancelar', False])
@@ -242,11 +311,18 @@ def load_dir(path):
     for n in names:
         if not n.startswith('.') and os.path.isdir(os.path.join(cur_path, n)):
             items.append([K_DIR, n + '/', False])
-    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar'):
+    # Si el modo no esta aqui, no se enseña NINGUN fichero: solo carpetas.
+    # Al añadir el modo "reg" se olvido esta lista y la pantalla salia sin
+    # nada que elegir, aunque la carpeta tuviera .reg dentro.
+    if BROWSE_KIND in ('file', 'play', 'keys', 'image', 'importar', 'reg',
+                       'cualquiera'):
         for n in names:
             p = os.path.join(cur_path, n)
+            # Sin lista de extensiones (modo "cualquiera") entra todo:
+            # endswith(()) es SIEMPRE False, asi que sin este caso no se
+            # veria ni un fichero.
             if (not n.startswith('.') and os.path.isfile(p)
-                    and n.lower().endswith(BROWSE_EXTS)):
+                    and (not BROWSE_EXTS or n.lower().endswith(BROWSE_EXTS))):
                 items.append([K_FILE, n, False])
     apply_filter()
 
@@ -351,6 +427,11 @@ RAW_BTN = {304: pygame.K_RETURN, 315: pygame.K_RETURN,
            308: pygame.K_TAB,
            310: pygame.K_F1, 311: pygame.K_F2}
 SELECT_BTN = 314          # BTN_SELECT: con A pulsa pantalla completa
+# Peticion de "volver al menu principal": la pone el hilo que lee el mando y
+# la atiende el bucle principal. De modulo porque son dos funciones
+# distintas, y una lista para poder mutarla desde el hilo sin declararla
+# global en cada sitio.
+home_req = [False]
 # Crucetas que reportan BOTONES (Anbernic/Decktroid...) en vez de hat:
 DPAD_BTN = {544: pygame.K_UP, 545: pygame.K_DOWN,
             546: pygame.K_LEFT, 547: pygame.K_RIGHT}
@@ -508,6 +589,8 @@ _noaccess = set()
 def evdev_thread():
     fds, held, ax = {}, {}, {}
     sel_held = [False]
+    sel_combo = [False]     # ¿se uso Select como modificador?
+    sel_desde = [0.0]       # cuando se pulso, para distinguir corta de larga
     last_scan = 0.0
     REP_FIRST, REP_NEXT = 0.40, 0.15
     TH_ON, TH_OFF = 18000, 12000
@@ -549,9 +632,39 @@ def evdev_thread():
                     else:
                         held.pop(k, None)
                 elif t == EV_KEY_RAW and c == SELECT_BTN:
-                    sel_held[0] = (v != 0)
+                    # SELECT SOLO = volver al menu principal.
+                    #
+                    # Select es MODIFICADOR (Select+A pantalla completa,
+                    # Select+X lista/rejilla), asi que no se puede actuar al
+                    # pulsarlo: hay que esperar a soltarlo y ver si por medio
+                    # se uso alguna combinacion.
+                    #
+                    # Y es una pulsacion CORTA: mantenerlo es lo que usa el
+                    # guardian para cerrar el juego, y eso no se toca.
+                    if v != 0:
+                        sel_held[0] = True
+                        sel_combo[0] = False
+                        sel_desde[0] = time.time()
+                    else:
+                        sel_held[0] = False
+                        if not sel_combo[0] \
+                           and (time.time() - sel_desde[0]) < 0.6:
+                            # UNA BANDERA, NO UNA TECLA.
+                            #
+                            # El primer intento simulaba una pulsacion (F12),
+                            # que ya era la captura de pantalla y se comia el
+                            # evento. Cambiarla a F9 tapaba ESE choque, pero
+                            # el problema de fondo seguia: el Select del mando
+                            # no tiene por que depender de una tecla del
+                            # teclado, ni pulsar esa tecla en un teclado real
+                            # deberia volver al menu principal.
+                            #
+                            # Con una bandera son cosas independientes y no
+                            # hay tecla que se pueda pisar mañana.
+                            home_req[0] = True
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
+                        sel_combo[0] = True
                         post_key(pygame.K_F11)      # Select + A: pantalla completa
                     elif c == 307 and sel_held[0]:
                         # Select + X: cambiar entre lista y rejilla.
@@ -559,6 +672,7 @@ def evdev_thread():
                         # Antes era L2, pero en la mayoria de mandos L2 y R2
                         # NO son botones: son ejes analogicos (ABS_Z/ABS_RZ),
                         # asi que su codigo de boton no llega nunca.
+                        sel_combo[0] = True
                         post_key(pygame.K_F3)
                     else:
                         post_key(RAW_BTN[c])
@@ -998,9 +1112,18 @@ def es_ancha(path):
         try:
             img = pygame.image.load(path)
             w, h = img.get_size()
-            _forma_cache[path] = (w > h)
+            forma = (w > h)
         except Exception:
-            _forma_cache[path] = False
+            forma = False
+        # CON TOPE, como las demas caches de este fichero.
+        #
+        # Guardaba una entrada por caratula vista y no se vaciaba nunca. En una
+        # sesion larga, paseando por una biblioteca grande, eso crece sin
+        # parar. Las otras caches (COVER_CACHE, _rcache, _imgcache) ya tenian
+        # su limite; estas dos se quedaron sin el.
+        if len(_forma_cache) > 300:
+            _forma_cache.clear()
+        _forma_cache[path] = forma
     return _forma_cache[path]
 
 def cover_surface(ruta, ancho):
@@ -1025,6 +1148,19 @@ def cover_surface(ruta, ancho):
     COVER_CACHE[clave] = img
     return img
 
+def caches_resumen():
+    """Cuantas entradas tiene cada cache. Para el diagnostico.
+
+    Se pidio reducir la memoria del servidor de menus y lo primero era saber
+    cuanto de los ~200 MiB son caches nuestras y cuanto es el suelo de pygame
+    (superficie de pantalla, fuentes, SDL). Suponerlo habria sido otra ronda
+    perdida.
+    """
+    return 'covers=%d img=%d fit=%d texto=%d forma=%d' % (
+        len(COVER_CACHE), len(_imgcache), len(_fitcache),
+        len(_rcache), len(_forma_cache))
+
+
 def fmt_horas(seg):
     try:
         seg = int(seg)
@@ -1035,6 +1171,644 @@ def fmt_horas(seg):
     if seg < 3600:
         return '%d min' % (seg // 60)
     return '%d h %d min' % (seg // 3600, (seg % 3600) // 60)
+
+# ---------------------------------------------------------------------------
+# Ayuda del panel derecho
+#
+# El panel "SELECCION" repetia el texto de la fila y ya esta, o sea que no
+# aportaba nada. Aqui se explica QUE HACE cada opcion, que es lo que cuesta
+# adivinar cuando buscas algo y no sabes por donde anda.
+#
+# Se casa por PREFIJO porque muchas opciones llevan un valor detras
+# ("Prefijo: propio del juego", "Runner: GE-Proton11-5"). Gana el prefijo mas
+# largo que case, para poder afinar casos concretos sin romper los generales.
+#
+# OJO: esta tabla vive aqui y los menus se escriben en wproton.sh, asi que
+# pueden desincronizarse. Hay una prueba que comprueba que cada prefijo de
+# aqui existe de verdad como opcion en el script.
+# ---------------------------------------------------------------------------
+AYUDAS_ES = [
+    # --- menu principal ---
+    ('Jugar (elegir juego)',
+     'Abre la biblioteca para elegir a que jugar. Con Select+X cambias entre '
+     'lista, rejilla y caratulas.'),
+    ('Jugar al ultimo',
+     'Lanza otra vez el ultimo juego, sin pasar por la lista. Con X entras '
+     'directo a su configuracion.'),
+    ('Jugar al último',
+     'Lanza otra vez el ultimo juego, sin pasar por la lista. Con X entras '
+     'directo a su configuracion.'),
+    ('Añadir un juego',
+     'Mete un juego nuevo: un comprimido (zip, rar, 7z), un .exe suelto o una '
+     'carpeta. Lo empaqueta y te guia por su configuracion basica.'),
+    ('Ajustes de un juego',
+     'Cambia el runner, el prefijo, los DLL overrides, el idioma y todo lo '
+     'demas de UN juego, sin lanzarlo.'),
+    ('Biblioteca y preferencias',
+     'Las carpetas donde estan tus juegos, montar discos externos, las '
+     'caratulas y el aspecto de los menus.'),
+    ('Runners y herramientas',
+     'Descargar y elegir versiones de Proton y Wine, y las herramientas del '
+     'sistema.'),
+    ('Gestion de archivos',
+     'Que ocupa cada cosa, limpiar caches, reparar montajes colgados y buscar '
+     'restos de juegos que ya borraste.'),
+    ('Instalar librerias',
+     'Los redistribuibles de Windows: Visual C++, DirectX, codecs de video... '
+     'Es lo primero que hay que probar cuando un juego no arranca.'),
+    ('Expulsar un disco',
+     'Suelta un disco conectado para poder desconectarlo sin perder nada. '
+     'Solo salen los que has conectado tu, no los del sistema.'),
+    ('Montar un disco',
+     'Monta un disco externo o una tarjeta para poder jugar a lo que tenga '
+     'dentro. Si su carpeta ya estaba, no pregunta nada.'),
+    ('Carátulas y perfiles de la comunidad',
+     'Descarga caratulas y fichas de los juegos, y ajustes que ya han '
+     'probado otros para que funcionen a la primera.'),
+    ('Detener Wine y liberar los juegos montados',
+     'Cierra Wine a la fuerza y desmonta todo. Para cuando un juego se cuelga '
+     'y deja el sistema a medias.'),
+    ('Ver el registro de la última sesión',
+     'El log de lo ultimo que paso, con scroll. Es lo que hay que mirar (y '
+     'enviar) cuando algo falla y no se sabe por que.'),
+    ('Carpetas de juegos',
+     'Donde busca WProton tus juegos. Puedes tener varias, por ejemplo una en '
+     'la Deck y otra en la tarjeta.'),
+
+    # --- ajustes de un juego ---
+    ('Runner (Proton/Wine):',
+     'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
+     'vale la pena probar otro.'),
+    ('>> JUGAR AHORA <<',
+     'Lanza el juego ya, con los ajustes que tenga puestos.'),
+    ('Runner:',
+     'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
+     'vale la pena probar otro.'),
+    ('Ejecutable:',
+     'El .exe que se lanza. En automatico lo busca solo; cambialo si el juego '
+     'trae varios (lanzador, editor, el juego...).'),
+    ('Argumentos:',
+     'Lo que se le pasa al juego al arrancar, como -windowed o -novr.'),
+    ('Prefijo:',
+     'La "instalacion de Windows" del juego. Compartido: una para todos. '
+     'Propio: solo para este. Incluido: el que trae el archivo dentro.'),
+    ('Librerias de este juego:',
+     'Las que se le han instalado y quedaron apuntadas. Si su prefijo se '
+     'rehace o se borra, WProton se las vuelve a poner solo. Desde aqui se '
+     'pueden olvidar.'),
+    ('Instalar librerias en el prefijo:',
+     'Instala redistribuibles directamente en el prefijo de este juego, sin '
+     'tener que elegirlo otra vez desde el menu principal.'),
+    ('GAMEID (protonfixes):',
+     'Identificador de Steam para que protonfixes aplique los apaños conocidos '
+     'de ese juego.'),
+    ('DLL overrides:',
+     'Fuerza a Wine a cargar una DLL de la carpeta del juego en vez de la '
+     'suya. Lo piden dgVoodoo2, ReShade, OptiScaler y los cargadores de mods.'),
+    ('Idioma del juego:',
+     'Muchos juegos miran el idioma del sistema para decidir en cual arrancan. '
+     'Aqui se le puede poner otro solo a este.'),
+    ('Variables extra:',
+     'Variables de entorno sueltas para casos raros, como PROTON_USE_WINED3D=1.'),
+    ('Notas:',
+     'Tus apuntes sobre este juego: que hay que tocar para que vaya, donde '
+     'guarda las partidas, lo que sea.'),
+    ('Favorito:',
+     'Los favoritos salen los primeros en la biblioteca.'),
+    ('Completado:',
+     'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
+     'vistazo lo que te queda pendiente.'),
+    ('Descargar carátulas',
+     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
+     'desde SteamGridDB. Hace falta una clave gratuita.'),
+    ('Clave de RAWG',
+     'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
+     'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
+    ('Descargar datos de los juegos',
+     'Baja la ficha de Steam (año, genero, nota, sinopsis) y la duracion de '
+     'HowLongToBeat de toda la biblioteca. No repite lo que ya esta.'),
+    ('Rendimiento y compatibilidad',
+     'MangoHud, GameMode, Fsync, DXVK, HDR, gamescope y demas ajustes de como '
+     'corre el juego.'),
+    ('Herramientas del prefijo',
+     'winecfg, winetricks, importar un .reg, dgVoodoo2, OptiScaler y borrar el '
+     'prefijo para empezar de cero.'),
+    ('Dejarlo como esta',
+     'No toca el estilo de botones. Siempre se puede cambiar despues desde '
+     'los ajustes del juego.'),
+    ('Teclas del mando .keys (marcar',
+     'Para juegos que no soportan mando: cada boton manda una tecla. Si el '
+     'juego ya trae un .keys, esto sale solo sin marcar nada.'),
+    ('Estilo Xbox',
+     'Los nombres de los botones dentro del .keys se leen al estilo Xbox: '
+     '"a" es el de abajo y "b" el de la derecha.'),
+    ('Batocera',
+     'Los nombres de los botones dentro del .keys se leen como en Batocera: '
+     '"a" es el de la DERECHA y "b" el de abajo.'),
+    ('Añadir: escribir un texto',
+     'Una combinacion teclea un texto que guardas antes (tu nombre). NO abre '
+     'ninguna ventana, asi que el juego no se minimiza ni pierde el foco.'),
+    ('Cambiar el texto', 'Escribir otro texto para esa combinacion.'),
+    ('Pulsar Enter al terminar:',
+     'Acepta el nombre de una vez. Quitalo si el juego tiene mas campos: el '
+     'Enter podria saltar al siguiente o aceptar antes de tiempo.'),
+    ('Rellenar: juego de teclado y raton',
+     'Deja asignados de golpe los controles tipicos de un juego de PC: WASD '
+     'para moverse, el stick derecho como raton y los gatillos como clics. '
+     'Para juegos que no detectan mandos.'),
+    ('Añadir: teclado en pantalla',
+     'Una combinacion que abre un teclado manejable con el mando, para los '
+     'juegos que te obligan a escribir un nombre y no soportan mando.'),
+    ('Select + A (abajo)',
+     'Se mantiene Select y se pulsa el boton de abajo. Si tu mando es de '
+     'Nintendo ahi pone B, pero es el mismo.'),
+    ('Select + B (derecha)', 'Se mantiene Select y se pulsa el de la derecha.'),
+    ('Select + Y (arriba)', 'Se mantiene Select y se pulsa el de arriba.'),
+    ('Select + X (izquierda)', 'Se mantiene Select y se pulsa el de la izquierda.'),
+    # La prueba recorta las opciones por el "$", asi que ve "Select +" a
+    # secas: la etiqueta real se compone en tiempo de ejecucion.
+    ('Select +', 'Se mantiene Select y se pulsa el otro boton.'),
+    ('Select + L1', 'Se mantiene Select y se pulsa el gatillo superior izquierdo.'),
+    ('Select + R1', 'Se mantiene Select y se pulsa el gatillo superior derecho.'),
+    ('Hotkey + ',
+     'Se mantiene el hotkey (Select) y se pulsa el otro boton.'),
+    ('L1 + R1',
+     'Los dos gatillos superiores a la vez.'),
+    ('Cambiar la combinacion',
+     'Elegir otros botones para abrir el teclado en pantalla.'),
+    ('Quitarlo',
+     'Deja de abrirse el teclado en pantalla. El resto del .keys no se toca.'),
+    ('Siempre: el juego solo vera las teclas',
+     'El mando se captura: el juego solo recibe las teclas del .keys. Para '
+     'juegos que traen su propio soporte de mando y lo usan en vez de las '
+     'teclas.'),
+    ('Nunca: el juego vera el mando y las teclas',
+     'El juego recibe las dos cosas. Para .keys que solo traen atajos, o si '
+     'el juego ya funcionaba bien con el mando.'),
+    ('Automatico (recomendado)',
+     'Se mira el propio .keys: si mapea el movimiento (sticks, cruceta, '
+     'gatillos) se captura el mando; si solo trae atajos, no.'),
+    ('Nunca (viejo): solo las teclas del .keys',
+     'El mando se captura siempre. El juego solo vera las teclas.'),
+    ('Siempre (viejo): mando y teclas a la vez',
+     'El mando no se captura nunca. Ojo: un juego con soporte de mando puede '
+     'ignorar las teclas.'),
+    ('¿Que significa esto?',
+     'Explica cuando conviene capturar el mando y cuando no.'),
+    ('Mando virtual:',
+     'Crea un mando de mentira y le copia lo del tuyo, cambiando algo por el '
+     'camino. Distinto del .keys: aqui el juego sigue viendo un mando.'),
+    ('No usar mando virtual',
+     'El juego ve tu mando tal cual, sin que WProton toque nada.'),
+    ('Mando Xbox (probar esto primero)',
+     'El juego vera un Xbox 360, que es el que todos entienden. Se le pasa '
+     'todo tal cual pero como un mando de libro: la cruceta va como eje y '
+     'como botones. Arregla los mandos que llegan de forma rara, como la '
+     'Steam Deck, que manda la cruceta como botones.'),
+    ('Mando DualShock',
+     'El juego vera un mando de Sony. Algunos se portan mejor con uno que con '
+     'otro, y otros enseñan los botones correctos (X, circulo, cuadrado).'),
+    ('Mando Xbox + cruceta al stick',
+     'Un Xbox y ademas la cruceta moviendo el stick izquierdo, para juegos '
+     'que leen bien la cruceta pero solo hacen caso al stick.'),
+    ('Mando DualShock + cruceta al stick',
+     'Un mando de Sony y ademas la cruceta moviendo el stick izquierdo.'),
+    ('Traducir el modo escritorio de Steam',
+     'En el modo escritorio de Steam los botones mandan TECLAS, no botones: A '
+     'es Enter, B es Escape, la cruceta son las flechas. Un juego que espere '
+     'un mando no recibe nada. Esto lo traduce de vuelta a mando.'),
+    ('Mando clasico (para juegos antiguos)',
+     'Finge un mando de los de antes: los gatillos van como botones y se '
+     'quitan los ejes de mas. Para juegos de DirectInput que se lian con un '
+     'mando moderno y se aceleran solos.'),
+    ('Mando clasico + cruceta al stick',
+     'Las dos cosas: mando de los de antes y la cruceta moviendo el stick.'),
+
+    ('Volver a instalar lo que trae el juego (.bat)',
+     'Algunos juegos instalan cosas la primera vez con un .bat. WProton lo '
+     'hace una sola vez y luego abre el juego directo. Con esto se repite la '
+     'instalacion, por si se corto a medias.'),
+    ('El juego NO ve el mando:',
+     'Captura el mando en exclusiva mientras el .keys esta activo, como hace '
+     'Batocera. Sin esto, un juego con soporte de mando ignora las teclas.'),
+    ('Teclado en pantalla:',
+     'Donde sale el teclado del mando. Cambialo si tapa justo el sitio donde '
+     'el juego te pide escribir.'),
+    ('abajo ',   'El teclado sale en la parte de abajo.'),
+    ('arriba ',  'El teclado sale arriba, para juegos que piden el texto abajo.'),
+    ('centro ',  'El teclado sale en mitad de la pantalla.'),
+    ('Estilo Batocera',
+     'Como en Batocera: "a" es el boton de la DERECHA y "b" el de abajo, al '
+     'estilo Nintendo. Si los botones salen cambiados, prueba a cambiarlo.'),
+    ('Estilo de botones:',
+     'Como se leen los nombres de los botones dentro del .keys. Xbox: "a" '
+     'abajo. Batocera: "a" a la derecha.'),
+    ('Mapeador .keys',
+     'Convierte los botones del mando en teclas, para juegos que no soportan '
+     'mando. Formato de Batocera.'),
+    ('Copia de seguridad',
+     'Guarda tus partidas fuera del prefijo, para que sobrevivan aunque lo '
+     'borres o cambies de runner.'),
+    ('Empaquetar con su prefijo',
+     'Crea un archivo autosuficiente: el juego Y su prefijo dentro. Sirve para '
+     'llevarlo a otro equipo tal cual esta.'),
+    ('Borrar prefijo',
+     'Deja el prefijo como recien hecho. Se pierde lo instalado en el '
+     '(librerias, ajustes de Wine), NO el juego.'),
+    ('Añadir este juego a Steam',
+     'Mete el juego en tu biblioteca de Steam, con su caratula, para lanzarlo '
+     'desde el modo Juego sin pasar por WProton.'),
+    ('Raton: ',
+     'El mando hace de raton: un stick mueve el puntero y un boton hace clic. '
+     'Util en estrategia, aventuras graficas e instaladores.'),
+    ('Crear acceso en Steam',
+     'Añade el juego a tu biblioteca de Steam para lanzarlo desde el modo '
+     'Juego, con su caratula.'),
+
+    # --- rendimiento ---
+    ('MangoHud',
+     'Enseña FPS, temperaturas y uso de CPU/GPU sobre el juego.'),
+    ('GameMode',
+     'Le pide al sistema prioridad para el juego mientras se juega.'),
+    ('Gamescope',
+     'Mete el juego en su propia ventana con escalado y limite de FPS. Hace '
+     'falta para el HDR.'),
+    ('HDR:',
+     'Rango dinamico alto. Necesita gamescope o una sesion Wayland, un monitor '
+     'que lo soporte y que el juego lo traiga.'),
+    ('Wayland nativo',
+     'Que el juego hable Wayland directamente en vez de pasar por XWayland. '
+     'Experimental.'),
+    ('NTsync',
+     'Sincronizacion por kernel, mas rapida que Fsync. Necesita Linux 6.14 o '
+     'mas nuevo.'),
+    ('Fsync',
+     'Sincronizacion rapida entre hilos. Ayuda en juegos que van justos de CPU.'),
+    ('DXVK',
+     'Traduce DirectX a Vulkan. Async y GPL reducen los tirones al compilar '
+     'shaders.'),
+    ('FSR',
+     'Escalado de AMD: el juego renderiza a menos resolucion y se reescala. '
+     'Mas FPS a cambio de nitidez.'),
+    ('Abrir winecfg',
+     'La configuracion de Wine: version de Windows, unidades, letras, graficos.'),
+    ('Abrir winetricks',
+     'La herramienta de siempre para instalar librerias y ajustes de Wine, con su interfaz.'),
+    ('Configurar dgVoodoo (Cpl)',
+     'El panel de dgVoodoo2: resolucion, filtros y como emula las tarjetas antiguas.'),
+    ('Instalar dgVoodoo2',
+     'Traduce DirectX 1 a 9 y Glide a DirectX 11. Para juegos de los 90 y principios de los 2000.'),
+    ('Instalar OptiScaler',
+     'Anade escalado moderno (FSR, DLSS, XeSS) a juegos que no lo traen.'),
+    ('Importar un fichero .reg',
+     'Mete claves en el registro del prefijo. Se usa sobre todo para cambiar el idioma de un juego.'),
+    ('Borrar la configuración de este juego',
+     'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
+    ('Carátula: buscar en SteamGridDB',
+     'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula: elegir una imagen',
+     'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
+    ('Ficha del juego',
+     'Los datos de Steam de este juego: año, editor, genero y nota.'),
+    ('Ficha de Steam',
+     'Año, genero, nota de Metacritic y sinopsis, de la tienda de Steam.'),
+    ('Duración (HowLongToBeat)',
+     'Cuanto se tarda en pasar el juego, segun HowLongToBeat.'),
+    ('Las dos cosas',
+     'La ficha de Steam y la duracion, de una pasada.'),
+    ('Datos de duración de partida',
+     'Instala la libreria que hace falta para consultar HowLongToBeat.'),
+    ('Vertical (2:3',
+     'La caratula de siempre, alta y estrecha, como en las tiendas.'),
+    ('Panorámica',
+     'Caratula ancha, como las de la biblioteca de Steam.'),
+    ('Cuadrada 4:3',
+     'Caratula casi cuadrada, va bien con juegos y sistemas antiguos.'),
+    ('Solo verticales',
+     'Baja solo las altas y estrechas: menos peticiones y mas rapido.'),
+    ('Solo panorámicas',
+     'Baja solo las anchas.'),
+    ('Solo cuadradas',
+     'Baja solo las 4:3.'),
+    ('Todas (las tres formas)',
+     'Baja las tres. Tarda el triple y gasta el triple de peticiones.'),
+    ('Proton oficial de Steam',
+     'Usa el Proton que Steam ya tiene instalado. No se descarga nada: se '
+     'enlaza, asi que no ocupa sitio y se actualiza con Steam.'),
+    ('Proton7-38-Frankenstein',
+     'Un Proton a medida para juegos que no funcionan con los normales. '
+     'Alojado por WProton.'),
+    ('Proton-Experimental',
+     'El Proton oficial de Valve. Como no se publica fuera de Steam, se '
+     'descarga de donde lo aloja WProton.'),
+    ('(incluido:',
+     'El Proton o Wine que viene DENTRO del archivo. Si el juego trae tambien '
+     'su prefijo, este es el que lo hizo: con otro puede no arrancar.'),
+    ('GE-Proton',
+     'El Proton de GloriousEggroll. Es el que mejor va en la mayoria de juegos.'),
+    ('Proton-CachyOS',
+     'Proton compilado para procesadores modernos (x86-64-v3).'),
+    ('Proton-LG',
+     'Proton de Castro-Fidel, el de PortProton, basado en GE.'),
+    ('DWProton',
+     'Proton con apanos para juegos anime y gacha.'),
+    ('WProton Custom',
+     'El runner que WProton instala de serie: Proton Frankenstein. Si lo has '
+     'borrado, desde aqui vuelve. No aparece en la lista de descarga porque '
+     'se instala solo al principio.'),
+    ('Wine-GE',
+     'Wine de GloriousEggroll, pensado para juegos que no son de Steam.'),
+    ('Wine Kron4ek',
+     'Wine limpio, en sus variantes vanilla, staging y tkg.'),
+    ('Wine Soda',
+     'Wine de Bottles basado en el de Valve.'),
+    ('Wine Caffe',
+     'Wine de Bottles, version TKG estable.'),
+    ('Wine-LG',
+     'Wine de Castro-Fidel, el de PortProton.'),
+    ('Actualizar GE-Proton',
+     'Descarga la ultima version de GE-Proton.'),
+    ('Actualizar umu-launcher',
+     'Actualiza umu, que es quien lanza los juegos con Proton.'),
+    ('Borrar un runner',
+     'Quita una version de Proton o Wine para liberar espacio.'),
+    ('Borrar runner',
+     'Quita una version de Proton o Wine para liberar espacio.'),
+    ('default   (el COMPARTIDO',
+     'El prefijo que usan todos los juegos en modo compartido. Lo que instales '
+     'aqui lo veran todos ellos.'),
+    ('Compartido',
+     'Una sola instalacion de Windows para todos los juegos. Ocupa poco y se configura una vez.'),
+    ('Propio del juego',
+     'Una instalacion solo para este juego. Ocupa mas, pero lo que instales no afecta a los demas.'),
+    ('Incluido en el wsquashfs',
+     'El prefijo que trae el propio archivo, con su registro y sus DLL.'),
+    ('El que trae el wsquashfs',
+     'El prefijo que trae el propio archivo, con su registro y sus DLL.'),
+    ('Prefijo compartido (default)',
+     'Lo que instales aqui lo veran todos los juegos en modo compartido.'),
+    ('Prefijo de un juego concreto',
+     'Elegir un juego e instalar en SU prefijo.'),
+    ('Otro prefijo de la lista',
+     'Elegir cualquiera de los prefijos que ya existen en disco.'),
+    ('Visual C++ y .NET',
+     'Lo que piden casi todos los juegos de Windows. Si uno no arranca, empieza por aqui.'),
+    ('DirectX y shaders',
+     'Las librerias D3DX y los compiladores de shaders que piden muchos juegos.'),
+    ('Codecs de video y sonido',
+     'Para cuando el juego arranca pero las cinematicas salen en negro o sin sonido.'),
+    ('Otros (fuentes',
+     'Fuentes de Windows, PhysX, XNA y los prerrequisitos de Unreal.'),
+    ('Verlo todo en una sola lista',
+     'Todos los redistribuibles juntos, sin categorias.'),
+    ('Elegir de una lista',
+     'Las DLL mas habituales y las que ya tengas puestas, para marcar y desmarcar.'),
+    ('Buscar las DLL que hay en el juego',
+     'Mira junto al ejecutable: si alguien dejo ahi una DLL, es que quiere que se cargue.'),
+    ('Escribir a mano la cadena entera',
+     'Para casos raros: se escribe el WINEDLLOVERRIDES tal cual.'),
+    ('Quitar todos',
+     'Quita todos los overrides. Los que pusieron dgVoodoo2 u OptiScaler tambien.'),
+    ('Crear o editar las teclas',
+     'Asigna una tecla a cada boton del mando, uno por uno.'),
+    ('Crear un .keys de ejemplo',
+     'Crea un fichero de ejemplo con Alt+Tab y Alt+F4, para partir de algo.'),
+    ('Ver las teclas asignadas',
+     'Enseña que tecla manda cada boton, sin abrir el fichero.'),
+    ('Encender: el stick derecho mueve',
+     'El mando hace de raton. Util en estrategia, aventuras graficas e instaladores.'),
+    ('Apagar el raton',
+     'El stick vuelve a ser un stick.'),
+    ('Probar el mando',
+     'Enseña que botones y ejes llegan de verdad. Para cuando algo no responde.'),
+    ('Arreglar permisos del mando',
+     'Da acceso a los dispositivos del mando. Si faltan botones o ejes, prueba esto.'),
+    ('Instalar evdev',
+     'La libreria que necesita el mapeador de teclas.'),
+    ('Flechas del teclado',
+     'Asignar una flecha: arriba, abajo, izquierda o derecha.'),
+    ('Teclas F (F1 a F12)',
+     'Asignar una tecla de funcion.'),
+    ('Escribir una letra o número',
+     'Asignar cualquier tecla escribiendola.'),
+    ('Añadir otra carpeta',
+     'Otra carpeta donde buscar juegos, ademas de la que ya hay.'),
+    ('Elegir otra carpeta',
+     'Cambia la carpeta principal de juegos.'),
+    ('Usar la carpeta games/',
+     'La carpeta que WProton crea junto a si mismo.'),
+    ('Olvidar carpetas detectadas',
+     'Borra las carpetas que se detectaron solas; se volveran a buscar al jugar.'),
+    ('Perfiles de la comunidad',
+     'Ajustes que ya han probado otros para juegos que necesitan apanos. Se descargan y se aplican.'),
+    ('Perfiles guardados',
+     'Los perfiles que tienes descargados: mirarlos o borrarlos.'),
+    ('Borrar TODOS los perfiles',
+     'Borra los perfiles de la comunidad descargados. Tus ajustes NO se tocan.'),
+    ('Buscar en la base de umu',
+     'Busca el identificador del juego en la base de umu, para que protonfixes aplique sus apanos.'),
+    ('Tamaño por juego',
+     'Que ocupa cada juego: el archivo, sus partidas y su prefijo.'),
+    ('Mostrar el tamaño de WProton',
+     'Lo que ocupa WProton entero: runners, prefijos, caratulas y datos.'),
+    ('Limpiar cache de shaders',
+     'Borra los shaders compilados. Se regeneran solos y pueden ocupar gigas.'),
+    # El texto del aviso empieza con "Copiar:" o "Mover:", y la prueba los
+    # extrae como opciones sueltas.
+    ('Copiar', 'Se copia lo elegido a la carpeta de destino.'),
+    ('Mover', 'Se lleva lo elegido a la carpeta de destino.'),
+    ('Copiar o mover ficheros',
+     'Lleva un fichero o una carpeta de un sitio a otro sin salir de WProton: '
+     'una partida, un .keys, una caratula. No borra nada.'),
+    ('Copiar algo a otra carpeta',
+     'Se elige que copiar y donde ponerlo. El original se queda donde esta.'),
+    ('Mover algo a otra carpeta',
+     'Igual que copiar, pero el original desaparece del sitio de origen.'),
+    ('¿Para que sirve esto?',
+     'Explica para que sirve copiar y mover ficheros desde aqui.'),
+    ('>> ESTA CARPETA ENTERA <<',
+     'Coge la carpeta en la que estas, con todo lo que tiene dentro.'),
+    ('Reparar carpetas tapadas',
+     'Cuando algo borra y rehace una carpeta, la superposicion tapa lo que '
+     'trae el archivo: el juego deja de ver sus idiomas o su configuracion.'),
+    ('Reparar montajes colgados',
+     'Limpia lo que deja un juego que se cuelga. Evita tener que reiniciar.'),
+    ('Buscar prefijos y saves huerfanos',
+     'Restos de juegos que ya borraste y siguen ocupando sitio.'),
+    ('Borrar copias de saves antiguas',
+     'Quita las copias viejas de partidas, dejando las recientes.'),
+    ('Borrar saves del overlay',
+     'Borra lo que el juego ha escrito. OJO: ahi estan las partidas guardadas.'),
+    ('Comprobar el archivo y ver cuanto ocupa',
+     'Verifica que el wsquashfs esta entero y dice lo que ocupa.'),
+    ('Comprobar lo descargado',
+     'Comprueba las huellas SHA-256 de lo descargado, por si algo vino a medias.'),
+    ('Partidas guardadas',
+     'Donde guarda el juego, y copias de seguridad para que no se pierdan.'),
+    ('Ver donde guarda las partidas',
+     'Enseña en que carpeta del prefijo escribe el juego.'),
+    ('Sincronizar AHORA con rsync',
+     'Copia las partidas a otra carpeta o disco en este momento.'),
+    ('Sincronizar la carpeta backups',
+     'Manda las copias a otro sitio, a mano con rsync o solo con Syncthing.'),
+    ('Preparar carpeta para Syncthing',
+     'Deja la carpeta lista para que Syncthing la sincronice entre equipos.'),
+    ('Copia de tu configuración',
+     'Guarda o recupera TODA tu configuracion en un zip: perfiles, ajustes y datos.'),
+    ('Exportar mi configuración',
+     'Guarda tus perfiles y ajustes en un zip, para otro equipo o por si acaso.'),
+    ('Importar configuración desde un zip',
+     'Recupera una copia hecha antes.'),
+    ('Añadir lo que falte',
+     'Solo mete lo que no tengas. Lo tuyo se queda como esta.'),
+    ('Sustituir todo',
+     'Machaca tu configuracion con la del zip. Lo que tengas ahora se pierde.'),
+    ('Repetir asistente de primera ejecucion',
+     'Vuelve a pasar por la configuracion inicial.'),
+    ('Instalar/actualizar Python portable',
+     'El Python propio de WProton, con pygame. Es lo que dibuja estos menus.'),
+    ('Descargar herramientas FUSE',
+     'Lo que hace falta para montar los juegos sin instalar nada en el sistema.'),
+    ('Descargar herramientas DwarFS',
+     'Para usar el formato dwarfs, que comprime mas que squashfs.'),
+    ('Descargar extractores GOG',
+     'Para poder abrir los instaladores de GOG.'),
+    ('Añadir WProton a Steam',
+     'Mete WProton en tu biblioteca de Steam, para abrirlo desde el modo Juego.'),
+    ('Cambiar las imágenes de WProton en Steam',
+     'La caratula y el fondo que se ven en Steam.'),
+    ('Acceso directo en el escritorio',
+     'Crea un icono para abrir WProton desde el escritorio.'),
+    ('Captura de pantalla',
+     'Hace una foto de la pantalla pasados unos segundos, para poder colocarte antes.'),
+    ('Grabar los menus',
+     'Graba un video de los menus. Util para enseñar un fallo.'),
+    ('Grabar la pantalla entera',
+     'Graba todo lo que se ve. Con algunos juegos sale en negro.'),
+    ('Ver la carpeta de capturas',
+     'Donde quedan las fotos y los videos.'),
+    ('Empaquetar a wsquashfs',
+     'Convierte una carpeta de juego en un solo archivo comprimido.'),
+    ('Probar el juego (sin empaquetar)',
+     'Lanzarlo tal cual esta, para comprobar que va antes de empaquetar.'),
+    ('wsquashfs - compatible',
+     'El formato de siempre: lo entienden Batocera y PortProton.'),
+    ('dwarfs - comprime',
+     'Comprime bastante mas y se monta igual de rapido, pero es menos compatible.'),
+    ('clasico - el original',
+     'El aspecto de siempre, una lista simple.'),
+    ('moderno - paneles',
+     'Dos paneles y color de acento. Es el que enseña la informacion de la derecha.'),
+    ('arcade - synthwave',
+     'Como el moderno pero con efecto de pantalla antigua.'),
+    ('nombre - alfabetico',
+     'Ordena la biblioteca por nombre.'),
+    ('recientes - los últimos',
+     'Ordena poniendo delante lo ultimo que jugaste.'),
+    ('jugados - los de más tiempo',
+     'Ordena por horas jugadas.'),
+    ('Automático (según el tamaño',
+     'WProton elige el tamano segun la pantalla.'),
+    ('Grande (recomendado',
+     'Letras y filas grandes, para jugar en portatil o en el sofa.'),
+    ('Muy grande',
+     'Todavia mas grande, para televisiones lejos.'),
+    ('Normal',
+     'Tamano estandar.'),
+    ('Pantalla completa nativa',
+     'A la resolucion de la pantalla, sin escalar.'),
+    ('Personalizado (escribir argumentos',
+     'Escribe tu los argumentos de gamescope.'),
+    ('Desactivado',
+     'Apagado.'),
+    ('Ninguno',
+     'Sin ninguno.'),
+    ('Configurar (runner, prefijo',
+     'Abre los ajustes de este juego.'),
+    ('Escribir la clave',
+     'Pega aqui tu clave. Se guarda en su fichero, no en settings.conf.'),
+    ('Quitar la clave',
+     'Borra la clave guardada.'),
+    ('Para qué sirve',
+     'Explica para que hace falta esto y que pasa si no lo pones.'),
+    ('El del sistema',
+     'Usa el idioma que tenga el sistema.'),
+    ('Escribir un locale a mano',
+     'Para un idioma que no este en la lista, como ko_KR.UTF-8.'),
+    ('Último log',
+     'El registro de la ultima sesion. Es lo que hay que mirar cuando algo falla.'),
+    ('Salir',
+     'Cierra WProton.'),
+    ('Arreglo mando SteamOS (Steam Input):',
+     'Apana los mandos que Steam Input duplica o presenta raro en SteamOS.'),
+    ('Carpeta principal:',
+     'La carpeta donde WProton busca los juegos.'),
+    ('Carátula en la vista de lista:',
+     'Que forma de caratula se enseña en el panel de la derecha.'),
+    ('Carátulas por fila:',
+     'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
+    ('Clic con:',
+     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Mover con:',
+     'Que stick mueve el puntero del raton.'),
+    ('Velocidad:',
+     'Lo rapido que se mueve el puntero.'),
+    ('Crear copia de seguridad ahora',
+     'Guarda AHORA las partidas de este juego, fuera del prefijo.'),
+    ('Restaurar una copia',
+     'Recupera unas partidas guardadas antes. Machaca las de ahora.'),
+    ('Descargar runners',
+     'Baja versiones de Proton y Wine de sus repositorios.'),
+    ('Destino rsync:',
+     'A donde se copian las partidas al sincronizar: otra carpeta o un disco.'),
+    ('Estadísticas:',
+     'Contar las veces y el tiempo que juegas. Solo para ti, no se envia a ningun sitio.'),
+    ('Esync:',
+     'Sincronizacion rapida entre hilos. Si un juego se cuelga al arrancar, prueba a apagarlo.'),
+    ('Formato al empaquetar:',
+     'wsquashfs para compatibilidad, dwarfs para comprimir mas.'),
+    ('Idioma:',
+     'El idioma de los menus de WProton (no el de los juegos).'),
+    ('LAA (32bit +2GB RAM):',
+     'Deja que un juego de 32 bits use mas de 2 GB. Arregla cuelgues en juegos viejos con mods.'),
+    ('Mandos por SDL en este prefijo',
+     'Hace que Wine lea los mandos por SDL en vez de por hidraw. Es el arreglo '
+     'que usa mucha gente cuando Proton no coge bien un mando, sobre todo los '
+     'de PlayStation. Solo toca el prefijo de este juego, y se puede deshacer.'),
+    ('Mando Sony (DualSense/DS4):',
+     'Ajustes propios de los mandos de PlayStation.'),
+    ('Mando via SDL',
+     'Presenta el mando como uno de Xbox. Necesario en DualSense y DS4 con juegos que solo entienden XInput.'),
+    ('Ordenar juegos por:',
+     'El orden de la biblioteca: por nombre, por lo ultimo jugado o por horas.'),
+    ('Tamaño de la letra:',
+     'Lo grande que se ve todo. En portatil conviene grande.'),
+    ('Tema de los menus:',
+     'El aspecto: clasico, moderno, arcade o cristal (este ultimo solo se ve '
+     'con el motor Qt).'),
+    ('Motor de los menus:',
+     'Con que se dibujan los menus: pygame (ligero, 12 MB) o Qt (se ve mejor, '
+     'ocupa 200-300 MB). Los dos conviven; auto usa Qt si esta instalado.'),
+    ('Vista de juegos:',
+     'Lista, rejilla, caratulas anchas o cuadradas. Tambien se cambia con Select+X.'),
+    ('WineD3D (OpenGL, juegos viejos):',
+     'Traduce DirectX a OpenGL en vez de a Vulkan. Solo para juegos muy viejos que fallan con DXVK.'),
+]
+
+# Prefijos ordenados de mas largo a mas corto: asi "Instalar librerias en el
+# prefijo:" gana a "Instalar librerias" y no al reves.
+AYUDAS_ES.sort(key=lambda x: -len(x[0]))
+
+
+def ayuda_de(texto):
+    """La explicacion de una opcion de menu, o None si no hay ninguna."""
+    if not texto:
+        return None
+    for prefijo, ayuda in AYUDAS_ES:
+        if texto.startswith(prefijo):
+            return L(ayuda)
+    return None
+
 
 def draw_side_panel():
     # Panel derecho: detalle de lo seleccionado. En la lista de juegos muestra
@@ -1087,32 +1861,45 @@ def draw_side_panel():
                                      (cx - 2, py - 2, cov.get_width() + 4, ch + 4), 1)
                     screen.blit(cov, (cx, py))
                     py += ch + 14
-        for ln in wrap_title(titulo_panel, f_it, SIDE_W - 34, 3 if datos else 6):
+        _ayuda = ayuda_de(titulo_panel) if not datos else None
+        # con ayuda debajo, el titulo se recorta a 3 lineas para dejarle sitio
+        for ln in wrap_title(titulo_panel, f_it, SIDE_W - 34,
+                             3 if (datos or _ayuda) else 6):
             screen.blit(rtext(f_it, ln, FG), (px, py))
             py += 28
+        if _ayuda:
+            py += 10
+            for ln in wrap_title(_ayuda, f_sm, SIDE_W - 34, 10):
+                if py > LIST_Y + LIST_H - 24:
+                    break
+                screen.blit(rtext(f_sm, ln, DIM), (px, py))
+                py += 20
         if datos and MODE == 'list':
             py += 6
             filas = []
-            # El favorito NO se repite aqui: su estrella ya se ve en la fila
-            # de la lista, y en el panel solo gastaba una linea.
-            if datos.get('ano'):
-                filas.append((L('Año', 'Year'), datos['ano']))
-            if datos.get('dev'):
-                filas.append((L('Desarrollo', 'Developer'), datos['dev']))
-            if datos.get('edi') and datos.get('edi') != datos.get('dev'):
-                filas.append((L('Edición', 'Publisher'), datos['edi']))
-            if datos.get('gen'):
-                filas.append((L('Género', 'Genre'), datos['gen']))
-            if datos.get('nota'):
-                filas.append((L('Nota', 'Score'), '%s/100' % datos['nota']))
-            if datos.get('dur'):
-                filas.append((L('Duración', 'Length'), datos['dur']))
-            if datos.get('veces') and datos['veces'] != '0':
-                filas.append((L('Jugado', 'Played'),
-                              L('%s veces', '%s times') % datos['veces']))
-            t = fmt_horas(datos.get('segs'))
-            if t:
-                filas.append((L('Tiempo', 'Time'), t))
+            # SIEMPRE las mismas filas, en el mismo orden, aunque el dato no
+            # este. Antes solo salian las que tenian valor, asi que cada juego
+            # enseñaba unas cuantas distintas y el panel bailaba: la nota, por
+            # ejemplo, solo la traen los juegos con puntuacion de Metacritic,
+            # y parecia que faltaba informacion en unos y en otros no.
+            SIN = L('—')
+            filas.append((L('Año', 'Year'), datos.get('ano') or SIN))
+            filas.append((L('Desarrollo', 'Developer'), datos.get('dev') or SIN))
+            _edi = datos.get('edi')
+            if _edi and _edi == datos.get('dev'):
+                _edi = ''          # no repetir la misma empresa dos veces
+            filas.append((L('Edición', 'Publisher'), _edi or SIN))
+            filas.append((L('Género', 'Genre'), datos.get('gen') or SIN))
+            filas.append((L('Nota', 'Score'),
+                          ('%s/100' % datos['nota']) if datos.get('nota') else SIN))
+            filas.append((L('Duración', 'Length'), datos.get('dur') or SIN))
+            _veces = datos.get('veces') or '0'
+            filas.append((L('Jugado', 'Played'),
+                          L('%s veces', '%s times') % _veces if _veces != '0'
+                          else L('nunca', 'never')))
+            filas.append((L('Tiempo', 'Time'), fmt_horas(datos.get('segs')) or SIN))
+            if datos.get('completado') == '1':
+                filas.append((L('Estado', 'Status'), L('COMPLETADO', 'COMPLETED')))
             for etiqueta, valor in filas:
                 if py > LIST_Y + LIST_H - 26:
                     break
@@ -1127,6 +1914,19 @@ def draw_side_panel():
                     sv = rtext(f_sm, v + '...', TH.get('acc2', ACC))
                 screen.blit(sv, (SIDE_X + SIDE_W - 16 - sv.get_width(), py))
                 py += 22
+            # La sinopsis, con lo que quede de panel. Va la ultima porque es
+            # lo unico que puede ocupar mucho y lo que menos se necesita de un
+            # vistazo.
+            _sin = datos.get('sinopsis')
+            if _sin and py < LIST_Y + LIST_H - 40:
+                py += 8
+                pygame.draw.rect(screen, TH['border'], (px, py, SIDE_W - 32, 1))
+                py += 10
+                for ln in wrap_title(_sin, f_sm, SIDE_W - 34, 12):
+                    if py > LIST_Y + LIST_H - 22:
+                        break
+                    screen.blit(rtext(f_sm, ln, DIM), (px, py))
+                    py += 19
     else:
         screen.blit(f_it.render(L('(vacio)', '(empty)'), True, DIM), (px, py))
         py += 28
@@ -1189,7 +1989,16 @@ def rtext(font, txt, color):
     surf = _rcache.get(k)
     if surf is None:
         surf = font.render(txt, True, color)
-        if len(_rcache) > 900:
+        # TOPE BAJADO DE 900 A 300.
+        #
+        # Medido en la Deck: con 857 entradas la memoria del servidor sube de
+        # 207 a 226 MiB, o sea unos 22 KiB por linea renderizada. Bajando el
+        # tope se recorta la mayor parte de ese crecimiento.
+        #
+        # Se pierde algo de cache y habra que redibujar mas texto, pero eso es
+        # justo lo que esta cache hace rapido: preparar un menu tarda 0-3 ms
+        # segun el registro, asi que hay margen de sobra.
+        if len(_rcache) > 300:
             _rcache.clear()
         _rcache[k] = surf
     return surf
@@ -1303,6 +2112,49 @@ def safe_quit(code):
 
 def vis():
     return VIS_KB if kb_open else VIS_FULL
+
+def pagina(d):
+    """Salta una pantalla entera SIN mover la fila donde esta el puntero.
+
+    move() recoloca el desplazamiento a partir de la seleccion, asi que
+    usarlo para saltar dejaba el puntero pegado al borde de la pantalla. Aqui
+    se mueven la seleccion Y el desplazamiento juntos: si estabas en la
+    tercera fila, sigues en la tercera fila de la pagina siguiente.
+
+    En los extremos no se da la vuelta: se llega al principio o al final y el
+    puntero se queda donde pueda, que es lo que uno espera al pasar paginas.
+    """
+    global sel, scroll
+    if not view:
+        return
+    n = len(view)
+    v = vis()
+    fila = sel - scroll                     # en que fila de la pantalla estoy
+    salto = d * _pagina()
+    nuevo_sel = max(0, min(n - 1, sel + salto))
+    if nuevo_sel == sel:                    # ya estabamos en el extremo
+        sel = 0 if d < 0 else n - 1
+    else:
+        sel = nuevo_sel
+    # El desplazamiento se recoloca para dejar el puntero en la MISMA fila,
+    # y despues se ajusta a los limites de la lista.
+    scroll = max(0, min(max(0, n - v), sel - fila))
+    if sel < scroll:
+        scroll = sel
+    elif sel >= scroll + v:
+        scroll = sel - v + 1
+
+
+def _pagina():
+    """Cuantas filas salta una 'pagina'.
+
+    Las que caben en pantalla menos una, para que quede una de referencia y
+    no se pierda el hilo al saltar. Con el teclado de busqueda abierto caben
+    menos, y hay que usar ese numero.
+    """
+    vis = VIS_KB if kb_open else VIS_FULL
+    return max(1, vis - 1)
+
 
 def move(d):
     global sel, scroll
@@ -1491,14 +2343,22 @@ def draw_segments(segs, font, x, y, maxw, active):
     except Exception:
         pass
 
-MORADO_W = (150, 90, 230)      # el morado de la W del logotipo
+# LOS DOS COLORES DE LA MARCA NO DEPENDEN DEL TEMA.
+#
+# "PROTON" se pintaba con el acento del tema activo, asi que la palabra
+# cambiaba de color en cada uno. El morado y el cian de moderno son ya la
+# seña de la marca, y una marca que cambia de color no es una marca. El tema
+# sigue mandando en todo lo demas -incluida la sombra del arcade, que es
+# suya-, pero estas dos letras se quedan quietas.
+MORADO_W = (150, 90, 230)      # el morado de la W
+CIAN_PROTON = (56, 214, 224)   # el cian de moderno, para "PROTON"
 
 def marca_surface(fuente, color=None):
     # "WPROTON" con la W en morado y el resto en el color de acento. Se
     # devuelve como una sola imagen para poder centrarla y medirla como
     # antes. Con "color" se fuerza un unico color (sombra del tema arcade).
     c_w = color if color else MORADO_W
-    c_r = color if color else ACC
+    c_r = color if color else CIAN_PROTON
     sw = fuente.render('W', True, c_w)
     sr = fuente.render('PROTON', True, c_r)
     try:
@@ -1559,6 +2419,12 @@ def fit_label(txt, font, maxw):
     k = (txt, maxw)
     if k in _fitcache:
         return _fitcache[k]
+    # CON TOPE. Guardaba una entrada por CADA etiqueta distinta de CADA menu, y
+    # no se vaciaba nunca: en una sesion larga son miles, y son las etiquetas
+    # enteras, no un identificador. Las demas caches del fichero ya tenian su
+    # limite.
+    if len(_fitcache) > 900:
+        _fitcache.clear()
     if rtext(font, txt, FG).get_width() <= maxw:
         _fitcache[k] = txt
         return txt
@@ -1579,6 +2445,13 @@ def grid_img(path):
     clave = (path, GIMG_W, GIMG_H)
     if clave in _imgcache:
         return _imgcache[clave]
+    # CON TOPE DE TAMAÑO, no solo vaciandose al cambiar el tema.
+    #
+    # Guardaba una superficie escalada por cada caratula vista y solo se
+    # vaciaba al cambiar de tema o de tamaño de casilla. Con una biblioteca
+    # grande son cientos de superficies vivas a la vez.
+    if len(_imgcache) > 120:
+        _imgcache.clear()
     if not path or not os.path.isfile(path):
         _imgcache[clave] = None
         return None
@@ -1793,6 +2666,90 @@ def run_session():
     # asi que run_session tiene que declararlo tambien o quedaria como local
     global TXT, shift, tr_r, tr_c
 
+    if MODE == 'ver':
+        # Visor de un fichero de texto, con scroll de verdad.
+        #
+        # El registro se enseñaba con zenity (una ventana de escritorio que en
+        # el modo Juego ni se ve) o, si no habia, metiendo 60 lineas como
+        # opciones de un menu: se cortaban por la derecha y no habia forma de
+        # leer una linea larga entera.
+        #
+        # ARG4 = fichero a mostrar
+        try:
+            with open(ARG4, encoding='utf-8', errors='replace') as fh:
+                crudo = fh.read().split('\n')
+        except OSError as e:
+            crudo = ['No se pudo abrir el fichero:', str(e)]
+        # Se parten las lineas largas al ancho de la pantalla: es la unica
+        # forma de leerlas enteras sin scroll horizontal, que con el mando
+        # seria un suplicio.
+        ancho = W - FS(40)
+        lineas = []
+        for l in crudo:
+            l = l.rstrip()
+            if not l:
+                lineas.append('')
+                continue
+            lineas.extend(wrap_title(l, f_sm, ancho, 40) or [''])
+        if not lineas:
+            lineas = ['(vacio)']
+        alto_l = f_sm.get_height() + FS(3)
+        visibles = max(4, (H - HEAD - FS(70)) // alto_l)
+        # se abre AL FINAL: lo que acaba de pasar es lo que interesa
+        pos = max(0, len(lineas) - visibles)
+        clockV = pygame.time.Clock()
+        while True:
+            for ev in eventos():
+                if ev.type == pygame.QUIT:
+                    safe_quit(1)
+                if ev.type != pygame.KEYDOWN:
+                    continue
+                k = ev.key
+                if k in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                    safe_quit(0)
+                elif k in (pygame.K_RETURN, pygame.K_SPACE):
+                    safe_quit(0)
+                elif k == pygame.K_UP:
+                    pos = max(0, pos - 1)
+                elif k == pygame.K_DOWN:
+                    pos = min(max(0, len(lineas) - visibles), pos + 1)
+                elif k == pygame.K_PAGEUP:
+                    pos = max(0, pos - visibles)
+                elif k == pygame.K_PAGEDOWN:
+                    pos = min(max(0, len(lineas) - visibles), pos + visibles)
+                elif k == pygame.K_HOME:
+                    pos = 0
+                elif k == pygame.K_END:
+                    pos = max(0, len(lineas) - visibles)
+            if BGSURF is not None:
+                screen.blit(BGSURF, (0, 0))
+            else:
+                screen.fill(TH['bg'])
+            draw_header()
+            y = HEAD + FS(10)
+            for l in lineas[pos:pos + visibles]:
+                col = FG
+                # un poco de color para lo que importa
+                if '[!]' in l or 'ERROR' in l or 'AVISO' in l or 'WARN' in l:
+                    col = TH.get('acc2', ACC)
+                elif l.lstrip().startswith('[+]'):
+                    col = ACC
+                elif l.lstrip().startswith('['):
+                    col = DIM
+                screen.blit(rtext(f_sm, l, col), (FS(20), y))
+                y += alto_l
+            # cuanto queda, y como moverse
+            total = max(1, len(lineas))
+            pie = L('%d-%d de %d   |   arriba/abajo, L1/R1 pagina, B salir') % (
+                pos + 1, min(pos + visibles, total), total)
+            sf = rtext(f_sm, pie, DIM)
+            screen.blit(sf, ((W - sf.get_width()) // 2, H - sf.get_height() - FS(14)))
+            if SCANSURF is not None:
+                screen.blit(SCANSURF, (0, 0))
+            pygame.display.flip()
+            grabar_fotograma()
+            clockV.tick(30)
+
     if MODE == 'canvas':
         # Fondo persistente para el MODO JUEGO de SteamOS.
         #
@@ -1902,7 +2859,9 @@ def run_session():
     if MODE == 'text':
         # Editor de una linea con teclado en pantalla: para argumentos, DLL
         # overrides, notas... Se maneja con el mando (o el teclado real).
-        TXT = ARG4 if len(sys.argv) > 4 else ''
+        # El valor de partida. Nunca el nombre del fichero de salida: si no
+        # hay valor, se empieza en blanco.
+        TXT = ARG4 if (len(sys.argv) > 4 and ARG4 != OUTFILE) else ''
         TROWS = ['1234567890-=',
                  'qwertyuiop[]',
                  'asdfghjkl;\'',
@@ -1916,6 +2875,20 @@ def run_session():
 
         def tcols(r):
             return len(TACT) if r == len(TROWS) else len(TROWS[r])
+
+        def col_al_entrar(fila, col):
+            """En que columna cae el puntero al llegar a una fila.
+
+            En la fila de acciones se va a ACEPTAR, no a la columna que
+            tuvieras. Antes se conservaba la columna y, viniendo de la derecha
+            del teclado, caia en CANCELAR: justo lo contrario de lo que uno
+            quiere despues de escribir algo.
+            """
+            if fila == len(TROWS):
+                for k, a in enumerate(TACT):
+                    if a in ('ACEPTAR', 'ACCEPT'):
+                        return k
+            return min(col, tcols(fila) - 1)
 
         def t_press():
             global TXT, shift, tr_r, tr_c
@@ -1945,9 +2918,11 @@ def run_session():
                 if time.time() - t_open2 < 0.35:
                     continue
                 if ev.key == pygame.K_UP:
-                    tr_r = (tr_r - 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+                    tr_r = (tr_r - 1) % (len(TROWS) + 1)
+                    tr_c = col_al_entrar(tr_r, tr_c)
                 elif ev.key == pygame.K_DOWN:
-                    tr_r = (tr_r + 1) % (len(TROWS) + 1); tr_c = min(tr_c, tcols(tr_r) - 1)
+                    tr_r = (tr_r + 1) % (len(TROWS) + 1)
+                    tr_c = col_al_entrar(tr_r, tr_c)
                 elif ev.key == pygame.K_LEFT:
                     tr_c = (tr_c - 1) % tcols(tr_r)
                 elif ev.key == pygame.K_RIGHT:
@@ -2031,7 +3006,19 @@ def run_session():
 
     _last_key = [None, 0.0]
     DEBOUNCE = 0.08
+    # Se limpia al empezar la sesion: en modo servidor el proceso no muere
+    # entre menu y menu, y una peticion suelta -pulsar Select justo mientras
+    # se dibuja el siguiente- cerraria el menu recien abierto.
+    home_req[0] = False
     while running:
+        # ¿Se pidio volver al menu principal? Se mira aqui, antes de los
+        # eventos: no depende de ninguna tecla y funciona en cualquier modo.
+        if home_req[0]:
+            home_req[0] = False
+            write_out('WPACT:HOME|')
+            running = False
+            done = True
+            break
         for ev in eventos():
             if ev.type == pygame.QUIT:
                 running = False
@@ -2082,9 +3069,15 @@ def run_session():
                         if MODE == 'grid': grid_move(0, 1)
                         else: move(1)
                     elif ev.key == pygame.K_LEFT:
+                        # En la rejilla, moverse de columna. En la LISTA,
+                        # izquierda y derecha no hacian nada: se usan para
+                        # saltar una pantalla entera, que con bibliotecas de
+                        # cientos de juegos ahorra muchisimo desplazamiento.
                         if MODE == 'grid': grid_move(-1, 0)
+                        else: pagina(-1)
                     elif ev.key == pygame.K_RIGHT:
                         if MODE == 'grid': grid_move(1, 0)
+                        else: pagina(1)
                     elif ev.key == pygame.K_TAB:
                         # Y del mando (o Tab): abrir teclado de busqueda
                         if ready() and MODE != 'check':
@@ -2318,6 +3311,13 @@ def run_session():
 #   <carpeta>/stop     si aparece, el servidor termina
 # ---------------------------------------------------------------------------
 
+_IDLE_PASOS = 10          # tamaños pre-renderizados de cada letra
+_idle_letras = None
+_idle_key = None
+_idle_alto = 0
+_idle_ancho = 0
+
+
 def draw_idle(status=''):
     # Pantalla de reposo entre peticiones: la ventana sigue viva.
     # Se vacia la cola de eventos para que las pulsaciones hechas mientras
@@ -2330,17 +3330,103 @@ def draw_idle(status=''):
         screen.blit(BGSURF, (0, 0))
     else:
         screen.fill(TH['bg'])
-    big = pygame.font.Font(None, max(48, W // 14))
-    brand = marca_surface(big)
-    try:
-        bh = brand.get_height()
-    except Exception:
-        bh = FS(96)
+    # LA MARCA SE PREPARA UNA VEZ, NO QUINCE VECES POR SEGUNDO.
+    #
+    # Esto creaba una fuente nueva y volvia a componer "WPROTON" en CADA
+    # fotograma del reposo. Crear una fuente no es barato, y el reposo corre a
+    # 15 fps: eran 15 fuentes por segundo para dibujar siempre lo mismo.
+    #
+    # Guardada, la animacion de abajo sale practicamente gratis: solo cambia la
+    # transparencia de una imagen que ya esta hecha.
+    global _idle_letras, _idle_key, _idle_alto, _idle_ancho
+    clave = (W, H, TH.get('bg'), ACC)
+    if _idle_letras is None or _idle_key != clave:
+        # CADA LETRA POR SEPARADO, Y EN DOS TONOS.
+        #
+        # Se preparan una sola vez: siete letras en su color y siete
+        # encendidas. Catorce imagenes pequeñas que despues solo se colocan.
+        # Mover algo ya dibujado es barato; recomponer texto en cada fotograma
+        # no lo seria.
+        # CADA LETRA EN VARIOS TAMAÑOS, HECHOS DE UNA VEZ.
+        #
+        # El zoom se pidio en lugar del salto. Escalar en cada fotograma seria
+        # trabajo de verdad -siete escalados quince veces por segundo-, asi que
+        # se preparan los tamaños de antemano y por fotograma solo se ELIGE
+        # cual toca y se coloca. Sigue sin dibujarse nada nuevo.
+        #
+        # Diez pasos entre el tamaño normal y un 35% mas: con menos se ve a
+        # saltos, y con muchos mas solo se gasta memoria.
+        _base_px = max(48, W // 14)
+        _idle_letras = []
+        for _i, _c in enumerate('WPROTON'):
+            _col = MORADO_W if _i == 0 else CIAN_PROTON
+            _pasos = []
+            for _k in range(_IDLE_PASOS):
+                _esc = 1.0 + 0.35 * (_k / float(_IDLE_PASOS - 1))
+                _fk = pygame.font.Font(None, max(8, int(_base_px * _esc)))
+                # UN SOLO TONO. Antes se guardaba tambien una version clara
+                # para encender la letra que crecia, y se quito: distraia del
+                # movimiento y son la mitad de imagenes.
+                _pasos.append(_fk.render(_c, True, _col))
+            _idle_letras.append(_pasos)
+        # El ANCHO Y EL ALTO son los del tamaño normal: la palabra ocupa
+        # siempre lo mismo aunque una letra este agrandada, o el texto entero
+        # se moveria a cada fotograma.
+        _idle_ancho = sum(_p[0].get_width() for _p in _idle_letras)
+        _idle_alto = max(_p[0].get_height() for _p in _idle_letras)
+        _idle_key = clave
+    bh = _idle_alto
     by = H // 2 - bh
-    screen.blit(brand, ((W - brand.get_width()) // 2, by))
+
+    # LA ANIMACION: una onda de zoom que recorre las letras.
+    #
+    # Cada letra se agranda y vuelve a su tamaño por turnos. Los tamaños estan
+    # hechos de antemano, asi que por fotograma solo se elige cual toca y se
+    # coloca: no se escala ni se dibuja texto nuevo.
+    #
+    # SIN ENCENDER LA LETRA. Se probo iluminar la que crecia y distraia del
+    # movimiento, que es lo que se queria ver.
+    #
+    # Ciclo de 2,6 s con una pausa al final. Empezo en 1,8 y resulto algo
+    # rapido: la onda pasaba antes de que la vista la siguiera.
+    # EL RITMO: separacion entre letras y cuanto dura el paso por cada una.
+    #
+    # Antes iba apelotonado -hasta CUATRO letras moviendose a la vez- y ademas
+    # el recorrido terminaba en el 112% del ciclo: la onda se solapaba con su
+    # propio reinicio y la ultima letra se quedaba a medias.
+    #
+    # Con 1/10 de separacion y una ventana de 0,22 se mueven DOS letras como
+    # mucho, la onda acaba en el 82% y queda un 18% de pausa antes de volver a
+    # empezar. Asi se distingue el paso de una letra a la siguiente.
+    _ahora = time.time()
+    _x = (W - _idle_ancho) // 2
+    for _i, _pasos in enumerate(_idle_letras):
+        _u = ((_ahora % 2.6) / 2.6 - _i / (len(_idle_letras) + 3.0)) / 0.22
+        _lift = math.sin(_u * math.pi) if 0 < _u < 1 else 0.0
+        _k = int(round(_lift * (_IDLE_PASOS - 1)))
+        _sn = _pasos[max(0, min(_IDLE_PASOS - 1, _k))]
+        _w0 = _pasos[0].get_width()
+        _h0 = _pasos[0].get_height()
+        # Crece desde su CENTRO: si creciera desde la esquina, la letra se
+        # iria hacia abajo y a la derecha en vez de agrandarse en su sitio.
+        screen.blit(_sn, (_x - (_sn.get_width() - _w0) // 2,
+                          by - (_sn.get_height() - _h0) // 2))
+        _x += _w0
+
     if status:
         sf = rtext(f_it, status, FG)
         screen.blit(sf, ((W - sf.get_width()) // 2, by + bh + FS(24)))
+        # Y tres puntos que van apareciendo, para que se vea que sigue vivo.
+        # El texto se cachea por contenido, asi que son tres cadenas distintas
+        # y no un render nuevo cada vez.
+        try:
+            n_pts = int(time.time() * 2) % 4
+            if n_pts:
+                pf = rtext(f_it, '.' * n_pts, FG)
+                screen.blit(pf, ((W + sf.get_width()) // 2 + FS(6),
+                                 by + bh + FS(24)))
+        except Exception:
+            pass
     if SCANSURF is not None:
         screen.blit(SCANSURF, (0, 0))
     try:
@@ -2404,11 +3490,34 @@ def serve(dirpath):
                 # sin menu: solo actualizar el texto del reposo
                 status = titulo
             elif modo:
-                set_request(modo, titulo, salida, arg4 or None,
+                # OJO con "arg4 or None": una cadena VACIA es falsa, asi que
+                # se convertia en None y ARG4 acababa siendo la ruta del
+                # fichero temporal. En el editor de texto eso salia escrito en
+                # el campo: habia que borrar "/tmp/tmp.XXXX" a mano antes de
+                # poder escribir. Se distingue "vacio" de "no hay".
+                set_request(modo, titulo, salida,
+                            arg4 if arg4 != '' else None,
                             kind or 'file', ax == '1', manif or None,
                             presel or None, favf or None, aspec or None)
+                # CUANTO TARDA EN APARECER EL MENU.
+                #
+                # Es el numero que faltaba. Los tiempos que medi­a WProton
+                # incluyen la espera del usuario, asi que no dicen nada sobre
+                # si una transicion es lenta. Este mide desde que llega la
+                # peticion hasta que el menu esta listo para dibujarse, que es
+                # lo unico que podemos mejorar.
+                #
+                # Se escribe en la salida de errores, que va al registro de
+                # WProton, y solo con DIAG_TIEMPOS=1: en el uso normal seria
+                # una linea por menu y solo ensucia.
+                _t_prep = time.time()
                 load_request_data()
                 compute_layout()
+                if os.environ.get('DIAG_TIEMPOS') == '1':
+                    sys.stderr.write(
+                        'menu_pygame: preparado en %d ms | %s\n'
+                        % ((time.time() - _t_prep) * 1000, caches_resumen()))
+                    sys.stderr.flush()
                 try:
                     rc = run_session()
                 except SessionEnd as e:
@@ -2469,7 +3578,7 @@ def dibujar_logo(sup, ancho, alto, con_lema=True):
     y2 = y + marca.get_height() + max(4, alto // 40)
     corte = x + f.size('W')[0]
     pygame.draw.line(sup, MORADO_W, (x, y2), (corte, y2), lw)
-    pygame.draw.line(sup, ACC, (corte, y2), (x + total, y2), lw)
+    pygame.draw.line(sup, CIAN_PROTON, (corte, y2), (x + total, y2), lw)
     if con_lema and alto > 220:
         f2 = pygame.font.Font(None, max(12, int(cuerpo * 0.26)))
         lema = f2.render('Juegos de Windows en Linux', True, DIM)
@@ -2558,6 +3667,44 @@ def ocultar_cursor():
         sys.stderr.write('menu_pygame: no se pudo ocultar el cursor (%s)\n' % e)
         return None
 
+def reloj_salida(desde, pulsado, soltado, ahora, segundos):
+    """Decide si toca cerrar el juego. Devuelve (nuevo_desde, cerrar).
+
+    ESTA LOGICA VIVE APARTE PARA PODER PROBARLA. El fallo que arregla no se
+    veia leyendo el bucle: solo aparece con una secuencia de pulsaciones y
+    soltadas a un ritmo concreto, y eso hay que EJECUTARLO para verlo.
+
+    - desde    cuando empezo la pulsacion que se esta midiendo (None si no hay)
+    - pulsado  si la combinacion esta pulsada AHORA
+    - soltado  si ha llegado una SOLTADA desde la ultima vez que se pregunto
+    - ahora    el reloj
+    - segundos cuanto hay que mantener
+
+    LA SOLTADA MANDA SOBRE EL ESTADO. El guardian mira el estado cada 50 ms;
+    si entre dos miradas cabe una soltada Y la siguiente pulsacion, el boton
+    parece seguir pulsado y el reloj no se reiniciaba: varias pulsaciones
+    cortas se sumaban como una larga y el juego se cerraba solo.
+
+    CUANTO PASABA, MEDIDO. Depende MUCHO de "segundos": cuanto mas corto, mas
+    facil es que ninguna mirada caiga en un hueco.
+
+        segundos=5, pulsar 0,30 s / soltar 0,02 s ->  0,1% de las tandas
+        segundos=2, pulsar 0,10 s / soltar 0,02 s ->  0,8%
+        segundos=2, pulsar 0,30 s / soltar 0,02 s -> 37%
+
+    El registro de un tester con PAD_EXIT_SEGUNDOS=2 mostraba catorce
+    pulsaciones seguidas de 0,1 s. Con ese ajuste esto no era "a veces": era
+    una de cada tres. Con la soltada atendida como evento, cero.
+    """
+    if soltado:
+        desde = None
+    if not pulsado:
+        return (None, False)
+    if desde is None:
+        return (ahora, False)
+    return (desde, ahora - desde >= segundos)
+
+
 def guardia(marca, segundos=5.0, combo='select'):
     # Vigila los mandos DURANTE la partida esperando la combinacion de salida.
     #
@@ -2605,6 +3752,9 @@ def guardia(marca, segundos=5.0, combo='select'):
         _cursor = None
     _t0 = time.time()
     _vistos = [0]
+    _btn_log = [0]      # botones ya apuntados (NO lecturas)
+    _desde = {}         # boton de la combinacion -> cuando se pulso
+    _soltado_req = [False]   # ha llegado una soltada de la combinacion
     while True:
         ahora = time.time()
         if ahora - ultimo_escaneo > 3:
@@ -2627,29 +3777,105 @@ def guardia(marca, segundos=5.0, combo='select'):
             time.sleep(1.0)
             continue
         for p, fd in list(fds.items()):
+            # SE VACIA LA COLA ENTERA, NO 32 EVENTOS.
+            #
+            # Antes se leian como mucho 32 eventos por vuelta (SZ*32) y se
+            # dormia 50 ms: 640 eventos por segundo como mucho. Los dos
+            # sticks de un mando pueden pasar de eso mientras se juega, y
+            # entonces la cola crece.
+            #
+            # HONESTIDAD SOBRE ESTE CAMBIO: se hizo buscando por que pulsar
+            # Select varias veces cerraba el juego, y NO se ha demostrado que
+            # sea la causa. Simulando el retraso de la cola, la soltada se
+            # recupera en una decima de segundo, muy lejos de los 5 que hacen
+            # falta para cerrar. Se deja porque leer de par en par es
+            # correcto igualmente y evita que el nucleo tenga que tirar
+            # eventos, pero la causa del fallo sigue sin estar probada.
+            datos = b''
             try:
-                datos = os.read(fd, SZ * 32)
+                while True:
+                    _trozo = os.read(fd, SZ * 256)
+                    if not _trozo:
+                        break
+                    datos += _trozo
+                    if len(_trozo) < SZ * 256:
+                        break
             except (BlockingIOError, OSError):
-                continue
+                pass
             if not datos:
                 continue
             _vistos[0] += 1
             aqui = pulsados.setdefault(p, set())
             for i in range(0, len(datos) - SZ + 1, SZ):
                 _s, _us, t, c, v = struct.unpack(FMT, datos[i:i+SZ])
+                # SI EL NUCLEO HA TIRADO EVENTOS, lo que creemos saber de este
+                # mando ya no vale: puede faltar justo una soltada. Se olvida
+                # lo pulsado y se empieza de cero, que es mucho mejor que
+                # cerrar el juego por un boton que nadie esta tocando.
+                if t == 0 and c == 3:      # EV_SYN / SYN_DROPPED
+                    aqui.clear()
+                    _desde.clear()
+                    sys.stderr.write('menu_pygame: guardia: el nucleo tiro '
+                                     'eventos de %s; se olvida lo pulsado\n' % p)
+                    continue
                 if t != 1:            # EV_KEY
                     continue
                 if v == 1:
                     aqui.add(c)
-                    # Los primeros botones se apuntan con su codigo: asi se
-                    # ve si el guardia recibe algo y si los codigos son los
-                    # esperados en ESTE mando. Sin esto habia que adivinar.
-                    if _vistos[0] <= 12:
+                    # Los primeros BOTONES se apuntan con su codigo, para ver
+                    # si llegan y si son los que espera la combinacion.
+                    #
+                    # OJO: antes esto miraba _vistos, que cuenta LECTURAS, no
+                    # botones. Los ejes de los sticks generan lecturas sin
+                    # parar, asi que se comian el cupo de 12 antes de que
+                    # nadie pulsara nada y no se registraba ni un boton. En
+                    # los registros de un tester no habia ni una linea.
+                    if _btn_log[0] < 12:
+                        _btn_log[0] += 1
                         sys.stderr.write('menu_pygame: guardia: boton %d en %s '
                                          '(la combinacion espera %s)\n'
                                          % (c, p, list(REQ)))
+                    if c in REQ:
+                        # SI YA ESTABA PULSADO, NO SE REINICIA EL RELOJ, pero
+                        # se apunta: dos pulsaciones seguidas sin soltada por
+                        # medio son la firma de una soltada perdida, que es lo
+                        # que hay que poder ver en el registro.
+                        if c in _desde:
+                            sys.stderr.write('menu_pygame: guardia: %d PULSADO '
+                                             'otra vez SIN soltada previa '
+                                             '(llevaba %.1fs)\n'
+                                             % (c, time.time() - _desde[c]))
+                        else:
+                            _desde[c] = time.time()
+                            sys.stderr.write('menu_pygame: guardia: %d PULSADO '
+                                             '(hay que mantenerlo %.0fs)\n'
+                                             % (c, segundos))
                 elif v == 0:
                     aqui.discard(c)
+                    # Cuanto se mantuvo. Si sale "soltado a los 4.6s" cuando
+                    # hacen falta 5, el problema es el tiempo y no el codigo.
+                    if c in REQ:
+                        # AQUI ESTABA EL FALLO.
+                        #
+                        # El reloj de "mantenido" se reiniciaba mirando el
+                        # ESTADO cada 50 ms. Si entre dos miradas cabia una
+                        # soltada Y la siguiente pulsacion, al mirar el boton
+                        # estaba pulsado y el reloj NO se reiniciaba: varias
+                        # pulsaciones cortas se sumaban como una larga y el
+                        # juego se cerraba solo.
+                        #
+                        # Medido con el ritmo que sale al aporrear el boton
+                        # -pulsar 0,30 s y soltar 0,02 s-: pasaba el 0,8% de
+                        # las tandas. De ahi el "a veces" del tester.
+                        #
+                        # La soltada es un EVENTO y se atiende como tal: en
+                        # cuanto llega, el reloj a cero. No importa lo que
+                        # parezca el estado despues.
+                        _soltado_req[0] = True
+                        if c in _desde:
+                            sys.stderr.write('menu_pygame: guardia: %d soltado a '
+                                             'los %.1fs\n' % (c, time.time() - _desde[c]))
+                            del _desde[c]
         # Si a los 60 segundos no ha llegado NI UN evento, es que no se puede
         # leer el mando (permisos), no que el usuario no pulse nada.
         if _vistos[0] == 0 and 'mudo' not in avisado and time.time() - _t0 > 60:
@@ -2664,29 +3890,33 @@ def guardia(marca, segundos=5.0, combo='select'):
             if all(b in aqui for b in REQ):
                 cual = p
                 break
-        if cual is not None:
-            if desde is None:
-                desde = time.time()
-            elif time.time() - desde >= segundos:
-                try:
-                    with open(marca, 'w') as fh:
-                        fh.write('salir\n')
-                except Exception:
-                    pass
-                sys.stderr.write('menu_pygame: %s mantenido en %s -> cerrar el juego\n'
-                                 % (nombre_combo, cual))
-                return 0
-        else:
+        desde, _cerrar = reloj_salida(desde, cual is not None,
+                                      _soltado_req[0], time.time(), segundos)
+        _soltado_req[0] = False
+        # Aqui hubo un parche de "boton encallado" -descartar una pulsacion
+        # que durase mas de cuatro veces el tiempo de salida-. Se ha quitado
+        # al encontrar la causa de verdad: tapaba el sintoma y ademas habria
+        # impedido cerrar el juego a quien mantuviera Select un rato largo,
+        # que es justo lo que hay que hacer.
+        if _cerrar:
+            try:
+                with open(marca, 'w') as fh:
+                    fh.write('salir\n')
+            except Exception:
+                pass
+            sys.stderr.write('menu_pygame: %s mantenido en %s -> cerrar el juego\n'
+                             % (nombre_combo, cual))
+            return 0
+        if cual is None:
             # Diagnostico: si se mantiene algo mucho rato y NO es la
             # combinacion, se apunta su codigo. Asi, si en algun mando los
             # botones no son los estandar, el registro lo dice.
-            if desde is not None and time.time() - desde >= segundos:
-                for p, aqui in pulsados.items():
-                    if aqui:
-                        sys.stderr.write('menu_pygame: guardia: %s mantiene %s '
-                                         '(la combinacion espera %s)\n'
-                                         % (p, sorted(aqui), list(REQ)))
-            desde = None
+            for p, aqui in pulsados.items():
+                if aqui and 'mantiene_%s' % p not in avisado:
+                    avisado.add('mantiene_%s' % p)
+                    sys.stderr.write('menu_pygame: guardia: %s mantiene %s '
+                                     '(la combinacion espera %s)\n'
+                                     % (p, sorted(aqui), list(REQ)))
         time.sleep(0.05)
 
 if sys.argv[1] == 'guardia':

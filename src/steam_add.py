@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# WProton - accesos directos de Steam
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # WPROTON_STEAMADD_V1 - anade un acceso directo no-Steam a shortcuts.vdf
 # uso: steam_add.py <shortcuts.vdf> <nombre> <exe> <startdir> <launchopts> <icono>
 import sys, os, struct, zlib

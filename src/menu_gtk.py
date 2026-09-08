@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# WProton - menus GTK
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 # Selector de WProton con foco garantizado en la lista (navegable con mando)
 # Uso: menu_gtk.py <list|check> <titulo> <fichero_salida> <fichero_opciones>
 #   list : una opción por linea; al elegir se escribe en salida
