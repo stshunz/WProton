@@ -106,6 +106,15 @@ generar() {
                 cat "$f" >> "$tmp"
                 n=$((n+1))
                 info "incluido $nombre ($(wc -l < "$f") líneas, marca $marca)" ;;
+            "@@INCLUIR_DEFECTOS@@")
+                # Los valores por defecto de bash salen del esquema de
+                # perfil.py, no de una copia escrita a mano.
+                f="$SRC/perfil.py"
+                [ -f "$f" ] || { rojo "Falta $f"; exit 1; }
+                "${PYTHON:-python3}" "$f" defectos-bash >> "$tmp" \
+                    || { rojo "perfil.py defectos-bash fallo"; exit 1; }
+                n=$((n+1))
+                info "incluido profile_defaults() generado desde perfil.py" ;;
             "@@INCLUIR_LANG@@")
                 f="$SRC/lang/en.json"
                 [ -f "$f" ] || { rojo "Falta $f"; exit 1; }
@@ -122,8 +131,9 @@ PY
         esac
     done < "$BASE"
 
-    # 7 con mando_virtual.py, que va en su propio fichero como el mapeador.
-    [ "$n" -eq 7 ] || { rojo "Se esperaban 7 inserciones y hubo $n"; exit 1; }
+    # 12: los 7 de antes, mas perfil.py, su profile_defaults() generado,
+    # detectar.py, dlls.py, disco.py, teclas.py, teknoparrot.py, ficha.py, procesos.py y menu_qt.py.
+    [ "$n" -eq 17 ] || { rojo "Se esperaban 17 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -142,7 +152,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py procesos.py menu_qt.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'
@@ -188,7 +198,16 @@ for var, fin, dest in (('MENU_PYGAME_PY','PGEOF','menu_pygame.py'),
                        ('MANDO_VIRTUAL_PY','MVIROF','mando_virtual.py'),
                        ('STEAM_ADD_PY','SAEOF','steam_add.py'),
                        ('MENU_GTK_PY','GTKEOF','menu_gtk.py'),
-                       ('BIBLIOTECA_PY','BIBEOF','biblioteca.py')):
+                       ('BIBLIOTECA_PY','BIBEOF','biblioteca.py'),
+                       ('PERFIL_PY','PERFEOF','perfil.py'),
+                       ('DETECTAR_PY','DETEOF','detectar.py'),
+                       ('DLLS_PY','DLLEOF','dlls.py'),
+                       ('DISCO_PY','DISEOF','disco.py'),
+                       ('TECLAS_PY','TECEOF','teclas.py'),
+                       ('TEKNOPARROT_PY','TKPEOF','teknoparrot.py'),
+                       ('FICHA_PY','FICEOF','ficha.py'),
+                       ('PROCESOS_PY','PROEOF','procesos.py'),
+                       ('MENU_QT_PY','QTEOF','menu_qt.py')):
     st = s.index('cat > "$%s" <<' % var)
     ini = s.index('\n', st) + 1
     en = s.index('\n%s\n' % fin, st)
