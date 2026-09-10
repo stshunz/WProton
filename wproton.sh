@@ -46,7 +46,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.65"
+WPROTON_VERSION="1.66"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -9073,10 +9073,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py 4ec377b979b4" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py da22b8543e9c" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py 4ec377b979b4
+# WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
 #
@@ -12189,10 +12189,58 @@ class Pantalla(QtWidgets.QWidget):
         self.saltar(paso)
 
     def saltar(self, paso):
+        """Salta una pagina dejando el puntero EN LA MISMA FILA.
+
+        Antes esto solo movia pet.sel y dejaba que el pintado recolocara el
+        desplazamiento. Ese ajuste solo garantiza que la seleccion se VEA, asi
+        que al bajar de pagina la dejaba pegada al borde de abajo: pasabas
+        pagina y el puntero se quedaba en la ultima fila, una y otra vez.
+
+        El motor pygame ya tenia esto resuelto -mismo problema, mismo arreglo-
+        y aqui se hace igual: se mueven la seleccion Y el desplazamiento
+        juntos, de forma que si estabas en la tercera fila sigues en la tercera
+        fila de la pagina siguiente.
+
+        En los extremos no se da la vuelta: se llega al principio o al final y
+        el puntero se queda donde pueda, que es lo que uno espera al pasar
+        paginas.
+        """
         pet = self.pet
         if not pet.view:
             return
-        pet.sel = max(0, min(len(pet.view) - 1, pet.sel + paso))
+        n = len(pet.view)
+
+        # EN REJILLA EL DESPLAZAMIENTO CUENTA FILAS, NO ELEMENTOS.
+        #
+        # pintar_rejilla usa pet.scroll como numero de FILA y pintar_lista lo
+        # usa como indice de ELEMENTO. Mezclarlos manda la rejilla a un sitio
+        # que no existe, asi que cada modo se ajusta con su unidad.
+        if pet.modo == 'grid':
+            cols = max(1, self.columnas())
+            filas_vis = max(1, self.filas_rejilla())
+            fila_en_pantalla = (pet.sel // cols) - pet.scroll
+            nuevo = max(0, min(n - 1, pet.sel + paso * cols))
+            pet.sel = nuevo if nuevo != pet.sel else (0 if paso < 0 else n - 1)
+            filas_tot = (n + cols - 1) // cols
+            pet.scroll = max(0, min(max(0, filas_tot - filas_vis),
+                                    (pet.sel // cols) - fila_en_pantalla))
+            self.update()
+            return
+
+        v = max(1, self.vis())
+        fila = pet.sel - pet.scroll          # en que fila de la pantalla estoy
+        nuevo = max(0, min(n - 1, pet.sel + paso))
+        if nuevo == pet.sel:                 # ya estabamos en el extremo
+            pet.sel = 0 if paso < 0 else n - 1
+        else:
+            pet.sel = nuevo
+        # El desplazamiento se recoloca para dejar el puntero en la MISMA fila,
+        # y despues se ajusta a los limites de la lista.
+        pet.scroll = max(0, min(max(0, n - v), pet.sel - fila))
+        if pet.sel < pet.scroll:
+            pet.scroll = pet.sel
+        elif pet.sel >= pet.scroll + v:
+            pet.scroll = pet.sel - v + 1
         self.update()
 
     def aceptar(self):
@@ -13496,6 +13544,23 @@ gh_tag_assets() {
         | filter_assets | grep -iE '\.(tar\.(gz|xz|zst)|tgz|zip|7z)$'
 }
 
+ge_serie_de_lista() {
+    # El numero de serie de cada etiqueta que llega por la entrada.
+    #
+    # Los dos formatos: "GE-Proton7-55" -> 7 ; "6.21-GE-2" -> 6
+    sed -E -e 's/^GE-Proton([0-9]+)-.*/\1/' -e 's/^([0-9]+)\..*/\1/'
+}
+
+ge_serie_y_tag() {
+    # "serie<espacio>etiqueta" por cada etiqueta de la entrada, para poder
+    # ordenar por serie sin perder el nombre original.
+    local t
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        printf '%s %s\n' "$(printf '%s\n' "$t" | ge_serie_de_lista)" "$t"
+    done
+}
+
 ge_tags_elegir() {
     # De la lista CRUDA de etiquetas (por la entrada), las que se ofrecen.
     #
@@ -13515,20 +13580,55 @@ ge_tags_elegir() {
     # testers- y bajarla a mano no deberia hacer falta.
     local todas; todas="$(cat)"
     [ -n "$todas" ] || return 1
-    # Las cuatro series mas nuevas, por numero.
+
+    # DOS ESQUEMAS DE NOMBRE, no uno.
+    #
+    # GloriousEggroll cambio el nombre de las etiquetas en la serie 7:
+    #
+    #   serie 7 y siguientes:  GE-Proton7-55, GE-Proton11-6
+    #   serie 6 y anteriores:  6.21-GE-2, 6.20-GE-1, 4.6-GE-2
+    #
+    # O SEA QUE NO EXISTE NINGUN "GE-Proton6-*". El filtro solo aceptaba el
+    # formato nuevo, asi que la serie 6 entera quedaba fuera y no habia forma
+    # de bajarla desde aqui. Y poner "6" en la lista de series completas no
+    # servia de nada, porque ninguna etiqueta casaba.
+    local _re_dos='^(GE-Proton[0-9]+-[0-9]+|[0-9]+\.[0-9]+-GE-[0-9]+)$'
+    local validas
+    validas="$(printf '%s\n' "$todas" | grep -E "$_re_dos")"
+    [ -n "$validas" ] || return 1
+
+    # Las cuatro series mas nuevas, por numero (en los dos formatos).
     local series
-    series="$(printf '%s\n' "$todas" | grep -E '^GE-Proton[0-9]+-[0-9]+$' \
-        | sed -E 's/^GE-Proton([0-9]+)-.*/\1/' | sort -n | uniq | tail -n4)"
+    series="$(printf '%s\n' "$validas" | ge_serie_de_lista | sort -n | uniq | tail -n4)"
+    # MAS LAS QUE SE PIDEN POR NOMBRE, aunque ya sean viejas.
+    #
+    # "las cuatro mas nuevas" es una regla que envejece: con la 11 en la calle
+    # deja fuera la 6 entera, y de esa solo aparecia su ultima version. La
+    # serie 6 la piden juegos antiguos y bastante arcade, y es justo donde
+    # importa poder probar version por version, porque la que funciona no
+    # siempre es la ultima de la serie.
+    #
+    # Se ponen por numero y no por posicion para que no se caigan solas cuando
+    # salga la serie 12.
+    #
+    # Se pide la 6 y la 7. La 7 porque al ofrecer la 6 entera quedaba coja: con
+    # la 11 en la calle, "las cuatro mas nuevas" son 8-11, asi que se podian
+    # bajar todas las de la 6 y todas las de la 8, pero de la 7 solo una. Y la 7
+    # es la serie con mas versiones de todas (55).
+    series="$series ${GE_SERIES_COMPLETAS:-6 7}"
     {
         printf '%s\n' "$todas" | head -n 8
-        # La ultima de CADA serie, incluidas las viejas.
-        printf '%s\n' "$todas" | grep -E '^GE-Proton[0-9]+-[0-9]+$' | sort -V \
-            | awk '{m=$0; sub(/^GE-Proton/,"",m); sub(/-.*/,"",m); last[m]=$0}
-                   END{for (k in last) print last[k]}'
-        # Y enteras las cuatro mas nuevas.
+        # La ultima de CADA serie, en los dos formatos.
+        printf '%s\n' "$validas" | ge_serie_y_tag \
+            | sort -k1,1n -k2,2V \
+            | awk '{last[$1]=$2} END{for (k in last) print last[k]}'
+        # Y enteras las series completas (las nuevas mas las pedidas).
+        # Se filtra a numeros: un valor raro en GE_SERIES_COMPLETAS no debe
+        # colar una expresion.
         local _s
-        for _s in $series; do
-            printf '%s\n' "$todas" | grep -E "^GE-Proton${_s}-[0-9]+$"
+        for _s in $(printf '%s\n' $series | grep -E '^[0-9]+$' | sort -n | uniq); do
+            printf '%s\n' "$validas" | ge_serie_y_tag \
+                | awk -v s="$_s" '$1==s {print $2}'
         done
     } | sort -Vr | awk 'NF && !seen[$0]++'
 }
@@ -13536,13 +13636,14 @@ ge_tags_elegir() {
 ge_tags_curated() {
     # Las etiquetas de GE-Proton que se ofrecen para descargar.
     #
-    # DOS PAGINAS DE LA API. Con una sola (100 releases) no se llegaba a las
+    # TRES PAGINAS DE LA API. Con una sola (100 releases) no se llegaba a las
     # series antiguas: entre la 11, la 10 y la 9 ya se pasan de 50, y la 8
-    # quedaba cortada por la mitad. Con 200 se alcanza de sobra.
+    # quedaba cortada por la mitad. Con dos se llegaba a la 8, pero la 6 -que
+    # ahora se ofrece entera- queda mas atras todavia.
     # "all" SE INICIALIZA. Con set -u, "$all" antes de existir mata el script
     # -y aqui, ademas, en silencio: el usuario solo veria la lista vacia-.
     local all="" p
-    for p in 1 2; do
+    for p in 1 2 3; do
         all="$all$(curl -fsSL "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases?per_page=100&page=$p" \
             | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
 "
@@ -13770,7 +13871,10 @@ extract_archive() {
         *.tar.zst)      tar --zstd -xf "$1" -C "$2" ;;
         *.tar)          tar -xf  "$1" -C "$2" ;;
         *.zip)          "$PY_BIN" -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$1" "$2" ;;
-        *.7z)
+        *.7z|*.exe|*.EXE)
+            # El .exe va aqui a proposito: el instalador de ReShade es un
+            # autoextraible y 7z le saca las DLL sin ejecutarlo. Nada de
+            # correr un .exe descargado.
             if command -v 7z >/dev/null 2>&1; then 7z x -y -o"$2" "$1" >> "$LOG_FILE" 2>&1
             elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf "$1" -C "$2"
             else return 1; fi ;;
@@ -19210,7 +19314,7 @@ Bajalo a mano de:
   https://github.com/$repo/releases
 (el fichero mako-render-v*-linux.tar.xz, NO el ZIP de Decky)
 y ejecuta su instalador con:
-  MAKO_INSTALL_PREFIX=\"$MAKO_DIR\" ./Install_MAKO_Renderer"
+  tar -xJf MAKO-Renderer-v*-linux.tar.xz -C \"$MAKO_DIR\""
         return 1
     fi
     say "[+] Descargando: ${url##*/}"
@@ -19229,29 +19333,46 @@ y ejecuta su instalador con:
     tar -xJf "$pkg" -C "$tmp" 2>/dev/null || {
         ui_error "Fallo al descomprimir."; rm -rf "$tmp"; rm -f "$pkg"; return 1; }
 
-    local inst
-    inst="$(find "$tmp" -maxdepth 3 -name 'Install_MAKO_Renderer' -type f 2>/dev/null | head -1)"
-    if [ -z "$inst" ]; then
-        ui_error "El paquete no trae su instalador (Install_MAKO_Renderer)."
+    # SE COPIA EL ARBOL; NO SE USA EL INSTALADOR DEL PAQUETE.
+    #
+    # POR QUE
+    #
+    # Su instalador hace tres cosas que aqui no queremos: pone entradas en el
+    # menu de aplicaciones, abre mako-ui al terminar -que necesita Qt- y
+    # gestiona perfiles en ~/.config. Nosotros no usamos perfiles: la
+    # configuracion va entera por variables con MAKO_ENV=1 y todo vive en la
+    # carpeta portable. De lo suyo, lo unico que nos sirve es copiar ficheros.
+    #
+    # Copiar ademas es determinista y no depende de que el equipo tenga
+    # kdialog o zenity.
+    #
+    # DONDE ESTA EL ARBOL. El paquete cambia de forma entre versiones: las 2.x
+    # se extraian tal cual sobre ~/.local, y las 3.x traen el arbol en una
+    # subcarpeta junto al instalador. En vez de suponer la profundidad, se
+    # busca la carpeta de manifiestos y se sube desde ella: eso da la raiz sea
+    # cual sea la forma que traiga el paquete.
+    say "[+] Instalando en $MAKO_DIR ..."
+    local manif_pkg raiz_pkg
+    manif_pkg="$(find "$tmp" -type d -path '*/share/mako-render/vulkan/implicit_layer.d' \
+                 2>/dev/null | head -1)"
+    if [ -z "$manif_pkg" ]; then
+        ui_error "El paquete no tiene la forma esperada: no aparecen los
+manifiestos de la capa (share/mako-render/vulkan/implicit_layer.d)."
         rm -rf "$tmp"; rm -f "$pkg"; return 1
     fi
-    chmod +x "$inst" 2>/dev/null
-
-    say "[+] Instalando en $MAKO_DIR ..."
+    # de .../share/mako-render/vulkan/implicit_layer.d se suben cuatro
+    raiz_pkg="$(dirname "$(dirname "$(dirname "$(dirname "$manif_pkg")")")")"
     mkdir -p "$MAKO_DIR"
-    if ! ( cd "$(dirname "$inst")" \
-           && MAKO_INSTALL_PREFIX="$MAKO_DIR" \
-              MAKO_INSTALLER_ASSUME_YES=1 \
-              MAKO_INSTALLER_NO_LAUNCH=1 \
-              ./Install_MAKO_Renderer >> "$LOG_FILE" 2>&1 ); then
-        ui_error "El instalador de MAKO ha fallado.
-Mira el registro para el detalle."
+    # cp -a conserva permisos: los binarios de bin/ tienen que seguir siendo
+    # ejecutables. El "/." copia el CONTENIDO, no la carpeta dentro de si misma.
+    if ! cp -a "$raiz_pkg/." "$MAKO_DIR/" 2>>"$LOG_FILE"; then
+        ui_error "No se ha podido copiar el contenido del paquete."
         rm -rf "$tmp"; rm -f "$pkg"; return 1
     fi
     rm -rf "$tmp"; rm -f "$pkg"
 
     if ! mako_disponible >/dev/null; then
-        ui_error "El instalador termino pero la capa no aparece en:
+        ui_error "Se ha copiado el paquete pero la capa no aparece en:
   $MAKO_DIR"
         return 1
     fi
@@ -21070,12 +21191,28 @@ Elige otro en: Ajustes del juego -> Ejecutable
     fi
     # La version del prefijo, con el runner que HAYAS ELEGIDO.
     #
-    # Solo con prefijo INCLUIDO: es el unico que viene hecho de fuera con otra
-    # version. Los compartidos y propios los hace Proton aqui, y meterle mano
-    # a su fichero "version" es pedir problemas.
-    [ "${PREFIX_MODE:-}" = "bundled" ] && {
-        loading_say "Revisando el prefijo del juego..."
-        proton_marcar_prefijo "$rdir"; }
+    # SE MARCA SIEMPRE, no solo con prefijo incluido.
+    #
+    # Aqui decia "solo con prefijo INCLUIDO: es el unico que viene hecho de
+    # fuera con otra version; los compartidos y propios los hace Proton aqui".
+    # ESA PREMISA ES FALSA, y lo demostro un registro: el prefijo PROPIO de
+    # King of Fighters XII lo habia creado GE-Proton9-27, se cambio el runner a
+    # Proton7-38-Frankenstein, y salio esto:
+    #
+    #   Proton: Upgrading prefix from GE-Proton9-27 to Proton7-38-Frankenstein
+    #   Proton: Prefix has an invalid version?! You may want to back up user
+    #           files and delete this prefix.
+    #
+    # ...y se quedaba colgado para siempre: ni arrancaba el juego ni se cerraba.
+    # Un prefijo propio no viene "de fuera", pero SI viene hecho por OTRO
+    # runner, y eso pasa cada vez que se cambia de runner.
+    #
+    # proton_marcar_prefijo ya se sale sola si la version coincide, asi que
+    # llamarla siempre no cambia nada en el caso normal. Y no reescribe el
+    # prefijo: solo pone en su fichero "version" el nombre del runner en uso,
+    # que es lo que evita que Proton decida "actualizarlo".
+    loading_say "Revisando el prefijo del juego..."
+    proton_marcar_prefijo "$rdir"
     # Aqui y no antes: hace falta el runner resuelto y WINEPREFIX exportado.
     # EL MENSAJE DICE EL PREFIJO QUE SE ESTA MIRANDO.
     #
@@ -21084,9 +21221,20 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # enseguida si el prefijo no es el compartido-, en el registro parecia que
     # se estaban tocando las librerias de un prefijo propio, que es justo lo
     # que NO se hace nunca. Un tester lo leyo asi, con razon.
+    # CADA PASO DICE SU NOMBRE EN LA PANTALLA DE CARGA.
+    #
+    # Antes los tres pasos compartian un solo mensaje, y cuando uno se colgaba
+    # la pantalla se quedaba en "Comprobando las librerias..." sin decir cual de
+    # los tres era. Con una foto de la pantalla no habia forma de saberlo, y hay
+    # que preguntar por el registro. Ahora la pantalla ya lo dice.
     loading_say "Comprobando las librerias del prefijo $(prefix_label)..."
+    log "redist: paso 1, prefijo compartido"
     redist_base_compartido "$rdir"
+    log "redist: paso 2, prefijo de TeknoParrot"
+    loading_say "Comprobando el prefijo de TeknoParrot..."
     redist_base_teknoparrot "$rdir"
+    log "redist: paso 3, librerias apuntadas para este juego"
+    loading_say "Comprobando las librerias apuntadas para $gid..."
     # LAS LIBRERIAS DE ESTE JUEGO, SI FALTAN.
     #
     # Lo que se instala en el prefijo propio de un juego se apunta en su
@@ -23007,10 +23155,33 @@ winetricks_uno_a_uno() {
         # leer solo lo que escriba este verbo y no lo de los anteriores.
         local _desde; _desde="$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
         local _rc_v=0
+        # CON LIMITE DE TIEMPO.
+        #
+        # Sin el, un verbo que se queda esperando cuelga WProton PARA SIEMPRE:
+        # ni arranca el juego ni se cierra, y desde fuera solo se ve la pantalla
+        # de carga con el ultimo mensaje. Pasa segun el runner -depende de la
+        # version de Wine- porque hay verbos que en unas abren un dialogo y
+        # esperan, y en otras van solos.
+        #
+        # 20 minutos por verbo es de sobra: los .NET, que son los mas lentos,
+        # tardan del orden de cinco. Y si se agota NO se aborta el lanzamiento:
+        # se apunta como fallido y se sigue con el resto, igual que con
+        # cualquier otro error. Mejor un juego sin una libreria -que a lo mejor
+        # ni la usa- que un WProton colgado sin salida.
+        local _lim="${WP_WINETRICKS_TIMEOUT:-1200}"
+        local _tmo=""
+        command -v timeout >/dev/null 2>&1 && _tmo="timeout -k 10 $_lim"
         if [ "$RUNNER_KIND" = "wine" ]; then
-            WINE="$(runner_wine_bin "$rdir")" winetricks -q "$v" >> "$LOG_FILE" 2>&1 || _rc_v=$?
+            WINE="$(runner_wine_bin "$rdir")" $_tmo winetricks -q "$v" >> "$LOG_FILE" 2>&1 || _rc_v=$?
         else
-            "${RUN_CMD[@]}" winetricks -q "$v" >> "$LOG_FILE" 2>&1 || _rc_v=$?
+            $_tmo "${RUN_CMD[@]}" winetricks -q "$v" >> "$LOG_FILE" 2>&1 || _rc_v=$?
+        fi
+        # 124 es lo que devuelve timeout cuando se agota el plazo.
+        if [ "$_rc_v" = 124 ]; then
+            say "AVISO: '$v' se quedo colgado mas de $((_lim / 60)) min; se corta."
+            say "       Si ese juego lo necesita, mira el registro: puede que"
+            say "       ese verbo pida confirmacion con este runner."
+            log "winetricks '$v' agoto el plazo de ${_lim}s" WARN
         fi
         # "YA INSTALADO" NO ES UN FALLO.
         #
@@ -23247,7 +23418,7 @@ teknoparrot_prefijo_descargar() {
     # Crearlo desde cero son 15 librerias y varios .NET: entre diez y treinta
     # minutos segun la maquina, y alguna puede fallar. Bajarlo hecho es un
     # rato y ya viene probado.
-    local url="${WP_TKP_PREFIJO_URL:-https://www.mediafire.com/file/o38un5242juelms/teknoparrot.tar.gz/file}"
+    local url="${WP_TKP_PREFIJO_URL:-https://www.mediafire.com/file/8qsnelttsfpfnql/teknoparrot.tar.gz/file}"
     local destino="$PREFIX_DIR/teknoparrot"
 
     if [ -d "$destino" ]; then
@@ -23350,6 +23521,111 @@ ni drive_c ni pfx dentro."
 Viene con sus librerias ya instaladas. Los juegos que lo usen
 (Ajustes del juego -> Prefijo -> TeknoParrot) ya pueden
 arrancar sin esperar a que se cree nada."
+    return 0
+}
+
+teknoparrot_completar() {
+    # Completa el prefijo de TeknoParrot con los INSTALADORES DE VERDAD que
+    # haya en <carpeta de WProton>/dependencies, y con winetricks solo para
+    # lo que esos no cubren.
+    #
+    # POR QUE ESTO NO ES LO MISMO QUE PASAR VERBOS DE WINETRICKS
+    #
+    # Un tester lo midio con un juego conflictivo (Dirty Drivin): pasarle el
+    # DXSETUP de DirectX y el vcredist x64 que trae el paquete lo arreglaba, y
+    # poner "directx9 + vcrun2022 + d3dcompiler" a mano NO. El motivo esta en
+    # lo que instala cada cosa: el DXSETUP pone ademas el SONIDO (XAudio2,
+    # XACT, X3DAudio) y el MANDO (XInput), y en x86 Y EN x64. Los verbos
+    # sueltos de winetricks no llegan ahi.
+    #
+    # POR QUE ES UNA ACCION APARTE Y NO EL CAMINO NORMAL
+    #
+    # El prefijo se DESCARGA, que es rapido y esta probado. Esto es para
+    # cuando ese prefijo se queda corto con un juego concreto: se completa,
+    # no se rehace. Y para quien prefiera montarselo con sus propios
+    # instaladores.
+    local marca="$PREFIX_DIR/teknoparrot/.wp_teknoparrot_listo"
+    if [ ! -d "$PREFIX_DIR/teknoparrot" ]; then
+        ui_info "Todavia no hay prefijo de TeknoParrot.
+
+Descargalo primero; esto sirve para completar uno que ya
+existe, no para crearlo de cero."
+        return 0
+    fi
+    if ! dependencias_del_juego_buscar "$BASE_DIR" >/dev/null 2>&1; then
+        ui_info "No hay instaladores en:
+  $BASE_DIR/dependencies
+
+Ahi se pueden dejar los que traen muchos volcados de arcade:
+DXSETUP.exe, vcredist*.exe, dotnet*.exe, oalinst.exe...
+Se pasan en silencio y cubren mas que los verbos sueltos:
+el DXSETUP pone tambien XAudio2, XACT, X3DAudio y XInput,
+en 32 y en 64 bits."
+        return 0
+    fi
+    local rdir; rdir="$(get_runner_path)"
+    if [ -z "$rdir" ]; then
+        ui_error "No hay ningun runner instalado.
+
+Descarga uno en: Runners y herramientas -> Descargar runners"
+        return 1
+    fi
+    ui_ask "Se van a pasar los instaladores de:
+  $BASE_DIR/dependencies
+
+y despues, con winetricks, solo lo que esos no cubren
+(los .NET y DXVK). Tarda un rato y va solo.
+
+Continuar?" || return 0
+
+    # TODO EN UNA SUBSHELL, COMO HACIA EL CREADOR ORIGINAL.
+    #
+    # Con set -u, una variable sin definir en cualquiera de estas llamadas
+    # mata el script SIN MENSAJE: un tester pulso el equivalente a esto y
+    # WProton se cerro entero, y el registro pasaba del aviso al cierre. En
+    # subshell muere la subshell y el menu sigue vivo. Y cada paso se apunta,
+    # para que el registro diga hasta donde llego.
+    local rc=0
+    (
+        log "TeknoParrot completar: paso 1, valores por defecto"
+        profile_defaults
+        PREFIX_MODE="teknoparrot"; PREFIX_ORIGEN="nuevo"
+        WP_PREFIX_OVERRIDE="$PREFIX_DIR/teknoparrot"
+        log "TeknoParrot completar: paso 2, entorno"
+        export_game_env "prefijo_teknoparrot" "$rdir"
+        log "TeknoParrot completar: paso 3, orden del runner"
+        build_runner_cmd "$rdir"
+        log "TeknoParrot completar: paso 4, instaladores de dependencies"
+        dependencias_del_juego_instalar "" "teknoparrot" "$BASE_DIR"
+        log "TeknoParrot completar: paso 5, lo que falta por winetricks"
+        # SOLO LOS .NET Y DXVK. El DXSETUP ya pone D3DX9/10/11, XAudio, XACT,
+        # XInput y Managed DirectX, y los vcredist los Visual C++: repetirlos
+        # son minutos tirados.
+        WP_PREFIX_VERBOS="dotnet35sp1 dotnet40 dotnet48 dotnet8 dxvk"
+        WP_REDIST_FALLIDOS=""
+        winetricks_uno_a_uno "$rdir" || true
+        [ -n "${WP_REDIST_FALLIDOS:-}" ] \
+            && printf '%s' "$WP_REDIST_FALLIDOS" \
+                 > "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_faltan" 2>/dev/null
+        log "TeknoParrot completar: paso 6, terminado"
+    ) 2>>"$LOG_FILE" || rc=$?
+    WP_PREFIX_OVERRIDE=""
+    : > "$marca" 2>/dev/null
+    prefijo_enlace_pfx "$PREFIX_DIR/teknoparrot"
+    if [ "$rc" != 0 ]; then
+        ui_error "Se ha interrumpido (rc=$rc).
+
+El registro dice en que paso ('TeknoParrot completar: paso N').
+Mira las ultimas lineas de logs/."
+        return 1
+    fi
+    local faltan=""
+    [ -f "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_faltan" ] \
+        && faltan="$(cat "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_faltan")"
+    ui_info "Prefijo de TeknoParrot completado.${faltan:+
+
+Fallaron: $faltan
+Se puede repetir: winetricks salta lo que ya esta puesto.}"
     return 0
 }
 
@@ -23693,7 +23969,7 @@ proton_marcar_prefijo() {
     _vname_nuevo="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
     _vname_actual="$(tr -d '\r' < "$WINEPREFIX/version" 2>/dev/null | head -n1 | awk '{print $NF}')"
     if [ -n "$_vname_actual" ] && [ "$_vname_actual" = "$_vname_nuevo" ]; then
-        say "[+] Prefix incluido: ya marcado para $(basename "$rdir")"
+        say "[+] Prefijo: ya marcado para $(basename "$rdir")"
         return 0
     fi
     # MANDA EL RUNNER QUE HAYAS ELEGIDO.
@@ -23708,11 +23984,16 @@ proton_marcar_prefijo() {
     #
     # Solo se dice cual habia, porque es un dato util si algo falla.
     if [ -s "$WINEPREFIX/version" ]; then
-        local vieja nueva
+        # SE ANUNCIA EL NOMBRE, NO LA LINEA DEL RUNNER.
+        #
+        # Antes se comparaba y se enseñaba la linea entera del fichero del
+        # runner ("1786437966 GE-Proton11-5"), pero lo que se escribe en el
+        # prefijo es solo el nombre. El registro decia una cosa y hacia otra,
+        # que es la mitad del rato que se pierde leyendo un registro.
+        local vieja
         vieja="$(tr -d '\n\r' < "$WINEPREFIX/version" 2>/dev/null)"
-        nueva="$(tr -d '\n\r' < "$vsrc" 2>/dev/null)"
-        [ -n "$vieja" ] && [ "$vieja" != "$nueva" ] \
-            && say "[+] Prefix incluido: venia de '$vieja', se marca como '$nueva'"
+        [ -n "$vieja" ] && [ "$vieja" != "$_vname_nuevo" ] \
+            && say "[+] Prefijo: venia de '$vieja', se marca como '$_vname_nuevo'"
     fi
     # SOLO EL NOMBRE, no la linea entera.
     #
@@ -23728,7 +24009,7 @@ proton_marcar_prefijo() {
     vname="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
     [ -n "$vname" ] || vname="$(basename "$rdir")"
     if printf '%s\n' "$vname" > "$WINEPREFIX/version" 2>/dev/null; then
-        say "[+] Prefix incluido: marcado como preparado ($vname)"
+        say "[+] Prefijo marcado como preparado para $vname"
     else
         say "AVISO: no se pudo escribir el fichero 'version' del prefijo."
         return 0
@@ -28723,6 +29004,220 @@ los DLL overrides y borra ddraw.dll de la carpeta del juego."
     return 0
 }
 
+RESHADE_DIR="$RUNTIME_DIR/reshade"
+
+reshade_url_de() {
+    # De un HTML de reshade.me (por la ENTRADA), la ruta del instalador.
+    # $1 = "addon" para la version con soporte de complementos.
+    #
+    # VA APARTE PARA PODER PROBARLA SIN RED, como mako_asset_de. Y hace falta
+    # porque ReShade NO ESTA EN GITHUB: no hay releases que consultar por API,
+    # la unica via es leer el enlace de descarga de su portada.
+    #
+    # OJO CON EL PATRON: "ReShade_Setup_6.5.1.exe" y
+    # "ReShade_Setup_6.5.1_Addon.exe" casan los dos con la misma expresion, asi
+    # que cuando NO se pide la de complementos hay que descartarla a mano. Al
+    # reves no: el patron con _Addon solo casa con esa.
+    local todos
+    todos="$(grep -o '/downloads/ReShade_Setup_[0-9][0-9.]*[0-9]\(_Addon\)\?\.exe')"
+    [ -n "$todos" ] || return 1
+    if [ "${1:-}" = addon ]; then
+        printf '%s' "$todos" | grep '_Addon\.exe$' | head -n1
+    else
+        printf '%s' "$todos" | grep -v '_Addon\.exe$' | head -n1
+    fi
+}
+
+reshade_buscar() {
+    # Devuelve "URL<TAB>version" del instalador de ReShade, o 1.
+    # $1 = "addon" para la version con complementos.
+    #
+    # DOS DIRECCIONES: la principal a veces devuelve una pagina de error en vez
+    # de un fallo de red -por eso no basta con mirar el codigo de curl-, asi
+    # que se comprueba el contenido y se prueba el espejo estatico.
+    local quiere="${1:-}" base html ruta ver
+    for base in https://reshade.me http://static.reshade.me; do
+        html="$(curl -fsSL --max-time 15 "$base" 2>/dev/null)" || continue
+        case "$html" in *'<h2>Something went wrong.</h2>'*) continue ;; esac
+        ruta="$(printf '%s' "$html" | reshade_url_de "$quiere")" || continue
+        [ -n "$ruta" ] || continue
+        ver="$(printf '%s' "$ruta" | grep -o '[0-9][0-9.]*[0-9]\(_Addon\)\?' | head -n1)"
+        printf '%s%s\t%s' "$base" "$ruta" "$ver"
+        return 0
+    done
+    return 1
+}
+
+reshade_dll_sugerida() {
+    # La DLL que ReShade debe suplantar, segun la arquitectura del ejecutable.
+    #
+    # No hay forma de acertar siempre: depende del API que use el juego, no de
+    # sus bits. Pero 64 bits casi siempre es DXGI (D3D10/11/12) y 32 bits casi
+    # siempre d3d9, que es lo que hace el script de referencia. El menu deja
+    # cambiarlo.
+    case "$(file -b "${1:-}" 2>/dev/null)" in
+        *x86-64*|*PE32+*) printf 'dxgi' ;;
+        *) printf 'd3d9' ;;
+    esac
+}
+
+reshade_shaders_bajar() {
+    # Los repositorios de shaders, a runtime/reshade/shaders.
+    #
+    # SE BAJAN COMO ZIP, NO CON git. El script de referencia hace git clone;
+    # WProton no depende de git y no tiene por que empezar ahora. GitHub sirve
+    # cualquier rama como zip, y eso ya lo sabemos descargar y extraer.
+    #
+    # Se hace UNA VEZ y se comparte entre juegos: son unos 100 MB y no tiene
+    # sentido repetirlos por juego.
+    local destino="$RESHADE_DIR/shaders"
+    [ -d "$destino/Shaders" ] && return 0
+    mkdir -p "$destino/Shaders" "$destino/Textures" 2>/dev/null
+    local repo nombre rama pkg tmp n=0
+    # nombre|rama del repositorio. El orden importa: si dos traen el mismo
+    # efecto, se queda el del primero.
+    for repo in "crosire/reshade-shaders|slim" \
+                "CeeJayDK/SweetFX|master" \
+                "BlueSkyDefender/AstrayFX|master" \
+                "prod80/prod80-ReShade-Repository|master"; do
+        nombre="${repo%%/*}"; rama="${repo##*|}"
+        nombre="${repo%%|*}"
+        pkg="$DL_DIR/$(printf '%s' "$nombre" | tr '/' '_')-$rama.zip"
+        rm -f "$pkg"
+        dl "https://codeload.github.com/$nombre/zip/refs/heads/$rama" "$pkg" \
+            || { say "AVISO: no se pudo bajar $nombre; se sigue"; continue; }
+        tmp="$(mktemp -d)"
+        if extract_archive "$pkg" "$tmp"; then
+            # Se copia SIN pisar: gana el primer repositorio que lo traiga.
+            find "$tmp" -type d -iname 'Shaders' -exec sh -c \
+                'cp -rn "$1"/. "$2/Shaders/" 2>/dev/null' _ {} "$destino" \;
+            find "$tmp" -type d -iname 'Textures' -exec sh -c \
+                'cp -rn "$1"/. "$2/Textures/" 2>/dev/null' _ {} "$destino" \;
+            n=$((n+1))
+        fi
+        rm -rf "$tmp"; rm -f "$pkg"
+    done
+    [ "$n" -gt 0 ] || return 1
+    say "[+] Shaders de ReShade listos ($n repositorios)"
+    return 0
+}
+
+reshade_ini_escribir() {
+    # El ReShade.ini con las rutas ya puestas.
+    #
+    # SIN ESTO, ReShade arranca sin saber donde estan los efectos y hay que
+    # configurarlo A MANO DENTRO DEL JUEGO cada vez: pestaña Settings, rellenar
+    # "Effect Search Paths" y "Texture Search Paths", y recargar. Con mando eso
+    # es una tortura.
+    #
+    # Las rutas se escriben en formato Windows y RELATIVAS a la carpeta del
+    # juego (.\), porque los shaders se copian ahi al lado: asi valen se monte
+    # el juego donde se monte, que es lo que el script de referencia no podia
+    # hacer al usar enlaces a $HOME.
+    local target="$1"
+    [ -f "$target/ReShade.ini" ] && return 0
+    cat > "$target/ReShade.ini" <<'RSINI'
+[GENERAL]
+EffectSearchPaths=.\ReShade_shaders\Shaders\**
+TextureSearchPaths=.\ReShade_shaders\Textures\**
+PresetPath=.\ReShadePreset.ini
+PerformanceMode=0
+
+[INPUT]
+KeyOverlay=36,0,0,0
+RSINI
+    return 0
+}
+
+install_reshade() {
+    # $1 = juego, $2 = gid, $3 = dll a suplantar (vacio = automatica),
+    # $4 = "addon" para la version con complementos.
+    local squash="$1" gid="$2" quiere_dll="${3:-}" variante="${4:-}" target
+    target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
+
+    local info url ver
+    info="$(reshade_buscar "$variante")" || {
+        ui_error "No se ha podido averiguar la version de ReShade.
+
+ReShade no se publica en GitHub: hay que leer el enlace de
+descarga de reshade.me, y ahora mismo no responde."
+        release_game_root; return 1; }
+    url="${info%%	*}"; ver="${info##*	}"
+    say "[+] ReShade $ver"
+
+    local pkg tmp
+    pkg="$DL_DIR/ReShade_Setup_$ver.exe"
+    if [ ! -f "$pkg" ]; then
+        dl "$url" "$pkg" || { ui_error "Fallo descargando ReShade"; rm -f "$pkg"
+            release_game_root; return 1; }
+    fi
+    tmp="$(mktemp -d)"
+    # El instalador es un autoextraible: 7z le saca las DLL SIN ejecutarlo.
+    if ! extract_archive "$pkg" "$tmp"; then
+        ui_error "No se ha podido extraer ReShade.
+Hace falta 7z (paquete p7zip).
+
+  CachyOS / Arch: sudo pacman -S p7zip"
+        rm -rf "$tmp"; rm -f "$pkg"; release_game_root; return 1
+    fi
+
+    # ¿32 o 64 bits? Lo decide el ejecutable del juego, no el sistema.
+    local exe bits dll_origen
+    exe="$(find "$target" -maxdepth 1 -type f -iname '*.exe' 2>/dev/null | head -1)"
+    [ -n "${EXE_PATH:-}" ] && [ -f "${EXE_PATH:-}" ] && exe="$EXE_PATH"
+    case "$(file -b "$exe" 2>/dev/null)" in
+        *x86-64*|*PE32+*) bits=64 ;;
+        *) bits=32 ;;
+    esac
+    dll_origen="$(find "$tmp" -iname "ReShade$bits.dll" 2>/dev/null | head -1)"
+    [ -n "$dll_origen" ] || {
+        ui_error "El paquete de ReShade no trae ReShade$bits.dll"
+        rm -rf "$tmp"; release_game_root; return 1; }
+
+    local dll="${quiere_dll:-}"
+    [ -n "$dll" ] || dll="$(reshade_dll_sugerida "$exe")"
+    dll="${dll%.dll}"
+
+    cp "$dll_origen" "$target/$dll.dll" || {
+        ui_error "No se ha podido copiar ReShade a la carpeta del juego."
+        rm -rf "$tmp"; release_game_root; return 1; }
+    rm -rf "$tmp"
+
+    # Los shaders, al lado del juego. Se copian y no se enlazan: la carpeta del
+    # juego es un overlay, y un enlace a $HOME se rompe en cuanto el juego
+    # viaja a otro equipo.
+    reshade_shaders_bajar
+    if [ -d "$RESHADE_DIR/shaders/Shaders" ]; then
+        mkdir -p "$target/ReShade_shaders" 2>/dev/null
+        cp -rn "$RESHADE_DIR/shaders/." "$target/ReShade_shaders/" 2>/dev/null
+    fi
+    reshade_ini_escribir "$target"
+
+    # EL COMPILADOR DE SHADERS, POR EL SISTEMA DE SIEMPRE.
+    #
+    # Sin d3dcompiler_47 ReShade no compila los efectos y NO DICE POR QUE: se
+    # queda en negro o sin efectos. El script de referencia lo saca de un
+    # instalador de Firefox; aqui ya es un verbo de winetricks que usamos en
+    # TeknoParrot, JConfig y RConfig, asi que se apunta como dependencia del
+    # juego y se instala por la via normal.
+    redist_juego_apuntar "$gid" "d3dcompiler_47"
+
+    merge_overrides "d3dcompiler_47=n;$dll=n,b"
+    write_full_profile "$gid"
+    release_game_root
+    ui_info "ReShade $ver instalado como $dll.dll junto al exe.
+
+DLL overrides: $DLL_OVERRIDES
+Se ha apuntado d3dcompiler_47 como libreria del juego: sin el,
+ReShade no compila los efectos y no dice por que.
+
+Dentro del juego, la tecla Inicio abre su menu.
+
+OJO: en juegos que solo usan Vulkan, ReShade NO funciona bajo
+Wine. Para esos no sirve de nada instalarlo."
+    return 0
+}
+
 install_optiscaler() {
     local squash="$1" gid="$2" target
     target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
@@ -30069,6 +30564,14 @@ Elige otro en: Ajustes del juego -> Ejecutable
     #
     # Va DESPUES de build_runner_cmd por lo mismo que alli: hace falta el
     # runner resuelto y WINEPREFIX exportado.
+    # MARCAR EL PREFIJO, IGUAL QUE EN launch_game.
+    #
+    # ESTO FALTABA AQUI, y es justo el camino donde salio el cuelgue: un .pc con
+    # prefijo propio de GE-Proton9-27 lanzado con Proton7-38-Frankenstein.
+    # Es el fallo mas repetido del proyecto -logica correcta en un solo camino-
+    # asi que va en los dos.
+    loading_say "Revisando el prefijo del juego..."
+    proton_marcar_prefijo "$rdir"
     loading_say "Comprobando las librerias del prefijo $(prefix_label)..."
     redist_base_compartido "$rdir"
     redist_base_teknoparrot "$rdir"
@@ -30139,6 +30642,18 @@ EOFRB
     instalar_una_vez "$(dirname "$exe")"
     acompanante_start "$(dirname "$exe")"
     unidad_juego_reaplicar "$(dirname "$exe")"
+    # LA PANTALLA DEJA DE MENTIR.
+    #
+    # Por este camino no habia ningun loading_say despues del de las
+    # librerias, asi que mientras Proton preparaba el prefijo -que es donde de
+    # verdad se colgaba- la pantalla seguia diciendo "Comprobando las
+    # librerias del prefijo propio del juego...". Un tester mando una foto de
+    # esa pantalla y me hizo buscar el fallo en el sitio equivocado: ese paso
+    # habia terminado hacia dos segundos.
+    #
+    # Proton puede tardar de verdad aqui la primera vez con un runner nuevo,
+    # asi que el mensaje lo dice en vez de dejar al usuario adivinando.
+    loading_say "Preparando el entorno de Windows con $(basename "${rdir%/}")..."
     ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 )
     acompanante_stop
     unidad_juego_reaplicar_stop
@@ -35226,6 +35741,7 @@ cfg_prefijo_menu() {
             "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)" \
             "Configurar dgVoodoo (Cpl)" \
             "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)" \
+            "Instalar ReShade (filtros y efectos)" \
             "Borrar prefijo (reinstala DLLs)" \
             "Borrar TODOS los datos de este juego" \
             "<< Volver")" || return 0
@@ -36032,14 +36548,14 @@ Instalarlo ahora?" || return 0
             if ! mako_disponible >/dev/null; then
                 ui_info "MAKO no esta instalado.
 
-Descarga 'mako-render-v<version>-linux.tar.xz' de la etiqueta
+Descarga 'MAKO-Renderer-v<version>-linux.tar.xz' de la etiqueta
 del Renderer (OJO: el 'latest' del repositorio es otra cosa,
-el ZIP de Decky) y ejecuta su instalador asi:
+el ZIP de Decky) y copia su contenido a mano:
 
-  MAKO_INSTALL_PREFIX=\"$MAKO_DIR\" \\
-  MAKO_INSTALLER_ASSUME_YES=1 \\
-  MAKO_INSTALLER_NO_LAUNCH=1 \\
-      ./Install_MAKO_Renderer
+  tar -xJf MAKO-Renderer-v*-linux.tar.xz -C /tmp/mako
+  cp -a /tmp/mako/*/. \"$MAKO_DIR/\"
+
+No hace falta su instalador: solo se copian ficheros.
 
 Y copia tu Lossless.dll en:
   $MAKO_DIR/"
@@ -36498,6 +37014,41 @@ cfg_ap_prefijo() {
         "Instalar dgVoodoo2"*)  install_dgvoodoo "$squash" "$gid"; load_profile "$gid" ;;
         "Configurar dgVoodoo"*) config_dgvoodoo_cpl "$squash" "$gid" ;;
         "Instalar OptiScaler"*) install_optiscaler "$squash" "$gid"; load_profile "$gid" ;;
+        "Instalar ReShade"*)
+            # ReShade suplanta una DLL del juego. CUAL depende del API que use,
+            # no de sus bits: por eso se ofrece elegir, con una sugerencia
+            # razonable segun la arquitectura del ejecutable.
+            local _rs_dll="" _rs_var="" _rs_sel
+            _rs_sel="$(menu "ReShade: que version" \
+                "Normal   (lo habitual)" \
+                "Con complementos   (mods; algun anti-trampas la detecta)" \
+                "<< Volver")" || _rs_sel=""
+            case "$_rs_sel" in
+                "Normal"*)           _rs_var="" ;;
+                "Con complementos"*) _rs_var="addon" ;;
+                *) return 0 ;;
+            esac
+            _rs_sel="$(menu "Que DLL debe suplantar ReShade
+
+Si no lo sabes, deja la automatica y prueba. Si el juego no
+arranca o no sale el menu, vuelve aqui y cambia de DLL." \
+                "Automatica   (dxgi en 64 bits, d3d9 en 32)" \
+                "dxgi     (D3D10 / D3D11 / D3D12)" \
+                "d3d9     (D3D9)" \
+                "d3d11    (algunos juegos de 32 bits)" \
+                "d3d8     (D3D8, juegos muy viejos)" \
+                "ddraw    (DirectDraw)" \
+                "dinput8  (cuando las demas estan ocupadas)" \
+                "opengl32 (OpenGL)" \
+                "<< Volver")" || _rs_sel=""
+            case "$_rs_sel" in
+                "Automatica"*)  _rs_dll="" ;;
+                "<< Volver"|"") return 0 ;;
+                # la etiqueta empieza por el nombre de la DLL: se corta ahi
+                *)              _rs_dll="${_rs_sel%% *}" ;;
+            esac
+            install_reshade "$squash" "$gid" "$_rs_dll" "$_rs_var"
+            load_profile "$gid" ;;
         "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
         "Instalar librerias en el prefijo:"*)
             # Directo al prefijo DE ESTE juego. Desde el menu principal hay
@@ -36907,8 +37458,15 @@ Mira el registro. Como ultimo recurso, copia una carpeta
 evmapy/ con el modulo ya compilado a la raiz de WProton."
             fi ;;
         "Datos de duración"*) hltb_instalar ;;
-        "Comprimir una carpeta"*) archivos_comprimir ;;
-        "Extraer una imagen"*)    archivos_extraer ;;
+        # LAS ETIQUETAS DICEN DE QUE A QUE.
+        #
+        # Antes eran "Comprimir una carpeta" y "Extraer una imagen a una
+        # carpeta". "Imagen" se entiende como una foto o una caratula, que es
+        # de lo que este programa habla el resto del tiempo, y "extraer" no
+        # deja claro que el resultado es una carpeta con el juego dentro.
+        # Diciendo el formato de origen y de destino no hay que adivinar nada.
+        "Convertir carpeta a"*)        archivos_comprimir ;;
+        "Convertir wsquashfs a carpeta"*) archivos_extraer ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
@@ -37288,12 +37846,23 @@ Instalarlo ahora?" && mako_instalar
                 # viene probado. Se ofrece elegir en vez de decidir por el
                 # usuario, porque quien no tenga buena conexion preferira lo
                 # primero y quien no quiera esperar, lo segundo.
-                # SOLO DESCARGA. Antes se ofrecia tambien crearlo aqui con
-                # winetricks, y esa via se quito: dependia de que 15 verbos
-                # salieran bien, algunos bajando ficheros de terceros, y
-                # fallaba a medias sin decir cual. El prefijo subido esta
-                # probado y da siempre el mismo resultado.
-                teknoparrot_prefijo_descargar ;;
+                # EL CAMINO NORMAL ES DESCARGARLO. Crearlo entero con
+                # winetricks se quito: dependia de que 15 verbos salieran
+                # bien, algunos bajando de terceros, y fallaba a medias sin
+                # decir cual.
+                #
+                # Pero se conserva COMPLETARLO con instaladores de verdad
+                # (dependencies/), que no es lo mismo: el DXSETUP cubre cosas
+                # -sonido y mando, en 32 y 64 bits- a las que los verbos
+                # sueltos no llegan, y eso resolvio un juego que con
+                # winetricks no habia forma.
+                case "$(menu "Prefijo de TeknoParrot" \
+                        "Descargarlo ya hecho   (lo normal)" \
+                        "Completarlo con instaladores de dependencies/" \
+                        "<< Volver")" in
+                    "Descargarlo"*)  teknoparrot_prefijo_descargar ;;
+                    "Completarlo"*)  teknoparrot_completar ;;
+                esac ;;
             *)
                 main_dispatch "$sel"
                 # 9 = "ya esta, vuelve al menu principal" (montar un disco)
@@ -37317,9 +37886,9 @@ archivos_comprimir() {
     # Se usan las herramientas que ya estan montadas: mksquashfs o mkdwarfs
     # segun PACK_FORMAT, con su barra de progreso.
     local src dst nombre out fmt need
-    src="$(browse_for_path "Carpeta a comprimir" "$(browse_start)" dir)" || return 0
+    src="$(browse_for_path "Que carpeta quieres convertir" "$(browse_start)" dir)" || return 0
     [ -d "$src" ] || { ui_error "Eso no es una carpeta."; return 1; }
-    dst="$(browse_for_path "Donde dejar el fichero" "$(dirname "$src")" dir)" || return 0
+    dst="$(browse_for_path "En que carpeta se deja el fichero" "$(dirname "$src")" dir)" || return 0
     [ -d "$dst" ] || { ui_error "Eso no es una carpeta."; return 1; }
     [ -w "$dst" ] || { ui_error "No se puede escribir en:\n$dst"; return 1; }
 
@@ -37391,14 +37960,14 @@ archivos_extraer() {
     # de dwarfs ya estan, y son los mismos que usa WProton para jugar. Con
     # unsquashfs habria que descargarlo aparte y solo serviria para squashfs.
     local img dst destino nombre raiz need
-    img="$(browse_for_path "Imagen a extraer" "$(browse_start "$GAMES_PATH")" play)" || return 0
+    img="$(browse_for_path "Que wsquashfs quieres convertir a carpeta" "$(browse_start "$GAMES_PATH")" play)" || return 0
     [ -f "$img" ] || { ui_error "Eso no es un fichero."; return 1; }
     if ! imagen_valida "$img"; then
-        ui_error "'$(basename "$img")' no parece una imagen valida
-(ni squashfs ni DwarFS)."
+        ui_error "'$(basename "$img")' no es un wsquashfs
+(ni un squashfs ni un DwarFS)."
         return 1
     fi
-    dst="$(browse_for_path "Donde extraerlo" "$(dirname "$img")" dir)" || return 0
+    dst="$(browse_for_path "En que carpeta se deja" "$(dirname "$img")" dir)" || return 0
     [ -d "$dst" ] || { ui_error "Eso no es una carpeta."; return 1; }
     [ -w "$dst" ] || { ui_error "No se puede escribir en:\n$dst"; return 1; }
 
@@ -37423,7 +37992,7 @@ Se borra y se extrae encima?" || return 0
         return 1
     fi
 
-    say "[+] Extrayendo '$nombre'..."
+    say "[+] Convirtiendo '$nombre' a carpeta..."
     rm -rf "$destino"
     mkdir -p "$destino"
     # cp -a conserva permisos, fechas y enlaces. El "/." del origen copia el
@@ -37434,7 +38003,7 @@ Se borra y se extrae encima?" || return 0
         return 1
     fi
     release_game_root
-    ui_info "Extraido en:
+    ui_info "Convertido a carpeta en:
   $destino
 
   $(human_size "$(dir_bytes "$destino")")"
@@ -37454,8 +38023,8 @@ tools_menu() {
             "Actualizar umu-launcher" \
             "Instalar/actualizar Python portable + pygame" \
             "Descargar extractores GOG (innoextract + innounp)" \
-            "Comprimir una carpeta a $(printf '%s' "${PACK_FORMAT:-wsquashfs}")" \
-            "Extraer una imagen a una carpeta" \
+            "Convertir carpeta a $(printf '%s' "${PACK_FORMAT:-wsquashfs}")" \
+            "Convertir wsquashfs a carpeta" \
             "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
