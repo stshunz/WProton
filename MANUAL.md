@@ -371,7 +371,38 @@ Y si **no** reconoce el fallo, no se inventa nada.
 
 Si un juego se cierra en menos de diez segundos, WProton te enseña automáticamente el final del registro.
 
+### Si la pantalla se queda en «Preparando el prefijo…»
+
+Pasa al usar un runner **Wine** sobre un prefijo que hizo Proton: hay que volver
+a registrar sus servicios, y eso tarda unos segundos la primera vez con cada
+runner. La pantalla dice hasta cuánto puede tardar.
+
+Si se pasa de ese plazo, WProton **corta y te lo dice**, en vez de quedarse ahí.
+Casi siempre es un proceso de Wine de otra versión que sigue vivo en ese prefijo:
+cierra WProton del todo y vuelve a entrar. Si se repite con un juego concreto,
+dale un prefijo propio.
+
+Los plazos se pueden cambiar en `settings.conf`, aunque no suele hacer falta:
+
+| Ajuste | Para qué | Por defecto |
+|---|---|---|
+| `WP_WINEBOOT_TIMEOUT` | Volver a registrar el prefijo | 180 s |
+| `WP_WINESERVER_TIMEOUT` | Cerrar los procesos de un prefijo | 20 s |
+
 **Perfiles de la comunidad**: en *Carátulas y perfiles de la comunidad* puedes descargar configuraciones ya probadas para juegos problemáticos. Vienen con notas explicando por qué necesitan esos ajustes.
+
+### Si hace falta mirar más adentro
+
+En `settings.conf` hay tres interruptores de diagnóstico. Se activan con `=1`, se
+juega una vez y el resultado queda en el registro:
+
+| Ajuste | Qué apunta |
+|---|---|
+| `DIAG_DLL=1` | Qué DLL carga el juego, y si un override se aplicó de verdad |
+| `DIAG_VIDEO=1` | Todo lo del vídeo; al salir resume las cuatro causas de que no se vea |
+| `DIAG_CIERRE=1` | Qué queda vivo al cerrar |
+
+Acuérdate de volver a ponerlos a `0`: el registro crece bastante.
 
 ---
 
@@ -539,9 +570,15 @@ TeknoParrot, y sin tocar tus ajustes.
 
 **Los prefijos de 32 bits funcionan.** Los `.wsquashfs` que vienen de Batocera
 traen prefijos de 32 bits. Antes fallaban con `rc=1` a los pocos segundos porque
-WProton exportaba `WINEARCH=win32`, que es lo que hace que los Wine modernos se
-nieguen a arrancar. Ya no se exporta: la arquitectura está en el registro del
-prefijo y Wine la lee de ahí.
+WProton exportaba `WINEARCH=win32` a todo, que es lo que hace que los Wine
+modernos se nieguen a arrancar (`WINEARCH is set to 'win32' but this is not
+supported in wow64`).
+
+Ahora se decide según el caso: **no se exporta nunca de oficio** —la arquitectura
+está en el registro del prefijo y Wine la lee de ahí—, pero **sí** cuando se usa
+un runner **Wine** sobre un prefijo que de verdad es de 32 bits, porque ese wine
+arrancaría en modo de 64 y lo rechazaría. Es lo que hacen Bottles, Lutris y
+Batocera, y es lo que hace funcionar *Aliens Armageddon*.
 
 **Lo que el paquete trae en `drive_c` se ve desde `C:\`.** El perfil XML de un
 juego suele decir `C:\game\game.exe`. Si usas un prefijo distinto del incluido,
@@ -550,13 +587,39 @@ carpetas del paquete dentro del `C:` que se esté usando.
 
 ### Un prefijo para todos los juegos de TeknoParrot
 
-En **Biblioteca y preferencias → Prefijo de TeknoParrot** se crea uno con todas
-sus librerías —Visual C++, compiladores de shaders, XACT, varios .NET y DXVK— de
-una vez y sin preguntar. Tarda un rato la primera vez; después cualquier juego
-lo elige en **Ajustes del juego → Prefijo → TeknoParrot** y lo reutiliza.
+En **Biblioteca y preferencias → Prefijo de TeknoParrot** se **descarga uno ya
+hecho**, con sus librerías puestas —Visual C++, compiladores de shaders, XACT,
+varios .NET y DXVK— y probado. Tarda lo que tarde la descarga; después cualquier
+juego lo elige en **Ajustes del juego → Prefijo → TeknoParrot** y lo reutiliza.
 
-Si alguna librería falla, el prefijo se marca como listo igual —con las demás
-funciona— y la fila del menú dice cuál falta, para reintentar solo esa.
+> Antes se creaba aquí mismo con winetricks. Se quitó: eran quince verbos, varios
+> de ellos bajando ficheros de terceros, y cuando alguno fallaba el prefijo
+> quedaba a medias sin que nadie supiera cuál. Bajarlo hecho da siempre el mismo
+> resultado.
+
+La otra opción del mismo menú, **Completarlo con instaladores de
+`dependencies/`**, no es lo mismo ni la sustituye: usa los instaladores de verdad
+que traiga el juego en esa carpeta. El DXSETUP de un juego cubre cosas —sonido y
+mando, en 32 y en 64 bits— a las que los verbos sueltos de winetricks no llegan,
+y eso ha resuelto algún juego que con winetricks no había forma.
+
+Si algo falta, la fila del menú lo dice por su nombre, para reintentar solo eso.
+
+### Si cambias de runner en ese prefijo
+
+Lo comparten todos los juegos de TeknoParrot, así que es el único que pasa de un
+runner a otro. Cambiar de **Proton a Wine** (o al revés) sobre el mismo prefijo
+requiere cerrarlo y volver a registrar sus servicios, y WProton lo hace solo:
+
+- Cierra lo que quede vivo dentro (`wineserver`, `services.exe`, `winedevice`).
+- Vuelve a registrar los servicios con el runner nuevo. Son unos segundos, y
+  **solo la primera vez con cada runner**.
+
+Si eso se pasa del plazo, **te lo dice** y no da el prefijo por preparado, así
+que el siguiente intento vuelve a probarlo. Cuando pasa, casi siempre es un
+proceso de Wine de otra versión que sigue vivo ahí dentro: cierra WProton del
+todo y vuelve a entrar. Si se repite con un juego concreto, dale un prefijo
+propio.
 
 ### Qué se sabe de cada juego
 

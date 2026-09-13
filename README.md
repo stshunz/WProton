@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.55** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.67** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
 
@@ -53,6 +53,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 - Descarga desde el menú: **GE-Proton**, **Soda** y **Caffe** (Bottles), **Proton-CachyOS**, **DWProton**, **Wine-LG**, **Proton-LG**, **Wine-GE** y **Kron4ek**.
 - **Los Proton oficiales de Valve**, si tienes Steam: no se descargan (Valve no los publica fuera de Steam), se enlazan los que ya tengas instalados —también los de la tarjeta o de otro disco—, así que no ocupan sitio y se actualizan con Steam.
 - **Auto-descarga**: si el perfil de un juego pide un runner que no tienes, se descarga solo antes de lanzar.
+- **Cambiar de Proton a Wine (o al revés) en un mismo prefijo no lo rompe**: WProton cierra los procesos que queden en él y vuelve a registrar sus servicios con el runner nuevo. Tarda unos segundos, y solo la primera vez con cada runner.
 - En Batocera detecta los Wine del sistema y los de `/userdata/system/wine/custom`.
 
 ### Ajustes por juego
@@ -73,7 +74,7 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 - **Instalar librerías en cualquier prefijo**, no solo en el compartido, con una **barra que avanza de verdad**: los redistribuibles se instalan de uno en uno y se ve por cuál va. Si uno falla, sigue con el resto y dice cuál falló.
 - **Capa gráfica**: `dxvk`, `vkd3d`, `d7vk` (DirectDraw y Direct3D 1-7 sobre Vulkan, para juegos de los 90), `dgvoodoo2`, `galliumnine` y los compiladores de shaders, en su propia categoría.
 - **Base de datos de arcades**: qué se sabe de TeknoParrot, JConfig, RConfig, Taito Type X, Sega Ring y de títulos concretos bajo Linux. Se consulta por nombre o de un listado, y cada ficha dice de qué fuente sale.
-- **Prefijo de TeknoParrot**: se crea de una vez con sus 16 librerías y lo comparten todos los juegos de TeknoParrot.
+- **Prefijo de TeknoParrot**: se descarga ya hecho, con sus librerías puestas y probado, y lo comparten todos los juegos de TeknoParrot. Crearlo con winetricks eran quince verbos que dependían de descargas de terceros y fallaba a medias sin decir cuál: se quitó. Lo que sí se puede es **completarlo** con los instaladores de verdad que traiga el juego en su carpeta `dependencies/`.
 - La primera vez que se estrena el prefijo compartido, ofrece dejarle instalado **Visual C++ 2015-2022**, que es lo que piden casi todos los juegos de Windows y sin lo cual muchos arrancan y se cierran sin dar ningún error.
 - El **mapeador `.keys`** enseña las teclas que ya tiene asignadas un juego sin tener que abrir el fichero, conserva las combinaciones al editarlo, y permite **usar el mando como ratón** (un stick mueve el puntero y un botón hace clic) y **abrir un teclado en pantalla** con una combinación, para los juegos que obligan a escribir un nombre.
 
