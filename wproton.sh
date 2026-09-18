@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.67"
+WPROTON_VERSION="1.70"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -312,6 +312,23 @@ DIAG_MANDO="$DIAG_MANDO"
 DIAG_CIERRE="$DIAG_CIERRE"
 DIAG_DLL="$DIAG_DLL"
 DIAG_VIDEO="$DIAG_VIDEO"
+# --------------------------------------------------------------------------
+# SUPERPOSICION DE STEAM (solo importa en el modo Juego)
+#   Esto es solo lo que significa "auto" en los perfiles. Lo normal es dejarlo
+#   en 1, y apagar la superposicion SOLO en el juego que la necesite apagada:
+#     Ajustes del juego -> Casos especiales -> Superposicion de Steam
+#   1 = se deja puesta. Es lo que hace que Steam VEA el juego: sale su fila en
+#       el menu de Steam y se puede cerrar desde ahi.
+#   0 = se quita en todos los juegos que esten en "auto".
+STEAM_OVERLAY_GENERAL="$STEAM_OVERLAY_GENERAL"
+# --------------------------------------------------------------------------
+# GRACIA ANTES DE ATENDER UN CIERRE (segundos)
+#   En el modo Juego, Steam manda un TERM al cerrarse la ventana de WProton
+#   para dejar paso al juego. Ese hay que ignorarlo. El que manda cuando pulsas
+#   "Salir del juego" es el mismo, pero llega cuando ya llevas un rato jugando:
+#   por eso se distinguen por tiempo. Subelo si tu juego tarda mucho en
+#   aparecer y se te cierra solo; bajalo si tardas en poder cerrarlo.
+WP_CIERRE_GRACIA="$WP_CIERRE_GRACIA"
 # --------------------------------------------------------------------------
 # PLAZOS AL PREPARAR UN PREFIJO (segundos)
 #   Cambiar de familia de runner -de Proton a Wine o al reves- obliga a cerrar
@@ -1631,6 +1648,45 @@ print('OK idx=%s appid=%d' % (idx, appid))
 SAEOF
 }
 
+# EL INTERRUPTOR GLOBAL DE STEAM INPUT SE QUITO (estuvo aqui una tarde).
+#
+# Escribia UseSteamControllerConfig en el localconfig.vdf de Steam. Funcionaba,
+# pero no servia para lo que hacia falta, por dos motivos de fondo:
+#
+#   1. Steam guarda ese ajuste POR APLICACION, y para Steam la aplicacion es
+#      WProton entero. No hay forma de aplicarlo a tres juegos y no al resto.
+#   2. Steam reescribe localconfig.vdf al cerrarse con lo que tiene en memoria,
+#      asi que hay que editarlo con Steam CERRADO. Desde el modo Juego, que es
+#      donde se juega, no se puede.
+#
+# Lo que si cumple las dos cosas es PROTON_PREFER_SDL, por juego y al lanzar:
+# GE-Proton apaga Steam Input Y hidraw cuando esa variable esta puesta, dentro
+# de ese Proton y solo ahi. Es lo que hace el ajuste PAD_SDL del perfil.
+#
+# El modulo steaminput.py se quito tambien. Esta en el historial de git.
+
+
+
+
+# TODA LA MAQUINARIA DE "APAGAR STEAM INPUT EN STEAM" SE QUITO.
+#
+# Editaba el localconfig.vdf de Steam para apagar Steam Input en el atajo de
+# WProton, y como Steam solo lee ese fichero al arrancar, hacia falta cerrarlo
+# y volver a abrirlo. Llego a funcionar -ayudante suelto que esperaba el cierre
+# de Steam, vuelta al estado original al salir, y relanzarse solo despues-,
+# pero eran tres piezas fragiles para algo que el usuario hace en dos
+# pulsaciones desde el propio menu de Steam. Y una fila mas en los ajustes del
+# juego, pegada a otra parecida, confundiendo.
+#
+# La via que SI resuelve el caso sin tocar Steam es el mando virtual: WProton
+# captura el mando que ofrece Steam Input y le da al juego un Xbox 360
+# corriente. Ver mando_virtual_start y mando_solo_virtual_de_steam.
+#
+# Si alguna vez hace falta volver a esto, esta en el historial de git junto con
+# el modulo steaminput.py, que parseaba el localconfig.vdf con copia de
+# seguridad y comprobacion de llaves.
+
+
 find_steam_userdata_config() {
     # config/ del usuario de Steam más reciente
     local base d best="" bestt=0 t
@@ -1654,11 +1710,20 @@ steam_cerrar() {
     # Cierra Steam ORDENADAMENTE y espera a que termine. Es importante: Steam
     # reescribe shortcuts.vdf al salir, asi que si lo modificamos con Steam
     # abierto, nuestro cambio se pierde o el fichero queda corrupto.
-    steam_esta_abierto || return 0
+    steam_esta_abierto || { log "steam_cerrar: Steam no estaba abierto"; return 0; }
     loading_say "Cerrando Steam..."
+    # SE APUNTA EN EL REGISTRO, NO SOLO EN PANTALLA.
+    #
+    # Esto solo hablaba por loading_say, que va a la pantalla y NO al fichero.
+    # Resultado: en el registro del 16/09 a las 22:05 no habia forma de saber
+    # si Steam llego a cerrarse o si ni se intento; el fichero simplemente se
+    # cortaba. Y esa es justo la pregunta que hay que responder cuando el
+    # reinicio "no hace nada".
     if command -v steam >/dev/null 2>&1; then
+        log "steam_cerrar: pidiendo el cierre con 'steam -shutdown'"
         steam -shutdown >/dev/null 2>&1 &
     else
+        log "steam_cerrar: no hay orden 'steam', se usa pkill" WARN
         pkill -x steam 2>/dev/null
     fi
     local i
@@ -1667,6 +1732,7 @@ steam_cerrar() {
         sleep 0.5
     done
     say "AVISO: Steam sigue abierto tras 15 segundos"
+    log "steam_cerrar: Steam NO se cerro en 15s; lo que dependa de ello no se hara" WARN
     return 1
 }
 
@@ -4022,9 +4088,9 @@ MAPEOF
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py 43af77f029d1" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py b78ea77f2f14" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py 43af77f029d1
+# WPROTON_HELPER mando_virtual.py b78ea77f2f14
 # -*- coding: utf-8 -*-
 """Mando virtual: presenta al juego un mando distinto del que tienes.
 
@@ -4066,11 +4132,36 @@ import signal
 import sys
 import time
 
+# LAS RUTAS DE WProton, ANTES DE IMPORTAR evdev.
+#
+# EL FALLO QUE COSTO DOS TARDES
+#
+# evdev NO esta en el Python del sistema: WProton lo instala en su propio
+# runtime/libs_pyX.Y para no tocar nada de la maquina. mapeador.py preparaba
+# sys.path con esas rutas antes de importarlo; aqui habia un "import evdev"
+# pelado, asi que este modulo se moria SIEMPRE con "falta python-evdev",
+# estuviera instalado o no.
+#
+# El registro del 16/09 lo enseña contradiciendose en diez segundos:
+#
+#   23:26:13  [+] evdev ya disponible (mapeador .keys listo)
+#   23:26:23  mando_virtual: falta python-evdev
+#
+# Los dos decian la verdad: uno buscaba en libs_pyX.Y y el otro no.
+_RT = os.path.dirname(os.path.abspath(__file__))          # runtime/
+_BASE_DIR = os.path.dirname(_RT)                          # raiz de WProton
+sys.path.insert(0, os.path.join(_RT, 'libs_py%d.%d' % sys.version_info[:2]))
+for _d in (os.path.join(_BASE_DIR, 'evmapy'), os.path.join(_RT, 'evmapy'),
+           os.path.join(_BASE_DIR, 'libs_py%d.%d' % sys.version_info[:2])):
+    if os.path.isdir(_d):
+        sys.path.insert(0, _d)
+
 try:
     import evdev
     from evdev import ecodes
 except ImportError:
     sys.stderr.write("mando_virtual: falta python-evdev\n")
+    sys.stderr.write("mando_virtual: buscado en %s\n" % ", ".join(sys.path[:4]))
     sys.exit(2)
 
 
@@ -4084,9 +4175,21 @@ except ImportError:
 # Lo que decide como te ve un juego NO es el nombre, sino el par
 # vendor/product: es lo que miran SDL y Wine para saber que mando es y que
 # iconos dibujar. Por eso se cambian los tres numeros y no solo el texto.
+# EL NOMBRE LLEVA "WProton" DELANTE, A PROPOSITO.
+#
+# Antes el de Xbox se llamaba exactamente "Microsoft X-Box 360 pad", y el mando
+# VIRTUAL DE STEAM se llama "Microsoft X-Box 360 pad 0". En un registro o en un
+# menu son indistinguibles: el 17/09 el usuario vio "mando Xbox 360" al entrar
+# en otro juego y penso que el ajuste se le habia quedado pegado. No era el
+# ajuste -los perfiles no arrastran nada, se comprobo- era el NOMBRE del mando
+# que Steam ofrece, que es el mismo que usabamos nosotros.
+#
+# El fabricante/modelo NO se toca: SDL mapea por vendor/product, asi que sigue
+# reconociendose como un Xbox 360 de verdad y los botones salen bien. Lo unico
+# que cambia es como se lee.
 MANDOS = {
-    "xbox": ("Microsoft X-Box 360 pad", 0x045E, 0x028E, 0x0114),
-    "ds4":  ("Sony Interactive Entertainment Wireless Controller",
+    "xbox": ("WProton Xbox 360 pad", 0x045E, 0x028E, 0x0114),
+    "ds4":  ("WProton Sony Wireless Controller",
              0x054C, 0x09CC, 0x8111),
 }
 NOMBRE_VIRTUAL = MANDOS["xbox"][0]
@@ -4748,9 +4851,38 @@ mando_virtual_start() {
     # Apagado por defecto: solo se enciende en los juegos que lo necesiten.
     WP_MANDO_VIRTUAL_PID=""
     local modo="${1:-0}"
-    [ -n "$modo" ] && [ "$modo" != 0 ] || return 0
+    # SE DICE SIEMPRE, tambien cuando esta apagado.
+    #
+    # En la prueba del 16/09 el usuario eligio "Mando Xbox" en el menu y en el
+    # registro NO SALIO NADA: ni que se activaba, ni que fallaba, ni que estaba
+    # apagado. Desde fuera es indistinguible de "no funciona", y se pierde una
+    # tanda de pruebas averiguando si la opcion llego a aplicarse.
+    if [ -z "$modo" ] || [ "$modo" = 0 ]; then
+        log "Mando virtual: apagado para este juego (MANDO_VIRTUAL=${modo:-0})"
+        return 0
+    fi
+    log "Mando virtual: pedido modo '$modo'"
+    # SE ESCRIBE EL MODULO, NO SOLO SE COMPRUEBA QUE ESTE.
+    #
+    # ESTE ES EL FALLO QUE HA ESTADO TAPANDO TODOS LOS DEMAS
+    #
+    # Aqui solo se miraba si el fichero EXISTIA. Como existia -de una version
+    # anterior-, nunca se reescribia, asi que el modulo en disco se quedaba
+    # congelado PARA SIEMPRE por mucho que se actualizara wproton.sh.
+    #
+    # Y de ahi la escena imposible del registro del 17/09 a las 22:50: el bash
+    # era de la version nueva -se ven mis avisos nuevos, "arranco y se murio en
+    # el acto"- y el Python era de la vieja, con el mensaje de error antiguo y
+    # sin el arreglo del sys.path que le habia puesto. Dos versiones distintas
+    # del mismo programa corriendo a la vez.
+    #
+    # write_mando_virtual ya hace lo correcto: compara la MARCA DE CONTENIDO
+    # (un hash que pone build.sh) y solo reescribe si ha cambiado. Es lo que
+    # hacen mapeador_start, perfil_py y todos los demas. Aqui faltaba la
+    # llamada.
+    write_mando_virtual
     [ -f "$MANDO_VIRTUAL_PY" ] || {
-        say "AVISO: falta mando_virtual.py; no se activa"; return 1; }
+        say "AVISO: no se pudo escribir mando_virtual.py; no se activa"; return 1; }
     [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || {
         say "AVISO: sin Python para el mando virtual"; return 1; }
     if [ ! -w /dev/uinput ] && [ ! -w /dev/input/uinput ]; then
@@ -4758,10 +4890,57 @@ mando_virtual_start() {
         say "       virtual. (No hace falta root para jugar; solo para esto.)"
         return 1
     fi
+    # FALTA evdev? SE INSTALA AQUI MISMO, igual que hace el mapeador de .keys.
+    #
+    # Esto costo una tarde entera. En el registro del 16/09 a las 23:12 se ve:
+    #
+    #   [+] Mando virtual activado (xbox)
+    #   mando_virtual: falta python-evdev
+    #
+    # Las dos en el mismo segundo. mando_virtual.py necesita python-evdev, se
+    # moria al arrancar, y aqui se daba por bueno porque lanzar_suelto habia
+    # devuelto un PID. El usuario leia "activado" y no funcionaba nada.
+    #
+    # El mapeador de .keys ya resolvia esto desde hace tiempo -si falta evdev,
+    # lo instala y sigue-. Aqui no estaba, y son la misma necesidad.
+    if ! evdev_disponible log; then
+        say "Falta el modulo evdev para el mando virtual; intentando instalarlo..."
+        loading_say "Preparando el mando virtual..."
+        instalar_evdev >/dev/null 2>&1
+        loading_clear
+        if ! evdev_disponible log; then
+            say "AVISO: mando virtual NO activado: falta el modulo python evdev"
+            say "       Arreglalo en: Runners y herramientas -> Instalar y"
+            say "       actualizar componentes -> Instalar evdev"
+            return 1
+        fi
+        say "[+] evdev instalado; el mando virtual ya puede funcionar"
+    fi
     WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo")" \
         || WP_MANDO_VIRTUAL_PID=""
+    # SE COMPRUEBA QUE SIGUE VIVO, no solo que arrancara.
+    #
+    # lanzar_suelto devuelve un PID en cuanto el proceso existe, aunque se
+    # muera al instante siguiente. Decir "activado" de algo que ya esta muerto
+    # es peor que no decir nada: manda a buscar el fallo a otra parte.
     if [ -n "$WP_MANDO_VIRTUAL_PID" ]; then
-        say "[+] Mando virtual activado ($modo)"
+        sleep 1
+        # NO VALE "kill -0": UN ZOMBI LO PASA.
+        #
+        # Un proceso que ya murio pero cuyo padre no lo ha recogido sigue
+        # existiendo como entrada en /proc, y kill -0 dice que si. Con eso, el
+        # aviso volvia a mentir. Se mira el ESTADO en /proc/<pid>/stat: la Z es
+        # zombi, o sea muerto para lo que nos importa.
+        local _est=""
+        [ -r "/proc/$WP_MANDO_VIRTUAL_PID/stat" ] \
+            && _est="$(awk '{print $3}' "/proc/$WP_MANDO_VIRTUAL_PID/stat" 2>/dev/null)"
+        if [ -n "$_est" ] && [ "$_est" != Z ]; then
+            say "[+] Mando virtual activado ($modo)"
+        else
+            WP_MANDO_VIRTUAL_PID=""
+            say "AVISO: el mando virtual arranco y se murio en el acto."
+            say "       El motivo esta unas lineas mas abajo en el registro."
+        fi
     else
         say "AVISO: el mando virtual no arranco (mira el registro)"
     fi
@@ -4875,6 +5054,10 @@ WP_JUGANDO=0                             # 1 = hay una partida en marcha
 # Plazos al preparar un prefijo, en segundos. Se pueden cambiar en
 # settings.conf; estan ahi porque quedarse mirando una pantalla quieta sin
 # saber cuanto va a durar es lo que hace pensar que WProton se ha colgado.
+# El GENERAL se llama distinto que el campo del perfil a proposito: si los dos
+# se llamaran STEAM_OVERLAY, load_profile pisaria el general en cada
+# lanzamiento y el ajuste de settings.conf no serviria para nada.
+STEAM_OVERLAY_GENERAL=1                  # lo que significa "auto" en el perfil
 WP_WINEBOOT_TIMEOUT=180                  # re-registrar el prefijo con otro wine
 WP_WINESERVER_TIMEOUT=20                 # cerrar los procesos de un prefijo
 # EL RUNNER EN USO, DECLARADO AQUI Y NO SOLO DENTRO DE build_runner_cmd.
@@ -4887,6 +5070,32 @@ WP_WINESERVER_TIMEOUT=20                 # cerrar los procesos de un prefijo
 #
 # Declaradas vacias aqui, quien las lea antes de tiempo se encuentra un valor
 # vacio y sigue, en vez de tumbar WProton.
+# LA SUPERPOSICION DE STEAM SE GUARDA APARTE Y SE DESEXPORTA.
+#
+# Cuando WProton se abre desde el modo Juego, Steam le mete su
+# gameoverlayrenderer.so en LD_PRELOAD, con la ruta de 32 y la de 64 bits. Eso
+# lo hereda TODO lo que lanzamos por debajo -bash, python, curl, unsquashfs...-
+# y cada proceso de 64 bits escupe en su salida de error:
+#
+#   ERROR: ld.so: object '.../ubuntu12_32/gameoverlayrenderer.so' from
+#   LD_PRELOAD cannot be preloaded (wrong ELF class: ELFCLASS32): ignored.
+#
+# En el registro del 15/09 eso eran 93 de 1073 lineas: UN 8% DEL REGISTRO en
+# ruido que no dice nada, y que ademas aparecia entremezclado con el
+# diagnostico de ventanas y lo hacia mucho mas dificil de leer. Depurar cuesta
+# el doble cuando una linea de cada doce es basura.
+#
+# Con "export -n" el valor SE QUEDA en el shell -asi que build_runner_cmd sigue
+# sabiendo que Steam nos lo paso- pero deja de heredarse. Al juego se le pasa
+# explicitamente, con "env LD_PRELOAD=...", solo cuando toca.
+WP_LD_PRELOAD_STEAM="${LD_PRELOAD:-}"
+if [ -n "$WP_LD_PRELOAD_STEAM" ]; then
+    export -n LD_PRELOAD 2>/dev/null || true
+fi
+WP_PAD_WHY=""                            # por que se decidio asi el mando
+WP_T0_JUEGO=0                            # cuando arranco el juego (epoch)
+WP_CIERRE_PEDIDO=0                       # 1 = el cierre lo pedimos nosotros
+WP_CIERRE_GRACIA=20                      # segundos de gracia: ver cierre_desde_fuera
 RUNNER_KIND=""                           # "proton" | "wine" | "nativo"
 RUN_CMD=()                               # la orden con la que se lanza el juego
 WP_PRIMERA_VEZ=0                         # 1 = puesta en marcha inicial
@@ -13609,95 +13818,263 @@ ge_serie_y_tag() {
     done
 }
 
-ge_tags_elegir() {
-    # De la lista CRUDA de etiquetas (por la entrada), las que se ofrecen.
-    #
-    # VA APARTE DE LA DESCARGA PARA PODER PROBARLA. Antes esto estaba pegado
-    # al curl y no habia forma de comprobar que salia lo que tenia que salir.
-    #
-    # Que se ofrece:
-    #   - las 8 mas recientes, sean de la serie que sean
-    #   - TODAS las versiones de las CUATRO series mas nuevas
-    #   - la ultima de cada serie mas antigua
-    #
-    # POR QUE CUATRO SERIES ENTERAS Y NO UNA
-    #
-    # Antes solo salia entera la serie anterior a la actual. Con la 11 en la
-    # calle eso dejaba fuera la 9 y la 8 completas, y de la 8 solo aparecia la
-    # 8-32. La serie 8 la piden bastantes juegos antiguos -la pidieron los
-    # testers- y bajarla a mano no deberia hacer falta.
-    local todas; todas="$(cat)"
-    [ -n "$todas" ] || return 1
+# ge_tags_curated y ge_tags_elegir SE QUITARON al pasar el menu a series.
+#
+# Escogian "las 8 mas recientes + las cuatro series nuevas enteras + la ultima
+# de cada serie vieja", que era la forma de que una lista sola no fuera
+# inmanejable. Con el menu por series eso sobra: cada serie se ofrece entera y
+# se piden solo sus paginas. Estan en el historial de git si algun dia hace
+# falta volver a mirarlas.
 
-    # DOS ESQUEMAS DE NOMBRE, no uno.
-    #
-    # GloriousEggroll cambio el nombre de las etiquetas en la serie 7:
-    #
-    #   serie 7 y siguientes:  GE-Proton7-55, GE-Proton11-6
-    #   serie 6 y anteriores:  6.21-GE-2, 6.20-GE-1, 4.6-GE-2
-    #
-    # O SEA QUE NO EXISTE NINGUN "GE-Proton6-*". El filtro solo aceptaba el
-    # formato nuevo, asi que la serie 6 entera quedaba fuera y no habia forma
-    # de bajarla desde aqui. Y poner "6" en la lista de series completas no
-    # servia de nada, porque ninguna etiqueta casaba.
-    local _re_dos='^(GE-Proton[0-9]+-[0-9]+|[0-9]+\.[0-9]+-GE-[0-9]+)$'
-    local validas
-    validas="$(printf '%s\n' "$todas" | grep -E "$_re_dos")"
-    [ -n "$validas" ] || return 1
+K4_REPO="Kron4ek/Wine-Builds"
 
-    # Las cuatro series mas nuevas, por numero (en los dos formatos).
-    local series
-    series="$(printf '%s\n' "$validas" | ge_serie_de_lista | sort -n | uniq | tail -n4)"
-    # MAS LAS QUE SE PIDEN POR NOMBRE, aunque ya sean viejas.
+k4_pagina_tags() { gh_pagina_tags "$K4_REPO" "$1"; }
+
+k4_serie_de_lista() {
+    # El numero de serie de cada etiqueta que llega por la entrada.
     #
-    # "las cuatro mas nuevas" es una regla que envejece: con la 11 en la calle
-    # deja fuera la 6 entera, y de esa solo aparecia su ultima version. La
-    # serie 6 la piden juegos antiguos y bastante arcade, y es justo donde
-    # importa poder probar version por version, porque la que funciona no
-    # siempre es la ultima de la serie.
-    #
-    # Se ponen por numero y no por posicion para que no se caigan solas cuando
-    # salga la serie 12.
-    #
-    # Se pide la 6 y la 7. La 7 porque al ofrecer la 6 entera quedaba coja: con
-    # la 11 en la calle, "las cuatro mas nuevas" son 8-11, asi que se podian
-    # bajar todas las de la 6 y todas las de la 8, pero de la 7 solo una. Y la 7
-    # es la serie con mas versiones de todas (55).
-    series="$series ${GE_SERIES_COMPLETAS:-6 7}"
-    {
-        printf '%s\n' "$todas" | head -n 8
-        # La ultima de CADA serie, en los dos formatos.
-        printf '%s\n' "$validas" | ge_serie_y_tag \
-            | sort -k1,1n -k2,2V \
-            | awk '{last[$1]=$2} END{for (k in last) print last[k]}'
-        # Y enteras las series completas (las nuevas mas las pedidas).
-        # Se filtra a numeros: un valor raro en GE_SERIES_COMPLETAS no debe
-        # colar una expresion.
-        local _s
-        for _s in $(printf '%s\n' $series | grep -E '^[0-9]+$' | sort -n | uniq); do
-            printf '%s\n' "$validas" | ge_serie_y_tag \
-                | awk -v s="$_s" '$1==s {print $2}'
-        done
-    } | sort -Vr | awk 'NF && !seen[$0]++'
+    # Se coge el PRIMER numero del nombre, y no una posicion fija, porque
+    # Kron4ek mezcla dos formas: "11.13" para los builds normales y algo como
+    # "11.0-2-proton" para los de Proton. El primer numero vale para las dos.
+    sed -E 's/[^0-9]*([0-9]+).*/\1/'
 }
 
-ge_tags_curated() {
-    # Las etiquetas de GE-Proton que se ofrecen para descargar.
+k4_es_proton() {
+    # $1 = etiqueta. Los builds de Proton son publicaciones APARTE, con su
+    # propia etiqueta, no una variante dentro de la misma.
+    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in *proton*) return 0 ;; esac
+    return 1
+}
+
+k4_serie_elegir() {
+    # Igual que en GE-Proton: primero la serie, y solo se piden sus paginas.
     #
-    # TRES PAGINAS DE LA API. Con una sola (100 releases) no se llegaba a las
-    # series antiguas: entre la 11, la 10 y la 9 ya se pasan de 50, y la 8
-    # quedaba cortada por la mitad. Con dos se llegaba a la 8, pero la 6 -que
-    # ahora se ofrece entera- queda mas atras todavia.
-    # "all" SE INICIALIZA. Con set -u, "$all" antes de existir mata el script
-    # -y aqui, ademas, en silencio: el usuario solo veria la lista vacia-.
-    local all="" p
-    for p in 1 2 3; do
-        all="$all$(curl -fsSL "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases?per_page=100&page=$p" \
-            | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
-"
+    # Kron4ek publica cada una o dos semanas desde hace años: la lista entera
+    # son cientos de versiones, y antes solo se ofrecian las 12 ultimas, asi
+    # que una version de la serie 9 no habia forma de bajarla desde aqui.
+    local p1 nueva s ops="" sel
+    p1="$(k4_pagina_tags 1)" || return 1
+    nueva="$(printf '%s\n' "$p1" | k4_serie_de_lista \
+             | grep -E '^[0-9]+$' | sort -n | tail -n1)"
+    [ -n "$nueva" ] || return 1
+    s="$nueva"
+    while [ "$s" -ge "${K4_SERIE_MIN:-6}" ]; do
+        ops="$ops${ops:+
+}Serie $s.x"
+        s=$(( s - 1 ))
     done
-    [ -n "$(printf '%s' "$all" | tr -d '[:space:]')" ] || return 1
-    printf '%s\n' "$all" | ge_tags_elegir
+    # shellcheck disable=SC2046
+    sel="$(IFS=$'\n'; set -f; menu "Wine Kron4ek - elige la serie
+
+Se cargan solo las versiones de la serie que elijas." \
+        $(printf '%s' "$ops") \
+        "<< Volver")" || return 1
+    case "$sel" in
+        "Serie "*) printf '%s' "$sel" | sed -E 's/^Serie ([0-9]+)\.x$/\1/' ;;
+        *)         return 1 ;;
+    esac
+}
+
+k4_variante_elegir() {
+    # La variante, dentro de la serie ya elegida.
+    #
+    # LOS NOMBRES SON LOS DEL PROPIO REPOSITORIO, no inventados: cada paquete
+    # se llama "wine-<version>-<variante>.tar.xz", asi que la variante elegida
+    # localiza el paquete exacto sin tener que ensenar la lista cruda.
+    #
+    #   amd64                      vanilla, necesita librerias de 32 bits
+    #   amd64-wow64                lo mismo SIN necesitar multilib
+    #   staging-*                  con el parcheado Staging
+    #   staging-tkg-*              Staging mas los parches de wine-tkg
+    #   x86                        solo para sistemas de 32 bits
+    #
+    # Los de Proton van aparte porque son publicaciones distintas.
+    # LAS FILAS VAN SOLO CON EL NOMBRE, Y LA EXPLICACION EN LA CABECERA.
+    #
+    # Antes cada fila llevaba su "(vanilla, sin multilib)" detras, rellenado con
+    # espacios para que los parentesis quedaran en columna. NO QUEDABAN: el menu
+    # usa la fuente por defecto de pygame, que es PROPORCIONAL, asi que una "i"
+    # y una "m" no miden lo mismo y rellenar con espacios no alinea nada. En una
+    # consola se veia el escalon a simple vista.
+    #
+    # Con la fuente proporcional solo hay dos salidas: cambiar el motor de menus
+    # a monoespaciada -para una lista, no compensa- o que no haya nada detras
+    # del nombre. Asi las diez filas quedan alineadas de verdad, y la
+    # explicacion va arriba, donde hay sitio para escribirla en condiciones.
+    local sel
+    sel="$(menu "Wine Kron4ek $1.x - elige la variante
+
+wow64 no necesita librerias de 32 bits: es la que quieres en
+SteamOS y en casi cualquier equipo de hoy. amd64 hace lo mismo
+pero SI las necesita en el sistema, y x86 es solo para sistemas
+de 32 bits.
+
+staging lleva el parcheado Staging, y tkg ademas los parches de
+wine-tkg. Wine Proton es el de Valve, que Kron4ek publica aparte." \
+        "wow64" \
+        "staging-tkg-wow64" \
+        "staging-wow64" \
+        "amd64" \
+        "staging-tkg-amd64" \
+        "staging-amd64" \
+        "x86" \
+        "staging-x86" \
+        "staging-tkg-x86" \
+        "Wine Proton" \
+        "<< Volver")" || return 1
+    # Coincidencia EXACTA, ya que no hay texto detras: con "patron*" un dia
+    # alguien añade una fila que empieza igual y se elige la variante de al lado.
+    case "$sel" in
+        "wow64")                   printf 'amd64-wow64' ;;
+        "staging-tkg-wow64")       printf 'staging-tkg-amd64-wow64' ;;
+        "staging-wow64")           printf 'staging-amd64-wow64' ;;
+        "amd64")                   printf 'amd64' ;;
+        "staging-tkg-amd64")       printf 'staging-tkg-amd64' ;;
+        "staging-amd64")           printf 'staging-amd64' ;;
+        "x86")                     printf 'x86' ;;
+        "staging-x86")             printf 'staging-x86' ;;
+        "staging-tkg-x86")         printf 'staging-tkg-x86' ;;
+        "Wine Proton")             printf 'proton' ;;
+        *)                         return 1 ;;
+    esac
+}
+
+k4_tags_de_serie() {
+    # $1 = serie, $2 = "proton" para las publicaciones de Proton.
+    local quiere="$1" modo="${2:-}" p pag menor t tags=""
+    for p in 1 2 3 4 5; do
+        pag="$(k4_pagina_tags "$p")" || break
+        [ -n "$pag" ] || break
+        while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            [ "$(printf '%s\n' "$t" | k4_serie_de_lista)" = "$quiere" ] || continue
+            if [ "$modo" = proton ]; then
+                k4_es_proton "$t" && tags="$tags$t
+"
+            else
+                k4_es_proton "$t" || tags="$tags$t
+"
+            fi
+        done <<EOFK4
+$pag
+EOFK4
+        # Se para en cuanto se pasa de largo: la API va de la mas nueva a la
+        # mas vieja, asi que por debajo de la serie pedida ya no hay nada suyo.
+        menor="$(printf '%s\n' "$pag" | k4_serie_de_lista \
+                 | grep -E '^[0-9]+$' | sort -n | head -n1)"
+        [ -n "$menor" ] && [ "$menor" -lt "$quiere" ] && break
+        # Y UNA PAGINA CON MENOS DE 100 ES LA ULTIMA QUE HAY.
+        #
+        # Sin esto, la serie mas vieja seguia pidiendo paginas que no existen:
+        # su numero nunca baja de si mismo, asi que el corte de arriba no
+        # entraba. Eran dos consultas tiradas a la basura en cada visita.
+        [ "$(printf '%s\n' "$pag" | grep -c .)" -lt 100 ] && break
+    done
+    printf '%s\n' "$tags" | sort -Vr | awk 'NF && !seen[$0]++'
+}
+
+gh_pagina_tags() {
+    # $1 = repo, $2 = numero de pagina de la API (100 publicaciones cada una).
+    #
+    # POR QUE HAY CACHE
+    #
+    # Lo que hacia lento el menu de GE-Proton no era pintar la lista: eran TRES
+    # llamadas seguidas a la API de GitHub, una detras de otra, cada vez que se
+    # entraba. Y GE-Proton no saca una version cada cinco minutos: lo que se
+    # bajo hace un rato sigue valiendo.
+    #
+    # Se guarda por paginas y no la lista entera, porque asi el menu por
+    # familias puede pedir SOLO las paginas que necesite.
+    local repo="$1" p="$2" f t
+    f="$RUNTIME_DIR/.tags_$(printf '%s' "$repo" | tr '/.' '__')_p$p"
+    if [ -f "$f" ] \
+       && [ -n "$(find "$f" -mmin "-$(( ${GE_CACHE_HORAS:-6} * 60 ))" 2>/dev/null)" ]; then
+        cat "$f"
+        return 0
+    fi
+    t="$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=100&page=$p" \
+        | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
+    if [ -n "$t" ]; then
+        printf '%s\n' "$t" > "$f" 2>/dev/null
+        printf '%s\n' "$t"
+        return 0
+    fi
+    # SIN RED, LO VIEJO ES MEJOR QUE NADA: una lista de ayer deja elegir; una
+    # lista vacia deja al usuario sin poder bajar ningun runner.
+    if [ -f "$f" ]; then
+        log "$repo: sin respuesta de GitHub, se usa la lista guardada (pagina $p)" WARN
+        cat "$f"
+        return 0
+    fi
+    return 1
+}
+
+ge_pagina_tags() { gh_pagina_tags "GloriousEggroll/proton-ge-custom" "$1"; }
+
+ge_serie_elegir() {
+    # El menu de familias. Se construye con UNA SOLA pagina de la API.
+    #
+    # La serie mas nueva se saca de lo que haya publicado, no de una lista
+    # escrita a mano: el dia que salga la 12 aparece sola.
+    local p1 nueva s ops="" sel
+    p1="$(ge_pagina_tags 1)" || return 1
+    nueva="$(printf '%s\n' "$p1" | ge_serie_de_lista \
+             | grep -E '^[0-9]+$' | sort -n | tail -n1)"
+    [ -n "$nueva" ] || return 1
+    s="$nueva"
+    while [ "$s" -ge "${GE_SERIE_MIN:-6}" ]; do
+        # EL SALTO DE LINEA, LITERAL Y NO POR $( ).
+        #
+        # Con "$ops$([ -n "$ops" ] && printf '\n')Serie $s.x" las seis familias
+        # salian PEGADAS en una sola opcion del menu: la sustitucion de ordenes
+        # se come los saltos de linea del final, asi que $(printf '\n') vale
+        # cadena vacia. Aqui va literal dentro de la expansion.
+        ops="$ops${ops:+
+}Serie $s.x"
+        s=$(( s - 1 ))
+    done
+    # SOLO LAS FAMILIAS. Ni "las mas recientes" ni "todas".
+    #
+    # "Las mas recientes" no aporta nada teniendo la serie nueva entera, y
+    # "todas" era justo lo que habia que quitar: volvia a pedir las tres
+    # paginas y a soltar cientos de versiones de golpe. Una lista con una
+    # opcion que tarda medio minuto invita a pulsarla.
+    # shellcheck disable=SC2046
+    sel="$(IFS=$'\n'; set -f; menu "GE-Proton - elige la serie
+
+Se cargan solo las versiones de la serie que elijas." \
+        $(printf '%s' "$ops") \
+        "<< Volver")" || return 1
+    case "$sel" in
+        "Serie "*) printf '%s' "$sel" | sed -E 's/^Serie ([0-9]+)\.x$/\1/' ;;
+        *)         return 1 ;;
+    esac
+}
+
+ge_tags_de_serie() {
+    # $1 = numero de serie, "recientes" o "todas".
+    local quiere="$1" p pag menor tags=""
+    for p in 1 2 3 4 5; do
+        pag="$(ge_pagina_tags "$p")" || break
+        [ -n "$pag" ] || break
+        tags="$tags$(printf '%s\n' "$pag" | ge_serie_y_tag \
+                     | awk -v s="$quiere" '$1==s {print $2}')
+"
+        # SE PARA EN CUANTO SE PASA DE LARGO.
+        #
+        # La API devuelve de la mas nueva a la mas vieja, asi que si en esta
+        # pagina ya hay algo por debajo de la serie pedida, las siguientes son
+        # todavia mas viejas y no hace falta pedirlas. Para la serie 11 eso es
+        # UNA consulta en vez de tres.
+        menor="$(printf '%s\n' "$pag" | ge_serie_de_lista \
+                 | grep -E '^[0-9]+$' | sort -n | head -n1)"
+        [ -n "$menor" ] && [ "$menor" -lt "$quiere" ] && break
+        # Una pagina con menos de 100 es la ultima que hay.
+        [ "$(printf '%s\n' "$pag" | grep -c .)" -lt 100 ] && break
+    done
+    printf '%s\n' "$tags" \
+        | grep -E '^(GE-Proton[0-9]+-[0-9]+|[0-9]+\.[0-9]+-GE-[0-9]+)$' \
+        | sort -Vr | awk 'NF && !seen[$0]++'
 }
 
 SHA_MANIFIESTO=""     # se fija en cuanto se conoce RUNTIME_DIR
@@ -13745,14 +14122,14 @@ sha_comprobar() {
     return 1
 }
 
-gh_digest() {
-    # Huella que publica GitHub para un fichero de una release.
-    # $1 = json de la release, $2 = nombre del fichero
-    [ -n "$1" ] || return 1
-    printf '%s' "$1" | tr ',' '\n' \
-        | grep -A2 -F "\"$2\"" 2>/dev/null \
-        | grep -o '"digest": *"[^"]*"' | head -n1 | cut -d'"' -f4
-}
+# gh_digest SE QUITO: nadie la llamaba.
+#
+# Leia la huella que GitHub publica para cada fichero de una release. Habria
+# servido para comprobar una descarga contra la huella del propio GitHub, pero
+# nunca se conecto: lo que hay hoy es el manifiesto propio de huellas
+# (SHA_MANIFIESTO y "Comprobar lo descargado"), que cubre lo mismo con datos
+# nuestros. Si algun dia se quiere comprobar contra GitHub, esta en el
+# historial de git.
 
 dl() {
     # Descarga y comprueba. $1 = url, $2 = destino, $3 = huella esperada
@@ -13805,20 +14182,27 @@ dl_bruto() {
         done
         wait $pid
         local rc=$?
-        # LOS CODECS DE 32 BITS, EN LA PRIMERA INSTALACION.
-    #
-    # Son 5 MB al lado de los cientos del runner, y evitan el caso que costo
-    # dos dias de diagnostico: un juego de 32 bits que se oye y no se ve porque
-    # falta avdec_wmv3. Ponerlos aqui significa que nadie tiene que enterarse
-    # de que existen.
-    #
-    # Si falla la descarga NO se aborta la instalacion: se sigue sin ellos y la
-    # opcion queda en Casos especiales para reintentarlo. Un codec de video no
-    # justifica dejar a alguien sin WProton.
-    progress_set 95 "Codecs de video de 32 bits..."
-    gst_portable_instalar >/dev/null 2>&1 \
-        || log "Codecs de 32 bits no instalados en el primer arranque" WARN
-    progress_set 100 "Listo"
+        # AQUI NO SE INSTALA NADA. ESTO SOLO DESCARGA.
+        #
+        # Habia pegado aqui el bloque de los codecs de 32 bits, que es de la
+        # PRIMERA PUESTA EN MARCHA. La sangria delatada -cuatro espacios en
+        # medio de un bloque de ocho- es la firma de siempre: un parche anclado
+        # por texto que cayo en la funcion equivocada.
+        #
+        # Lo que provocaba, y no era cosmetico:
+        #
+        #   1. dl_bruto la usan VEINTIDOS funciones. Cada descarga de WProton
+        #      -un runner, el prefijo de TeknoParrot, ReShade, Mako, los
+        #      perfiles de la comunidad...- terminaba instalando los codecs.
+        #   2. La URL del pack es todavia un marcador PENDIENTE, asi que
+        #      gst_portable_instalar se va por su rama de error... y esa rama
+        #      llama a ui_error, que ABRE UN DIALOGO Y ESPERA.
+        #   3. Con la barra de progreso ya en pantalla, ese dialogo no se ve ni
+        #      se puede contestar: la descarga se quedaba clavada en el 95% con
+        #      el rotulo "Codecs de video de 32 bits...".
+        #
+        # Los codecs se instalan donde toca, en instalar_runtime.
+        progress_set 100 "Listo"
         progress_stop
         return $rc
     elif [ "$HAS_ZENITY" = 1 ]; then
@@ -14281,31 +14665,72 @@ setup_proton_custom() {
     return 0
 }
 
-setup_proton() {
-    # Descarga rapida: último GE-Proton x86_64 (excluye aarch64)
-    say "Buscando último GE-Proton x86_64..."
-    local url
-    url="$(gh_latest_asset "GloriousEggroll/proton-ge-custom" 'GE-Proton.*\.tar\.gz$')"
-    [ -z "$url" ] && { fallo "No se pudo obtener la URL de GE-Proton"; return 1; }
-    local name; name="$(basename "$url" .tar.gz)"
+setup_runner_ultimo() {
+    # BAJA LA ULTIMA VERSION DE UN RUNNER, por clase: ge | umu | wine.
+    #
+    # POR QUE UNA SOLA FUNCION Y NO TRES
+    #
+    # Antes solo existia setup_proton, para GE-Proton. Al pedir lo mismo para
+    # Wine y para UMU-Proton -que son los otros dos que la gente usa- la
+    # tentacion era copiar la funcion tres veces. Eso sale caro: cada copia
+    # tendria su descarga, su extraccion y su "ya estas al dia", y en cuanto se
+    # arregle una las otras dos se quedan atras. Aqui solo cambian el
+    # repositorio, el patron del fichero y el nombre que se le dice al usuario.
+    #
+    # GE-PROTON SIGUE SIENDO EL DE SERIE: esto no cambia el runner por defecto,
+    # solo permite tener los otros dos al dia con una pulsacion.
+    local clase="${1:-ge}" repo patron etiqueta url name
+    case "$clase" in
+        ge)   repo="GloriousEggroll/proton-ge-custom"
+              patron='GE-Proton.*\.tar\.gz$'
+              etiqueta="GE-Proton" ;;
+        umu)  repo="Open-Wine-Components/umu-proton"
+              patron='UMU-Proton-.*\.tar\.gz$'
+              etiqueta="UMU-Proton" ;;
+        wine) # DE KRON4EK, Y LA VARIANTE staging-wow64 A PROPOSITO.
+              #
+              # staging trae mas arreglos que el vanilla, y wow64 NO necesita
+              # librerias de 32 bits, que es justo lo que no se puede instalar
+              # en una SteamOS inmutable. Quien quiera otra variante las tiene
+              # todas en el menu de Wine Kron4ek.
+              repo="$K4_REPO"
+              patron='wine-.*-staging-amd64-wow64\.tar\.xz$'
+              etiqueta="Wine (Kron4ek staging wow64)" ;;
+        *)    fallo "setup_runner_ultimo: clase desconocida '$clase'"; return 1 ;;
+    esac
+    say "Buscando el ultimo $etiqueta x86_64..."
+    url="$(gh_latest_asset "$repo" "$patron")"
+    if [ -z "$url" ]; then
+        fallo "No se pudo obtener la URL de $etiqueta"
+        return 1
+    fi
+    # El nombre de la carpeta sale del fichero sin extension: asi vale para
+    # .tar.gz y para .tar.xz sin tener que saber cual toca.
+    name="$(basename "$url")"
+    name="${name%.tar.gz}"; name="${name%.tar.xz}"; name="${name%.tar.zst}"
     if [ -d "$RUNNERS_DIR/$name" ]; then
         if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
-            say "GE-Proton ya al dia: $name"
+            say "$etiqueta ya al dia: $name"
         else
-            ui_info "GE-Proton ya al dia: $name"
+            ui_info "$etiqueta ya al dia: $name"
         fi
         return 0
     fi
     local tmp="$RUNNERS_DIR/.dl_tmp"; rm -rf "$tmp"; mkdir -p "$tmp"
-    dl "$url" "$tmp/$(basename "$url")" || { fallo "Fallo descargando GE-Proton"; return 1; }
-    extract_archive "$tmp/$(basename "$url")" "$RUNNERS_DIR" || { fallo "Fallo extrayendo GE-Proton"; return 1; }
+    dl "$url" "$tmp/$(basename "$url")" || { fallo "Fallo descargando $etiqueta"; return 1; }
+    extract_archive "$tmp/$(basename "$url")" "$RUNNERS_DIR" \
+        || { fallo "Fallo extrayendo $etiqueta"; return 1; }
     rm -rf "$tmp"
     if [ "${WP_INSTALL_SILENCIOSO:-0}" = 1 ]; then
-        say "GE-Proton instalado: $name"
+        say "$etiqueta instalado: $name"
     else
-        ui_info "GE-Proton instalado: $name"
+        ui_info "$etiqueta instalado: $name"
     fi
 }
+
+# setup_proton se queda como envoltura: la llaman la primera puesta en marcha y
+# el actualizador, y no hay motivo para tocar esos sitios.
+setup_proton() { setup_runner_ultimo ge; }
 
 download_runner_tag() {
     # $1 = repo github, $2 = tag, $3 = 1 si es dwproton (fallback dawn.wine)
@@ -14393,21 +14818,27 @@ download_runner_menu() {
     done <<EOFAL
 $RUNNERS_ALOJADOS
 EOFAL
+    # EL ORDEN ES POR USO, NO POR ORDEN DE APARICION.
+    #
+    # Los tres primeros son los que se bajan casi siempre. Los alojados por
+    # nosotros -hoy solo Proton-Experimental- van AL FINAL: son el recurso para
+    # cuando algo no va, no lo primero que hay que elegir, y estaban arriba solo
+    # porque la lista se montaba pegando su bloque delante.
     # shellcheck disable=SC2086
     # shellcheck disable=SC2046
     src="$(IFS=$'\n'; set -f; menu "Descargar runner - elige fuente" \
-        $(printf '%s' "$filas_aloj") \
         "GE-Proton [proton] - GloriousEggroll, el estandar" \
-        "Proton-CachyOS [proton] - optimizado x86-64-v3" \
+        "Wine Kron4ek [wine] - vanilla / staging / tkg" \
         "UMU-Proton [proton] - Open Wine Components, el de umu" \
+        "Proton-CachyOS [proton] - optimizado x86-64-v3" \
         "DWProton [proton] - Dawn Winery, fixes anime/gacha" \
         "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)" \
         "Proton-LG [proton] - Castro-Fidel, basado en GE" \
         "Wine-GE [wine] - GloriousEggroll, juegos fuera de Steam" \
-        "Wine Kron4ek [wine] - vanilla / staging / tkg" \
         "Wine Soda [wine] - Bottles, basado en el Wine de Valve" \
         "Wine Caffe [wine] - Bottles, Wine TKG estable" \
         "WProton Custom [proton] - ${GE_CUSTOM_NAME:-Proton7-38-Frankenstein}" \
+        $(printf '%s' "$filas_aloj") \
         "<< Volver")" || return
     case "$src" in
         *)
@@ -14457,15 +14888,40 @@ settings.conf."
         *) return ;;
     esac
 
-    say "Consultando versiones de $repo..."
-    local tags
-    if [ "$repo" = "GloriousEggroll/proton-ge-custom" ]; then
-        tags="$(ge_tags_curated)"
+    local tags k4_var=""
+    if [ "$repo" = "$K4_REPO" ]; then
+        # SERIE -> VARIANTE -> VERSION, y el paquete se localiza solo.
+        #
+        # Antes esto pedia las 12 ultimas etiquetas y luego ensenaba los diez o
+        # doce paquetes de la publicacion con su nombre crudo
+        # (wine-11.13-staging-tkg-amd64-wow64.tar.xz). Dos problemas: de la
+        # serie 9 o la 8 no habia forma de bajar nada, y habia que leerse los
+        # nombres para saber cual era cual.
+        local k4_serie
+        k4_serie="$(k4_serie_elegir)" || return
+        k4_var="$(k4_variante_elegir "$k4_serie")" || return
+        if [ "$k4_var" = proton ]; then
+            say "Consultando los Wine Proton de la serie $k4_serie..."
+            tags="$(k4_tags_de_serie "$k4_serie" proton)"
+            [ -z "$tags" ] && { ui_error "No hay builds de Wine Proton en la serie $k4_serie."; return; }
+        else
+            say "Consultando la serie $k4_serie de $repo..."
+            tags="$(k4_tags_de_serie "$k4_serie")"
+        fi
+    elif [ "$repo" = "GloriousEggroll/proton-ge-custom" ]; then
+        # POR FAMILIAS, no todas de golpe: son cientos de versiones y tres
+        # consultas a GitHub cada vez que se entraba aqui.
+        local _ge_serie
+        _ge_serie="$(ge_serie_elegir)" || return
+        say "Consultando la serie $_ge_serie de $repo..."
+        tags="$(ge_tags_de_serie "$_ge_serie")"
     elif [ -n "$tagfilter" ]; then
+        say "Consultando versiones de $repo..."
         # el repo mezcla familias (WINE_LG / PROTON_LG / PROTON_STEAM):
         # pedir más releases y quedarnos con la familia elegida
         tags="$(gh_release_tags "$repo" 40 | grep -E "$tagfilter" || true)"
     else
+        say "Consultando versiones de $repo..."
         tags="$(gh_release_tags "$repo")"
     fi
     [ -z "$tags" ] && { ui_error "No se pudieron listar versiones de $repo"; return; }
@@ -14484,7 +14940,40 @@ settings.conf."
     [ -z "$assets" ] && { ui_error "Sin paquetes x86_64 en $tag"; return; }
     local url count
     count="$(printf '%s\n' "$assets" | grep -c .)"
-    if [ "$count" -eq 1 ]; then
+    # LA VARIANTE YA ELEGIDA LOCALIZA EL PAQUETE.
+    #
+    # Cada paquete se llama "wine-<version>-<variante>.tar.xz", asi que el
+    # sufijo es exacto: no hace falta ensenar los doce nombres crudos.
+    #
+    # Si en esa version no existe -las series viejas no traian todas las
+    # variantes- no se descarga otra a la ligera: se dice y se ensena lo que
+    # SI hay, que es mejor que instalar un Wine que no era el pedido.
+    if [ -n "$k4_var" ] && [ "$k4_var" != proton ]; then
+        # EL NOMBRE COMPLETO, NO SOLO EL SUFIJO.
+        #
+        # Con "-${k4_var}.tar." la variante "amd64" cazaba TRES paquetes:
+        # wine-11.13-amd64, wine-11.13-staging-amd64 y
+        # wine-11.13-staging-tkg-amd64. Con un head -n1 detras, eso instala un
+        # Wine que no es el que se pidio y sin decir nada.
+        #
+        # Se construye el nombre entero con la version delante
+        # -"wine-11.13-amd64.tar"- y se busca literal, sin expresiones: asi
+        # solo puede casar el paquete exacto.
+        local _u_k4
+        _u_k4="$(printf '%s\n' "$assets" \
+                 | grep -F -- "/wine-${tag}-${k4_var}.tar" | head -n1)"
+        if [ -n "$_u_k4" ]; then
+            url="$_u_k4"
+            say "Paquete: $(basename "$_u_k4")"
+        else
+            ui_error "La version $tag no trae la variante $k4_var.
+
+Se te ensena lo que si trae."
+        fi
+    fi
+    if [ -n "${url:-}" ]; then
+        :
+    elif [ "$count" -eq 1 ]; then
         url="$assets"
     else
         local names sel
@@ -14652,6 +15141,34 @@ runner_wine_para_prefijo32() {
     return 1
 }
 
+runner_ultimo_de() {
+    # El runner instalado mas nuevo de una familia: ge | umu | wine.
+    #
+    # Se ordena con sort -V (por version, no alfabetico) porque si no
+    # "GE-Proton10-1" iria antes que "GE-Proton9-27" por empezar por 1.
+    local patron
+    case "${1:-}" in
+        ge)   patron='GE-Proton*' ;;
+        umu)  patron='UMU-Proton*' ;;
+        wine) patron='wine-*' ;;
+        *)    return 1 ;;
+    esac
+    find "$RUNNERS_DIR" -maxdepth 1 -type d -name "$patron" 2>/dev/null \
+        | sort -V | tail -n1
+}
+
+runner_etiqueta() {
+    # Como se ensena el valor de RUNNER en los menus.
+    case "${1:-}" in
+        "")           printf 'auto (ultimo GE-Proton)' ;;
+        bundled)      printf 'el incluido en el juego' ;;
+        latest:ge)    printf 'siempre el ultimo GE-Proton' ;;
+        latest:umu)   printf 'siempre el ultimo UMU-Proton' ;;
+        latest:wine)  printf 'siempre el ultimo Wine' ;;
+        *)            printf '%s' "$1" ;;
+    esac
+}
+
 get_runner_path() {
     if [ "${RUNNER:-}" = "bundled" ] && [ -n "$BUNDLED_RUNNER_DIR" ]; then
         printf '%s' "$BUNDLED_RUNNER_DIR"; return
@@ -14670,6 +15187,26 @@ get_runner_path() {
         sw="$(sys_wine_runners | head -n1 | sed 's/^sys:\(.*\) \[[a-z]*\]$/\1/')"
         [ -n "$sw" ] && swd="$(sys_runner_path "$sw")" && { printf '%s' "$swd"; return; }
     fi
+    # "SIEMPRE EL ULTIMO DE SU FAMILIA", sin fijar una version.
+    #
+    # RUNNER vacio ya significaba "el ultimo GE-Proton instalado". Ahora se
+    # puede pedir lo mismo con Wine y con UMU-Proton: asi el perfil no queda
+    # atado a una version concreta que en tres meses estara vieja, y al bajar
+    # una nueva el juego la coge sin tocar nada.
+    #
+    # Si la familia pedida no esta instalada NO se falla: se avisa y se sigue
+    # por el camino de siempre (el ultimo GE-Proton). Quedarse sin lanzar el
+    # juego por esto seria peor que lanzarlo con otro runner.
+    case "${RUNNER:-}" in
+        latest:*)
+            local _fam _ult
+            _fam="${RUNNER#latest:}"
+            _ult="$(runner_ultimo_de "$_fam")"
+            if [ -n "$_ult" ]; then
+                printf '%s' "$_ult"; return
+            fi
+            log "Runner 'latest:$_fam' pedido y no hay ninguno instalado; se usa el ultimo GE-Proton" WARN ;;
+    esac
     local ge
     ge="$(find "$RUNNERS_DIR" -maxdepth 1 -type d -name 'GE-Proton*' | sort -V | tail -n1)"
     [ -n "$ge" ] && { printf '%s' "$ge"; return; }
@@ -15133,254 +15670,47 @@ OBSEOF
     return 0
 }
 
-PROCESOS_PY="$RUNTIME_DIR/procesos.py"
-
-write_procesos() {
-    grep -q "WPROTON_HELPER procesos.py f0b031127973" "$PROCESOS_PY" 2>/dev/null && return 0
-    mkdir -p "$RUNTIME_DIR" 2>/dev/null
-    cat > "$PROCESOS_PY" <<'PROEOF'
-# WPROTON_HELPER procesos.py f0b031127973
-# -*- coding: utf-8 -*-
-# WProton - arbol de procesos
+# LOS DOS AJUSTES DE SDL SE LLAMABAN CASI IGUAL, Y SE CONFUNDIAN.
 #
-# Copyright (C) 2026  stshunz y colaboradores
+# Habia "Mando via SDL" en Rendimiento y compatibilidad y "Mandos por SDL en
+# este prefijo" en Casos especiales. Hacen cosas distintas -uno exporta
+# PROTON_USE_SDL para que WINE lea el mando por SDL, el otro escribe claves en
+# el registro DEL PREFIJO- y con esos nombres es imposible saber cual es cual.
+# Un tester siguio el aviso del registro, entro en el segundo y lo dio por
+# probado: perdimos una tanda de pruebas por el nombre.
 #
-# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
-# los terminos de la Licencia Publica General GNU (GPL), version 3 o
-# posterior, publicada por la Free Software Foundation.
+# Ahora cada fila dice lo que HACE, no la tecnologia que usa:
+#   "Que Wine lea el mando por SDL, no por hidraw"        (PAD_SDL)
+#   "Escribir SDL en el registro del prefijo (avanzado)"  (winebus_sdl_*)
+
+# EL PUENTE A procesos.py SE QUITO, Y EL MODULO CON EL.
 #
-# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
-# ----------------------------------------------------------------------------
-# QUE SUSTITUYE
+# procesos.py daba un subcomando "hijos <pid>" para listar los descendientes de
+# un proceso. Lo usaba una sola funcion, descendientes_nuestros, que a su vez no
+# la llamaba nadie: eran 223 lineas de Python EMPAQUETADAS EN CADA DESCARGA sin
+# que nada las invocara nunca.
 #
-#   el heredoc PYDESC de descendientes_nuestros()
+# Comprobado antes de quitarlo: ni una llamada a procesos_py en el script, ni un
+# modulo que importe procesos, ni ninguna referencia a la ruta del fichero. Cada
+# ayudante tiene su propio write_X llamado solo por su envoltura, asi que no
+# habia un escritor comun que lo arrastrara.
 #
-# PARA QUE SIRVE
+# Lo que SI hace falta -cerrar solo lo que desciende de nosotros, porque matar
+# el grupo entero costo un reinicio de la Deck- lo hace matar_con_hijos en bash,
+# con "pgrep -P" y de las hojas a la raiz.
 #
-# Al cerrar un juego hay que saber que procesos siguen vivos por debajo de
-# WProton: el juego puede dejar hijos sueltos -lanzadores, servicios del DRM,
-# procesos de Wine- y desmontar el squashfs con alguno todavia abierto deja el
-# punto de montaje ocupado.
+# Si algun dia se quiere volver a tener, esta en el historial de git.
+
+# descendientes_nuestros SE QUITO: nadie la llamaba.
 #
-# SE LEE /proc, YA NO SE LLAMA A "ps"
-# -----------------------------------
-# La version anterior lanzaba "ps -eo pid=,ppid=,comm=" y parseaba su salida.
-# Ese "-eo" con "=" para quitar cabeceras es sintaxis de procps; el ps de
-# busybox no la lleva igual. No he podido comprobar que hace el de Batocera,
-# asi que NO digo que alli fallara; lo que si es seguro es que leyendo /proc
-# la pregunta desaparece, y ademas se ahorra lanzar un proceso justo cuando se
-# esta intentando ver cuales quedan vivos.
+# Era una envoltura de una linea sobre "procesos_py hijos $$". La idea que
+# explicaba -cerrar SOLO lo que desciende de nosotros, porque matar el grupo
+# entero costo un reinicio de la Deck- sigue viva y es importante, pero la
+# aplica matar_con_hijos, en bash, recorriendo "pgrep -P" de las hojas a la
+# raiz. O sea que esto era un segundo camino para lo mismo que nadie usaba.
 #
-# EL NOMBRE SE SACA CON CUIDADO. En /proc/<pid>/stat el nombre va entre
-# parentesis y PUEDE LLEVAR PARENTESIS DENTRO: hay juegos cuyo ejecutable se
-# llama "Game (2011)". Partir por el primer ")" daria un ppid equivocado, y
-# entonces el proceso parece colgar de otro sitio y no se espera. Por eso se
-# busca el ULTIMO ")".
-# ----------------------------------------------------------------------------
-
-import os
-import sys
-
-VERSION = "1"
-
-# Procesos que lanzamos NOSOTROS para diagnosticar: esperarlos seria
-# esperarnos a nosotros mismos.
-NUESTROS = ("sh", "dash", "sleep", "ps", "awk", "grep")
-
-# Tope de saltos al subir por el arbol. Con un ciclo en los ppid -no deberia
-# pasar, pero un proceso reasignado a init durante la lectura lo puede
-# simular- esto evita quedarse dando vueltas.
-MAX_SALTOS = 40
-
-
-def _leer_stat(pid):
-    """(ppid, nombre) de un proceso, o None si ya no esta."""
-    try:
-        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as fh:
-            linea = fh.read()
-    except (OSError, ValueError):
-        return None
-    # El nombre va entre el primer "(" y el ULTIMO ")": puede llevar
-    # parentesis dentro.
-    ini = linea.find("(")
-    fin = linea.rfind(")")
-    if ini < 0 or fin < ini:
-        return None
-    nombre = linea[ini + 1:fin]
-    resto = linea[fin + 2:].split()
-    if len(resto) < 2:
-        return None
-    try:
-        ppid = int(resto[1])
-    except ValueError:
-        return None
-    return ppid, nombre
-
-
-def tabla():
-    """{pid: (ppid, nombre)} de todo lo que hay ahora mismo."""
-    salida = {}
-    try:
-        entradas = os.listdir("/proc")
-    except OSError:
-        return salida
-    for e in entradas:
-        if not e.isdigit():
-            continue
-        pid = int(e)
-        datos = _leer_stat(pid)
-        if datos:
-            salida[pid] = datos
-    return salida
-
-
-def descendientes(raiz, procesos=None, yo=None):
-    """Los procesos que cuelgan de 'raiz'. Lista de (pid, nombre), ordenada.
-
-    No se incluye ni la propia raiz ni el proceso que pregunta.
-    """
-    procesos = tabla() if procesos is None else procesos
-    yo = os.getpid() if yo is None else yo
-    salida = []
-    for pid, (_ppid, nombre) in procesos.items():
-        if pid in (raiz, yo):
-            continue
-        # Un hilo del nucleo no es un proceso que podamos esperar.
-        if nombre.startswith("["):
-            continue
-        if nombre in NUESTROS:
-            continue
-        actual, saltos = pid, 0
-        while actual > 1 and saltos < MAX_SALTOS:
-            siguiente = procesos.get(actual, (0, ""))[0]
-            if siguiente == actual:      # se apunta a si mismo: ciclo
-                break
-            actual = siguiente
-            saltos += 1
-            if actual == raiz:
-                salida.append((pid, nombre))
-                break
-    salida.sort()
-    return salida
-
-
-# ----------------------------------------------------------------------------
-# COMPROBACION INTERNA
-#
-# El arbol se pasa como argumento para poder probar formas que en una maquina
-# de verdad no se pueden montar a voluntad.
-# ----------------------------------------------------------------------------
-
-def comprobar():
-    fallos = []
-
-    def esperar(que, visto, esperado):
-        if visto != esperado:
-            fallos.append("%s: salio %r y se esperaba %r" % (que, visto, esperado))
-
-    # 100 es la raiz; 200 y 201 cuelgan de el, 300 no.
-    arbol = {
-        100: (1, "wproton"),
-        200: (100, "juego.exe"),
-        201: (200, "hijo.exe"),
-        300: (1, "otracosa"),
-        400: (100, "sleep"),          # lo lanzamos nosotros
-        500: (100, "[kworker]"),      # hilo del nucleo
-        600: (100, "yo-mismo"),
-    }
-    esperar("arbol basico", descendientes(100, arbol, yo=600),
-            [(200, "juego.exe"), (201, "hijo.exe")])
-    esperar("nada cuelga de 300", descendientes(300, arbol, yo=600), [])
-
-    # Un ciclo en los ppid no debe colgar la lectura.
-    ciclo = {10: (11, "a"), 11: (10, "b"), 12: (1, "c"), 100: (1, "raiz")}
-    descendientes(100, ciclo, yo=1)      # basta con que termine
-
-    # Un proceso que se apunta a si mismo tampoco.
-    descendientes(100, {7: (7, "raro"), 100: (1, "raiz")}, yo=1)
-
-    # El nombre con parentesis dentro: lo que rompe partir por el primer ")".
-    linea = "4242 (Game (2011).exe) S 100 4242 4242 0 -1 4194304 1 2 3\n"
-    ini, fin = linea.find("("), linea.rfind(")")
-    nombre = linea[ini + 1:fin]
-    ppid = int(linea[fin + 2:].split()[1])
-    esperar("nombre con parentesis", nombre, "Game (2011).exe")
-    esperar("ppid con parentesis en el nombre", ppid, 100)
-
-    # Sobre la maquina de verdad: el proceso actual tiene que salir en la
-    # tabla, y su padre tiene que estar bien.
-    t = tabla()
-    yo = os.getpid()
-    if yo not in t:
-        fallos.append("el proceso actual no aparece en la tabla de /proc")
-    elif t[yo][0] != os.getppid():
-        fallos.append("el ppid leido de /proc no coincide: %r vs %r"
-                      % (t[yo][0], os.getppid()))
-    if len(t) < 2:
-        fallos.append("la tabla de /proc sale casi vacia (%d procesos)" % len(t))
-
-    return fallos
-
-
-# ----------------------------------------------------------------------------
-# LINEA DE ORDENES
-# ----------------------------------------------------------------------------
-
-def main(argv):
-    if len(argv) < 2:
-        sys.stderr.write(
-            "uso: procesos.py <orden> [...]\n"
-            "  hijos <pid>    los procesos que cuelgan de ese: \"pid nombre\"\n"
-            "  comprobar      auto-diagnostico\n")
-        return 2
-    orden = argv[1]
-
-    if orden == "comprobar":
-        fallos = comprobar()
-        if fallos:
-            sys.stderr.write("procesos.py: %d fallo(s)\n" % len(fallos))
-            for f in fallos:
-                sys.stderr.write("  - %s\n" % f)
-            return 1
-        print("procesos.py: todo correcto")
-        return 0
-
-    if orden == "hijos":
-        if len(argv) < 3:
-            return 2
-        try:
-            raiz = int(argv[2])
-        except ValueError:
-            sys.stderr.write("procesos.py: %r no es un pid\n" % argv[2])
-            return 2
-        for pid, nombre in descendientes(raiz):
-            print("%d %s" % (pid, nombre))
-        return 0
-
-    sys.stderr.write("procesos.py: orden desconocida %r\n" % orden)
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv))
-PROEOF
-}
-
-procesos_py() {
-    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 127
-    write_procesos || return 127
-    "$PY_BIN" "$PROCESOS_PY" "$@"
-}
-
-descendientes_nuestros() {
-    # Procesos que descienden de NOSOTROS, por la cadena de padres.
-    #
-    # Es la unica forma segura de decidir que se puede cerrar: si desciende de
-    # WProton, lo lanzamos nosotros (o algo que lanzamos). Todo lo demas es
-    # ajeno y no se toca —esa confusion fue la que reiniciaba la consola—.
-    command -v ps >/dev/null 2>&1 || return 0
-    procesos_py hijos "$$" 2>>"$LOG_FILE"
-}
+# Al quitarla, procesos_py se quedo sin ningun llamante, y con el todo el puente
+# a procesos.py. El modulo se quito tambien: ver la nota mas arriba.
 
 proceso_vivo() {
     # ¿Queda algun proceso cuyo nombre case con $1?
@@ -15391,6 +15721,205 @@ proceso_vivo() {
     # el proceso sigue vivo. De ahi los avisos de "SIGUEN VIVOS" que salian
     # justo despues de un "detenido".
     pgrep -af "$1" 2>/dev/null | grep -qvE '^[0-9]+ +(pkill|pgrep|/usr/bin/pkill|/usr/bin/pgrep)\b'
+}
+
+steam_display_gamescope() {
+    # El display donde manda el compositor de Steam, o nada si no se encuentra.
+    #
+    # WProton pinta sus menus en :1 y el juego puede estar en otro. Se busca por
+    # los atomos GAMESCOPE_*, que solo los pone el compositor: preguntar por
+    # $DISPLAY a secas fue el error que dejo el diagnostico del 15/09 mirando
+    # una pantalla sin el juego.
+    local _s _d
+    command -v xprop >/dev/null 2>&1 || return 1
+    for _s in /tmp/.X11-unix/X*; do
+        [ -e "$_s" ] || continue
+        _d=":${_s##*/X}"
+        case "$(DISPLAY="$_d" xprop -root GAMESCOPE_FOCUSED_APP 2>/dev/null)" in
+            ''|*"not found"*) ;;
+            *) printf '%s' "$_d"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+steam_ocultar_ventanas() {
+    # QUITA LA ETIQUETA STEAM_GAME DE LAS VENTANAS DEL JUEGO, MIENTRAS JUEGA.
+    #
+    # POR QUE HACE FALTA ESTO ADEMAS DE QUITAR LAS VARIABLES
+    #
+    # Quitarle al juego LD_PRELOAD no oculta nada (la 1.60 lo quitaba y el juego
+    # salia igual), y quitarle SteamAppId/SteamGameId tampoco basta (probado el
+    # 15/09). Queda una via mas, y es la que Steam lee de verdad para decidir
+    # que ventana es una aplicacion: la propiedad STEAM_GAME de la ventana.
+    #
+    # La pone quien crea la ventana -umu, Proton o el propio compositor- DESPUES
+    # de arrancar, asi que no vale con preparar el entorno: hay que quitarla
+    # cuando ya existe. De ahi el vigilante.
+    #
+    # LO QUE NO SE TOCA
+    #
+    #   - la ventana raiz: sus atomos son del compositor, no de una aplicacion
+    #   - steamcompmgr y las ventanas de Steam: romperlas rompe la sesion
+    #
+    # Dura un rato y se va: no es un vigilante permanente. Si la etiqueta se
+    # vuelve a poner mas tarde, en el registro se vera cuantas veces se quito.
+    [ "${IS_GAMESCOPE:-0}" = 1 ] || return 0
+    local f="$LOG_FILE"
+    (
+        local _d _w _nom _sg _n=0 _i=0
+        _d="$(steam_display_gamescope)" || {
+            printf '\n[ocultar] no se encontro el display del compositor\n' >> "$f"
+            exit 0
+        }
+        printf '\n[ocultar] display del compositor: %s\n' "$_d" >> "$f"
+        while [ "$_i" -lt "${WP_OCULTAR_VUELTAS:-15}" ]; do
+            _i=$(( _i + 1 ))
+            for _w in $(DISPLAY="$_d" xwininfo -root -tree 2>/dev/null \
+                        | grep -oE '0x[0-9a-f]{4,}' | awk '!v[$0]++'); do
+                _sg="$(DISPLAY="$_d" xprop -id "$_w" STEAM_GAME 2>/dev/null)"
+                case "$_sg" in ''|*"not found"*) continue ;; esac
+                _nom="$(DISPLAY="$_d" xprop -id "$_w" WM_NAME 2>/dev/null)"
+                case "$_nom" in
+                    *steamcompmgr*|*Steam*|*steamwebhelper*) continue ;;
+                esac
+                if DISPLAY="$_d" xprop -id "$_w" -remove STEAM_GAME 2>/dev/null; then
+                    _n=$(( _n + 1 ))
+                    printf '[ocultar] quitada STEAM_GAME de %s  %s\n' \
+                        "$_w" "$(printf '%s' "$_nom" | cut -c1-60)" >> "$f"
+                fi
+            done
+            sleep 2
+        done
+        printf '[ocultar] fin: %d etiqueta(s) quitada(s) en %d vueltas\n' \
+            "$_n" "$_i" >> "$f"
+        # Si no se quito ninguna, NO es que haya fallado: es que en este equipo
+        # Steam no usa STEAM_GAME para esto, y entonces hay que buscar por otro
+        # lado. Queda dicho aqui para que el registro lo aclare en una linea.
+        [ "$_n" = 0 ] && printf '[ocultar] ninguna ventana llevaba STEAM_GAME: Steam no lo usa aqui\n' >> "$f"
+    ) < /dev/null > /dev/null 2>&1 &
+    log "Ocultar a Steam: vigilando las etiquetas de las ventanas"
+    return 0
+}
+
+diag_ventanas_steam() {
+    # QUE VE STEAM MIENTRAS SE JUEGA, en el registro y sin pedirle nada al
+    # usuario.
+    #
+    # POR QUE EXISTE
+    #
+    # "En el menu de Steam sale WProton pero no el juego" no se puede depurar
+    # desde este lado: hay que saber que ventanas hay y con que etiqueta las ve
+    # el compositor. Steam decide que mostrar por la propiedad STEAM_GAME de
+    # cada ventana; sin ella, para Steam esa ventana no es una aplicacion.
+    #
+    # LA PRIMERA VERSION MIRABA EL DISPLAY EQUIVOCADO.
+    #
+    # Usaba $DISPLAY a secas, que es donde corre NUESTRO menu (:1), y ahi no
+    # esta el compositor: salia "GAMESCOPE_FOCUSED_APP: not found" y una lista
+    # de ventanas internas de Xwayland -"Default IME", "Input"- sin la del
+    # juego ni la nuestra. O sea, cuatro lineas que no decian nada y encima
+    # parecian decir algo.
+    #
+    # Ahora se recorren TODOS los displays que haya abiertos y se marca cual es
+    # el de gamescope (el que tiene los atomos GAMESCOPE_*), y se listan las
+    # ventanas del arbol completo, no solo las hijas directas de la raiz: la
+    # del juego suele estar un nivel mas abajo.
+    [ "${IS_GAMESCOPE:-0}" = 1 ] || return 0
+    local f="$LOG_FILE"
+    (
+        sleep "${WP_DIAG_VENTANAS_ESPERA:-12}"      # que al juego le de tiempo
+        printf '\n=== VENTANAS Y ETIQUETAS DE STEAM (%s) ===\n' "$(date '+%H:%M:%S')" >> "$f"
+        if ! command -v xprop >/dev/null 2>&1 || ! command -v xwininfo >/dev/null 2>&1; then
+            printf '   (sin xprop/xwininfo: no se puede saber que ve Steam)\n' >> "$f"
+            exit 0
+        fi
+        # Los displays abiertos, no solo el nuestro.
+        _dsp=""
+        for _s in /tmp/.X11-unix/X*; do
+            [ -e "$_s" ] || continue
+            _dsp="$_dsp :${_s##*/X}"
+        done
+        case " $_dsp " in *" ${DISPLAY:-} "*) : ;; *) _dsp="$_dsp ${DISPLAY:-}" ;; esac
+        for _d in $_dsp; do
+            [ -n "$_d" ] || continue
+            _gs="$(DISPLAY="$_d" xprop -root GAMESCOPE_FOCUSED_APP 2>/dev/null)"
+            case "$_gs" in
+                *"not found"*|"") _quien="(no es el de gamescope)" ;;
+                *)                _quien="<-- ESTE es el de gamescope" ;;
+            esac
+            printf -- '-- display %s %s\n' "$_d" "$_quien" >> "$f"
+            DISPLAY="$_d" xprop -root GAMESCOPE_FOCUSED_APP GAMESCOPE_FOCUSED_WINDOW \
+                STEAM_GAME STEAM_OVERLAY 2>&1 | sed 's/^/     /' >> "$f"
+            _n=0
+            for _w in $(DISPLAY="$_d" xwininfo -root -tree 2>/dev/null \
+                        | grep -oE '0x[0-9a-f]{4,}' | awk '!v[$0]++'); do
+                _n=$(( _n + 1 ))
+                [ "$_n" -gt 40 ] && { printf '     (...mas ventanas)\n' >> "$f"; break; }
+                _nom="$(DISPLAY="$_d" xprop -id "$_w" WM_NAME 2>/dev/null | cut -d= -f2-)"
+                _sg="$(DISPLAY="$_d" xprop -id "$_w" STEAM_GAME 2>/dev/null | cut -d= -f2-)"
+                case "$_sg" in *'not found'*|'') _sg='-' ;; esac
+                # Sin nombre y sin etiqueta no aporta: son ventanas internas.
+                [ "$_sg" = '-' ] && [ -z "$(printf '%s' "$_nom" | tr -d ' ')" ] && continue
+                printf '     %-12s STEAM_GAME=%-12s %s\n' "$_w" "$_sg" "$_nom" >> "$f"
+            done
+        done
+        printf -- '-- fin --\n' >> "$f"
+    ) < /dev/null > /dev/null 2>&1 &
+    log "Diagnostico de ventanas: se apuntara en el registro dentro de unos segundos"
+    return 0
+}
+
+cierre_desde_fuera() {
+    # Lo que se hace cuando llega un INT o un TERM CON LA PARTIDA EN MARCHA.
+    #
+    # EL PROBLEMA QUE RESUELVE
+    #
+    # Esto era "trap '' INT TERM": las senales se ignoraban a secas. Hacia
+    # falta, porque en el modo Juego de SteamOS, al cerrarse nuestra ventana
+    # para dejar paso al juego, Steam o gamescope dan por terminado el "juego" y
+    # mandan un TERM. Atenderlo desmontaba el .wsquashfs con el juego dentro:
+    # "Transport endpoint is not connected".
+    #
+    # Pero ignorarlo TODO tiene un precio que nadie habia atado a esto: cuando
+    # el usuario pulsa "Salir del juego" en el menu de Steam, Steam manda ese
+    # MISMO TERM. Y WProton lo ignoraba. De ahi el "no se puede cerrar el juego
+    # desde ese menu": el boton de Steam funcionaba; el que no hacia nada era
+    # WProton.
+    #
+    # COMO SE DISTINGUEN
+    #
+    # Por CUANDO llegan. El TERM espurio llega al cerrarse nuestra ventana, o
+    # sea en los primeros segundos. El del usuario llega cuando lleva un rato
+    # jugando. Con eso basta:
+    #
+    #   juego sin arrancar, o recien arrancado  -> se ignora, como antes
+    #   juego corriendo desde hace un rato      -> se cierra EL JUEGO
+    #
+    # Se cierra el JUEGO, no WProton: al morir el juego, "wait" vuelve y sigue
+    # el camino normal de fin de partida -desmontar, recolocar los menus,
+    # guardar las estadisticas-, que es justo lo que el TERM crudo se saltaba.
+    #
+    # La gracia se ajusta con WP_CIERRE_GRACIA en settings.conf.
+    if [ -z "${WP_PID_JUEGO:-}" ] || [ "${WP_T0_JUEGO:-0}" = 0 ]; then
+        log "Senal de cierre: el juego aun no ha arrancado, se ignora" WARN
+        return 0
+    fi
+    local _vivo=$(( $(date +%s) - WP_T0_JUEGO ))
+    if [ "$_vivo" -lt "${WP_CIERRE_GRACIA:-20}" ]; then
+        log "Senal de cierre a los ${_vivo}s: dentro de la gracia, se ignora" WARN
+        log "  (es la que manda Steam al cerrarse nuestra ventana)"
+        return 0
+    fi
+    log "Cierre pedido desde fuera tras ${_vivo}s: se cierra el juego"
+    say "[i] Cierre pedido desde Steam: cerrando el juego..."
+    # Se APUNTA que el cierre es nuestro, en vez de deducirlo luego del codigo
+    # de salida. matar_con_hijos manda TERM y, si hace falta, KILL: el juego
+    # puede acabar con 143 o con 137 segun cual le llegue, y ademas un juego
+    # puede devolver esos numeros por su cuenta. La bandera no se equivoca.
+    WP_CIERRE_PEDIDO=1
+    matar_con_hijos "$WP_PID_JUEGO"
+    return 0
 }
 
 partida_fin() {
@@ -15421,6 +15950,12 @@ cleanup_all() {
     # TeknoParrot se quedarian reescritos. cleanup_all cuelga de un trap
     # EXIT INT TERM, asi que cubre esas salidas.
     teknoparrot_restaurar "${WP_TKP_RAIZ:-}" 2>/dev/null || true
+    # STEAM INPUT VUELVE A COMO ESTABA.
+    #
+    # Va aqui, en el cierre, y no en cada fin de partida: durante la sesion
+    # puede lanzarse varias veces el juego que lo necesita. Al salir de WProton
+    # se programa la vuelta, que se aplicara cuando Steam se cierre por su
+    # cuenta. Asi no queda un ajuste global olvidado.
     vigilante_cierre        # antes de parar nada, para verlo todo
     # A partir de aqui no se arranca ningun proceso grafico mas.
     #
@@ -16958,7 +17493,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY KEYS_ESTILO TECLADO_POS KEYS_EXCLUSIVO MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY KEYS_ESTILO TECLADO_POS KEYS_EXCLUSIVO MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -17016,15 +17551,17 @@ profile_defaults() {
     MAKO_MULT=2
     MAKO_ADAPTIVE=0
     RESHADE_LX=0
+    STEAM_OVERLAY="auto"
+    PAD_SIFALLBACK="auto"
 }
 
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py d24c9531fca5" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py ec33111453d6" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py d24c9531fca5
+# WPROTON_HELPER perfil.py ec33111453d6
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -17171,6 +17708,37 @@ ESQUEMA = [
     # ReShade nativo de Linux (capa Vulkan). Va al final por lo mismo que los
     # de MAKO: no mover de sitio los campos anteriores.
     ("RESHADE_LX",        "entero", 0,                None),
+    # SUPERPOSICION DE STEAM, POR JUEGO. Tambien al final, por lo mismo.
+    #
+    # "auto" = lo que diga STEAM_OVERLAY en settings.conf, que viene a 1.
+    # Dejarla puesta es lo normal: es como Steam se entera de que hay un juego
+    # corriendo, y sin ella en el modo Juego sale solo "WProton" en el menu de
+    # Steam y el juego no se puede cerrar desde ahi.
+    #
+    # Se apaga por juego porque hay lanzadores que se atragantan con lo que
+    # otros programas les escriben en la salida -BudgieLoader, el de los juegos
+    # de Raw Thrills, se cierra al leer los avisos de GameMode y MangoHud-, asi
+    # que no es descartable que alguno haga lo mismo con esto. Un interruptor
+    # general obligaria a elegir entre ese juego y todos los demas.
+    #
+    # El cuarto valor, "oculto", va mas alla: ademas de la superposicion le
+    # quita al juego la IDENTIDAD de Steam (SteamAppId, SteamGameId y
+    # compania), que es lo que de verdad hace que Steam lo vea como una
+    # aplicacion aparte. Quitar solo la superposicion NO basta: en la 1.60 se
+    # quitaba y el juego seguia saliendo en el menu de Steam.
+    ("STEAM_OVERLAY",     "opcion", "auto",           ("auto", "1", "0", "oculto")),
+    # PUENTE DE STEAM INPUT A XInput. Al final, por lo mismo que los de arriba.
+    #
+    # PROTON_STEAMINPUT_XINPUT_FALLBACK, que GE-Proton 11-4 añadio: da un
+    # dispositivo Steam Input de mentira que reenvia las asignaciones de
+    # XInput. Es LO CONTRARIO de PROTON_PREFER_SDL, que apaga Steam Input.
+    #
+    # Hace falta en el caso del modo Juego de SteamOS: Steam se queda el mando
+    # fisico y solo ofrece el suyo, virtual. Ahi "preferir SDL" quita el unico
+    # mando que hay, y lo que sirve es este puente.
+    #
+    # "auto" = se enciende cuando el UNICO mando que hay es el virtual de Steam.
+    ("PAD_SIFALLBACK",    "opcion", "auto",           ("auto", "1", "0")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
@@ -17919,13 +18487,11 @@ write_full_profile() {
     return 1
 }
 
-perfil_poner() {
-    # Cambiar campos sueltos sin cargar el perfil entero. Para apuntar las
-    # horas jugadas al salir del juego sin arrastrar el resto del estado.
-    #   perfil_poner "$gid" PLAY_COUNT=5 LAST_PLAYED="2026-09-08 12:00"
-    local gid="$1"; shift
-    perfil_py poner "$PROFILE_DIR" "$gid" "$@" 2>>"$LOG_FILE"
-}
+# perfil_poner SE QUITO: nadie la llamaba.
+#
+# Iba a servir para apuntar las horas jugadas sin cargar el perfil entero, pero
+# eso acabo haciendolo write_full_profile junto con el resto del estado. El
+# subcomando "poner" de perfil.py se queda.
 
 perfiles_limpiar_mscoree() {
     # Barrido de una vez: quita mscoree de los .conf que lo tengan escrito.
@@ -18354,22 +18920,52 @@ wizard_pick_runner() {
         fi
     fi
     # shellcheck disable=SC2046
+    # LAS TRES FAMILIAS "SIEMPRE EL ULTIMO", ANTES DE LA LISTA DE VERSIONES.
+    #
+    # Elegir una version concreta ata el perfil a ella: en tres meses esta
+    # vieja y hay que volver a entrar aqui juego por juego. Con estas tres, al
+    # bajar una version nueva los juegos la cogen solos.
+    #
+    # GE-Proton se queda de primero, que es el de serie.
+    local ultimas="(automático: último GE-Proton instalado)
+(siempre el último Wine instalado)
+(siempre el último UMU-Proton instalado)"
+    # shellcheck disable=SC2046
     if [ -n "$brow" ] && [ "$PREFIX_MODE" = "bundled" ]; then
         sel="$(IFS=$'\n'; set -f; menu "Paso 1/3 - Elige Proton/Wine para este juego" \
-                "$brow" "(automático: último GE-Proton instalado)" $runners)" || return 1
+                "$brow" $(printf '%s' "$ultimas") $runners)" || return 1
     else
         sel="$(IFS=$'\n'; set -f; menu "Paso 1/3 - Elige Proton/Wine para este juego" \
-                "(automático: último GE-Proton instalado)" "$brow" $runners)" || return 1
+                $(printf '%s' "$ultimas") "$brow" $runners)" || return 1
     fi
     if [ "${sel#\(incluido}" != "$sel" ]; then
         RUNNER="bundled"
         return 0
     fi
-    if [ "$sel" = "(automático: último GE-Proton instalado)" ]; then
-        RUNNER=""
-    else
-        RUNNER="${sel% \[*\]}"
-    fi
+    case "$sel" in
+        "(automático: último GE-Proton instalado)")  RUNNER="" ;;
+        "(siempre el último Wine instalado)")        RUNNER="latest:wine" ;;
+        "(siempre el último UMU-Proton instalado)")  RUNNER="latest:umu" ;;
+        *)                                           RUNNER="${sel% \[*\]}" ;;
+    esac
+    # SE AVISA SI ESA FAMILIA NO ESTA INSTALADA, aqui y no al lanzar.
+    #
+    # Si se elige "siempre el ultimo Wine" y no hay ninguno, el juego arrancaria
+    # igual -con GE-Proton- y nadie entenderia por que. Mejor decirlo ahora, que
+    # es cuando se puede arreglar.
+    case "$RUNNER" in
+        latest:*)
+            if [ -z "$(runner_ultimo_de "${RUNNER#latest:}")" ]; then
+                ui_info "Elegido: $(runner_etiqueta "$RUNNER").
+
+Ahora mismo NO tienes ninguno instalado de esa familia, asi
+que hasta que bajes uno el juego se lanzara con el ultimo
+GE-Proton.
+
+Se baja en: Runners y herramientas -> Actualizar a la ultima
+version >>"
+            fi ;;
+    esac
     return 0
 }
 
@@ -18876,7 +19472,7 @@ ejemplo, sin ellos arranca Half-Life 2 en ingles."
     # mando no va a abrir una terminal. Se le dice por donde se llega DESDE
     # AQUI, que es lo unico que le sirve.
     ui_info "Perfil creado: profiles/$gid.conf
-Runner: ${RUNNER:-último GE-Proton} | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
+Runner: $(runner_etiqueta "${RUNNER:-}") | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
 DLL overrides: $DLL_OVERRIDES}
 
 Puedes cambiar todo esto cuando quieras:
@@ -18980,6 +19576,17 @@ winebus_sdl_en_prefijo() {
     say "[+] Mandos por SDL en el prefijo de este juego"
     say "    (DisableHidraw=1, Enable SDL=1)"
     return 0
+}
+
+winebus_sdl_puesto() {
+    # ¿Este prefijo ya tiene los mandos por SDL? $1 = prefijo.
+    #
+    # Se lee system.reg, que es un fichero de TEXTO, igual que hace
+    # winebus_reparar_compartido: asi se sabe el estado real sin arrancar wine
+    # y sin depender de una marca nuestra que puede faltar.
+    local reg="${1:-}/system.reg"
+    [ -f "$reg" ] || return 1
+    grep -qi '"DisableHidraw"=dword:00000001' "$reg" 2>/dev/null
 }
 
 winebus_sdl_quitar() {
@@ -20326,6 +20933,12 @@ gst_portable_verificar() {
 }
 
 gst_portable_instalar() {
+    # $1 = "auto" cuando la llama WProton por su cuenta (primera puesta en
+    # marcha). En ese modo NO abre ni un dialogo: informa por el registro y se
+    # va. Un codec de video no puede parar una instalacion esperando a que
+    # alguien pulse "Aceptar" en una ventana que igual no se ve.
+    local _auto=""
+    [ "${1:-}" = "auto" ] && _auto=1
     # Descarga e instala NUESTRO pack de GStreamer de 32 bits en
     # runtime/gstreamer.
     #
@@ -20336,6 +20949,10 @@ gst_portable_instalar() {
     local url; url="$(gst_pack_url)"
     case "$url" in
         *PENDIENTE*)
+            if [ -n "$_auto" ]; then
+                log "Codecs de 32 bits: todavia no hay pack publicado, se omite"
+                return 1
+            fi
             ui_error "Todavia no hay un pack publicado.
 
 Se construye con hacer_pack_gst32.sh -necesita podman o
@@ -20400,6 +21017,10 @@ Eso significa que el pack esta mal construido -deberia traer
 su cierre completo-. Mira en el registro que librerias son y
 rehazlo con hacer_pack_gst32.sh."
         return 1
+    fi
+    if [ -n "$_auto" ]; then
+        log "Codecs de 32 bits instalados en la primera puesta en marcha ($n plugins)"
+        return 0
     fi
     ui_info "Pack de GStreamer instalado: $n plugins de 32 bits.
 
@@ -20916,7 +21537,19 @@ export_game_env() {
     fi
     # Mandos Sony/Switch fuera de Steam: sin esto Proton los pasa por hidraw
     # y los juegos solo-XInput no los ven (el caso The Mummy Demastered)
-    local pad_auto pad_eff pad_why
+    # CON VALOR, NO SOLO DECLARADAS.
+    #
+    # "local pad_auto pad_eff pad_why" las marca como locales pero SIN ASIGNAR,
+    # o sea que siguen SIN DEFINIR: leer "$pad_eff" antes de darle valor mata el
+    # script con set -u. Es lo que paso el 15/09 al meter una rama nueva que se
+    # saltaba el bloque que las asignaba: WProton se cerraba al lanzar cualquier
+    # juego.
+    #
+    # Con "" el peor caso es que la comparacion salga falsa, que es recuperable.
+    # La comprobacion del apartado 10 no puede cazar esto -una variable asignada
+    # en unas ramas y no en otras pide analisis de flujo-, asi que la defensa es
+    # no dejarlas sin valor de entrada.
+    local pad_auto="" pad_eff="" pad_why=""
     # Mandos de Sony. GE-Proton 11-4 ("arreglo de mandos") cambio como se
     # manejan DualSense y DS4, y trajo estas variables pensadas sobre todo
     # para jugar FUERA de Steam, que es nuestro caso: los ajustes automaticos
@@ -20966,6 +21599,7 @@ export_game_env() {
         say "    'Mando Sony' y 'Mando via SDL' estan en Nunca)"
     elif [ "${PAD_SONY:-auto}" = auto ] && [ "${PAD_SDL:-auto}" = auto ] \
        && { [ "$_hidraw_cerrado" = 0 ] || mando_utilizable; } \
+       && ! mando_solo_virtual \
        && runner_gestiona_mandos "$(basename "$rdir")"; then
         # EN AUTOMATICO, LA PREGUNTA BUENA NO ES HIDRAW: ES SI HAY MANDO.
         #
@@ -21035,8 +21669,59 @@ export_game_env() {
         unset PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW
         say "    (Mando via SDL se ignora: es incompatible con los modos Sony)"
     elif [ "${PAD_SDL:-auto}" = auto ]; then
-        pad_auto="$(pad_sdl_auto)"
-        pad_eff="${pad_auto%%|*}"; pad_why="auto: ${pad_auto#*|}"
+        # SI EL UNICO MANDO ES VIRTUAL, SDL. SIN PREGUNTAR.
+        #
+        # El mando virtual de Steam Input es uinput: no tiene nodo /dev/hidraw,
+        # que es por donde lo buscan GE-Proton 11-4 y siguientes. "auto" le
+        # dejaba los mandos al runner y el juego se quedaba sin ninguno.
+        #
+        # VA AQUI DENTRO Y NO EN UNA RAMA APARTE. El primer intento fue un "if"
+        # suelto mas arriba que ponia PROTON_USE_SDL a mano y se saltaba este
+        # bloque... que es el unico que le da valor a pad_eff. Doce lineas mas
+        # abajo se lee "$pad_eff", y con "local pad_auto pad_eff pad_why" -sin
+        # valor- eso es una variable SIN DEFINIR: con set -u, WProton se cerraba
+        # al lanzar CUALQUIER juego. Registro que lo enseña:
+        # wproton_20260915_214951.log, cortado justo en esas lineas.
+        if mando_solo_virtual_de_steam; then
+            # STEAM NO SE METE: SDL **Y** SIN LISTA DE IGNORADOS, LAS DOS.
+            #
+            # PRIMER INTENTO, EQUIVOCADO: aqui se ponia el puente XInput porque
+            # el changelog de GE dice que PROTON_PREFER_SDL "apaga Steam Input",
+            # y parecia que preferir SDL quitaba el unico mando que habia. No
+            # era eso.
+            #
+            # Cuando Steam Input esta en marcha esconde TODOS los mandos
+            # fisicos y ofrece el suyo, que es uinput y NO tiene nodo
+            # /dev/hidraw. Para que el juego lo vea hacen falta DOS cosas:
+            #
+            #   1. Que Wine lea los mandos por SDL (evdev) y no por hidraw,
+            #      porque en hidraw no hay nada -> PROTON_PREFER_SDL (pad_eff=1)
+            #   2. Que ESE SDL no tenga orden de ignorarlo -> quitar las
+            #      SDL_*_IGNORE_DEVICES, que es lo que hace PAD_STEAMFIX
+            #
+            # Se probaron POR SEPARADO y ninguna sirvio, y con razon: cada vez
+            # faltaba la otra mitad. En los registros del 15 y del 16 de
+            # septiembre la lista de ignorados LLEGO AL JUEGO en los dos
+            # intentos, asi que la combinacion no se habia probado nunca.
+            #
+            # Y el dato que lo explica: de veinte mandos conocidos, los veinte
+            # estan en esa lista MENOS el virtual de Valve. Steam esconde todo
+            # lo real a proposito, asi que mientras la lista siga puesta da
+            # igual que mando se le ofrezca al juego, incluido uno nuestro.
+            #
+            # El puente XInput no va en este caso: es incompatible con preferir
+            # SDL y el propio codigo de abajo ya lo descarta solo.
+            pad_eff=1
+            pad_why="automatico: unico mando el virtual de Steam (SDL + sin ocultacion)"
+            WP_PAD_WHY="$pad_why"
+        elif mando_solo_virtual && runner_gestiona_mandos "$(basename "$rdir")"; then
+            pad_eff=1
+            pad_why="automatico: el unico mando es virtual y no tiene hidraw"
+            WP_PAD_WHY="$pad_why"
+        else
+            pad_auto="$(pad_sdl_auto)"
+            pad_eff="${pad_auto%%|*}"; pad_why="auto: ${pad_auto#*|}"
+        fi
     else
         pad_eff="$PAD_SDL"; pad_why="fijado en el perfil"
     fi
@@ -21056,6 +21741,49 @@ export_game_env() {
     else
         say "[+] Mando via SDL: desactivado ($pad_why)"
     fi
+    # LA OCULTACION SE QUITA POR LA SITUACION, NO POR COMO ESTE PAD_SDL.
+    #
+    # ESTE FUE UN FALLO MIO, Y GORDO
+    #
+    # Esto vivia DENTRO de la rama "auto" de PAD_SDL. Consecuencia: en cuanto
+    # el usuario fijaba "Desactivar Steam Input para este juego" en el perfil
+    # -que es justo lo que yo le habia recomendado-, la rama auto ya no entraba
+    # y la ocultacion de Steam SE QUEDABA PUESTA. O sea que fijar la opcion
+    # daba PEOR resultado que dejarla en automatico, y en el registro del
+    # 16/09 a las 20:13 se ve: "Mando via SDL: ACTIVADO (fijado en el perfil)"
+    # y ni una linea de "quitada la ocultacion".
+    #
+    # Las dos mitades hacen falta juntas SIEMPRE que el unico mando sea el
+    # virtual de Steam, da igual si el usuario lo pidio o lo decidimos
+    # nosotros. Un ajuste que se comporta distinto segun como llegaste a el es
+    # una trampa.
+    if mando_solo_virtual_de_steam && [ "${PAD_STEAMFIX:-0}" = 0 ] \
+       && [ -n "${PROTON_PREFER_SDL:-}" ]; then
+        PAD_STEAMFIX=1
+        say "[+] Mando: se quita tambien la ocultacion de Steam (hacen falta las dos)"
+    fi
+    # EL PUENTE DE STEAM INPUT A XInput.
+    #
+    # PROTON_STEAMINPUT_XINPUT_FALLBACK (GE-Proton 11-4): un dispositivo Steam
+    # Input de mentira que reenvia las asignaciones de XInput. Es para cuando
+    # Steam se queda el mando fisico y solo ofrece el suyo, que es el caso del
+    # modo Juego de SteamOS.
+    #
+    # Es INCOMPATIBLE con preferir SDL, que apaga Steam Input: si las dos
+    # estuvieran puestas, la segunda anularia a la primera.
+    local _si="${PAD_SIFALLBACK:-auto}"
+    if [ "$_si" = auto ]; then
+        if mando_solo_virtual_de_steam; then _si=1; else _si=0; fi
+    fi
+    if [ "$_si" = 1 ] && [ -z "${PROTON_PREFER_SDL:-}" ]; then
+        export PROTON_STEAMINPUT_XINPUT_FALLBACK=1
+        say "[+] Puente Steam Input -> XInput: ACTIVADO"
+        say "    (Steam se queda tu mando y solo ofrece el suyo; este puente"
+        say "     se lo pasa al juego como un mando de Xbox)"
+    elif [ "$_si" = 1 ]; then
+        say "[i] Puente Steam Input -> XInput: no se pone, se esta prefiriendo SDL"
+        say "    (son incompatibles: preferir SDL apaga Steam Input)"
+    fi
     # QUE NOS HA PASADO STEAM, en el registro.
     #
     # Steam Input solo entra en juego si Steam lanzo el proceso y le paso su
@@ -21069,8 +21797,22 @@ export_game_env() {
                SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
                STEAM_COMPAT_LAUNCHER_SERVICE ENABLE_VKBASALT; do
         eval "_sval=\${$_sv:-}"
-        [ -n "$_sval" ] && _shay="$_shay  $_sv=$_sval
-"
+        [ -n "$_sval" ] || continue
+        # LAS LISTAS DE SDL SE RESUMEN, NO SE VUELCAN.
+        #
+        # SDL_GAMECONTROLLER_IGNORE_DEVICES son 792 pares de fabricante/modelo
+        # y 11 KB en UNA linea. Volcarla entera dos veces por partida no aporta
+        # nada -nadie lee 792 numeros- y hunde el resto del registro. Lo que
+        # hace falta saber es cuantas entradas trae; si el mando que tienes esta
+        # dentro lo dice log_input_devices, que es quien sabe cual es.
+        case "$_sv" in
+            SDL_*IGNORE_DEVICES*)
+                _shay="$_shay  $_sv= ($(printf '%s' "$_sval" | tr ',' '\n' \
+                        | grep -c .) entradas)
+" ;;
+            *) _shay="$_shay  $_sv=$_sval
+" ;;
+        esac
     done
     if [ -n "$_shay" ]; then
         say "[i] Entorno de Steam presente:"
@@ -21480,18 +22222,109 @@ export_game_env() {
     return 0
 }
 
+steam_overlay_texto() {
+    # La etiqueta de la fila del menu. En una funcion y no metida en el propio
+    # menu porque un "case" dentro de "$( )" dentro de una cadena entre comillas
+    # es justo el tipo de linea que se rompe sin que bash -n lo vea claro.
+    case "${STEAM_OVERLAY:-auto}" in
+        1)      printf 'Steam ve el juego' ;;
+        0)      printf 'sin superposicion' ;;
+        oculto) printf 'OCULTO a Steam' ;;
+        # "automatico" NO SIGNIFICA SIEMPRE "puesta": depende del ajuste
+        # general. Poner ahi un texto fijo era una etiqueta que miente en
+        # cuanto alguien pone STEAM_OVERLAY_GENERAL=0, y una fila de menu que
+        # dice lo contrario de lo que va a pasar es peor que no decir nada.
+        *) if [ "${STEAM_OVERLAY_GENERAL:-1}" = 1 ]; then
+               printf 'automatico (Steam ve el juego)'
+           else
+               printf 'automatico (sin superposicion)'
+           fi ;;
+    esac
+}
+
 build_runner_cmd() {
     local rdir="$1" kind
     kind="$(runner_kind "$rdir")" || { fallo "Runner invalido: $rdir"; return 1; }
     RUN_CMD=()
-    # La superposicion de Steam se cuela por LD_PRELOAD cuando WProton se
-    # lanza desde el modo Juego, y en 32 bits ni siquiera carga: llena el
-    # registro de "wrong ELF class" y puede estorbar. Se quita para el juego;
-    # umu y Proton ya ponen lo que necesitan.
+    # LA SUPERPOSICION DE STEAM SE DEJA PUESTA.
+    #
+    # Antes se quitaba entera con "env -u LD_PRELOAD" por el ruido que ld.so
+    # mete en el registro: "gameoverlayrenderer.so ... wrong ELF class". Ese
+    # ruido es NORMAL y no es un fallo nuestro: Steam pone en LD_PRELOAD las
+    # rutas de 32 Y de 64 bits a la vez, y ld.so descarta la que no toca. Lo
+    # dice el propio mensaje al final: "ignored".
+    #
+    # Y quitarla sale MUY caro en el modo Juego: sin gameoverlayrenderer.so,
+    # Steam no se entera de que hay un juego corriendo. En su menu sale solo
+    # "WProton" y no la fila del juego, asi que NO SE PUEDE CERRAR DESDE AHI, y
+    # Steam Input se queda a medias. Esta documentado: PrismLauncher #3421
+    # describe exactamente eso -vaciar LD_PRELOAD deja arrancar el juego pero
+    # rompe el resto de SteamOS-.
+    #
+    # Para salir del juego seguimos teniendo SELECT 5 segundos, pero eso no
+    # sustituye al menu de Steam: es lo primero que busca quien viene de jugar
+    # a un juego de Steam.
+    #
+    # SE DECIDE POR JUEGO, no con un interruptor general.
+    #
+    # Hay lanzadores que se atragantan con lo que otros programas les escriben
+    # en la salida: BudgieLoader, el de los juegos de Raw Thrills, se cierra al
+    # leer los avisos de GameMode y de MangoHud. No es descartable que alguno
+    # haga lo mismo con la superposicion, y un interruptor general obligaria a
+    # elegir entre ese juego y todos los demas.
+    #
+    #   STEAM_OVERLAY del PERFIL:  auto | 1 | 0
+    #   "auto" -> lo que diga STEAM_OVERLAY en settings.conf, que viene a 1.
+    #
+    # Se cambia en: Ajustes del juego -> Casos especiales.
+    local _ovl="${STEAM_OVERLAY:-auto}"
+    [ "$_ovl" = "auto" ] && _ovl="${STEAM_OVERLAY_GENERAL:-1}"
+    # OCULTAR EL JUEGO A STEAM: hay que quitarle la IDENTIDAD, no la
+    # superposicion.
+    #
+    # Quitar gameoverlayrenderer.so del LD_PRELOAD NO oculta nada: en la 1.60 se
+    # quitaba y el juego seguia saliendo en el menu de Steam. Lo que ata la
+    # ventana del juego a la aplicacion de Steam son las variables de
+    # identidad, y de ellas SteamGameId en particular: umu-launcher saca de ahi
+    # el AppID y se lo pone a la ventana, que es lo que lee el compositor.
+    #
+    # Sin ellas, para Steam solo existe WProton. Consecuencias, para que nadie
+    # se lleve una sorpresa:
+    #   - no hay superposicion (nada de Shift+Tab, ni capturas, ni FPS de Steam)
+    #   - Steam Input no engancha en el juego
+    #   - "Salir del juego" actua sobre WProton, que cierra el juego por su
+    #     cuenta (cierre_desde_fuera) y hace el fin de partida completo
+    #
+    # STEAM_COMPAT_CLIENT_INSTALL_PATH NO se toca: Proton la necesita para
+    # arrancar, y no es una variable de identidad.
+    if [ "$_ovl" = oculto ]; then
+        log "Steam: se oculta el juego (se le quita la identidad de Steam)"
+        say "[i] Este juego se oculta a Steam: en su menu solo saldra WProton."
+        say "    Sin superposicion ni Steam Input. Para cerrarlo, 'Salir del"
+        say "    juego' sobre WProton, o SELECT 5 segundos."
+        # LD_PRELOAD ya no se hereda (se desexporto al arrancar), asi que aqui
+        # solo hay que quitar la identidad.
+        RUN_CMD+=(env -u SteamAppId -u SteamGameId \
+                      -u SteamOverlayGameId -u SteamClientLaunch)
+    fi
     case "${LD_PRELOAD:-}" in
         *gameoverlayrenderer*)
-            log "Quitada la superposicion de Steam del LD_PRELOAD del juego"
-            RUN_CMD+=(env -u LD_PRELOAD) ;;
+            if [ "$_ovl" = oculto ]; then
+                :                       # ya resuelto arriba
+            elif [ "$_ovl" = 1 ]; then
+                # SE LE PASA AL JUEGO A MANO.
+                #
+                # WProton se la desexporta a si mismo al arrancar (ver
+                # WP_LD_PRELOAD_STEAM) para no llenar el registro de "wrong ELF
+                # class". El juego SI la necesita, asi que se le pone aqui y
+                # solo a el: los ayudantes nuestros siguen sin heredarla.
+                log "Superposicion de Steam: se le pasa al juego"
+                RUN_CMD+=(env "LD_PRELOAD=$WP_LD_PRELOAD_STEAM")
+            else
+                log "Superposicion de Steam: no se le pasa a este juego"
+                say "[i] Superposicion de Steam apagada para este juego."
+                say "    Para cerrarlo, manten SELECT 5 segundos."
+            fi ;;
     esac
     local gs_args="$GAMESCOPE"
     if [ -z "$gs_args" ] && [ "${IS_GAMESCOPE:-0}" = 1 ] && [ "${NESTED_GAMESCOPE:-0}" = 1 ]; then
@@ -22101,9 +22934,29 @@ $(tail -n 400 "$_gl" 2>/dev/null)"
     # "IL-only binary ... cannot be loaded" es LA linea que suelta Wine
     # cuando el programa es .NET puro y no encuentra mscoree. Es mas fiable
     # que el codigo de salida y va primero.
+    # HACE FALTA UN ERROR DE VERDAD, NO NUESTRA PROPIA CONFIGURACION.
+    #
+    # ESTA REGLA SE AUTOENGAÑABA
+    #
+    # Pedia "mscoree=d" y ademas que en el texto apareciera mscoree, .NET, Wine
+    # Mono o CLR. Pero "mscoree=d" ES LA ANULACION QUE PONE WProton cuando Mono
+    # esta desactivado en el perfil, y esa misma cadena contiene "mscoree": la
+    # segunda condicion casaba SIEMPRE que se cumpliera la primera.
+    #
+    # Resultado: cualquier juego con Mono desactivado -que es lo normal, y lo
+    # que le conviene a casi todos- salia acusado de ser .NET y de no poder
+    # arrancar, aunque hubiera funcionado perfectamente. Caso real: un juego que
+    # se ejecuta bien con su propio prefijo y al salir mostraba "Este programa
+    # es .NET y Mono esta desactivado para el", ofreciendo instalar dotnet48 que
+    # no hacia ninguna falta.
+    #
+    # Ahora hace falta que WINE SE QUEJE de verdad: que diga que no puede
+    # cargar mscoree, o el fallo de binario IL-only. La presencia de nuestra
+    # anulacion ya no es prueba de nada.
     if printf '%s' "$cola" | grep -q 'fixup_imports_ilonly' \
-       || { printf '%s' "$cola" | grep -q 'mscoree=d' \
-            && { [ "$rc" = 53 ] || printf '%s' "$cola" | grep -qiE 'mscoree|\.NET|Wine Mono|CLR'; }; }; then
+       || [ "$rc" = 53 ] \
+       || printf '%s' "$cola" | grep -qiE \
+            'mscoree\.dll[^a-z]*not found|(failed|unable|could not|cannot) to? ?load[^\n]*(mscoree|\.NET|CLR)|err:[^\n]*mscoree|Mono[^\n]*not installed'; then
         # QUE SE ACONSEJA DEPENDE DEL PREFIJO.
         #
         # Un prefijo que trae el paquete (Batocera) ya viene con lo que el
@@ -22480,7 +23333,37 @@ diag_mando_vigilante() {
     # carpeta. Con DIAG_MANDO=1 en un .pc no salia nada: ni el estado de antes
     # ni lo que el juego recibio de verdad. Y eso es justo lo unico que dice si
     # nuestras variables llegaron o alguien las cambio por el camino.
-    [ "${DIAG_MANDO:-0}" = 1 ] || return 0
+    # SE ENCIENDE SOLO CUANDO LA DECISION LA TOMAMOS NOSOTROS.
+    #
+    # Con DIAG_MANDO=0 no salia nada, y entonces no hay forma de saber si
+    # nuestras variables LLEGARON al juego o alguien las cambio por el camino.
+    # Justo lo que hizo falta el 15/09: el registro decia "Mando via SDL:
+    # ACTIVADO" y el mando no iba, sin manera de distinguir "no llego la
+    # variable" de "llego y no basta". Son dos fallos distintos y se arreglan
+    # en sitios distintos.
+    #
+    # Asi que si la decision fue automatica -pad_why empieza por "automatico"-
+    # se vuelca el entorno del juego aunque el diagnostico este apagado. Son
+    # diez lineas en el registro y solo en ese caso.
+    # EL VOLCADO SE ENCIENDE POR LA SITUACION, NO POR COMO SE DECIDIO.
+    #
+    # Antes solo entraba si la decision habia sido "automatico". Mismo fallo
+    # que con la ocultacion: en cuanto el usuario fijaba el ajuste en el perfil
+    # el diagnostico SE APAGABA, justo cuando mas falta hacia. En el registro
+    # del 16/09 a las 20:13 no hay volcado por eso.
+    #
+    # Ahora se enciende siempre que el unico mando sea el virtual de Steam, que
+    # es el caso que estamos peleando, decidalo quien lo decida.
+    if [ "${DIAG_MANDO:-0}" != 1 ]; then
+        if mando_solo_virtual_de_steam; then
+            log "Mando: solo hay el virtual de Steam, se apunta que recibio el juego"
+        else
+            case "${WP_PAD_WHY:-}" in
+                automatico*) log "Mando: decision automatica, se apunta que recibio el juego" ;;
+                *) return 0 ;;
+            esac
+        fi
+    fi
     diag_mando_antes
     local exe_base="${1:-}"
     [ -n "$exe_base" ] || return 0
@@ -22549,7 +23432,11 @@ launch_game() {
     # antes de arrancar el juego. Y en los .wsquashfs con prefijo incluido
     # los ficheros de Wine viven DENTRO del montaje: el juego se quedaba sin
     # nada y moria con "Transport endpoint is not connected".
-    trap '' INT TERM
+    # Se ATIENDE, no se ignora: cierre_desde_fuera distingue el TERM espurio
+    # de Steam -llega en los primeros segundos- del que manda cuando el
+    # usuario pulsa "Salir del juego". Con el "trap ''" de antes, ese boton
+    # no hacia absolutamente nada.
+    trap cierre_desde_fuera INT TERM
     WP_JUGANDO=1
 
     # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
@@ -22928,14 +23815,62 @@ Elige otro en: Ajustes del juego -> Ejecutable
     menu_server_stop
     canvas_stop
     log_input_devices
+    avisar_estado_steam_input
     local keys_file=""
     if keys_file="$(find_keys_file "$abs_squash" "$gid")"; then
         mapeador_start "$keys_file"
-        # El mando virtual va aparte del mapeador: uno convierte el mando en
-        # teclas y el otro en otro mando. Se pueden usar los dos.
-        mando_virtual_start "${MANDO_VIRTUAL:-0}"
     else
         say "[i] Sin .keys para $gid (buscado: ${abs_squash%.*}.keys | $abs_squash.keys | profiles/$gid.keys)"
+    fi
+    # EL MANDO VIRTUAL VA APARTE DEL MAPEADOR. AHORA SI.
+    #
+    # ESTE FUE EL FALLO QUE COSTO DOS TARDES
+    #
+    # Esta llamada vivia DENTRO del "if" que busca el .keys, o sea que el mando
+    # virtual solo se creaba en los juegos que tenian fichero de teclas. En los
+    # demas -como Shredder's Revenge- se elegia "Mando Xbox" en el menu, se
+    # guardaba en el perfil, y NO PASABA NADA. Ni un aviso, porque con modo 0
+    # la funcion se iba en silencio.
+    #
+    # El propio comentario de al lado decia "va aparte del mapeador: uno
+    # convierte el mando en teclas y el otro en otro mando, se pueden usar los
+    # dos". Estaba bien escrito y mal colocado.
+    #
+    # AUTOMATICO CUANDO EL UNICO MANDO ES EL VIRTUAL DE STEAM.
+    #
+    # Ese es el caso que no tiene otra salida sin reiniciar Steam: Steam se
+    # queda el mando fisico y ofrece el suyo, que el juego no ve. Capturando el
+    # suyo y ofreciendo NOSOTROS un Xbox 360 corriente, el juego ve un mando
+    # normal y no hay que tocar nada de Steam.
+    #
+    # Se puede desactivar poniendo el mando virtual en "No usar".
+    # SE ELIGE A MANO, POR JUEGO. NO ES AUTOMATICO, Y NO DEBE SERLO.
+    #
+    # Llego a estar en automatico -"si el unico mando es el virtual de Steam,
+    # se enciende"- y era un error de bulto: EN EL MODO JUEGO DE LA DECK ESA
+    # CONDICION ES SIEMPRE CIERTA. Steam Input esconde el mando fisico en todos
+    # los juegos, asi que aquello habria capturado el mando en la biblioteca
+    # entera para arreglar uno.
+    #
+    # Y capturar no es gratis: el mando fisico queda cogido en exclusiva, se
+    # pierden la vibracion, el giroscopio y el remapeado de Steam Input, y hay
+    # un salto mas de latencia. Eso se paga en el juego que lo necesita, no en
+    # todos.
+    #
+    # Se enciende en: Ajustes del juego -> Mapeador .keys -> Mando virtual.
+    # "nunca" se acepta como apagado por compatibilidad con los perfiles que se
+    # guardaron mientras existio el automatico.
+    local _mv="${MANDO_VIRTUAL:-0}"
+    [ "$_mv" = nunca ] && _mv=0
+    mando_virtual_start "$_mv"
+    # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
+    #
+    # log_input_devices corre ANTES de crearlo, asi que en el registro solo
+    # salia el de Steam y no habia forma de saber si el nuestro habia aparecido
+    # de verdad ni con que nombre. Dos lineas y se ve.
+    if [ "$_mv" != 0 ]; then
+        say "[i] Mandos DESPUES de crear el virtual:"
+        log_input_devices
     fi
     gamepad_retrigger &
     local trig=$!
@@ -23022,9 +23957,30 @@ EOFRA
         fi
     ) &
     WP_PID_JUEGO=$!
-    wait "$WP_PID_JUEGO"
-    local rc=$?
-    WP_PID_JUEGO=""
+    WP_T0_JUEGO=$(date +%s)          # desde aqui, un TERM es una peticion real
+    diag_ventanas_steam
+    # Y si este juego va en modo "oculto", se le quitan las etiquetas.
+    [ "${STEAM_OVERLAY:-auto}" = oculto ] && steam_ocultar_ventanas
+    # SE VUELVE A ESPERAR SI LA SENAL SE IGNORO.
+    #
+    # Con el "trap '' INT TERM" de antes, una senal ignorada NO cortaba el
+    # "wait": se seguia esperando al juego y ya esta. Con un manejador ya no es
+    # asi: bash lo ejecuta y "wait" vuelve con 128+n AUNQUE el juego siga vivo.
+    #
+    # Si se dejara pasar, el TERM espurio de Steam -el que llega al cerrarse
+    # nuestra ventana- haria que WProton diera la partida por terminada y
+    # desmontara el .wsquashfs CON EL JUEGO DENTRO. O sea, exactamente el
+    # desastre que el blindaje existia para evitar.
+    #
+    # Asi que: si la espera se corto por una senal pero el juego sigue vivo, es
+    # que cierre_desde_fuera decidio ignorarla, y se vuelve a esperar.
+    local rc=0
+    while :; do
+        wait "$WP_PID_JUEGO"; rc=$?
+        [ "$rc" -gt 128 ] && kill -0 "$WP_PID_JUEGO" 2>/dev/null && continue
+        break
+    done
+    WP_PID_JUEGO=""; WP_T0_JUEGO=0
     # Y se cierra al terminar, con su arbol: si sobrevive mantiene vivo el
     # prefijo y WProton se queda esperando a alguien que no va a morir.
     acompanante_stop
@@ -23047,6 +24003,12 @@ EOFRA
     # 241 y 255 los produce nuestro propio cierre con el mando: el juego se
     # corta a proposito, asi que no es un fallo del que haya que avisar.
     case "$rc" in 241|255) [ "$dur" -ge 10 ] && rc=0 ;; esac
+    # Y el cierre pedido desde Steam tampoco es un fallo del juego.
+    if [ "${WP_CIERRE_PEDIDO:-0}" = 1 ]; then
+        log "El juego se cerro porque lo pedimos nosotros (rc=$rc): no es un fallo"
+        [ "$dur" -ge 10 ] && rc=0
+        WP_CIERRE_PEDIDO=0
+    fi
     # UN REGISTRO EN BUCLE ES UN FALLO AUNQUE EL JUEGO HAYA DURADO MINUTOS.
     #
     # Aliens Armageddon "funciono" minuto y medio mientras Mesa escribia la
@@ -23059,15 +24021,34 @@ EOFRA
         | sed 's/[0-9a-fx]\{6,\}/N/g' | sort | uniq -c | sort -rn | head -n1)"
     _repes="${_linea_rep%%[!0-9 ]*}"; _repes="${_repes// /}"
     if [ "${_repes:-0}" -ge 1000 ] && [ $dur -ge 12 ]; then
-        local _sug_bucle
-        _sug_bucle="$(fallo_analizar "$LOG_FILE" "$rc")" || true
         say "AVISO: el registro del juego repite la misma linea $_repes veces:"
         say "       ${_linea_rep#*[0-9] }"
-        if [ -n "$_sug_bucle" ]; then
-            ui_error "El juego ha estado escribiendo el mismo error miles de veces.
+        # LA LINEA REPETIDA TIENE QUE PARECER UN ERROR PARA ABRIR UN DIALOGO.
+        #
+        # Antes se llamaba a fallo_analizar con EL REGISTRO ENTERO, asi que el
+        # diagnostico que salia podia no tener NADA que ver con la linea que se
+        # repetia: se juntaban dos hechos sin relacion y se presentaban como
+        # causa y efecto. Un juego que funciono bien y que repetia una linea
+        # inocua acababa con un dialogo diciendole al usuario que instalara
+        # dotnet48.
+        #
+        # Si la linea repetida no parece un error, se queda en el registro y no
+        # se interrumpe a nadie: un juego que ha funcionado no merece un
+        # dialogo de error al salir.
+        case "$(printf '%s' "${_linea_rep#*[0-9] }" | tr 'A-Z' 'a-z')" in
+            *err:*|*error*|*fail*|*fatal*|*cannot*|*unable*|*"not found"*|*segfault*|*crash*)
+                local _sug_bucle
+                _sug_bucle="$(fallo_analizar "$LOG_FILE" "$rc")" || true
+                if [ -n "$_sug_bucle" ]; then
+                    ui_error "El juego ha estado escribiendo el mismo error miles de veces.
+
+Si el juego te ha funcionado bien, puedes ignorar esto.
 
 $_sug_bucle"
-        fi
+                fi ;;
+            *)
+                log "El bucle del registro no parece un error; no se avisa en pantalla" ;;
+        esac
     fi
     # UNA SALIDA EN POCOS SEGUNDOS ES UN FALLO AUNQUE EL CODIGO SEA 0.
     #
@@ -28531,10 +29512,10 @@ run_exe_in_game() {
 TECLAS_PY="$RUNTIME_DIR/teclas.py"
 
 write_teclas() {
-    grep -q "WPROTON_HELPER teclas.py f62369b1698a" "$TECLAS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teclas.py 71a66edb4f02" "$TECLAS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TECLAS_PY" <<'TECEOF'
-# WPROTON_HELPER teclas.py f62369b1698a
+# WPROTON_HELPER teclas.py 71a66edb4f02
 # -*- coding: utf-8 -*-
 # WProton - formato de los ficheros .keys (mapeo de mando a teclado)
 #
@@ -28552,7 +29533,7 @@ write_teclas() {
 #   keys_texto_poner() / keys_teclado_poner()-> poner_accion()
 #   keys_raton_leer() / keys_raton_poner()  -> raton_leer() / raton_poner()
 #   keys_sustituye_al_mando()               -> sustituye_al_mando()
-#   keys_ejemplo_crear()                    -> ejemplo()
+#   (la fila del menu se quito en 1.67)     -> ejemplo()
 #   el heredoc PYESC de keys_editor()       -> componer()
 #
 # ESTO YA ERA PYTHON
@@ -29400,19 +30381,15 @@ keys_sustituye_al_mando() {
     teclas_py sustituye "$1" 2>>"$LOG_FILE"
 }
 
-keys_ejemplo_crear() {
-    # Deja un .keys de ejemplo con las combinaciones utiles, para quien quiera
-    # usarlas. NO se aplica solo: para que funcione hay que ponerlo junto a un
-    # juego (<juego>.wsquashfs.keys) o copiarlo como perfil del juego.
-    #
-    # No se activa de serie porque el mapeador crea un teclado virtual durante
-    # la partida y algunos juegos se confunden al ver un dispositivo nuevo.
-    local f="$RUNTIME_DIR/ejemplo.keys"
-    mkdir -p "$RUNTIME_DIR" 2>/dev/null
-    teclas_py ejemplo "$f" 2>>"$LOG_FILE" || return 1
-    printf '%s' "$f"
-    return 0
-}
+# keys_ejemplo_crear SE QUITO junto con su fila del menu.
+#
+# Dejaba un "ejemplo.keys" en runtime/ que luego habia que copiar a mano junto
+# al juego con el nombre exacto. Ajustes del juego -> Mapeador .keys -> "Crear
+# o editar las teclas de este juego" hace lo mismo y lo deja DONDE VA, asi que
+# la fila sobraba y ademas era la peor de las dos formas.
+#
+# El subcomando "ejemplo" de teclas.py se queda: el modulo es independiente y
+# se usa a mano para ver el formato de un .keys.
 
 DISCO_PY="$RUNTIME_DIR/disco.py"
 
@@ -32234,7 +33211,11 @@ launch_loose_exe() {
     #
     # Y reparar_montajes tampoco se negaba a tocar nada mientras un .pc
     # estaba jugandose, por lo mismo.
-    trap '' INT TERM
+    # Se ATIENDE, no se ignora: cierre_desde_fuera distingue el TERM espurio
+    # de Steam -llega en los primeros segundos- del que manda cuando el
+    # usuario pulsa "Salir del juego". Con el "trap ''" de antes, ese boton
+    # no hacia absolutamente nada.
+    trap cierre_desde_fuera INT TERM
     WP_JUGANDO=1
     gid="$(printf '%s' "$gid" | tr ' /' '__')"
     # EL IDENTIFICADOR, TAMBIEN AQUI.
@@ -32666,6 +33647,7 @@ Elige otro en: Ajustes del juego -> Ejecutable
     menu_server_stop
     canvas_stop
     log_input_devices
+    avisar_estado_steam_input
     local keys_file=""
     if keys_file="$(find_keys_file "$exe" "$gid")"; then
         mapeador_start "$keys_file"
@@ -32675,9 +33657,42 @@ Elige otro en: Ajustes del juego -> Ejecutable
         # otro mando, y se pueden usar los dos. La opcion MANDO_VIRTUAL del
         # perfil se guardaba y NO SE APLICABA en los juegos en carpeta, asi que
         # el usuario la activaba y no pasaba nada.
-        mando_virtual_start "${MANDO_VIRTUAL:-0}"
     else
         say "[i] Sin .keys para $gid"
+    fi
+    # EL MANDO VIRTUAL, FUERA DEL IF DEL .keys. Igual que en launch_game:
+    # vivia dentro y solo se creaba en los juegos con fichero de teclas.
+    #
+    # Y automatico cuando el unico mando es el virtual de Steam, que es el caso
+    # sin otra salida: se captura el suyo y se le ofrece al juego un Xbox 360
+    # corriente, sin tocar nada de Steam ni reiniciar nada.
+    # SE ELIGE A MANO, POR JUEGO. NO ES AUTOMATICO, Y NO DEBE SERLO.
+    #
+    # Llego a estar en automatico -"si el unico mando es el virtual de Steam,
+    # se enciende"- y era un error de bulto: EN EL MODO JUEGO DE LA DECK ESA
+    # CONDICION ES SIEMPRE CIERTA. Steam Input esconde el mando fisico en todos
+    # los juegos, asi que aquello habria capturado el mando en la biblioteca
+    # entera para arreglar uno.
+    #
+    # Y capturar no es gratis: el mando fisico queda cogido en exclusiva, se
+    # pierden la vibracion, el giroscopio y el remapeado de Steam Input, y hay
+    # un salto mas de latencia. Eso se paga en el juego que lo necesita, no en
+    # todos.
+    #
+    # Se enciende en: Ajustes del juego -> Mapeador .keys -> Mando virtual.
+    # "nunca" se acepta como apagado por compatibilidad con los perfiles que se
+    # guardaron mientras existio el automatico.
+    local _mv="${MANDO_VIRTUAL:-0}"
+    [ "$_mv" = nunca ] && _mv=0
+    mando_virtual_start "$_mv"
+    # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
+    #
+    # log_input_devices corre ANTES de crearlo, asi que en el registro solo
+    # salia el de Steam y no habia forma de saber si el nuestro habia aparecido
+    # de verdad ni con que nombre. Dos lineas y se ve.
+    if [ "$_mv" != 0 ]; then
+        say "[i] Mandos DESPUES de crear el virtual:"
+        log_input_devices
     fi
     gamepad_retrigger &
     local trig=$!
@@ -32725,14 +33740,40 @@ EOFRB
     # Proton puede tardar de verdad aqui la primera vez con un runner nuevo,
     # asi que el mensaje lo dice en vez de dejar al usuario adivinando.
     loading_say "Preparando el entorno de Windows con $(basename "${rdir%/}")..."
-    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 )
-    # EL CODIGO DE SALIDA, ANTES DE NADA.
+    # EN SEGUNDO PLANO Y CON SU PID, IGUAL QUE EN launch_game.
     #
-    # Estaba dos lineas mas abajo, despues de acompanante_stop y
-    # unidad_juego_reaplicar_stop, asi que "$?" recogia el resultado de ESAS y
-    # no el del juego. Todo lo que dependa de rc trabajaba con un numero que no
-    # era el del juego.
-    local rc=$?
+    # Corria en primer plano y sin guardar el PID, asi que por este camino NADA
+    # podia cerrar el juego: ni el guardia de SELECT -que hace
+    # matar_con_hijos "$WP_PID_JUEGO"- ni la peticion de cierre de Steam. El
+    # usuario se quedaba con un juego que solo se podia cerrar desde dentro.
+    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 ) &
+    WP_PID_JUEGO=$!
+    WP_T0_JUEGO=$(date +%s)
+    diag_ventanas_steam
+    # Y si este juego va en modo "oculto", se le quitan las etiquetas.
+    [ "${STEAM_OVERLAY:-auto}" = oculto ] && steam_ocultar_ventanas
+    # EL CODIGO DE SALIDA ES EL DEL JUEGO, no el de lo que venga despues: por
+    # eso rc se recoge aqui mismo y no tras acompanante_stop.
+    # SE VUELVE A ESPERAR SI LA SENAL SE IGNORO.
+    #
+    # Con el "trap '' INT TERM" de antes, una senal ignorada NO cortaba el
+    # "wait": se seguia esperando al juego y ya esta. Con un manejador ya no es
+    # asi: bash lo ejecuta y "wait" vuelve con 128+n AUNQUE el juego siga vivo.
+    #
+    # Si se dejara pasar, el TERM espurio de Steam -el que llega al cerrarse
+    # nuestra ventana- haria que WProton diera la partida por terminada y
+    # desmontara el .wsquashfs CON EL JUEGO DENTRO. O sea, exactamente el
+    # desastre que el blindaje existia para evitar.
+    #
+    # Asi que: si la espera se corto por una senal pero el juego sigue vivo, es
+    # que cierre_desde_fuera decidio ignorarla, y se vuelve a esperar.
+    local rc=0
+    while :; do
+        wait "$WP_PID_JUEGO"; rc=$?
+        [ "$rc" -gt 128 ] && kill -0 "$WP_PID_JUEGO" 2>/dev/null && continue
+        break
+    done
+    WP_PID_JUEGO=""; WP_T0_JUEGO=0
     acompanante_stop
     unidad_juego_reaplicar_stop
     # Al subshell Y a lo que tenga dentro: "kill" sobre un subshell de bash no
@@ -32768,6 +33809,20 @@ EOFRB
     mako_informe
     reshade_lx_informe
     diag_video_informe
+    # NUESTROS PROPIOS CIERRES NO SON UN FALLO, igual que en launch_game.
+    #
+    # Faltaba aqui tambien: cerrar un .pc con SELECT o desde el menu de Steam
+    # devuelve 241, 255 o 143, y por este camino eso iba derecho a
+    # fallo_analizar, que se ponia a buscar la causa de un fallo que no existe
+    # y soltaba una "pista" al usuario por haber cerrado el juego a proposito.
+    case "$rc" in
+        241|255) [ "$(( $(date +%s) - st0 ))" -ge 10 ] && rc=0 ;;
+    esac
+    if [ "${WP_CIERRE_PEDIDO:-0}" = 1 ]; then
+        log "El juego se cerro porque lo pedimos nosotros (rc=$rc): no es un fallo"
+        [ "$(( $(date +%s) - st0 ))" -ge 10 ] && rc=0
+        WP_CIERRE_PEDIDO=0
+    fi
     if [ "$rc" != 0 ]; then
         local _sug_le _l
         _sug_le="$(fallo_analizar "$LOG_FILE" "$rc")" || true
@@ -33047,20 +34102,180 @@ diag_mando_despues() {
     return 0
 }
 
-log_input_devices() {
-    # Deja en el log que mandos ve el sistema justo antes de lanzar
-    local name handlers n=0
-    [ -r /proc/bus/input/devices ] || return 0
+mando_solo_virtual_de_steam() {
+    # Devuelve 0 si HAY mandos, TODOS son virtuales y son de Valve (0x28de).
+    #
+    # Distinguir "virtual" de "virtual DE STEAM" importa: nuestro propio mando
+    # virtual (mando_virtual.py) tambien es uinput, y para el la respuesta es
+    # otra. Solo cuando el unico mando es el que da Steam Input tiene sentido
+    # el puente a XInput.
+    [ -r /proc/bus/input/devices ] || return 1
+    local line sysfs="" vend="" n=0 nv=0
     while IFS= read -r line; do
         case "$line" in
-            N:*) name="${line#N: Name=}" ;;
-            H:*) handlers="$line"
-                 case "$handlers" in
+            I:*) vend="$(printf '%s' "$line" | sed -n 's/.*Vendor=\([0-9a-fA-F]*\).*/\1/p' | tr 'A-Z' 'a-z')" ;;
+            S:*) sysfs="${line#S: Sysfs=}" ;;
+            H:*) case "$line" in
                      *js*) n=$((n+1))
-                           say "    mando $n: $name" ;;
+                           case "$sysfs" in
+                               */virtual/*) [ "$vend" = 28de ] && nv=$((nv+1)) ;;
+                           esac ;;
                  esac ;;
         esac
     done < /proc/bus/input/devices
+    [ "$n" -gt 0 ] && [ "$nv" -ge "$n" ]
+}
+
+mando_solo_virtual() {
+    # Devuelve 0 si HAY mandos y TODOS son virtuales (uinput), o sea sin nodo
+    # /dev/hidraw.
+    #
+    # Es el caso del modo Juego de SteamOS: Steam Input esconde el mando fisico
+    # y ofrece el suyo, que es uinput. Un runner que lea por hidraw -GE-Proton
+    # 11-4 y siguientes- no encuentra ahi nada, y el juego se queda sin mando
+    # aunque los menus de WProton lo lean perfectamente.
+    [ -r /proc/bus/input/devices ] || return 1
+    local line sysfs="" n=0 nv=0
+    while IFS= read -r line; do
+        case "$line" in
+            S:*) sysfs="${line#S: Sysfs=}" ;;
+            H:*) case "$line" in
+                     *js*) n=$((n+1))
+                           case "$sysfs" in */virtual/*) nv=$((nv+1)) ;; esac ;;
+                 esac ;;
+        esac
+    done < /proc/bus/input/devices
+    [ "$n" -gt 0 ] && [ "$nv" -ge "$n" ]
+}
+
+steam_input_activo() {
+    # ¿STEAM INPUT ESTA ACTIVO PARA ESTE LANZAMIENTO?
+    #
+    # COMO SE SABE, Y DE DONDE SALE
+    #
+    # Comparando dos registros del 17/09 del MISMO juego, uno que fallaba y
+    # otro que funcionaba, los entornos tenian 37 variables cada uno y solo
+    # diferian en dos. Una era ruido (STEAM_MANGOAPP_HORIZONTAL_SUPPORTED). La
+    # otra:
+    #
+    #   21:51 (Steam Input encendido, sin mando)  SDL_GAMECONTROLLER_USE_BUTTON_LABELS presente
+    #   21:55 (Steam Input apagado, funcionando)  AUSENTE
+    #
+    # Esa variable la pone Steam como parte del entorno de Steam Input: le dice
+    # a SDL que use las etiquetas del mando que esta emulando. Si Steam Input
+    # esta apagado para el atajo, Steam no la pone.
+    #
+    # ES UNA SEÑAL, NO UNA CERTEZA. Sale de una sola comparacion, asi que NO se
+    # usa para decidir nada: solo para DECIRLO. Con esto, en el registro queda
+    # claro en que estado se jugo, que es lo que falto toda esta semana.
+    [ -n "${SDL_GAMECONTROLLER_USE_BUTTON_LABELS:-}" ]
+}
+
+avisar_estado_steam_input() {
+    # Deja dicho en el registro con que estado de Steam Input se juega.
+    #
+    # Se dice SIEMPRE, tanto si esta como si no: media semana se fue en no
+    # saber si una prueba se hizo con Steam Input puesto o quitado.
+    if steam_input_activo; then
+        log "Steam Input: ACTIVO para este atajo (SDL_GAMECONTROLLER_USE_BUTTON_LABELS presente)"
+        if mando_solo_virtual_de_steam; then
+            say "[i] Steam Input esta ACTIVO y el unico mando es el que el ofrece."
+            say "    Hay juegos que asi no ven ningun mando. Si es tu caso, la"
+            say "    unica solucion probada es apagar Steam Input para WProton"
+            say "    desde el menu de Steam (Mando -> Desactivar Steam Input)."
+        fi
+    else
+        log "Steam Input: no parece activo para este atajo (falta SDL_GAMECONTROLLER_USE_BUTTON_LABELS)"
+        say "[+] Steam Input no esta activo: el juego recibe tu mando tal cual."
+    fi
+}
+
+log_input_devices() {
+    # Deja en el log que mandos ve el sistema justo antes de lanzar, Y SI STEAM
+    # LE HA DICHO AL JUEGO QUE LOS IGNORE.
+    #
+    # EL CASO QUE ESTO DESTAPA
+    #
+    # En el registro del 15/09 habia UN solo mando, "Microsoft X-Box 360 pad 0",
+    # que es el VIRTUAL que da Steam Input... y su fabricante/modelo
+    # (045e:028e) estaba DENTRO de SDL_GAMECONTROLLER_IGNORE_DEVICES, la lista
+    # que Steam nos pasa para que los juegos ignoren el mando fisico.
+    #
+    # O sea: Steam esconde el fisico, ofrece el suyo, y en la misma lista le
+    # dice al juego que ignore tambien el suyo. El juego no ve NINGUNO. Con el
+    # lanzador funcionando -nosotros leemos /dev/input en crudo- eso parece un
+    # fallo del juego, y no lo es.
+    #
+    # Sin esta comprobacion habia que sacar el fabricante/modelo a mano de una
+    # lista de 792 entradas para darse cuenta. Ahora sale en una linea.
+    local name handlers n=0 nign=0 nvirt=0 vend="" prod="" sysfs="" ign_hay="" ign_lista
+    ign_lista="${SDL_GAMECONTROLLER_IGNORE_DEVICES:-}${SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES:-}"
+    [ -r /proc/bus/input/devices ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            I:*) vend="$(printf '%s' "$line" | sed -n 's/.*Vendor=\([0-9a-fA-F]*\).*/\1/p')"
+                 prod="$(printf '%s' "$line" | sed -n 's/.*Product=\([0-9a-fA-F]*\).*/\1/p')" ;;
+            N:*) name="${line#N: Name=}" ;;
+            S:*) sysfs="${line#S: Sysfs=}" ;;
+            H:*) handlers="$line"
+                 case "$handlers" in
+                     *js*) n=$((n+1))
+                           # ¿ES VIRTUAL? Los de uinput -el de Steam Input, y
+                           # el nuestro- viven en /devices/virtual/ y NO TIENEN
+                           # nodo /dev/hidraw. GE-Proton 11-4 y siguientes leen
+                           # los mandos por hidraw, asi que a uno virtual no lo
+                           # ven: no es que falte permiso, es que no existe ahi.
+                           case "$sysfs" in */virtual/*) nvirt=$((nvirt+1)) ;; esac
+                           if [ -n "$ign_lista" ] && [ -n "$vend" ] \
+                              && printf '%s' "$ign_lista" | tr 'A-Z' 'a-z' \
+                                 | grep -qF "0x$(printf '%s' "$vend" | tr 'A-Z' 'a-z')/0x$(printf '%s' "$prod" | tr 'A-Z' 'a-z')"; then
+                               say "    mando $n: $name  [$vend:$prod] <-- STEAM LE DICE AL JUEGO QUE LO IGNORE"
+                               ign_hay=1; nign=$((nign+1))
+                           else
+                               say "    mando $n: $name  [$vend:$prod]"
+                           fi ;;
+                 esac ;;
+        esac
+    done < /proc/bus/input/devices
+    if [ -n "$ign_hay" ]; then
+        # SE DICE LO QUE PASA DE VERDAD, no "no vera ninguno" a bulto: con dos
+        # mandos y uno ignorado, el juego si ve el otro, y un aviso que exagera
+        # manda a buscar por donde no es.
+        if [ "$nign" -ge "$n" ]; then
+            say "[!] TODOS LOS MANDOS QUE HAY ESTAN EN LA LISTA DE IGNORADOS DE STEAM."
+            say "    El juego no vera NINGUNO, aunque los menus de WProton si."
+        else
+            say "[!] $nign de $n mando(s) estan en la lista de ignorados de Steam."
+            say "    El juego no vera ese, aunque los menus de WProton si."
+        fi
+        say "    Solucion: Ajustes del juego -> Rendimiento y compatibilidad ->"
+        say "    Arreglo mando SteamOS (Steam Input)."
+    fi
+    # TODOS VIRTUALES + RUNNER QUE LEE POR HIDRAW = NO VE NINGUNO.
+    #
+    # Este es el segundo motivo por el que "el mando va en los menus y no en el
+    # juego", y no se arregla con el de arriba. El mando virtual de Steam Input
+    # es un dispositivo uinput: aparece en /dev/input pero NO tiene nodo
+    # /dev/hidraw. GE-Proton 11-4 y siguientes leen los mandos por hidraw, asi
+    # que ahi no hay nada que leer. Quitar la lista de ignorados no lo arregla
+    # porque el problema no es que lo ignore: es que no lo encuentra.
+    #
+    # Lo que si lo arregla es que Wine lea por SDL en vez de por hidraw, que es
+    # lo que hace "Mando via SDL -> Siempre" (PROTON_USE_SDL).
+    # SI YA SE HA PUESTO SDL, NO SE RECOMIENDA PONERLO.
+    #
+    # El aviso salia DESPUES de que export_game_env activara SDL por su cuenta,
+    # asi que el registro decia "Mando via SDL: ACTIVADO (automatico...)" y tres
+    # lineas mas abajo "Solucion: Mando via SDL -> Siempre". Un registro que se
+    # contradice hace perder el tiempo a quien lo lee: parece que no se aplico.
+    if [ "$n" -gt 0 ] && [ "$nvirt" -ge "$n" ] \
+       && [ "${PAD_SDL:-auto}" != 1 ] && [ -z "${PROTON_USE_SDL:-}" ] \
+       && runner_gestiona_mandos "$(basename "${RUNNER_DIR_ACTUAL:-$RUNNER}")" 2>/dev/null; then
+        say "[!] EL UNICO MANDO QUE HAY ES VIRTUAL (uinput), sin nodo /dev/hidraw."
+        say "    Este runner lee los mandos por hidraw, asi que no lo encontrara."
+        say "    Solucion: Ajustes del juego -> Rendimiento y compatibilidad ->"
+        say "    Mando via SDL -> Siempre."
+    fi
     if [ "$n" -eq 0 ]; then
         say "[!] El sistema no expone ningun joystick (/dev/input/js*)"
     else
@@ -37857,6 +39072,7 @@ aqui no hay nada que tocar." \
             "Escritorio virtual: $(redist_juego_valor 'vd=' 'no' | sed 's/^vd=//')" \
             "Codecs de video de 32 bits: $([ -f "$RUNTIME_DIR/gstreamer/lib/gstreamer-1.0/libgstlibav.so" ] && printf 'instalados' || printf 'no')" \
             "Preguntar por Wine Mono (.NET): $([ "${MONO_PEDIR:-0}" = 1 ] && printf 'si' || printf 'NO (recomendado)')" \
+            "Superposicion de Steam: $(steam_overlay_texto)" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
@@ -38320,7 +39536,7 @@ cfg_ap_teclas() {
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
             "Volver a instalar lo que trae el juego (.bat)" \
-            "Mando virtual: $([ "${MANDO_VIRTUAL:-0}" = 0 ] && printf 'no' || printf '%s' "$MANDO_VIRTUAL")" \
+            "Mando virtual: $(case "${MANDO_VIRTUAL:-0}" in 0|nunca) printf 'no' ;; *) printf '%s' "$MANDO_VIRTUAL" ;; esac)" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Batocera' || printf 'Xbox')" \
                 "Teclado en pantalla: ${TECLADO_POS:-abajo}" \
                 "El juego NO ve el mando: $(case "${KEYS_EXCLUSIVO:-auto}" in \
@@ -38348,6 +39564,8 @@ cfg_ap_teclas() {
                         "Mando clasico + cruceta al stick" \
                         "<< Volver")" || _mv=""
                     case "$_mv" in
+                        # 0 otra vez: al no haber automatico, "apagado" y "de
+                        # fabrica" son lo mismo y no hacen falta dos valores.
                         "No usar"*)      MANDO_VIRTUAL=0 ;;
                         "Mando Xbox (probar"*)  MANDO_VIRTUAL=xbox ;;
                         "Mando DualShock")      MANDO_VIRTUAL=ds4 ;;
@@ -38494,7 +39712,7 @@ cfg_ap_mando() {
     # usa cfg_aplicar para pasar al siguiente manejador.
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
-        "Mandos por SDL en este prefijo"*)
+        "Escribir SDL en el registro del prefijo"*)
             # El arreglo que usa media comunidad para los mandos que Proton no
             # coge bien: winebus deja de leer por hidraw y lee por SDL.
             if [ "${PREFIX_MODE:-}" = "shared" ]; then
@@ -38503,7 +39721,33 @@ toca: lo usan todos los demas juegos.
 
 Cambialo a prefijo 'propio del juego' y vuelve a
 intentarlo."
-            elif ui_ask "Hacer que Wine lea los mandos por SDL en vez de por
+            else
+                # UN INTERRUPTOR DE VERDAD, NO SOLO EL "PONER".
+                #
+                # Este dialogo prometia dos veces que se podia deshacer -"Se
+                # puede deshacer desde aqui mismo" y "vuelve aqui y elige la
+                # opcion otra vez"- y no era cierto: solo se llamaba a
+                # winebus_sdl_en_prefijo, asi que elegirlo otra vez lo volvia a
+                # poner. El deshacer estaba escrito (winebus_sdl_quitar) pero
+                # sin conectar a nada.
+                #
+                # El estado se mira en el registro del prefijo, no en una marca
+                # nuestra: si las claves quedaron escritas y la marca no, el
+                # interruptor diria "apagado" con los mandos ocultos.
+                local _pfx="$PREFIX_DIR/$gid" _rd
+                _rd="$(get_runner_path 2>/dev/null)" || _rd=""
+                if winebus_sdl_puesto "$_pfx"; then
+                    if ui_ask "Este prefijo YA lee los mandos por SDL.
+
+Devolverlo a hidraw, como estaba?"; then
+                        if winebus_sdl_quitar "$_pfx" "$_rd"; then
+                            ui_info "Deshecho: este prefijo vuelve a leer los
+mandos por hidraw."
+                        else
+                            ui_error "No se pudo deshacer. Mira el registro."
+                        fi
+                    fi
+                elif ui_ask "Hacer que Wine lea los mandos por SDL en vez de por
 hidraw, SOLO en el prefijo de este juego.
 
 Es el arreglo que usa mucha gente cuando Proton no coge
@@ -38511,17 +39755,14 @@ bien un mando (sobre todo los de PlayStation), o cuando
 los botones salen cambiados.
 
 Se puede deshacer desde aqui mismo."; then
-                # El prefijo propio del juego: PREFIX_DIR/<gid>, que es como
-                # lo construye el resto del script.
-                local _pfx="$PREFIX_DIR/$gid" _rd
-                _rd="$(get_runner_path 2>/dev/null)" || _rd=""
-                if winebus_sdl_en_prefijo "$_pfx" "$_rd"; then
-                    ui_info "Hecho. Prueba el juego.
+                    if winebus_sdl_en_prefijo "$_pfx" "$_rd"; then
+                        ui_info "Hecho. Prueba el juego.
 
-Si va peor, vuelve aqui y elige la opcion otra vez para
-deshacerlo."
-                else
-                    ui_error "No se pudo. Mira el registro."
+Si va peor, vuelve aqui y elige la opcion otra vez: ahora
+si lo deshace."
+                    else
+                        ui_error "No se pudo. Mira el registro."
+                    fi
                 fi
             fi ;;
         "Mando Sony"*)
@@ -38533,7 +39774,21 @@ deshacerlo."
             esac
             write_full_profile "$gid"
             say "[+] Mando Sony: $(pad_sony_label)" ;;
-        "Mando via SDL"*)
+        "Puente Steam Input -> XInput"*)
+            case "${PAD_SIFALLBACK:-auto}" in
+                auto) PAD_SIFALLBACK=1 ;;
+                1)    PAD_SIFALLBACK=0 ;;
+                *)    PAD_SIFALLBACK=auto ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Puente Steam Input -> XInput: $(case "$PAD_SIFALLBACK" in 1) printf 'SI' ;; 0) printf 'no' ;; *) printf 'automatico' ;; esac)
+
+Es para cuando Steam se queda tu mando fisico y solo ofrece el
+suyo: este puente se lo pasa al juego como un mando de Xbox.
+
+En automatico se enciende solo si el UNICO mando que hay es el
+virtual de Steam." ;;
+        "Que Wine lea el mando por SDL"*)
             case "${PAD_SDL:-auto}" in
                 auto) PAD_SDL=1 ;;
                 1)    PAD_SDL=0 ;;
@@ -38913,6 +40168,48 @@ normales. Son unos 5 MB.
 
 Descargarlos ahora?" && gst_portable_instalar
             fi ;;
+        "Superposicion de Steam"*)
+            # Tres estados y no dos: "automatico" deja que lo decida el ajuste
+            # general, que es lo que quiere el 99% de los juegos, y los otros
+            # dos son para este juego y solo este.
+            case "$(menu "Como ve Steam este juego - $gid
+
+Es como Steam se entera de que hay un juego corriendo. Con ella
+puesta, en el modo Juego sale la fila del juego en el menu de
+Steam y se puede cerrar desde ahi.
+
+Quitala SOLO si este juego se porta raro con ella: hay
+lanzadores que se cierran al leer lo que otros programas les
+escriben en la salida." \
+                    "Automatico   (lo que diga el ajuste general)" \
+                    "Puesta       (Steam ve el juego, con superposicion)" \
+                    "Sin superposicion (pero Steam sigue viendolo)" \
+                    "Ocultar el juego a Steam (solo vera WProton)" \
+                    "<< Volver")" in
+                "Automatico"*)
+                    STEAM_OVERLAY="auto"; write_full_profile "$gid"
+                    ui_info "Superposicion de Steam: automatico." ;;
+                "Puesta"*)
+                    STEAM_OVERLAY=1; write_full_profile "$gid"
+                    ui_info "Superposicion de Steam puesta para $gid." ;;
+                "Sin superposicion"*)
+                    STEAM_OVERLAY=0; write_full_profile "$gid"
+                    ui_info "Superposicion quitada para $gid.
+
+OJO: esto NO oculta el juego a Steam, solo le quita la
+superposicion. Si lo que quieres es que Steam no lo vea,
+elige 'Ocultar el juego a Steam'." ;;
+                "Ocultar"*)
+                    STEAM_OVERLAY=oculto; write_full_profile "$gid"
+                    ui_info "$gid queda oculto a Steam.
+
+En el menu de Steam solo saldra WProton. No habra
+superposicion (nada de Shift+Tab ni capturas) y Steam Input
+no entrara en este juego.
+
+Para cerrarlo: 'Salir del juego' sobre WProton, que lo cierra
+y vuelve a los menus, o SELECT 5 segundos con el mando." ;;
+            esac ;;
         "Preguntar por Wine Mono"*)
             if [ "${MONO_PEDIR:-0}" = 1 ]; then
                 MONO_PEDIR=0; write_full_profile "$gid"
@@ -39433,7 +40730,7 @@ game_config_menu() {
         # entender que el juego va por Wine.
         #
         # Mismo truco que pack_row: la fila vacia no se enseña.
-        local r_runner="Runner (Proton/Wine): ${RUNNER:-auto (último GE-Proton)}"
+        local r_runner="Runner (Proton/Wine): $(runner_etiqueta "${RUNNER:-}")"
         local r_prefijo="Prefijo: $(prefix_label)"
         local r_libs="Instalar librerias en el prefijo: $(prefix_label)"
         # Lo que se le ha instalado a ESTE juego, para poder verlo y quitarlo.
@@ -39504,9 +40801,10 @@ game_config_menu() {
             "$r_packpfx" \
             "Acceso directo en el escritorio" \
             "Borrar la configuración de este juego" \
-            "Mando via SDL (DualSense como Xbox): $(pad_sdl_label)" \
+            "Que Wine lea el mando por SDL, no por hidraw: $(pad_sdl_label)" \
+            "Puente Steam Input -> XInput: $(case "${PAD_SIFALLBACK:-auto}" in 1) printf 'SI' ;; 0) printf 'no' ;; *) printf 'automatico' ;; esac)" \
             "Mando Sony (DualSense/DS4): $(pad_sony_label)" \
-            "Mandos por SDL en este prefijo (arreglo de la comunidad)" \
+            "Escribir SDL en el registro del prefijo (avanzado): $(winebus_sdl_puesto "$PREFIX_DIR/$gid" && printf 'SI' || printf 'no')" \
             "Mapeador .keys: $kstat" \
             "Rendimiento y compatibilidad >>" \
             "Herramientas del prefijo >>" \
@@ -39626,7 +40924,10 @@ main_dispatch() {
                 game_config_menu "$g2"
             fi ;;
         "Descargar runners"*)    download_runner_menu ;;
-        "Actualizar GE-Proton"*) setup_proton ;;
+        "Actualizar a la última versión"*) actualizar_runners_menu ;;
+        "Actualizar GE-Proton"*)   setup_runner_ultimo ge ;;
+        "Actualizar Wine"*)        setup_runner_ultimo wine ;;
+        "Actualizar UMU-Proton"*)  setup_runner_ultimo umu ;;
         "Actualizar umu-launcher") setup_umu ;;
         "Instalar/actualizar Python portable + pygame") setup_python ;;
         "Descargar herramientas DwarFS"*)
@@ -39639,17 +40940,6 @@ mkdwarfs para empaquetar y dwarfs para montar."
         "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Probar el mando"*) probar_mando ;;
         "Comprobar lo descargado"*) descargas_revisar ;;
-        "Crear un .keys de ejemplo"*)
-            ui_info "Ejemplo creado en:
-$(keys_ejemplo_crear)
-
-Trae dos combinaciones:
-  Select + Y    -> Alt+Tab (recuperar el foco)
-  L3 + R3       -> Alt+F4  (cerrar el juego)
-
-Para usarlo en un juego, copialo junto a el con el mismo nombre
-y la extension .keys. Por ejemplo:
-  Mi Juego.wsquashfs  ->  Mi Juego.wsquashfs.keys" ;;
         "Arreglar permisos del mando"*) arreglar_permisos_mando ;;
         "Instalar evdev"*)
             if instalar_evdev; then
@@ -39794,6 +41084,7 @@ Cambia el motor en Biblioteca y preferencias."
         "Copia de tu configuración"*) config_menu ;;
         "Biblioteca y preferencias") library_menu ;;
         "Runners y herramientas"*) tools_menu ;;
+        "Instalar y actualizar componentes"*) componentes_menu ;;
         "Carátulas y perfiles"*) media_menu ;;
         "Formato al empaquetar:"*)
             local pf
@@ -40216,31 +41507,100 @@ Se borra y se extrae encima?" || return 0
     return 0
 }
 
+actualizar_runners_menu() {
+    # LAS TRES FAMILIAS QUE LA GENTE USA, EN UN SITIO.
+    #
+    # Estaban como tres filas sueltas en "Runners y herramientas", una debajo de
+    # otra y empezando las tres por "Actualizar...": tres lineas casi iguales en
+    # una pantalla que ya tiene doce. Agrupadas se leen de un vistazo y ademas
+    # cada una puede decir QUE VERSION tienes instalada, que es la pregunta que
+    # se hace cualquiera al entrar aqui.
+    local sel
+    while true; do
+        sel="$(menu "Actualizar a la última versión
+
+Se consulta GitHub y solo se descarga si hay una mas nueva que
+la que ya tienes." \
+            "GE-Proton    (el runner por defecto)   [$(runner_etiqueta_instalada ge)]" \
+            "Wine         (Kron4ek staging wow64)   [$(runner_etiqueta_instalada wine)]" \
+            "UMU-Proton   (Open Wine Components)    [$(runner_etiqueta_instalada umu)]" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            "GE-Proton"*)   setup_runner_ultimo ge ;;
+            "Wine"*)        setup_runner_ultimo wine ;;
+            "UMU-Proton"*)  setup_runner_ultimo umu ;;
+        esac
+    done
+}
+
+runner_etiqueta_instalada() {
+    # Que version de esa familia hay ya, o "no instalado".
+    local d; d="$(runner_ultimo_de "${1:-}")"
+    if [ -n "$d" ]; then basename "$d"; else printf 'no instalado'; fi
+}
+
+componentes_menu() {
+    # Lo que WProton instala por debajo: se toca una vez y ya esta.
+    #
+    # "Instalar librerias de Windows" NO esta aqui a proposito, aunque parezca
+    # de la familia: eso no instala un componente de WProton, instala
+    # vcredist/PhysX/etc EN EL PREFIJO DE UN JUEGO. Se hace por juego y se
+    # repite, asi que se queda en el menu principal y no detras de un submenu.
+    # (Tambien se llega desde Ajustes del juego, pero desde aqui se elige el
+    # prefijo, que es lo que hace falta cuando el prefijo es compartido.)
+    #
+    # Cada fila dice si esta puesto o no, que es la pregunta que se hace
+    # cualquiera al entrar aqui. Antes habia que acordarse.
+    local sel
+    while true; do
+        sel="$(menu "Instalar y actualizar componentes
+
+Todo esto se instala dentro de WProton, sin tocar el sistema." \
+            "Actualizar umu-launcher" \
+            "Instalar/actualizar Python portable + pygame" \
+            "Instalar evdev (para los ficheros .keys)" \
+            "Descargar extractores GOG (innoextract + innounp)" \
+            "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
+            "Descargar herramientas DwarFS (mkdwarfs + driver)" \
+            "Datos de duración de partida (HowLongToBeat)" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            *) main_dispatch "$sel" ;;
+        esac
+    done
+}
+
 tools_menu() {
     # Instalacion y actualizacion de todo lo que WProton usa por debajo
     local sel nrunners
     while true; do
         nrunners="$(list_runners | grep -c . || true)"
+        # LAS INSTALACIONES, EN SU PROPIO SUBMENU.
+        #
+        # Esta pantalla tenia diecinueve filas y mezclaba dos cosas muy
+        # distintas: lo que se USA a diario -runners, convertir un juego,
+        # probar el mando- y lo que se INSTALA una vez y no se vuelve a tocar
+        # -umu, Python, los extractores de GOG, evdev, DwarFS-. Buscar
+        # "Convertir carpeta" entre ocho instaladores hace perder tiempo cada
+        # vez, y con la letra grande de una consola portatil ni cabe.
+        #
+        # El ">>" es el mismo que ya usa "Casos especiales >>": en esta interfaz
+        # significa submenu y quien la usa ya lo tiene aprendido.
         sel="$(menu "Runners y herramientas" \
             "Descargar runners (Proton / Wine) [$nrunners instalados]" \
-            "Actualizar GE-Proton a la última" \
+            "Actualizar a la última versión >>" \
             "Borrar un runner" \
+            "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
-            "Actualizar umu-launcher" \
-            "Instalar/actualizar Python portable + pygame" \
-            "Descargar extractores GOG (innoextract + innounp)" \
             "Convertir carpeta a $(printf '%s' "${PACK_FORMAT:-wsquashfs}")" \
             "Convertir wsquashfs a carpeta" \
-            "Descargar herramientas FUSE portables (squashfuse, overlayfs)" \
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
             "Probar el mando (ver que botones llegan)" \
-            "Comprobar lo descargado (huellas SHA-256)" \
-            "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)" \
             "Arreglar permisos del mando (hidraw)" \
-            "Instalar evdev (para los ficheros .keys)" \
-            "Datos de duración de partida (HowLongToBeat)" \
-            "Descargar herramientas DwarFS (mkdwarfs + driver)" \
+            "Comprobar lo descargado (huellas SHA-256)" \
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
@@ -40267,6 +41627,7 @@ media_menu() {
 }
 
 main_menu() {
+    # ¿VENIMOS DE UN REINICIO DE STEAM? Entonces al juego directo.
     while true; do
         local nrunners; nrunners="$(list_runners | grep -c . || true)"
         local opts=("Jugar (elegir juego)")
@@ -40550,6 +41911,22 @@ Runners y herramientas -> Descargar herramientas FUSE portables."
             setup_proton_custom || say "Se continua sin ${GE_CUSTOM_NAME:-el runner de WProton}"
         fi
     fi
+    # LOS CODECS DE 32 BITS, AQUI: en la primera puesta en marcha y una vez.
+    #
+    # Son 5 MB al lado de los cientos del runner, y evitan el caso que costo dos
+    # dias de diagnostico: un juego de 32 bits que se oye y no se ve porque
+    # falta avdec_wmv3. Ponerlos aqui significa que nadie tiene que enterarse de
+    # que existen.
+    #
+    # En modo "auto": si falla -o si todavia no hay pack publicado- NO se
+    # aborta ni se pregunta nada. Se sigue sin ellos y la opcion queda en Casos
+    # especiales para reintentarlo. Un codec de video no justifica dejar a
+    # alguien sin WProton, ni pararle la instalacion con un dialogo.
+    if [ "$hay_que_instalar" = 1 ]; then
+        progress_set 95 "Codecs de video de 32 bits..."
+        gst_portable_instalar auto \
+            || log "Codecs de 32 bits no instalados en el primer arranque" WARN
+    fi
     progress_set 100 "Listo"
     progress_stop
     install_notice_stop
@@ -40817,7 +42194,7 @@ Mas runners: menu principal -> Descargar runners"
         _rc_cli=$?
         case "$_rc_cli" in
             0)   log "Salida por linea de ordenes: correcta" ;;
-            241|255) log "Salida por linea de ordenes: el juego se cerro con el mando (rc=$_rc_cli); se informa como correcta" ;;
+            241|255|143|137) log "Salida por linea de ordenes: el juego se cerro a proposito (rc=$_rc_cli); se informa como correcta" ;;
             *)   log "Salida por linea de ordenes: rc=$_rc_cli; se informa como correcta para no marcar error" ;;
         esac
         exit 0 ;;
