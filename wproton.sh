@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.71"
+WPROTON_VERSION="1.72"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -2428,9 +2428,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 29647228fc46" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py df4f7547b85a" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 29647228fc46
+# WPROTON_HELPER mapeador.py df4f7547b85a
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -3396,6 +3396,10 @@ def main():
         print("[keys] El teclado en pantalla usa el mismo teclado virtual "
               "que las demas teclas", flush=True)
 
+    # Los botones de raton NO van en este aparato: van al raton virtual, que se
+    # crea mas abajo. Se intento declarar aqui EV_REL para que el teclado
+    # pareciera tambien un raton y no sirvio de nada, porque el problema no era
+    # la clasificacion del aparato sino que el raton no llegaba a existir.
     try:
         if _necesarias:
             ui = evdev.UInput({ecodes.EV_KEY: sorted(_necesarias)},
@@ -3668,16 +3672,48 @@ def main():
     # El raton se crea si lo pide el bloque "mouse" O una accion con
     # type=mouse. Antes solo lo primero, y los ficheros que usan la segunda
     # forma se quedaban sin puntero.
-    if _mouse_activo:
+    # TAMBIEN SI ALGUNA TECLA APUNTA A UN BOTON DE RATON.
+    #
+    # EL FALLO QUE ESTO ARREGLA
+    #
+    # Un .keys puede pedir un clic con "type": "key" y "target": "BTN_LEFT",
+    # sin bloque mouse ni type=mouse. Eso no encendia _mouse_activo, asi que no
+    # se creaba el raton virtual, y al pulsar salia en el registro:
+    #
+    #   [keys] AVISO: el .keys pide BTN_RIGHT (boton de raton) pero no hay
+    #          raton virtual
+    #
+    # Las teclas funcionaban y los clics no. Caso real: 8bit Killer, con los
+    # gatillos mapeados a BTN_LEFT y BTN_RIGHT.
+    #
+    # El aviso ya estaba y decia la verdad; lo que faltaba era crear el aparato.
+    _btn_raton = {getattr(ecodes, _n, None)
+                  for _n in ('BTN_LEFT', 'BTN_RIGHT', 'BTN_MIDDLE')} - {None}
+    _keys_con_raton = False
+    # Las tablas guardan LISTAS de codigos: map_normal por boton, map_dirs por
+    # direccion y map_combos con sus "outs". Se miran las tres.
+    for _v in list(map_normal.values()) + list(map_dirs.values()) \
+            + [_c.get("outs", []) for _c in map_combos]:
+        for _cc in (_v if isinstance(_v, (list, tuple, set)) else [_v]):
+            if _cc in _btn_raton:
+                _keys_con_raton = True
+    if _keys_con_raton and not _mouse_activo:
+        print("[keys] El .keys manda clics de raton: se crea el raton virtual "
+              "aunque no haya modo raton", flush=True)
+    if _mouse_activo or _keys_con_raton:
         try:
             ui_mouse=evdev.UInput({ecodes.EV_REL:[ecodes.REL_X,ecodes.REL_Y],
                                    ecodes.EV_KEY:[ecodes.BTN_LEFT,ecodes.BTN_RIGHT,
                                                   ecodes.BTN_MIDDLE]},
                                   name="Mapeador_Mouse_Portable")
-            print("[keys] Raton virtual: %s mueve el puntero%s"
-                  % (_meje,
-                     (" | %s hace clic" % _mcfg.get('click_left', 'r2'))
-                     if _mclick else ""), flush=True)
+            if _mouse_activo:
+                print("[keys] Raton virtual: %s mueve el puntero%s"
+                      % (_meje,
+                         (" | %s hace clic" % _mcfg.get('click_left', 'r2'))
+                         if _mclick else ""), flush=True)
+            else:
+                print("[keys] Raton virtual creado solo para los clics "
+                      "(el puntero no se mueve)", flush=True)
         except Exception as e:
             print(f"[!] Sin ratón virtual: {e}"); ui_mouse=None
     _macc_x=0.0; _macc_y=0.0; _mlast=_tm.monotonic(); _msx=center; _msy=center
@@ -24262,27 +24298,16 @@ Que cumplas muchos mas.
                                     (v$WPROTON_VERSION)"
         return 0
     fi
+    # CORTO. Esto se lee en una pantalla de consola y con el mando en la mano:
+    # si no cabe de un vistazo, no se lee. Dos o tres lineas por version, lo que
+    # de verdad nota quien la usa.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
-NOVEDADES DE ESTA VERSION
+NOVEDADES
 
-  Prefijos que viajan entre equipos
-    Un juego empaquetado con su prefijo en un equipo ya funciona
-    en otro: se le quitan las rutas del equipo de origen y Proton
-    rehace lo que falte.
+  Los ficheros .keys ya soportan teclado y raton a la vez.
 
-  Wine y UMU-Proton al dia con una pulsacion
-    Runners y herramientas -> Actualizar a la ultima version >>.
-    Y un juego puede pedir 'siempre el ultimo' en vez de una
-    version fija.
-
-  El menu del juego, ordenado
-    Mandos, Protonfixes/UMU, Caratula y ficha, y Archivo y
-    mantenimiento, cada uno en lo suyo.
-
-  Mandos mejor identificados
-    Se le pregunta a udev, como hace RetroArch: dice cuales son
-    mandos de verdad y si son de la consola o externos."
+  Corregido un fallo al restaurar copias de seguridad."
     return 0
 }
 
@@ -36007,12 +36032,53 @@ Se SOBRESCRIBIRAN las partidas actuales de este juego." || return 1
         rm -rf "$tmp"; ui_error "No se pudo descomprimir (falta 'unzip'?)"; return 1
     fi
     local n=0
+    # LA RUTA DE LA COPIA ES DEL EQUIPO DONDE SE HIZO. SE REHACE PARA ESTE.
+    #
+    # EL FALLO QUE ESTO ARREGLA
+    #
+    # El manifiesto guarda rutas absolutas:
+    #
+    #   NEON INFERNO|/home/deck/wptoton/prefixes/default/drive_c/users/dani/...
+    #
+    # Al restaurar esa copia en OTRO equipo, ese /home/deck/... no existe.
+    # mkdir -p lo creaba tan ricamente -un arbol vacio donde no lo ve nadie- y
+    # copiaba las partidas ahi. La restauracion decia que habia ido bien y el
+    # juego seguia sin su partida.
+    #
+    # Es el mismo fallo que tenian los prefijos: rutas de una maquina metidas
+    # en algo que esta hecho para viajar.
+    #
+    # COMO SE REHACE
+    #
+    # Todo lo que copiamos vive bajo la carpeta de WProton, asi que de la ruta
+    # guardada se toma desde "prefixes/" en adelante y se le pone delante la
+    # carpeta de ESTE equipo. Funciona con las copias ya hechas, que es lo que
+    # importa: nadie va a rehacer sus copias de seguridad.
+    #
+    # Si la ruta no pasa por "prefixes/" -algo fuera de lo previsto- se deja
+    # como estaba, pero solo si existe aqui: crear arboles a ciegas es lo que
+    # hacia que esto fallara en silencio.
+    local _base_local; _base_local="$(dirname "$PREFIX_DIR")"
     while IFS='|' read -r label path; do
         [ -n "$path" ] || continue
         [ -d "$tmp/$label" ] || continue
-        mkdir -p "$path"
-        cp -a "$tmp/$label/." "$path/" 2>/dev/null && n=$((n+1))
-        say "[restaurar] $label -> $path"
+        local destino="$path"
+        case "$path" in
+            */prefixes/*)
+                destino="$_base_local/prefixes/${path#*/prefixes/}" ;;
+        esac
+        if [ "$destino" != "$path" ]; then
+            say "[restaurar] ruta rehecha para este equipo:"
+            say "            $path"
+            say "         -> $destino"
+        elif [ ! -d "$(dirname "$destino")" ]; then
+            say "[restaurar] AVISO: '$label' apunta a una ruta que aqui no"
+            say "            existe y no se sabe rehacer: $path"
+            continue
+        fi
+        mkdir -p "$destino"
+        cp -a "$tmp/$label/." "$destino/" 2>/dev/null && n=$((n+1))
+        say "[restaurar] $label -> $destino"
     done <<EOFR
 $(grep '|' "$tmp/wproton_backup.txt" 2>/dev/null)
 EOFR
