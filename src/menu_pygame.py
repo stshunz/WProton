@@ -241,6 +241,57 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
         BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
         ACTION_X = action_x
+
+# ── RATON EN LOS MENUS ───────────────────────────────────────────────────────
+#
+# POR QUE SE AÑADE
+#
+# WProton se maneja con el mando y con el teclado, pero hay quien lo usa en un
+# sobremesa o en el modo escritorio de la Deck, con el raton en la mano, y
+# tener que soltarlo para navegar es incomodo. Lo pidieron los usuarios.
+#
+# NO SE REESCRIBE LA NAVEGACION: el raton solo MUEVE LA SELECCION y luego
+# inyecta la misma tecla que pulsarias tu. Asi el raton no puede desincronizarse
+# de lo que hace el mando, y cualquier arreglo en la seleccion vale para los
+# tres a la vez. Duplicar la logica seria condenarse a arreglar cada cosa dos
+# veces.
+# Se puede apagar con RATON_MENUS=0 en settings.conf, para quien no lo quiera.
+RATON = os.environ.get('WP_RATON', '1') != '0'
+# Se dice en el registro: si alguien reporta que el raton no va, lo primero es
+# saber si esta version lo trae siquiera y si viene encendido.
+print("menu_pygame: raton en los menus: %s" % ('SI' if RATON else 'no'), flush=True)
+RATON_T0 = [0.0]          # cuando se movio por ultima vez
+RATON_OCULTAR = 3.0       # segundos sin moverlo para esconder el puntero
+
+
+def fila_bajo_raton(mx, my, scroll, nvis, nitems):
+    """Indice de la fila que hay bajo el puntero, o None.
+
+    Se comprueba tambien el ancho: si el puntero esta en el panel lateral -la
+    ficha del juego, la caratula- NO se cambia la seleccion. Si no, pasar el
+    raton por la ficha te movia la lista por debajo.
+    """
+    if nitems <= 0 or ROW <= 0:
+        return None
+    if mx < LIST_X or mx > LIST_X + LIST_W:
+        return None
+    rel = my - (LIST_Y + 8) + 4
+    if rel < 0:
+        return None
+    i = scroll + int(rel // ROW)
+    if i < scroll or i >= min(scroll + nvis, nitems):
+        return None
+    return i
+
+
+def raton_tecla(key):
+    """Mete una pulsacion en la cola, como si la hubieras hecho tu."""
+    try:
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=key,
+                                             mod=0, unicode=''))
+    except Exception:
+        pass
+
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
 HEADER_KINDS = (K_HDR, K_UP2, K_CANCEL)
 
@@ -2067,10 +2118,24 @@ def compute_layout():
     apply_layout()
 
 # --- teclado virtual (rejilla navegable con el dpad) ---
-KB_ROWS = ['ABCDEFGHIJ',
-           'KLMNOPQRST',
-           'UVWXYZ0123',
-           '456789 .-_']
+#
+# HAY UN TECLADO NUMERICO PARA LO QUE SOLO SON NUMEROS.
+#
+# Escribir una IP con la rejilla completa son cuarenta casillas y un viaje por
+# el dpad para cada cifra. Con solo numeros y el punto, cada tecla esta a un
+# paso. Lo pide quien abre el cuadro (WP_TECLADO=num), asi que un campo de
+# texto normal sigue teniendo todas las letras.
+KB_ROWS_FULL = ['ABCDEFGHIJ',
+                'KLMNOPQRST',
+                'UVWXYZ0123',
+                '456789 .-_']
+# Tres columnas, como el teclado de un telefono: la fila de abajo deja el 0
+# centrado y el punto a mano, que es lo que mas se repite en una IP.
+KB_ROWS_NUM = ['123',
+               '456',
+               '789',
+               '.0:']
+KB_ROWS = KB_ROWS_NUM if os.environ.get('WP_TECLADO', '') == 'num' else KB_ROWS_FULL
 KB_ACTIONS = ['BORRAR', 'LIMPIAR', 'LISTO'] if LANG != 'en' else ['DELETE', 'CLEAR', 'DONE']
 
 def kb_cols(r):
@@ -2859,14 +2924,51 @@ def run_session():
     if MODE == 'text':
         # Editor de una linea con teclado en pantalla: para argumentos, DLL
         # overrides, notas... Se maneja con el mando (o el teclado real).
-        # El valor de partida. Nunca el nombre del fichero de salida: si no
-        # hay valor, se empieza en blanco.
-        TXT = ARG4 if (len(sys.argv) > 4 and ARG4 != OUTFILE) else ''
-        TROWS = ['1234567890-=',
-                 'qwertyuiop[]',
-                 'asdfghjkl;\'',
-                 'zxcvbnm,./\\',
-                 ' _:"|+*@#$%&']
+        # EL VALOR DE PARTIDA, PARA PODER EDITAR EN VEZ DE REESCRIBIR.
+        #
+        # Antes se miraba "len(sys.argv) > 4", y eso es el argv DEL PROCESO. El
+        # proceso de menus es persistente: cuando el teclado se abre a traves
+        # del servidor -que es el camino normal- sys.argv es el del servidor y
+        # no el de la peticion, asi que la condicion era falsa y EL TECLADO
+        # ARRANCABA SIEMPRE VACIO. Solo se rellenaba por el camino de respaldo,
+        # cuando no habia servidor.
+        #
+        # Resultado para quien lo usa: cada vez que querias corregir una letra
+        # de los argumentos de lanzamiento, habia que escribirlos enteros otra
+        # vez. Lo reportaron los testers.
+        #
+        # Ahora se mira ARG4, que set_mode rellena con el valor de la peticion.
+        # Se conserva la comparacion con OUTFILE porque set_mode pone ahi el
+        # fichero de salida cuando no viene valor, y ese nombre no es un texto
+        # que nadie quiera editar.
+        # Y TAMPOCO SI PARECE EL FICHERO TEMPORAL.
+        #
+        # Un tester abrio el campo de la IP y le salia escrito
+        # "/tmp/tmp.nVBXgjT4se": el nombre del fichero de salida, colado como
+        # valor de partida por algun camino que no se ha podido reproducir
+        # leyendo el codigo. La comparacion con OUTFILE de arriba deberia
+        # bastar y no basto.
+        #
+        # El patron es el de mktemp y nada mas: nadie escribe "/tmp/tmp.XXXX"
+        # como IP ni como argumento de lanzamiento, asi que descartarlo no
+        # quita nada a nadie. Mas vale una guarda de sobra que un campo que
+        # hay que vaciar a mano cada vez.
+        TXT = ARG4 if (ARG4 and ARG4 != OUTFILE
+                       and not re.match(r'^/tmp/tmp\.[A-Za-z0-9]{6,}$', ARG4)) else ''
+        # Este editor tiene su propio teclado (qwerty). Si se pide el
+        # numerico, aqui tambien: hay dos teclados en el programa y un campo
+        # de IP tiene que salir igual de comodo por los dos caminos.
+        if os.environ.get('WP_TECLADO', '') == 'num':
+            TROWS = ['123',
+                     '456',
+                     '789',
+                     '.0:']
+        else:
+            TROWS = ['1234567890-=',
+                     'qwertyuiop[]',
+                     'asdfghjkl;\'',
+                     'zxcvbnm,./\\',
+                     ' _:"|+*@#$%&']
         TACT = [L('MAYUS', 'SHIFT'), L('BORRAR', 'DELETE'),
                 L('LIMPIAR', 'CLEAR'), L('ACEPTAR', 'ACCEPT'), L('CANCELAR', 'CANCEL')]
         tr_r, tr_c, shift = 0, 0, False
@@ -3022,6 +3124,98 @@ def run_session():
         for ev in eventos():
             if ev.type == pygame.QUIT:
                 running = False
+            # ── RATON ────────────────────────────────────────────────────
+            #
+            # Se traduce a las MISMAS teclas que usarias tu: asi no hay dos
+            # caminos que mantener y el raton nunca se desincroniza del mando.
+            #
+            # Se deja fuera el teclado en pantalla (kb_open) y la rejilla: ahi
+            # la seleccion no es una lista de filas y el calculo no vale.
+            elif ev.type == pygame.MOUSEMOTION and RATON and not kb_open:
+                RATON_T0[0] = time.time()
+                try:
+                    pygame.mouse.set_visible(True)
+                except Exception:
+                    pass
+                if MODE != 'grid':
+                    _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                         vis(), len(view))
+                    if _i is not None and _i != sel:
+                        sel = _i
+            elif ev.type == pygame.MOUSEBUTTONDOWN and RATON and not kb_open:
+                RATON_T0[0] = time.time()
+                if ev.button == 1:
+                    # Clic izquierdo: si es sobre una fila, se selecciona esa y
+                    # se entra. Sobre otra cosa no se hace nada: un clic al aire
+                    # no deberia activar lo que hubiera seleccionado.
+                    if MODE != 'grid':
+                        _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                             vis(), len(view))
+                        if _i is not None:
+                            sel = _i
+                            raton_tecla(pygame.K_RETURN)
+                    else:
+                        raton_tecla(pygame.K_RETURN)
+                elif ev.button == 3:
+                    # DERECHO: EN LA LISTA DE JUEGOS, LOS AJUSTES DE ESE JUEGO.
+                    #
+                    # Es lo que espera cualquiera que venga de un escritorio: el
+                    # derecho abre las opciones de lo que hay debajo, no te saca
+                    # de la pantalla. En el resto de menus no hay "opciones de
+                    # esta fila", asi que ahi sigue siendo volver, que es lo
+                    # util.
+                    #
+                    # Se selecciona ANTES la fila de debajo del puntero: abrir
+                    # los ajustes de un juego que no es el que señalas seria
+                    # peor que no hacer nada.
+                    # Se deja decidir al manejador de la X, que ya sabe que
+                    # hacer en cada modo. Antes se exigia aqui MODE in
+                    # ('list','grid') y en la pantalla de juegos por carpetas el
+                    # modo es otro: el derecho caia en "volver" y salia el
+                    # "¿Salir de WProton?". Con ACTION_X basta.
+                    if ACTION_X:
+                        _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                             vis(), len(view))
+                        if _i is not None:
+                            sel = _i
+                        raton_tecla(pygame.K_SPACE)   # = X, ajustes del juego
+                    else:
+                        print("menu_pygame: derecho sin accion X (modo %s): se vuelve"
+                              % MODE, flush=True)
+                        raton_tecla(pygame.K_ESCAPE)  # volver
+                elif ev.button in (4, 5):
+                    # Rueda en pygame antiguo: se mueve igual, sin teclas.
+                    if MODE != 'grid':
+                        _paso = max(1, vis() // 2)
+                        sel = max(0, min(len(view) - 1,
+                                         sel - _paso if ev.button == 4 else sel + _paso))
+                    else:
+                        grid_move(0, -1 if ev.button == 4 else 1)
+            elif ev.type == getattr(pygame, 'MOUSEWHEEL', -1) and RATON and not kb_open:
+                # La rueda en pygame2 viene por MOUSEWHEEL; en pygame1 por los
+                # botones 4 y 5. Se atienden las dos formas porque no se sabe
+                # con que version se va a ejecutar esto.
+                RATON_T0[0] = time.time()
+                # LA RUEDA MUEVE LA SELECCION DIRECTAMENTE, SIN INYECTAR TECLAS.
+                #
+                # EL FALLO QUE ESTO ARREGLA
+                #
+                # Antes se mandaban N pulsaciones seguidas de arriba o abajo. No
+                # funciono: el manejador de teclas tiene un ANTIRREBOTE de 0,08 s
+                # que descarta la misma tecla repetida, y como las N llegan en el
+                # mismo instante, se comia todas menos la primera. La rueda movia
+                # UNA fila, y ademas de forma distinta arriba y abajo segun que
+                # otros eventos mandara el raton.
+                #
+                # El antirrebote esta ahi por los mandos, que repiten solos, y
+                # quitarlo seria peor. Asi que la rueda no pasa por ahi: mueve la
+                # seleccion y ya, que ademas es exacto.
+                _y = int(getattr(ev, 'y', 0))
+                if _y and MODE != 'grid':
+                    _paso = max(1, vis() // 2) * min(abs(_y), 3)
+                    sel = max(0, min(len(view) - 1, sel - _paso if _y > 0 else sel + _paso))
+                elif _y:
+                    grid_move(0, -1 if _y > 0 else 1)
             elif ev.type == pygame.KEYDOWN:
                 if DEV and ev.key == pygame.K_F12:
                     captura()
@@ -3135,6 +3329,18 @@ def run_session():
                 _ry = HEAD - 8
             pygame.draw.line(screen, TH['border'], (24, _ry), (W - 24, _ry), 1)
 
+        # EL PUNTERO SE ESCONDE SOLO CUANDO NO SE USA.
+        #
+        # En una Deck sin raton, un puntero plantado en medio de la pantalla
+        # sobra. Y con raton, verlo encima del menu mientras juegas con el mando
+        # tambien. Se esconde tras unos segundos quieto y vuelve al primer
+        # movimiento.
+        if RATON and RATON_T0[0] and (time.time() - RATON_T0[0]) > RATON_OCULTAR:
+            try:
+                pygame.mouse.set_visible(False)
+            except Exception:
+                pass
+            RATON_T0[0] = 0.0
         if MODE == 'grid':
             draw_grid()
         for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
@@ -3318,6 +3524,76 @@ _idle_alto = 0
 _idle_ancho = 0
 
 
+
+# ── FONDOS DE TEMPORADA ─────────────────────────────────────────────────────
+#
+# El calendario NO esta aqui: lo decide el bash (tema_temporada) y llega hecho
+# en WP_TEMA. Aqui solo se elige la paleta y se pintan unas particulas.
+#
+# POR QUE DIBUJADO Y NO CON IMAGENES
+#
+# Empaquetar fotos de calabazas y de nieve serian megas en el script para
+# cuatro dias al año, y bajarlas seria depender de la red para un adorno. Con
+# un tinte y unos circulitos se nota igual y no pesa nada.
+# bg = fondo | p1,p2 = particulas | sube = hacia arriba | n = cuantas
+# w  = color de la W  |  letras = color del resto de "PROTON"
+#
+# LA MARCA TAMBIEN SE TIÑE. Con el fondo cambiado y las letras en su morado y
+# cian de siempre, la pantalla queda a medias: lo que mas se mira es la palabra
+# del centro. Se respeta la forma -la W distinta del resto, como siempre- y
+# solo cambian los colores.
+_TEMAS = {
+    'halloween':  {'bg': (18, 10, 24), 'p1': (255, 138, 24), 'p2': (150, 60, 200),
+                   'sube': True,  'n': 34,
+                   'w': (150, 60, 200), 'letras': (255, 138, 24)},   # morado + calabaza
+    'navidad':    {'bg': (10, 20, 34), 'p1': (235, 245, 255), 'p2': (150, 200, 255),
+                   'sube': False, 'n': 46,
+                   'w': (214, 48, 49), 'letras': (240, 248, 255)},   # rojo Papa Noel + nieve
+    'finde_anyo': {'bg': (14, 14, 30), 'p1': (255, 214, 102), 'p2': (120, 220, 255),
+                   'sube': True,  'n': 30,
+                   'w': (255, 214, 102), 'letras': (240, 248, 255)}, # dorado + blanco
+    'reyes':      {'bg': (12, 16, 38), 'p1': (255, 214, 102), 'p2': (200, 160, 255),
+                   'sube': False, 'n': 30,
+                   'w': (255, 214, 102), 'letras': (200, 160, 255)}, # dorado + violeta
+}
+_TEMA_COLS = _TEMAS.get(os.environ.get('WP_TEMA', '').strip() or None)
+_PARTS = []
+
+
+def _dibuja_particulas(screen, W, H):
+    """Nieve que cae o brasas que suben, segun el tema.
+
+    Se crean UNA VEZ y luego solo se mueven: crear objetos en cada fotograma a
+    15 fps seria trabajo de verdad para un adorno. Cuando una sale por un
+    borde, se recoloca en el contrario en vez de crear otra.
+    """
+    import random
+    global _PARTS
+    if not _PARTS:
+        for _ in range(_TEMA_COLS['n']):
+            _PARTS.append([random.randint(0, max(1, W)),
+                           random.randint(0, max(1, H)),
+                           random.uniform(0.4, 1.8),          # velocidad
+                           random.randint(2, 4),              # radio
+                           random.random() < 0.5])            # color 1 o 2
+    sube = _TEMA_COLS['sube']
+    for p in _PARTS:
+        p[1] += (-p[2] if sube else p[2])
+        # Un vaiven suave para que no caigan en linea recta, que canta mucho
+        p[0] += 0.6 if (int(p[1]) // 20) % 2 else -0.6
+        if sube and p[1] < -4:
+            p[1] = H + 4; p[0] = random.randint(0, max(1, W))
+        elif not sube and p[1] > H + 4:
+            p[1] = -4; p[0] = random.randint(0, max(1, W))
+        if p[0] < -4: p[0] = W + 4
+        elif p[0] > W + 4: p[0] = -4
+        col = _TEMA_COLS['p1'] if p[4] else _TEMA_COLS['p2']
+        try:
+            pygame.draw.circle(screen, col, (int(p[0]), int(p[1])), p[3])
+        except Exception:
+            pass
+
+
 def draw_idle(status=''):
     # Pantalla de reposo entre peticiones: la ventana sigue viva.
     # Se vacia la cola de eventos para que las pulsaciones hechas mientras
@@ -3326,10 +3602,26 @@ def draw_idle(status=''):
         pygame.event.clear()
     except Exception:
         pass
+    # FONDO DE TEMPORADA.
+    #
+    # El tema llega hecho en WP_TEMA: el calendario esta en el bash
+    # (tema_temporada) y aqui solo se pinta. Asi las fechas se tocan en un sitio.
+    #
+    # SE DIBUJA, NO SE DESCARGA NI SE EMPAQUETA. Meter imagenes de Halloween y
+    # de Navidad en el script serian megas para cuatro dias al año, y bajarlas
+    # seria depender de la red para un adorno. Unos circulitos y un tinte hacen
+    # el trabajo y no pesan nada.
+    #
+    # Si el usuario tiene su propio fondo (BGSURF), MANDA EL SUYO: solo se le
+    # ponen las particulas encima. Su fondo no se pisa por una fiesta.
     if BGSURF is not None:
         screen.blit(BGSURF, (0, 0))
+    elif _TEMA_COLS is not None:
+        screen.fill(_TEMA_COLS['bg'])
     else:
         screen.fill(TH['bg'])
+    if _TEMA_COLS is not None:
+        _dibuja_particulas(screen, W, H)
     # LA MARCA SE PREPARA UNA VEZ, NO QUINCE VECES POR SEGUNDO.
     #
     # Esto creaba una fuente nueva y volvia a componer "WPROTON" en CADA
@@ -3339,7 +3631,10 @@ def draw_idle(status=''):
     # Guardada, la animacion de abajo sale practicamente gratis: solo cambia la
     # transparencia de una imagen que ya esta hecha.
     global _idle_letras, _idle_key, _idle_alto, _idle_ancho
-    clave = (W, H, TH.get('bg'), ACC)
+    # El tema entra en la clave: si cambia, las letras se rehacen. Hoy no cambia
+    # dentro de un mismo proceso, pero dejar fuera de la clave algo que decide
+    # el color es la forma clasica de que un dia se vea un color viejo.
+    clave = (W, H, TH.get('bg'), ACC, os.environ.get('WP_TEMA', ''))
     if _idle_letras is None or _idle_key != clave:
         # CADA LETRA POR SEPARADO, Y EN DOS TONOS.
         #
@@ -3359,7 +3654,10 @@ def draw_idle(status=''):
         _base_px = max(48, W // 14)
         _idle_letras = []
         for _i, _c in enumerate('WPROTON'):
-            _col = MORADO_W if _i == 0 else CIAN_PROTON
+            if _TEMA_COLS is not None:
+                _col = _TEMA_COLS['w'] if _i == 0 else _TEMA_COLS['letras']
+            else:
+                _col = MORADO_W if _i == 0 else CIAN_PROTON
             _pasos = []
             for _k in range(_IDLE_PASOS):
                 _esc = 1.0 + 0.35 * (_k / float(_IDLE_PASOS - 1))

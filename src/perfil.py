@@ -134,6 +134,47 @@ ESQUEMA = [
     ("REDIST_JUEGO",      "texto",  "",               None),
     ("GAME_LANG",         "texto",  "es_ES.UTF-8",    None),
     ("EXTRA_ENV",         "texto",  "",               None),
+    # MAKO: generacion de fotogramas por capa Vulkan. Va al final para no
+    # mover de sitio los 52 campos anteriores: asi un perfil viejo se lee
+    # igual y uno nuevo lo entiende el WProton viejo (ignora lo que no
+    # conoce). Los tres valen 0/vacio por defecto, o sea apagado.
+    ("MAKO",              "entero", 0,                None),
+    ("MAKO_MULT",         "entero", 2,                None),
+    ("MAKO_ADAPTIVE",     "entero", 0,                None),
+    # ReShade nativo de Linux (capa Vulkan). Va al final por lo mismo que los
+    # de MAKO: no mover de sitio los campos anteriores.
+    ("RESHADE_LX",        "entero", 0,                None),
+    # SUPERPOSICION DE STEAM, POR JUEGO. Tambien al final, por lo mismo.
+    #
+    # "auto" = lo que diga STEAM_OVERLAY en settings.conf, que viene a 1.
+    # Dejarla puesta es lo normal: es como Steam se entera de que hay un juego
+    # corriendo, y sin ella en el modo Juego sale solo "WProton" en el menu de
+    # Steam y el juego no se puede cerrar desde ahi.
+    #
+    # Se apaga por juego porque hay lanzadores que se atragantan con lo que
+    # otros programas les escriben en la salida -BudgieLoader, el de los juegos
+    # de Raw Thrills, se cierra al leer los avisos de GameMode y MangoHud-, asi
+    # que no es descartable que alguno haga lo mismo con esto. Un interruptor
+    # general obligaria a elegir entre ese juego y todos los demas.
+    #
+    # El cuarto valor, "oculto", va mas alla: ademas de la superposicion le
+    # quita al juego la IDENTIDAD de Steam (SteamAppId, SteamGameId y
+    # compania), que es lo que de verdad hace que Steam lo vea como una
+    # aplicacion aparte. Quitar solo la superposicion NO basta: en la 1.60 se
+    # quitaba y el juego seguia saliendo en el menu de Steam.
+    ("STEAM_OVERLAY",     "opcion", "auto",           ("auto", "1", "0", "oculto")),
+    # PUENTE DE STEAM INPUT A XInput. Al final, por lo mismo que los de arriba.
+    #
+    # PROTON_STEAMINPUT_XINPUT_FALLBACK, que GE-Proton 11-4 añadio: da un
+    # dispositivo Steam Input de mentira que reenvia las asignaciones de
+    # XInput. Es LO CONTRARIO de PROTON_PREFER_SDL, que apaga Steam Input.
+    #
+    # Hace falta en el caso del modo Juego de SteamOS: Steam se queda el mando
+    # fisico y solo ofrece el suyo, virtual. Ahi "preferir SDL" quita el unico
+    # mando que hay, y lo que sirve es este puente.
+    #
+    # "auto" = se enciende cuando el UNICO mando que hay es el virtual de Steam.
+    ("PAD_SIFALLBACK",    "opcion", "auto",           ("auto", "1", "0")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
