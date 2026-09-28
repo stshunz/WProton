@@ -484,6 +484,23 @@ footer a{color:var(--tenue)}
          opcional: sin ella todo funciona igual.</p>
     </details>
     <details>
+      <summary>Cerrar el juego desde el menú de Steam</summary>
+      <p>En el menú de Steam, <em>Salir del juego</em> sobre la fila de WProton
+         cierra el juego y te devuelve a los menús, sin cerrar WProton. Hasta
+         la 1.75 no hacía nada: WProton ignoraba esa señal porque Steam manda
+         la misma al cerrarse su ventana para dejar paso al juego, y atenderla
+         desmontaba el juego a medio arrancar. Ahora se distinguen.</p>
+    </details>
+    <details>
+      <summary>El juego no sale con su nombre en el menú de Steam</summary>
+      <p>Si en el menú de Steam sale solo «WProton» y no la fila del juego, es
+         la superposición de Steam: sin ella, para Steam solo existe el atajo.
+         WProton la deja puesta, así que debería salir. Se puede apagar juego
+         por juego en <em>Ajustes del juego → Casos especiales</em>, para algún
+         lanzamiento que se porte raro con ella. Y en cualquier caso, mantener
+         <b>Select</b> cinco segundos cierra el juego desde el mando.</p>
+    </details>
+    <details>
       <summary>Cambié de runner y se quedó en «Preparando el prefijo»</summary>
       <p>Pasa al pasar de un runner Proton a uno Wine (o al revés) sobre el
          mismo prefijo: hay que cerrarlo y volver a registrar sus servicios.

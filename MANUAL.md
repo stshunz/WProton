@@ -271,6 +271,389 @@ lo guarda ahí y no en un menú. Antes de aplicarlo te enseña qué lleva dentro
 **guarda una copia del registro** en `wp_registro_<fecha>/` dentro del prefijo,
 porque una vez importado no hay deshacer.
 
+> **Runners y herramientas** tenía diecinueve filas y mezclaba lo que se usa a
+> diario con lo que se instala una vez. Lo segundo está ahora en *Instalar y
+> actualizar componentes >>*: umu-launcher, Python portable, evdev, los
+> extractores de GOG, las herramientas FUSE y DwarFS, y los datos de
+> HowLongToBeat.
+>
+> *Instalar librerías de Windows* se queda fuera: eso no instala un componente
+> de WProton, mete `vcredist` y compañía en el prefijo de un juego, se hace por
+> juego y se repite. También se llega desde *Ajustes del juego*, pero desde
+> aquí puedes elegir el prefijo, que es lo que hace falta cuando es compartido.
+
+**Elegir versión de GE-Proton** — en *Runners y herramientas → Descargar
+runners → GE-Proton*.
+
+GE-Proton lleva cientos de versiones publicadas, y pedirlas todas eran tres
+consultas a GitHub cada vez que entrabas. Al entrar salen ahora **las series**:
+
+```
+Serie 11.x
+Serie 10.x
+Serie 9.x
+Serie 8.x
+Serie 7.x
+Serie 6.x
+```
+
+y al elegir una **se cargan solo las suyas**, enteras. Para las series nuevas es
+una consulta en vez de tres, y la lista que sale es corta.
+
+La lista de series se construye sola con lo que haya publicado, así que el día
+que salga la 12 aparece sin tocar nada.
+
+Lo consultado se guarda unas horas, así que entrar por segunda vez es
+instantáneo. Si GitHub no responde, se usa lo guardado y se avisa en el
+registro: una lista de hace un rato deja elegir, una lista vacía te deja sin
+poder bajar nada.
+
+**Elegir versión de Wine de Kron4ek** — mismo sitio, entrada *Wine Kron4ek*.
+
+Tres pasos, y cada lista es corta:
+
+1. **La serie**: 11.x, 10.x, 9.x… igual que en GE-Proton.
+2. **La variante**, dentro de esa serie. Las filas van solo con el nombre y la
+   explicación arriba, en la cabecera: el menú usa una fuente proporcional, así
+   que rellenar con espacios no alinea nada y se veía el escalón.
+
+   | Variante | Qué es |
+   |---|---|
+   | `wow64` | Vanilla, **no necesita librerías de 32 bits**. La que quieres en SteamOS |
+   | `staging-tkg-wow64` | Staging más los parches de wine-tkg |
+   | `staging-wow64` | Staging |
+   | `amd64`, `staging-amd64`, `staging-tkg-amd64` | Lo mismo, pero necesitan multilib |
+   | `x86`, `staging-x86`, `staging-tkg-x86` | Solo para sistemas de 32 bits |
+   | `Wine Proton` | El de Valve. Son publicaciones aparte, con su propia numeración |
+
+3. **La versión** concreta, y el paquete se localiza solo.
+
+Antes había que elegir entre las 12 últimas versiones y luego leerse los doce
+nombres de fichero de la publicación (`wine-11.13-staging-tkg-amd64-wow64.tar.xz`)
+para dar con el que querías. Y de la serie 9 o la 8 no había forma de bajar
+nada. Si una versión antigua no trae la variante que has pedido, se te dice y
+se te enseña lo que sí trae, en vez de instalarte otra.
+
+**Tener los tres al día** — *Runners y herramientas → Actualizar a la última
+versión >>*. Cada fila dice qué versión tienes ya instalada:
+
+```
+GE-Proton    (el runner por defecto)   [GE-Proton11-6]
+Wine         (Kron4ek staging wow64)   [wine-11.13-staging-amd64-wow64]
+UMU-Proton   (Open Wine Components)    [no instalado]
+```
+
+Solo se descarga si hay una más nueva que la que tienes.
+
+Del Wine se coge `staging-amd64-wow64` a propósito: staging trae más arreglos
+que el vanilla, y wow64 **no necesita librerías de 32 bits**, que es justo lo
+que no se puede instalar en una SteamOS inmutable. Si quieres otra variante,
+están todas en *Descargar runners → Wine Kron4ek*.
+
+### Juegos de Linux sueltos (.sh y .AppImage)
+
+Un `.sh` o un `.AppImage` dejado **en la raíz de la carpeta de juegos** aparece
+en la biblioteca como cualquier otro juego, sin empaquetar ni nada.
+
+Solo se miran en el **primer nivel**, a propósito: casi todos los juegos traen
+sus propios `.sh` por dentro (`start.sh`, `setup.sh`, el lanzador de una carpeta
+que ya sale como juego). Si se buscaran en profundidad, un solo juego llenaría
+la lista de entradas que no son juegos. En la raíz, en cambio, lo que hay
+puesto lo has puesto tú a propósito.
+
+### Manejar los menús con el ratón
+
+Además del mando y el teclado, los menús responden al ratón:
+
+| Acción | Qué hace |
+|---|---|
+| Mover el puntero | Selecciona la fila que hay debajo |
+| Clic izquierdo | Entra en esa fila (como A o Intro) |
+| Clic derecho | En la lista de juegos, abre los **ajustes de ese juego**; en el resto, vuelve atrás |
+| Rueda | Sube y baja **media pantalla** por golpe |
+
+El clic derecho selecciona antes la fila que hay debajo: abrir los ajustes de un
+juego que no es el que señalas sería peor que no hacer nada.
+
+La rueda mueve media pantalla porque con tres filas por golpe una lista de
+cincuenta juegos son diecisiete vueltas, y entonces no compensa frente a la
+búsqueda.
+
+**El puntero se esconde solo** tras unos segundos quieto y vuelve al primer
+movimiento: en una Deck sin ratón un puntero plantado en medio sobra, y con
+ratón verlo encima del menú mientras juegas con el mando también.
+
+Pasar el puntero por el **panel lateral** —la ficha del juego, la carátula— no
+cambia la selección; solo cuenta la zona de la lista.
+
+Se apaga con `RATON_MENUS=0` en `settings.conf`.
+
+> Por dentro, el ratón **no reescribe la navegación**: mueve la selección e
+> inyecta la misma tecla que pulsarías tú. Así no puede desincronizarse del
+> mando, y cualquier arreglo en la selección vale para los tres a la vez.
+
+### Juegos de Linux dentro de un `.wsquashfs`
+
+Un `.sh` o un `.AppImage` empaquetado dentro de un `.wsquashfs` se detecta y se
+lanza como juego de Linux, sin Wine de por medio.
+
+> **El AppImage no necesita venir con permiso de ejecución.** Antes se buscaba
+> «cualquier ejecutable ELF», y un AppImage lo es… pero solo si tiene el bit de
+> ejecución puesto, y recién descargado no suele tenerlo. Squashfs conserva los
+> permisos tal cual estaban al empaquetar, así que dentro del archivo seguía sin
+> tenerlo y el juego no aparecía. Ahora se busca por extensión y el permiso se
+> arregla al lanzar, aprovechando la capa de escritura del montaje.
+>
+> Si aun así no se puede poner (un archivo de solo lectura de verdad), se dice
+> claramente en vez de intentar `bash` sobre un binario, que es lo que hacía una
+> de las ramas y solo escupía basura.
+
+### Un juego puede traer su propia carpeta personal (`.home`)
+
+WProton busca una carpeta personal dentro del juego, **en este orden**:
+
+| Se busca | Ejemplo |
+|---|---|
+| `<lanzador>.home` junto al ejecutable | `Xemu.AppImage.home` |
+| `<lanzador sin extensión>.home` | `Xemu.home` |
+| **Cualquier `*.home` que haya al lado** | el `.sh` se llama distinto que el AppImage |
+| `.home` en la raíz del juego | `.home` |
+| Si no hay ninguna, la de siempre | `prefixes/<juego>.home` |
+
+La tercera regla es la que resuelve el caso real: el lanzador que se detecta
+suele ser un `.sh` que por dentro llama a otra cosa con parámetros —
+`Crazy Taxi 3 High Roller.sh` ejecutando `Xemu.AppImage -dvd_path …`— y la
+carpeta personal lleva el nombre **del AppImage**, no el del `.sh`.
+
+Si hay **varias** `*.home`, se prefiere la que tenga su fichero al lado
+(`Xemu.AppImage.home` con `Xemu.AppImage` presente). Si aún así queda más de
+una, no se adivina: se anota en el registro y se usa la carpeta de siempre.
+Elegir a boleo dónde va a guardar el juego sus partidas es la clase de acierto
+que sale caro.
+
+Las dos primeras son el **convenio de AppImage**: un AppImage busca por su cuenta
+una carpeta llamada igual que él con `.home` detrás, y la usa como carpeta
+personal. Si el paquete la trae, dentro está el juego ya configurado.
+
+> **Solo cuentan las que acaban en `.home`.** Al lado del lanzador hay muchas
+> otras carpetas —`Super Mario Remastered_Data` de Unity, `lib`, `share`— y
+> ninguna es una carpeta personal. Aceptar cualquier carpeta con el nombre del
+> juego sería meter al juego a escribir dentro de sus propios datos. Sirve
+para empaquetar un juego **ya configurado**: ajustes hechos, mandos mapeados,
+resolución puesta, y arranca bien a la primera.
+
+Manda sobre todo lo demás: si está ahí, es que quien empaquetó el juego la puso
+a propósito, y crear otra al lado sería tirar ese trabajo. En el registro se
+distingue cuál se está usando:
+
+```
+[+] Carpeta del juego: /…/tmp_mount/MiJuego/.home
+    La trae el propio juego (.home): se usa esa, con lo que
+    venga configurado, en vez de crear una vacia.
+```
+
+Funciona aunque el `.wsquashfs` sea de solo lectura: el juego se monta con una
+capa de escritura encima, así que lo que escriba en su `.home` se conserva en
+`overlays/<juego>/upper`.
+
+Vale tanto para juegos de Linux (`.sh`, `.AppImage`) como para los de Windows.
+
+### Borrar la caché de shaders de un juego
+
+*Ajustes del juego → Rendimiento y compatibilidad → **Borrar la caché de shaders
+de este juego***.
+
+La caché de DXVK se va llenando mientras juegas y hace que los tirones del
+principio desaparezcan. Pero si se corrompe —un cierre brusco, un cambio de
+runner, un driver nuevo— el juego puede petar al arrancar, quedarse en negro o
+dar tirones que no se van. Borrarla obliga a regenerarla desde cero.
+
+Borra solo la de **ese** juego (`<ejecutable>.dxvk-cache` y su equivalente de
+VKD3D), porque WProton junta todas las cachés en `cache/dxvk` y `cache/vkd3d` en
+vez de dejarlas sueltas por los prefijos. Después ofrece borrar también la del
+**driver (Mesa)**, que no se puede separar por juego: o entera o nada, y afecta
+a todos.
+
+> **Es una acción, no un interruptor, y es a propósito.** En Batocera
+> (`dxvk_reset_cache`) es un ajuste que se queda puesto. Un ajuste permanente
+> borraría la caché **en cada arranque**, con lo que el juego no llegaría a
+> tener caché nunca y tendrías tirones para siempre sin saber por qué. Se hace
+> una vez, que es cuando sirve.
+
+### Fondos de temporada
+
+El fondo que se ve entre menús cambia solo en unas fechas:
+
+| Tema | Cuándo | Fondo y partículas | La palabra WPROTON |
+|---|---|---|---|
+| Halloween | 25–31 de octubre | Morado oscuro, brasas naranjas subiendo | W morada, PROTON naranja calabaza |
+| Navidad | 20–26 de diciembre | Azul noche, nieve cayendo | W roja (Papá Noel), PROTON blanco nieve |
+| Fin de año | 30 dic – 2 ene | Chispas doradas subiendo | W dorada, PROTON blanco |
+| Reyes | 5–6 de enero | Destellos dorados cayendo | W dorada, PROTON violeta |
+
+La marca del centro se tiñe también: con el fondo cambiado y las letras en su
+morado y cian de siempre, la pantalla queda a medias. Se respeta la forma —la W
+distinta del resto— y solo cambian los colores.
+
+El resto del año, el fondo de siempre: una decoración puesta todo el año
+dejaría de ser una gracia. Se apaga con `TEMAS_TEMPORADA=0` en `settings.conf`.
+
+> **Si tienes tu propio fondo, manda el tuyo.** Solo se le añaden las partículas
+> encima; tu imagen no se pisa por una fiesta.
+>
+> No se descarga ni se empaqueta ninguna imagen: es todo dibujado. Meter fotos
+> de calabazas y de nieve en el script serían megas para cuatro días al año.
+
+El calendario está en una sola función (`tema_temporada`), así que cambiar
+fechas o añadir una fiesta se hace en un sitio.
+
+**Para verlos sin esperar a la fecha:** con `DEV_MODE=1` en `settings.conf`,
+*Modo desarrollo → Probar un fondo de temporada*. Se rearrancan los menús y el
+siguiente ya sale con el fondo elegido; «como toque por fecha» vuelve a lo
+normal. El forzado dura hasta que cierres WProton.
+
+
+### Cómo está organizado el menú del juego
+
+Tres agrupaciones nuevas en 1.75, porque la pantalla se había convertido en un
+cajón de sastre:
+
+| Submenú | Qué hay dentro |
+|---|---|
+| **Mandos >>** | SDL/hidraw, puente Steam Input → XInput, mando Sony, **mando virtual**, escribir SDL en el registro del prefijo |
+| **Protonfixes / UMU >>** | El `GAMEID` y la búsqueda en la base de umu |
+| **Carátula y ficha >>** | Las dos carátulas, la ficha del juego, las notas y las estadísticas |
+| **Archivo y mantenimiento >>** | Reinstalar el `.bat` del juego, copias de partidas, comprobar el archivo, acceso directo, repetir el asistente, borrar saves del overlay y borrar la configuración |
+| *Mapeador .keys* | Se queda **fuera**: convertir el mando en pulsaciones de teclado es otra cosa distinta de elegir cómo se lee el mando |
+
+*Favorito* y *Completado* se quedan fuera de ese submenú a propósito: son
+interruptores de una pulsación que se usan a menudo y ahí costarían tres.
+
+Y las dos de empaquetar —*EMPAQUETAR A WSQUASHFS* y *Empaquetar con su prefijo*—
+se quedan en el menú principal y **juntas**: son el paso final de preparar un
+juego, se usan bastante, y esconderlas detrás de «mantenimiento» sería
+enterrarlas.
+
+> *EMPAQUETAR A WSQUASHFS* solo aparece si el juego está **en carpeta**. Si ya
+> es un `.wsquashfs`, no hay nada que convertir y la fila no sale.
+
+Dos cosas cambiaron de sitio por estar donde nadie las buscaría:
+
+- El **mando virtual** vivía dentro del *Mapeador .keys*. Tenía sentido cuando
+  solo se usaba junto a un fichero de teclas, pero ya no lo necesita.
+- *Volver a instalar lo que trae el juego (.bat)* también estaba ahí, y no tiene
+  ninguna relación con las teclas: vuelve a ejecutar el `.bat` de instalación
+  del juego. Está en *Archivo y mantenimiento*, que es donde encaja por lo poco
+  que se usa.
+
+### Que un juego use siempre el más nuevo
+
+Al elegir el runner de un juego, antes de la lista de versiones concretas hay
+tres opciones:
+
+| Opción | Qué hace |
+|---|---|
+| *(automático: último GE-Proton instalado)* | Lo de siempre, y el valor por defecto |
+| *(siempre el último Wine instalado)* | El Kron4ek más nuevo que tengas |
+| *(siempre el último UMU-Proton instalado)* | El UMU más nuevo que tengas |
+
+Elegir una **versión concreta** ata el perfil a ella: en tres meses estará vieja
+y hay que volver a entrar juego por juego. Con estas tres, al bajar una versión
+nueva los juegos la cogen solos.
+
+Si eliges una familia que no tienes instalada, WProton te lo dice en ese momento
+—no al lanzar— y el juego se lanzará con el último GE-Proton hasta que bajes
+uno. Quedarse sin jugar por eso sería peor.
+
+### Pasar partidas entre dos equipos de la misma red
+
+Sin instalar nada. En *Ajustes del juego → Archivo y mantenimiento → Partidas
+guardadas → Sincronizar*:
+
+1. En el equipo que **tiene** las partidas: *Compartir mis copias con otro
+   equipo*. Sale su IP, el puerto y un **código de seis cifras**.
+2. En el otro: *Traer copias de otro equipo*, y escribe esos tres datos.
+
+Se trae lo que aquí no está y lo que allí es **más nuevo**. Lo que aquí es más
+nuevo **no se toca**, y se dice cuáles son.
+
+> **Por qué no es sincronización automática, y no va a serlo.** Un
+> sincronizador genérico resuelve los choques guardando los dos ficheros con
+> nombres distintos. Para un documento vale; para una partida no sirve de nada,
+> porque el juego lee uno solo y tú no sabes cuál es el bueno. El caso malo
+> llega solo: juegas en un equipo sin red, luego en el otro, y al reencontrarse
+> uno pisa al otro en silencio. Con una dirección explícita eso no puede pasar.
+
+Los tres campos que se escriben —IP, puerto y código— salen con un **teclado
+numérico** de doce teclas en vez de la rejilla completa de cuarenta: con el
+mando, cada cifra está a un paso.
+
+El puerto es 8788 por defecto y se cambia en *Puerto para la red local*. Tiene
+que ser **el mismo en los dos equipos**.
+
+**Para no escribir nada la próxima vez.** La primera vez que traigas copias de
+un equipo y funcione, se te ofrece guardarlo con un nombre («Deck»,
+«Sobremesa»). A partir de ahí, *Traer copias* sale con la lista y no pide ni IP
+ni código.
+
+Para que eso funcione, el equipo que comparte debe usar un **código fijo**:
+*Código al compartir* → fijo. De serie sale uno nuevo cada vez, que es más
+seguro pero obliga a teclearlo siempre. Lo que se quita es escribirlo, no la
+puerta: sigue haciendo falta un código.
+
+> El equipo se ofrece guardar **después** de que la descarga haya funcionado, no
+> antes. Guardar una IP o un código equivocados solo serviría para volver a
+> fallar mañana sin saber por qué.
+
+### Un servidor de partidas siempre disponible
+
+En vez de que las dos máquinas coincidan encendidas, una guarda las copias de
+todas. *Partidas guardadas → Sincronizar → **Servidor de partidas***.
+
+**En el equipo que más tiempo esté encendido:** *Instalar el servidor AQUÍ*. Se
+queda en marcha con la máquina, sin necesidad de abrir WProton, y te da su IP y
+un **token**.
+
+**En los demás:** *Usar un servidor*, con esa IP y ese token. Luego *Subir mis
+copias al servidor* deja allí lo que tengas, y *Traer copias* se las lleva.
+
+| Detalle | Cómo está resuelto |
+|---|---|
+| Permisos | Servicio **de usuario**, sin root. Se quita borrando un fichero |
+| Con la sesión cerrada | Se activa *lingering*, o el servicio moriría al salir justo cuando más falta hace |
+| Subir algo más viejo | **Se rechaza**: el servidor conserva la copia nueva y te lo dice |
+| Una partida que se corrompió | Guarda las **5 últimas versiones** de cada juego en `backups/versiones/` |
+| Quién puede escribir | Token largo generado solo, no un código de seis cifras: un servidor que acepta subidas necesita más puerta que uno que solo presta |
+
+> El servidor de *Compartir mis copias* (el de un rato) **no acepta subidas**, y
+> está comprobado que las rechaza. Son dos cosas distintas a propósito.
+
+**Funciona en cualquier equipo con Python 3**, que es algo que WProton ya
+necesita: no hay dependencias nuevas, todo es biblioteca estándar. *Instalar el
+servidor aquí* necesita además systemd (CachyOS, SteamOS y las distribuciones
+normales lo tienen; Batocera no, y ahí te avisa y queda el modo manual).
+
+**Y es opcional del todo:** no arranca nada por su cuenta y los ajustes están
+vacíos de serie.
+
+> **Lo que más guerra da es el cortafuegos.** El servicio arranca, responde en
+> el propio equipo, y desde el otro no hay manera. WProton lo comprueba solo al
+> instalar —probando por su **IP de red**, no por `127.0.0.1`, que respondería
+> aunque el puerto estuviera cerrado a todo el mundo— y te dice la orden exacta
+> para `firewalld` o `ufw`.
+
+Detalles que conviene saber:Detalles que conviene saber:
+
+- **Se comparte solo mientras esa ventana esté abierta.** No queda ningún
+  servicio en segundo plano.
+- Hace falta el **código**, que cambia cada vez. Sin él no se lista ni se
+  descarga nada.
+- Se sirve **solo la carpeta de copias**, y solo ficheros `.zip` de dentro: los
+  nombres se limpian, así que no se puede pedir nada de fuera.
+- Cada copia que llega se **comprueba con su huella SHA-256** antes de darla por
+  buena. Una copia de partidas a medias es peor que no tenerla, porque parece
+  buena hasta que la restauras.
+
 **Proton oficial de Steam** — en *Runners y herramientas → Descargar runners*.
 
 Valve **no publica Proton para descargar por su cuenta**: solo se consigue a
@@ -370,6 +753,216 @@ aunque la partida haya durado minutos: eso siempre significa que algo va mal.
 Y si **no** reconoce el fallo, no se inventa nada.
 
 Si un juego se cierra en menos de diez segundos, WProton te enseña automáticamente el final del registro.
+
+### El mando va en los menús pero no en el juego
+
+Es lo más frecuente en el modo Juego de SteamOS, y no es un fallo del juego.
+
+Steam esconde el mando físico a lo que lanza —con
+`SDL_GAMECONTROLLER_IGNORE_DEVICES`, una lista de casi 800 fabricante/modelo— y
+ofrece a cambio su mando virtual, un «Microsoft X-Box 360 pad». El problema es
+que **ese mando virtual está también dentro de la lista**, así que el juego
+recibe la orden de ignorar el único mando que tiene. Los menús de WProton sí lo
+ven porque leen `/dev/input` en crudo, y eso hace que parezca cosa del juego.
+
+WProton lo detecta y lo dice en el registro:
+
+```
+mando 1: "Microsoft X-Box 360 pad 0"  [045e:028e] <-- STEAM LE DICE AL JUEGO QUE LO IGNORE
+[!] TODOS LOS MANDOS QUE HAY ESTAN EN LA LISTA DE IGNORADOS DE STEAM.
+```
+
+**La solución** es *Ajustes del juego → Rendimiento y compatibilidad → Arreglo
+mando SteamOS (Steam Input)*: quita esas cuatro variables para ese juego, y así
+ve el mando virtual con normalidad.
+
+Va por juego y no de serie porque no siempre conviene: si `/dev/hidraw` no se
+puede leer, el mando virtual de Steam es el único que funciona, y es justo esa
+lista la que hace que el juego lo use.
+
+### Si con eso tampoco va: hacen falta las dos cosas
+
+Hay un segundo motivo, independiente del primero, y por eso quitar la lista de
+ignorados a veces no basta. El mando virtual de Steam Input es un dispositivo
+**uinput**: aparece en `/dev/input` pero **no tiene nodo `/dev/hidraw`**. Y
+GE-Proton 11-4 y siguientes leen los mandos precisamente por hidraw, así que ahí
+no encuentran nada. No es que lo ignoren: es que no lo ven.
+
+WProton también lo detecta:
+
+```
+[!] EL UNICO MANDO QUE HAY ES VIRTUAL (uinput), sin nodo /dev/hidraw.
+    Este runner lee los mandos por hidraw, asi que no lo encontrara.
+```
+
+### Cuando Steam se queda el mando: el mando virtual de WProton
+
+Es la vía que **no necesita reiniciar Steam**, y la recomendada.
+
+Steam Input se queda el mando físico y ofrece el suyo, que es uinput y que hay
+juegos que no ven. WProton **captura el de Steam y le ofrece al juego un Xbox
+360 corriente**, creado por él. El juego ve un mando normal y no hay que tocar
+nada de Steam.
+
+**Se elige a mano, en el juego que lo necesite**: *Ajustes del juego → Mapeador
+.keys → Mando virtual → «Mando Xbox (probar esto primero)»*.
+
+Y no es automático a propósito. En el modo Juego de la Deck, Steam Input esconde
+el mando físico **en todos los juegos**, así que un automático basado en «el
+único mando es el virtual de Steam» se activaría en la biblioteca entera para
+arreglar uno. Y capturar el mando no es gratis: queda cogido en exclusiva, se
+pierden la vibración, el giroscopio y el remapeado de Steam Input, y hay un
+salto más de latencia. Eso se paga donde hace falta, no en todas partes.
+
+En el registro se ve qué hizo, siempre:
+
+```
+[+] Mando virtual activado (xbox)
+Mando virtual: apagado para este juego (MANDO_VIRTUAL=0)
+```
+
+> Hasta la 1.75 esta opción **no funcionaba en la mayoría de juegos**: la
+> llamada que crea el mando virtual estaba dentro del bloque que busca el
+> fichero `.keys`, así que solo se creaba en los juegos que tuvieran uno.
+> Elegías «Mando Xbox», se guardaba en el perfil, y no pasaba nada — sin ningún
+> aviso. El comentario del propio código decía que iba aparte del mapeador:
+> estaba bien escrito y mal colocado.
+
+Select 5 segundos sigue funcionando: el guardia de salida reescanea los
+dispositivos cada 3 segundos y coge el nuestro.
+
+### Si aun así no va
+
+Queda desactivar Steam Input para el atajo de WProton **desde Steam**: en el
+menú de Steam, sobre WProton, *Mando → plantilla «Desactivar Steam Input»*. Son
+dos pulsaciones y hay que reiniciar Steam para que lo lea.
+
+> WProton llegó a hacer esto solo, editando el `localconfig.vdf` de Steam,
+> reiniciándolo y volviendo al juego. Funcionaba, pero eran tres piezas
+> frágiles para algo que se hace en dos pulsaciones, y una fila más en los
+> ajustes del juego pegada a otra parecida. Se quitó en favor del mando
+> virtual.
+
+### El caso del modo Juego: Steam se queda tu mando
+
+En el modo Juego, Steam se queda el mando físico y solo ofrece el suyo, que es
+virtual. Aquí **preferir SDL es lo peor que se puede hacer**:
+`PROTON_PREFER_SDL` apaga Steam Input en winebus, y si el único mando que hay es
+el de Steam Input, apagarlo quita el único mando que existe.
+
+Lo que sirve es el puente que GE-Proton 11-4 añadió para esto:
+`PROTON_STEAMINPUT_XINPUT_FALLBACK`, un dispositivo Steam Input que reenvía las
+asignaciones de XInput. En *Ajustes del juego → Rendimiento y compatibilidad →
+**Puente Steam Input → XInput***.
+
+En **automático** se enciende solo cuando el único mando que hay es el virtual
+**de Valve** (`0x28de`) — no con cualquier mando virtual, porque el nuestro
+también lo es y para ése la respuesta es otra.
+
+Las dos opciones son incompatibles y WProton no las pone juntas: si estás
+prefiriendo SDL, el puente no se pone y se dice en el registro.
+
+**El otro ajuste, para cuando el mando físico sí llega:** *Ajustes del juego →
+Rendimiento y compatibilidad → **Desactivar Steam Input para este juego***.
+
+Pone `PROTON_PREFER_SDL`, y GE-Proton **apaga Steam Input y hidraw** cuando esa
+variable está presente, dentro de ese Proton y solo ahí. Por eso vale para tres
+juegos y no para el resto, y funciona desde el modo Juego sin cerrar Steam.
+
+> No confundir con el «Steam Input por juego» de Steam: Steam guarda eso **por
+> aplicación**, y para Steam la aplicación es WProton entero. Editarlo exige
+> además tener Steam cerrado, así que desde el modo Juego no se puede. Por eso
+> no se hace por ahí.
+
+**Desde 1.75 WProton lo resuelve solo.** Si el único mando que hay es virtual y
+el runner lee por hidraw, pone `PROTON_USE_SDL` sin preguntar y lo dice:
+
+```
+[+] Mando por SDL, automatico: el unico mando que hay es virtual
+    (el de Steam Input) y no tiene nodo /dev/hidraw, que es por
+    donde lo buscaria GE-Proton11-6-x86_64. Con SDL si lo ve.
+```
+
+Si quieres lo contrario, *Que Wine lea el mando por SDL* → **Nunca**.
+
+> **Cuidado con dos ajustes que se llamaban casi igual.** Había *Mando vía SDL*
+> en Rendimiento y compatibilidad y *Mandos por SDL en este prefijo* en Casos
+> especiales, y hacen cosas distintas. Ahora cada uno dice lo que hace:
+> **Que Wine lea el mando por SDL, no por hidraw** (el del mando) y
+> **Escribir SDL en el registro del prefijo (avanzado)** (el del prefijo).
+
+Si aun así va peor, apágalos y prueba *Arreglar permisos del mando (hidraw)*, o
+desactiva Steam Input para el atajo de WProton desde Steam: así el mando físico
+llega sin intermediarios.
+
+### Cerrar el juego desde el menú de Steam
+
+Funciona: en el menú de Steam, *Salir del juego* sobre la fila de **WProton**
+cierra el juego y te devuelve a los menús de WProton, sin cerrar WProton.
+
+Hasta la 1.75 no hacía nada, y el motivo no era Steam. En el modo Juego, Steam
+manda un `TERM` a WProton **al cerrarse su ventana** para dejar paso al juego, y
+atender ése desmontaba el `.wsquashfs` con el juego dentro. Por eso WProton
+ignoraba esas señales a secas — y con ellas, la que manda Steam cuando pulsas
+*Salir del juego*, que es exactamente la misma.
+
+Ahora se distinguen por cuándo llegan: en los primeros segundos es la de Steam
+al cerrarse la ventana y se ignora; pasado ese rato es tuya y se cierra el
+juego. El margen es `WP_CIERRE_GRACIA` en `settings.conf`, 20 segundos por
+defecto. Súbelo si un juego tarda mucho en aparecer y se te cierra solo; bájalo
+si tardas en poder cerrarlo.
+
+Con el mando, **Select** 5 segundos hace lo mismo y sigue disponible.
+
+### El juego no sale con su nombre en el menú de Steam
+
+Si en el menú de Steam sale solo «WProton» y no la fila del juego, es la
+**superposición de Steam**. Steam se entera de que hay un juego corriendo
+porque le mete su `gameoverlayrenderer.so` al proceso; si eso no llega, para
+Steam solo existe el atajo, y desde su menú no hay nada que cerrar.
+
+WProton la deja puesta. Los `wrong ELF class ... ignored` que verás en el
+registro **son normales**: Steam pone las rutas de 32 y de 64 bits a la vez y
+`ld.so` descarta la que no corresponde.
+
+Se decide **por juego**, en *Ajustes del juego → Casos especiales → Cómo ve
+Steam este juego*, con cuatro opciones:
+
+| Opción | Qué hace |
+|---|---|
+| **Automático** | Lo que diga el ajuste general. Es lo normal |
+| **Puesta** | Steam ve el juego, con superposición |
+| **Sin superposición** | Le quita la superposición, pero **Steam sigue viéndolo** |
+| **Ocultar el juego a Steam** | Steam solo verá WProton |
+
+La diferencia entre las dos últimas importa, y costó averiguarla: quitar la
+superposición **no oculta nada**. En la 1.60 se quitaba y el juego seguía
+saliendo en el menú de Steam. Lo que ata la ventana del juego a una aplicación
+de Steam son las variables de identidad —`SteamAppId`, `SteamGameId` y
+compañía—, y de ellas `SteamGameId` en particular: umu-launcher saca de ahí el
+AppID y se lo pone a la ventana, que es lo que lee el compositor.
+
+**Ocultar** quita esas variables. Lo que pierdes:
+
+- No hay superposición: nada de Shift+Tab, capturas de Steam ni contador de FPS.
+- Steam Input no engancha en el juego.
+
+Lo que ganas: para Steam solo existe WProton, así que *Salir del juego* actúa
+sobre WProton —que cierra el juego y hace el fin de partida completo: desmontar,
+recolocar los menús, guardar las estadísticas— y Steam no puede dar la partida
+por terminada antes de tiempo. **Select** 5 segundos sigue funcionando igual.
+
+Va por juego y no con un interruptor general porque hay lanzadores que se
+cierran al leer lo que otros programas les escriben en la salida —BudgieLoader,
+el de los juegos de Raw Thrills, se cierra con los avisos de GameMode y
+MangoHud—, y no es descartable que alguno haga lo mismo con esto. Un
+interruptor general obligaría a elegir entre ese juego y todos los demás.
+
+`STEAM_COMPAT_CLIENT_INSTALL_PATH` no se toca en ningún modo: Proton la necesita
+para arrancar y no es una variable de identidad.
+
+El general, si alguna vez hace falta, es `STEAM_OVERLAY_GENERAL` en
+`settings.conf`: sólo cambia lo que significa «automático».
 
 ### Si la pantalla se queda en «Preparando el prefijo…»
 

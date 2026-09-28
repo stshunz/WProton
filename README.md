@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.67** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 1.75** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
 
@@ -60,7 +60,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).
 
 - **DLL overrides con menú**: se marcan de una lista con las más habituales (`dinput8`, `d3d9`, `dxgi`, `winhttp`, `winmm`), las que ya tengas puestas y las que encuentre junto al ejecutable del juego. Nada de recordar el formato ni de perder por el camino lo que dejaron dgVoodoo2 u OptiScaler.
-- **Casos especiales**: unidades de Windows por juego, ejecutable acompañante, el juego dentro de `C:\`, versión de Windows (de 98 a 11), escritorio virtual y OpenGL por Vulkan (Zink). Todo se guarda con los ajustes que ya existían, sin campos nuevos por opción.
+- **Casos especiales**: unidades de Windows por juego, ejecutable acompañante, el juego dentro de `C:\`, versión de Windows (de 98 a 11), escritorio virtual, OpenGL por Vulkan (Zink) y **superposición de Steam** (por juego: es lo que hace que Steam vea el juego en su menú del modo Juego). Todo se guarda con los ajustes que ya existían, sin campos nuevos por opción.
 - **Idioma del juego** de una lista, en **español por defecto**. Avisa si el sistema no tiene ese idioma generado, que es la causa más común de que un juego siga saliendo en inglés.
 - **HDR**: pone las variables que hacen falta y se lo pide a gamescope. Y dice en el propio menú si va a poder verse: sin gamescope ni sesión Wayland no hay HDR, por mucho que se active.
 - El **asistente de añadir un juego** deja listos también los DLL overrides y el prefijo, sin tener que entrar después por *Configurar*.

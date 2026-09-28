@@ -132,8 +132,8 @@ PY
     done < "$BASE"
 
     # 12: los 7 de antes, mas perfil.py, su profile_defaults() generado,
-    # detectar.py, dlls.py, disco.py, teclas.py, teknoparrot.py, ficha.py, procesos.py y menu_qt.py.
-    [ "$n" -eq 17 ] || { rojo "Se esperaban 17 inserciones y hubo $n"; exit 1; }
+    # detectar.py, dlls.py, disco.py, teclas.py, teknoparrot.py, ficha.py y menu_qt.py.
+    [ "$n" -eq 19 ] || { rojo "Se esperaban 19 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -152,7 +152,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py procesos.py menu_qt.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py sincro.py menu_qt.py mako.py reshade.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'
@@ -206,7 +206,7 @@ for var, fin, dest in (('MENU_PYGAME_PY','PGEOF','menu_pygame.py'),
                        ('TECLAS_PY','TECEOF','teclas.py'),
                        ('TEKNOPARROT_PY','TKPEOF','teknoparrot.py'),
                        ('FICHA_PY','FICEOF','ficha.py'),
-                       ('PROCESOS_PY','PROEOF','procesos.py'),
+                       ('SINCRO_PY','SNCEOF','sincro.py'),
                        ('MENU_QT_PY','QTEOF','menu_qt.py')):
     st = s.index('cat > "$%s" <<' % var)
     ini = s.index('\n', st) + 1

@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.72"
+WPROTON_VERSION="1.75"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -168,9 +168,11 @@ LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
 PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
+TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 MENU_UI=auto                             # motor de menus: auto | pygame | qt
 OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
+RATON_MENUS=1                            # 1 = manejar los menus con el raton
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
@@ -204,6 +206,12 @@ GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Franken
 RUNNERS_ALOJADOS="Proton-Experimental|https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file|el oficial de Valve, alojado por nosotros"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
+SINCRO_HOST=""                           # ultimo equipo del que se trajeron copias
+SINCRO_EQUIPOS=""                        # equipos guardados: nombre|ip|codigo, separados por ;
+SINCRO_CODIGO=""                         # codigo fijo al compartir (vacio = uno nuevo cada vez)
+SINCRO_SERVIDOR=""                       # servidor permanente de partidas (ip)
+SINCRO_TOKEN=""                          # token de ese servidor
+SINCRO_PUERTO=8788                       # puerto para compartir copias en la red local
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
 save_settings() {
     # RED DE SEGURIDAD para las carpetas de juegos.
@@ -1552,8 +1560,9 @@ pad_bridge_stop() {
 STEAM_ADD_PY="$RUNTIME_DIR/steam_add.py"
 
 write_steam_add() {
-    grep -q "WPROTON_HELPER steam_add.py 3f6725b2040c" "$STEAM_ADD_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER steam_add.py cd26efece9a6" "$STEAM_ADD_PY" 2>/dev/null && return 0
     cat > "$STEAM_ADD_PY" <<'SAEOF'
+# WPROTON_HELPER steam_add.py cd26efece9a6
 # WPROTON_HELPER steam_add.py 3f6725b2040c
 #!/usr/bin/env python3
 # WProton - accesos directos de Steam
@@ -1749,9 +1758,10 @@ steam_abrir() {
 FICHA_PY="$RUNTIME_DIR/ficha.py"
 
 write_ficha() {
-    grep -q "WPROTON_HELPER ficha.py 4853cd33ebeb" "$FICHA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER ficha.py 189f0fff8761" "$FICHA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$FICHA_PY" <<'FICEOF'
+# WPROTON_HELPER ficha.py 189f0fff8761
 # WPROTON_HELPER ficha.py 4853cd33ebeb
 # -*- coding: utf-8 -*-
 # WProton - fichas de juego (Steam, HowLongToBeat) e identificadores
@@ -5130,6 +5140,7 @@ if [ -n "$WP_LD_PRELOAD_STEAM" ]; then
 fi
 WP_PAD_WHY=""                            # por que se decidio asi el mando
 WP_T0_JUEGO=0                            # cuando arranco el juego (epoch)
+WP_DUR_PARTIDA=0                         # lo que duro la ultima partida (s)
 WP_CIERRE_PEDIDO=0                       # 1 = el cierre lo pedimos nosotros
 WP_CIERRE_GRACIA=20                      # segundos de gracia: ver cierre_desde_fuera
 RUNNER_KIND=""                           # "proton" | "wine" | "nativo"
@@ -5145,6 +5156,13 @@ if [ "${DEV_MODE:-0}" = 1 ]; then
     export WP_DEV=1
     export WP_CAPT_DIR="$BASE_DIR/capturas"
 fi
+# EL RATON SE EXPORTA UNA VEZ, no en cada llamada a un menu.
+#
+# Los menus se abren desde MUCHOS sitios -el servidor, el ayudante suelto, el
+# lienzo, el editor de texto- y añadir la variable en cada uno seria garantizar
+# que un dia falta en alguno y el raton deja de ir en una pantalla suelta sin
+# que nadie sepa por que. Exportada, la heredan todos.
+export WP_RATON="${RATON_MENUS:-1}"
 
 pygame_available() {
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
@@ -5180,9 +5198,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py eb2ec4b1f3d6" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 89bb806f4cb7" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py eb2ec4b1f3d6
+# WPROTON_HELPER menu_pygame.py 89bb806f4cb7
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5426,6 +5444,57 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
         BROWSE_EXTS = EXTS_NORMAL
     if action_x is not None:
         ACTION_X = action_x
+
+# ── RATON EN LOS MENUS ───────────────────────────────────────────────────────
+#
+# POR QUE SE AÑADE
+#
+# WProton se maneja con el mando y con el teclado, pero hay quien lo usa en un
+# sobremesa o en el modo escritorio de la Deck, con el raton en la mano, y
+# tener que soltarlo para navegar es incomodo. Lo pidieron los usuarios.
+#
+# NO SE REESCRIBE LA NAVEGACION: el raton solo MUEVE LA SELECCION y luego
+# inyecta la misma tecla que pulsarias tu. Asi el raton no puede desincronizarse
+# de lo que hace el mando, y cualquier arreglo en la seleccion vale para los
+# tres a la vez. Duplicar la logica seria condenarse a arreglar cada cosa dos
+# veces.
+# Se puede apagar con RATON_MENUS=0 en settings.conf, para quien no lo quiera.
+RATON = os.environ.get('WP_RATON', '1') != '0'
+# Se dice en el registro: si alguien reporta que el raton no va, lo primero es
+# saber si esta version lo trae siquiera y si viene encendido.
+print("menu_pygame: raton en los menus: %s" % ('SI' if RATON else 'no'), flush=True)
+RATON_T0 = [0.0]          # cuando se movio por ultima vez
+RATON_OCULTAR = 3.0       # segundos sin moverlo para esconder el puntero
+
+
+def fila_bajo_raton(mx, my, scroll, nvis, nitems):
+    """Indice de la fila que hay bajo el puntero, o None.
+
+    Se comprueba tambien el ancho: si el puntero esta en el panel lateral -la
+    ficha del juego, la caratula- NO se cambia la seleccion. Si no, pasar el
+    raton por la ficha te movia la lista por debajo.
+    """
+    if nitems <= 0 or ROW <= 0:
+        return None
+    if mx < LIST_X or mx > LIST_X + LIST_W:
+        return None
+    rel = my - (LIST_Y + 8) + 4
+    if rel < 0:
+        return None
+    i = scroll + int(rel // ROW)
+    if i < scroll or i >= min(scroll + nvis, nitems):
+        return None
+    return i
+
+
+def raton_tecla(key):
+    """Mete una pulsacion en la cola, como si la hubieras hecho tu."""
+    try:
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=key,
+                                             mod=0, unicode=''))
+    except Exception:
+        pass
+
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
 HEADER_KINDS = (K_HDR, K_UP2, K_CANCEL)
 
@@ -7252,10 +7321,24 @@ def compute_layout():
     apply_layout()
 
 # --- teclado virtual (rejilla navegable con el dpad) ---
-KB_ROWS = ['ABCDEFGHIJ',
-           'KLMNOPQRST',
-           'UVWXYZ0123',
-           '456789 .-_']
+#
+# HAY UN TECLADO NUMERICO PARA LO QUE SOLO SON NUMEROS.
+#
+# Escribir una IP con la rejilla completa son cuarenta casillas y un viaje por
+# el dpad para cada cifra. Con solo numeros y el punto, cada tecla esta a un
+# paso. Lo pide quien abre el cuadro (WP_TECLADO=num), asi que un campo de
+# texto normal sigue teniendo todas las letras.
+KB_ROWS_FULL = ['ABCDEFGHIJ',
+                'KLMNOPQRST',
+                'UVWXYZ0123',
+                '456789 .-_']
+# Tres columnas, como el teclado de un telefono: la fila de abajo deja el 0
+# centrado y el punto a mano, que es lo que mas se repite en una IP.
+KB_ROWS_NUM = ['123',
+               '456',
+               '789',
+               '.0:']
+KB_ROWS = KB_ROWS_NUM if os.environ.get('WP_TECLADO', '') == 'num' else KB_ROWS_FULL
 KB_ACTIONS = ['BORRAR', 'LIMPIAR', 'LISTO'] if LANG != 'en' else ['DELETE', 'CLEAR', 'DONE']
 
 def kb_cols(r):
@@ -8061,12 +8144,34 @@ def run_session():
         # Se conserva la comparacion con OUTFILE porque set_mode pone ahi el
         # fichero de salida cuando no viene valor, y ese nombre no es un texto
         # que nadie quiera editar.
-        TXT = ARG4 if (ARG4 and ARG4 != OUTFILE) else ''
-        TROWS = ['1234567890-=',
-                 'qwertyuiop[]',
-                 'asdfghjkl;\'',
-                 'zxcvbnm,./\\',
-                 ' _:"|+*@#$%&']
+        # Y TAMPOCO SI PARECE EL FICHERO TEMPORAL.
+        #
+        # Un tester abrio el campo de la IP y le salia escrito
+        # "/tmp/tmp.nVBXgjT4se": el nombre del fichero de salida, colado como
+        # valor de partida por algun camino que no se ha podido reproducir
+        # leyendo el codigo. La comparacion con OUTFILE de arriba deberia
+        # bastar y no basto.
+        #
+        # El patron es el de mktemp y nada mas: nadie escribe "/tmp/tmp.XXXX"
+        # como IP ni como argumento de lanzamiento, asi que descartarlo no
+        # quita nada a nadie. Mas vale una guarda de sobra que un campo que
+        # hay que vaciar a mano cada vez.
+        TXT = ARG4 if (ARG4 and ARG4 != OUTFILE
+                       and not re.match(r'^/tmp/tmp\.[A-Za-z0-9]{6,}$', ARG4)) else ''
+        # Este editor tiene su propio teclado (qwerty). Si se pide el
+        # numerico, aqui tambien: hay dos teclados en el programa y un campo
+        # de IP tiene que salir igual de comodo por los dos caminos.
+        if os.environ.get('WP_TECLADO', '') == 'num':
+            TROWS = ['123',
+                     '456',
+                     '789',
+                     '.0:']
+        else:
+            TROWS = ['1234567890-=',
+                     'qwertyuiop[]',
+                     'asdfghjkl;\'',
+                     'zxcvbnm,./\\',
+                     ' _:"|+*@#$%&']
         TACT = [L('MAYUS', 'SHIFT'), L('BORRAR', 'DELETE'),
                 L('LIMPIAR', 'CLEAR'), L('ACEPTAR', 'ACCEPT'), L('CANCELAR', 'CANCEL')]
         tr_r, tr_c, shift = 0, 0, False
@@ -8222,6 +8327,98 @@ def run_session():
         for ev in eventos():
             if ev.type == pygame.QUIT:
                 running = False
+            # ── RATON ────────────────────────────────────────────────────
+            #
+            # Se traduce a las MISMAS teclas que usarias tu: asi no hay dos
+            # caminos que mantener y el raton nunca se desincroniza del mando.
+            #
+            # Se deja fuera el teclado en pantalla (kb_open) y la rejilla: ahi
+            # la seleccion no es una lista de filas y el calculo no vale.
+            elif ev.type == pygame.MOUSEMOTION and RATON and not kb_open:
+                RATON_T0[0] = time.time()
+                try:
+                    pygame.mouse.set_visible(True)
+                except Exception:
+                    pass
+                if MODE != 'grid':
+                    _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                         vis(), len(view))
+                    if _i is not None and _i != sel:
+                        sel = _i
+            elif ev.type == pygame.MOUSEBUTTONDOWN and RATON and not kb_open:
+                RATON_T0[0] = time.time()
+                if ev.button == 1:
+                    # Clic izquierdo: si es sobre una fila, se selecciona esa y
+                    # se entra. Sobre otra cosa no se hace nada: un clic al aire
+                    # no deberia activar lo que hubiera seleccionado.
+                    if MODE != 'grid':
+                        _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                             vis(), len(view))
+                        if _i is not None:
+                            sel = _i
+                            raton_tecla(pygame.K_RETURN)
+                    else:
+                        raton_tecla(pygame.K_RETURN)
+                elif ev.button == 3:
+                    # DERECHO: EN LA LISTA DE JUEGOS, LOS AJUSTES DE ESE JUEGO.
+                    #
+                    # Es lo que espera cualquiera que venga de un escritorio: el
+                    # derecho abre las opciones de lo que hay debajo, no te saca
+                    # de la pantalla. En el resto de menus no hay "opciones de
+                    # esta fila", asi que ahi sigue siendo volver, que es lo
+                    # util.
+                    #
+                    # Se selecciona ANTES la fila de debajo del puntero: abrir
+                    # los ajustes de un juego que no es el que señalas seria
+                    # peor que no hacer nada.
+                    # Se deja decidir al manejador de la X, que ya sabe que
+                    # hacer en cada modo. Antes se exigia aqui MODE in
+                    # ('list','grid') y en la pantalla de juegos por carpetas el
+                    # modo es otro: el derecho caia en "volver" y salia el
+                    # "¿Salir de WProton?". Con ACTION_X basta.
+                    if ACTION_X:
+                        _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
+                                             vis(), len(view))
+                        if _i is not None:
+                            sel = _i
+                        raton_tecla(pygame.K_SPACE)   # = X, ajustes del juego
+                    else:
+                        print("menu_pygame: derecho sin accion X (modo %s): se vuelve"
+                              % MODE, flush=True)
+                        raton_tecla(pygame.K_ESCAPE)  # volver
+                elif ev.button in (4, 5):
+                    # Rueda en pygame antiguo: se mueve igual, sin teclas.
+                    if MODE != 'grid':
+                        _paso = max(1, vis() // 2)
+                        sel = max(0, min(len(view) - 1,
+                                         sel - _paso if ev.button == 4 else sel + _paso))
+                    else:
+                        grid_move(0, -1 if ev.button == 4 else 1)
+            elif ev.type == getattr(pygame, 'MOUSEWHEEL', -1) and RATON and not kb_open:
+                # La rueda en pygame2 viene por MOUSEWHEEL; en pygame1 por los
+                # botones 4 y 5. Se atienden las dos formas porque no se sabe
+                # con que version se va a ejecutar esto.
+                RATON_T0[0] = time.time()
+                # LA RUEDA MUEVE LA SELECCION DIRECTAMENTE, SIN INYECTAR TECLAS.
+                #
+                # EL FALLO QUE ESTO ARREGLA
+                #
+                # Antes se mandaban N pulsaciones seguidas de arriba o abajo. No
+                # funciono: el manejador de teclas tiene un ANTIRREBOTE de 0,08 s
+                # que descarta la misma tecla repetida, y como las N llegan en el
+                # mismo instante, se comia todas menos la primera. La rueda movia
+                # UNA fila, y ademas de forma distinta arriba y abajo segun que
+                # otros eventos mandara el raton.
+                #
+                # El antirrebote esta ahi por los mandos, que repiten solos, y
+                # quitarlo seria peor. Asi que la rueda no pasa por ahi: mueve la
+                # seleccion y ya, que ademas es exacto.
+                _y = int(getattr(ev, 'y', 0))
+                if _y and MODE != 'grid':
+                    _paso = max(1, vis() // 2) * min(abs(_y), 3)
+                    sel = max(0, min(len(view) - 1, sel - _paso if _y > 0 else sel + _paso))
+                elif _y:
+                    grid_move(0, -1 if _y > 0 else 1)
             elif ev.type == pygame.KEYDOWN:
                 if DEV and ev.key == pygame.K_F12:
                     captura()
@@ -8335,6 +8532,18 @@ def run_session():
                 _ry = HEAD - 8
             pygame.draw.line(screen, TH['border'], (24, _ry), (W - 24, _ry), 1)
 
+        # EL PUNTERO SE ESCONDE SOLO CUANDO NO SE USA.
+        #
+        # En una Deck sin raton, un puntero plantado en medio de la pantalla
+        # sobra. Y con raton, verlo encima del menu mientras juegas con el mando
+        # tambien. Se esconde tras unos segundos quieto y vuelve al primer
+        # movimiento.
+        if RATON and RATON_T0[0] and (time.time() - RATON_T0[0]) > RATON_OCULTAR:
+            try:
+                pygame.mouse.set_visible(False)
+            except Exception:
+                pass
+            RATON_T0[0] = 0.0
         if MODE == 'grid':
             draw_grid()
         for i in ([] if MODE == 'grid' else range(scroll, min(scroll + vis(), len(view)))):
@@ -8518,6 +8727,76 @@ _idle_alto = 0
 _idle_ancho = 0
 
 
+
+# ── FONDOS DE TEMPORADA ─────────────────────────────────────────────────────
+#
+# El calendario NO esta aqui: lo decide el bash (tema_temporada) y llega hecho
+# en WP_TEMA. Aqui solo se elige la paleta y se pintan unas particulas.
+#
+# POR QUE DIBUJADO Y NO CON IMAGENES
+#
+# Empaquetar fotos de calabazas y de nieve serian megas en el script para
+# cuatro dias al año, y bajarlas seria depender de la red para un adorno. Con
+# un tinte y unos circulitos se nota igual y no pesa nada.
+# bg = fondo | p1,p2 = particulas | sube = hacia arriba | n = cuantas
+# w  = color de la W  |  letras = color del resto de "PROTON"
+#
+# LA MARCA TAMBIEN SE TIÑE. Con el fondo cambiado y las letras en su morado y
+# cian de siempre, la pantalla queda a medias: lo que mas se mira es la palabra
+# del centro. Se respeta la forma -la W distinta del resto, como siempre- y
+# solo cambian los colores.
+_TEMAS = {
+    'halloween':  {'bg': (18, 10, 24), 'p1': (255, 138, 24), 'p2': (150, 60, 200),
+                   'sube': True,  'n': 34,
+                   'w': (150, 60, 200), 'letras': (255, 138, 24)},   # morado + calabaza
+    'navidad':    {'bg': (10, 20, 34), 'p1': (235, 245, 255), 'p2': (150, 200, 255),
+                   'sube': False, 'n': 46,
+                   'w': (214, 48, 49), 'letras': (240, 248, 255)},   # rojo Papa Noel + nieve
+    'finde_anyo': {'bg': (14, 14, 30), 'p1': (255, 214, 102), 'p2': (120, 220, 255),
+                   'sube': True,  'n': 30,
+                   'w': (255, 214, 102), 'letras': (240, 248, 255)}, # dorado + blanco
+    'reyes':      {'bg': (12, 16, 38), 'p1': (255, 214, 102), 'p2': (200, 160, 255),
+                   'sube': False, 'n': 30,
+                   'w': (255, 214, 102), 'letras': (200, 160, 255)}, # dorado + violeta
+}
+_TEMA_COLS = _TEMAS.get(os.environ.get('WP_TEMA', '').strip() or None)
+_PARTS = []
+
+
+def _dibuja_particulas(screen, W, H):
+    """Nieve que cae o brasas que suben, segun el tema.
+
+    Se crean UNA VEZ y luego solo se mueven: crear objetos en cada fotograma a
+    15 fps seria trabajo de verdad para un adorno. Cuando una sale por un
+    borde, se recoloca en el contrario en vez de crear otra.
+    """
+    import random
+    global _PARTS
+    if not _PARTS:
+        for _ in range(_TEMA_COLS['n']):
+            _PARTS.append([random.randint(0, max(1, W)),
+                           random.randint(0, max(1, H)),
+                           random.uniform(0.4, 1.8),          # velocidad
+                           random.randint(2, 4),              # radio
+                           random.random() < 0.5])            # color 1 o 2
+    sube = _TEMA_COLS['sube']
+    for p in _PARTS:
+        p[1] += (-p[2] if sube else p[2])
+        # Un vaiven suave para que no caigan en linea recta, que canta mucho
+        p[0] += 0.6 if (int(p[1]) // 20) % 2 else -0.6
+        if sube and p[1] < -4:
+            p[1] = H + 4; p[0] = random.randint(0, max(1, W))
+        elif not sube and p[1] > H + 4:
+            p[1] = -4; p[0] = random.randint(0, max(1, W))
+        if p[0] < -4: p[0] = W + 4
+        elif p[0] > W + 4: p[0] = -4
+        col = _TEMA_COLS['p1'] if p[4] else _TEMA_COLS['p2']
+        try:
+            pygame.draw.circle(screen, col, (int(p[0]), int(p[1])), p[3])
+        except Exception:
+            pass
+
+
 def draw_idle(status=''):
     # Pantalla de reposo entre peticiones: la ventana sigue viva.
     # Se vacia la cola de eventos para que las pulsaciones hechas mientras
@@ -8526,10 +8805,26 @@ def draw_idle(status=''):
         pygame.event.clear()
     except Exception:
         pass
+    # FONDO DE TEMPORADA.
+    #
+    # El tema llega hecho en WP_TEMA: el calendario esta en el bash
+    # (tema_temporada) y aqui solo se pinta. Asi las fechas se tocan en un sitio.
+    #
+    # SE DIBUJA, NO SE DESCARGA NI SE EMPAQUETA. Meter imagenes de Halloween y
+    # de Navidad en el script serian megas para cuatro dias al año, y bajarlas
+    # seria depender de la red para un adorno. Unos circulitos y un tinte hacen
+    # el trabajo y no pesan nada.
+    #
+    # Si el usuario tiene su propio fondo (BGSURF), MANDA EL SUYO: solo se le
+    # ponen las particulas encima. Su fondo no se pisa por una fiesta.
     if BGSURF is not None:
         screen.blit(BGSURF, (0, 0))
+    elif _TEMA_COLS is not None:
+        screen.fill(_TEMA_COLS['bg'])
     else:
         screen.fill(TH['bg'])
+    if _TEMA_COLS is not None:
+        _dibuja_particulas(screen, W, H)
     # LA MARCA SE PREPARA UNA VEZ, NO QUINCE VECES POR SEGUNDO.
     #
     # Esto creaba una fuente nueva y volvia a componer "WPROTON" en CADA
@@ -8539,7 +8834,10 @@ def draw_idle(status=''):
     # Guardada, la animacion de abajo sale practicamente gratis: solo cambia la
     # transparencia de una imagen que ya esta hecha.
     global _idle_letras, _idle_key, _idle_alto, _idle_ancho
-    clave = (W, H, TH.get('bg'), ACC)
+    # El tema entra en la clave: si cambia, las letras se rehacen. Hoy no cambia
+    # dentro de un mismo proceso, pero dejar fuera de la clave algo que decide
+    # el color es la forma clasica de que un dia se vea un color viejo.
+    clave = (W, H, TH.get('bg'), ACC, os.environ.get('WP_TEMA', ''))
     if _idle_letras is None or _idle_key != clave:
         # CADA LETRA POR SEPARADO, Y EN DOS TONOS.
         #
@@ -8559,7 +8857,10 @@ def draw_idle(status=''):
         _base_px = max(48, W // 14)
         _idle_letras = []
         for _i, _c in enumerate('WPROTON'):
-            _col = MORADO_W if _i == 0 else CIAN_PROTON
+            if _TEMA_COLS is not None:
+                _col = _TEMA_COLS['w'] if _i == 0 else _TEMA_COLS['letras']
+            else:
+                _col = MORADO_W if _i == 0 else CIAN_PROTON
             _pasos = []
             for _k in range(_IDLE_PASOS):
                 _esc = 1.0 + 0.35 * (_k / float(_IDLE_PASOS - 1))
@@ -9366,9 +9667,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py da22b8543e9c" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py 8e334d47cae7" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
+# WPROTON_HELPER menu_qt.py 8e334d47cae7
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -12940,8 +13242,9 @@ gtk_available() {
 }
 
 write_menu_gtk() {
-    grep -q "WPROTON_HELPER menu_gtk.py d654c84f899f" "$MENU_GTK_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_gtk.py 1f82c53d0224" "$MENU_GTK_PY" 2>/dev/null && return 0
     cat > "$MENU_GTK_PY" <<'GTKEOF'
+# WPROTON_HELPER menu_gtk.py 1f82c53d0224
 # WPROTON_HELPER menu_gtk.py d654c84f899f
 #!/usr/bin/env python3
 # WProton - menus GTK
@@ -13071,9 +13374,10 @@ GTKEOF
 BIBLIOTECA_PY="$RUNTIME_DIR/biblioteca.py"
 
 write_biblioteca() {
-    grep -q "WPROTON_HELPER biblioteca.py a556af1f7ab0" "$BIBLIOTECA_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER biblioteca.py 6439db77aedb" "$BIBLIOTECA_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
+# WPROTON_HELPER biblioteca.py 6439db77aedb
 # WPROTON_HELPER biblioteca.py a556af1f7ab0
 # -*- coding: utf-8 -*-
 # WProton - composicion rapida de la biblioteca
@@ -13662,17 +13966,30 @@ ask_text() {
     # $1 = pregunta, $2 = valor actual. Imprime el nuevo valor.
     # Con pygame se usa un TECLADO EN PANTALLA: así se pueden escribir
     # argumentos, DLL overrides o notas con el mando, sin teclado fisico.
-    local title="$1" default="${2:-}"
+    # $3 = "num" para un teclado SOLO DE NUMEROS y el punto.
+    #
+    # Escribir una IP con la rejilla completa son cuarenta casillas y un viaje
+    # por el dpad para cada cifra. Con el teclado numerico cada tecla esta a un
+    # paso.
+    #
+    # VA POR EL AYUDANTE SUELTO Y NO POR EL SERVIDOR DE MENUS. El servidor lee
+    # la distribucion al arrancar -es un proceso que vive toda la sesion-, asi
+    # que no puede cambiarla en una peticion. Tardar un instante mas en abrir un
+    # campo que se usa dos veces es mejor que reiniciar el servidor por esto.
+    local title="$1" default="${2:-}" teclado="${3:-}"
     if pygame_available; then
         pad_bridge_stop
         write_menu_pygame
         local tmpsel; tmpsel="$(mktemp)"
         printf '%s' "$default" > "$tmpsel"
-        local rc
-        menu_server_request text "$title" "$tmpsel" "$default" "" ""
-        rc=$?
+        local rc=9
+        if [ "$teclado" != num ]; then
+            menu_server_request text "$title" "$tmpsel" "$default" "" ""
+            rc=$?
+        fi
         if [ "$rc" = 9 ]; then
             PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
+                WP_TECLADO="$teclado" \
                 env -u LD_PRELOAD "$PY_BIN" "$(menu_helper text)" text "$title" \
                 "$tmpsel" "$default" >> "$LOG_FILE" 2>&1
             rc=$?
@@ -15987,6 +16304,115 @@ cierre_desde_fuera() {
     return 0
 }
 
+diag_cuelgue_sistema() {
+    # LE PREGUNTA AL SISTEMA SI EL JUEGO REVENTO.
+    #
+    # POR QUE HACE FALTA MIRAR FUERA DE NUESTRO REGISTRO
+    #
+    # Caso real del 27/09: un juego se cerraba solo a los dos minutos. Nuestro
+    # registro no tenia NADA -ni err:seh, ni page fault, ni backtrace, ni
+    # señal- y el codigo de salida era 0. Ese 0 engaña: viene del envoltorio
+    # (umu/proton), no del juego, y muchos devuelven 0 aunque el juego reviente
+    # por dentro. O sea que el registro no descartaba un cuelgue: es que ni
+    # siquiera lo veia.
+    #
+    # Cuando un proceso se va por SIGSEGV o lo mata el sistema por falta de
+    # memoria, quien lo apunta es systemd, no nosotros. Aqui se le pregunta.
+    #
+    # Todo es de solo lectura y si una orden no esta, se salta: son fuentes de
+    # informacion, no dependencias.
+    local desde="${1:-5 min}" hubo=0
+    # 1) VOLCADOS DE FALLO. Si el juego petó, systemd-coredump lo tiene.
+    if command -v coredumpctl >/dev/null 2>&1; then
+        local vol
+        vol="$(coredumpctl --since "-$desde" --no-pager --no-legend 2>/dev/null | tail -n 8)"
+        if [ -n "$vol" ]; then
+            hubo=1
+            log "---- el sistema registro VOLCADOS DE FALLO en los ultimos $desde ----"
+            printf '%s\n' "$vol" >> "$LOG_FILE" 2>/dev/null
+            log "  Si ahi sale el .exe del juego o wine, ES UN CUELGUE."
+            log "  Para ver el detalle: coredumpctl info <PID de esa lista>"
+            log "----"
+        fi
+    else
+        log "  (no hay coredumpctl; no se puede saber si hubo volcado de fallo)"
+    fi
+    # 2) FALTA DE MEMORIA. El matador por OOM no avisa a nadie mas que al kernel.
+    local oom=""
+    if command -v journalctl >/dev/null 2>&1; then
+        oom="$(journalctl -k --since "-$desde" --no-pager 2>/dev/null \
+               | grep -iE 'out of memory|oom-kill|killed process' | tail -n 5)"
+    fi
+    [ -z "$oom" ] && command -v dmesg >/dev/null 2>&1 \
+        && oom="$(dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -n 5)"
+    if [ -n "$oom" ]; then
+        hubo=1
+        log "---- el sistema se quedo SIN MEMORIA ----"
+        printf '%s\n' "$oom" >> "$LOG_FILE" 2>/dev/null
+        log "  Si ahi sale el juego, lo mato el sistema por falta de memoria."
+        log "  Prueba a bajar la resolucion, quitar MangoHud o cerrar cosas."
+        log "----"
+    fi
+    # 3) CUANTA MEMORIA QUEDABA. Util aunque no haya habido OOM: si el juego se
+    # va siempre con la memoria al limite, el camino a mirar es ese.
+    if [ -r /proc/meminfo ]; then
+        local libre swap
+        libre="$(awk '/^MemAvailable:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+        swap="$(awk '/^SwapFree:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+        log "  Memoria disponible al acabar: ${libre:-?} MB | swap libre: ${swap:-?} MB"
+    fi
+    [ "$hubo" = 0 ] && log "  El sistema no registro ni volcados ni falta de memoria."
+    return 0
+}
+
+diag_ultimas_del_juego() {
+    # LO ULTIMO QUE ESCRIBIO EL JUEGO ANTES DE IRSE.
+    #
+    # PARA QUE SIRVE Y QUE HUECO TAPA
+    #
+    # Cuando un juego se cierra solo con rc=0 -salida limpia, ni cuelgue ni
+    # señal nuestra- el registro no dice nada: se ve el fin de partida y ya.
+    # Caso real del 27/09 con Crazy Taxi 3, que se cerraba solo a los dos
+    # minutos y el registro descartaba causas pero no señalaba ninguna.
+    #
+    # Aqui se rescatan las ultimas lineas que NO son nuestras. Las de WProton
+    # empiezan por la hora (HH:MM:SS) o por una marca conocida; lo demas lo
+    # escribio el juego, Wine o el runner, y es justo lo que hay que leer.
+    #
+    # Se hace SOLO si la partida fue corta o si el juego salio mal, porque
+    # despues de dos horas jugando estas lineas no dicen nada y solo ensucian.
+    local rc="${1:-0}" dur="${2:-0}" n="${3:-25}"
+    [ -r "${LOG_FILE:-}" ] || return 0
+    if [ "$rc" = 0 ] && [ "$dur" -ge 600 ]; then
+        return 0
+    fi
+    local ultimas
+    ultimas="$(grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2} \[' "$LOG_FILE" 2>/dev/null \
+        | grep -vE '^(menu_pygame|menu_qt|\[keys\]|\s+0x[0-9a-f]+\s)' \
+        | grep -vE 'gameoverlayrenderer' \
+        | tail -n "$n")"
+    [ -n "$ultimas" ] || return 0
+    log "---- lo ultimo que escribio el juego (rc=$rc, $dur s) ----"
+    printf '%s\n' "$ultimas" >> "$LOG_FILE" 2>/dev/null
+    log "---- fin de lo ultimo que escribio el juego ----"
+    # Y UNA PISTA SI NO HAY NADA QUE LEER.
+    #
+    # Un juego que se va con rc=0 y sin escribir una linea casi siempre se ha
+    # cerrado EL SOLO: su propio menu de salir, un temporizador de demo, una
+    # comprobacion que no le cuadra. No es cosa de WProton, y decirlo ahorra
+    # buscar donde no hay nada.
+    # Y SE LE PREGUNTA AL SISTEMA, que es quien sabe si hubo cuelgue.
+    #
+    # Antes aqui se afirmaba que un rc=0 "NO es un cuelgue". Era falso: ese 0
+    # sale del envoltorio y no del juego. Ahora en vez de afirmar, se mira.
+    if [ "$rc" != 0 ] || [ "$dur" -lt 600 ]; then
+        log "  Codigo de salida $rc, pero OJO: ese numero lo da el envoltorio"
+        log "  (umu/proton), no el juego. Un juego puede reventar y dejar un 0."
+        diag_cuelgue_sistema "5 min"
+    fi
+    return 0
+}
+
 partida_fin() {
     # Levanta el blindaje de la partida: se vuelve a atender INT y TERM.
     #
@@ -16046,6 +16472,10 @@ cleanup_all() {
     # registro.
     if [ "${WP_JUGANDO:-0}" = 1 ]; then
         log "Cierre con el juego aun en marcha: se espera un poco" WARN
+        log "  motivo del cierre: ${WP_CIERRE_MOTIVO:-desconocido}"
+        log "  (si dice TERM, no nos cerramos solos: nos lo pidieron)"
+        [ -n "${WP_ULTIMA_ORDEN:-}" ] \
+            && log "  ultima orden que fallo: $WP_ULTIMA_ORDEN"
         local _i
         for _i in $(seq 1 20); do
             juego_sigue_vivo || break
@@ -16244,7 +16674,50 @@ cleanup_all() {
     # nada y es un riesgo innecesario.
     [ "${WP_HAY_MENU:-0}" != 1 ] && exec 1>/dev/null 2>/dev/null
 }
-trap cleanup_all EXIT INT TERM
+# SE APUNTA QUIEN PIDIO EL CIERRE, no solo que se cierra.
+#
+# EL HUECO QUE ESTO TAPA
+#
+# El registro decia "Cierre: desmontando" y nada mas. No habia forma de
+# distinguir estas tres cosas, que piden arreglos distintos:
+#
+#   - salida normal (el usuario eligio Salir)
+#   - nos mandaron TERM desde fuera (Steam, el modo Juego, systemd)
+#   - nos mandaron INT (Ctrl+C, o un padre que se va)
+#
+# En SteamOS, con un juego de Linux, WProton se cerraba solo al lanzar y el
+# registro no permitia saber si la peticion venia de fuera. Con esto, si.
+WP_CIERRE_MOTIVO="salida normal"
+WP_ULTIMA_ORDEN=""
+trap 'WP_CIERRE_MOTIVO="senal TERM desde fuera"; cleanup_all' TERM
+trap 'WP_CIERRE_MOTIVO="senal INT desde fuera"; cleanup_all' INT
+# QUE ORDEN SE ESTABA EJECUTANDO SI ALGO FALLA.
+#
+# POR QUE HACE FALTA
+#
+# Con "set -u", usar una variable sin definir NO es un aviso: mata el script
+# ahi mismo. Y al morir asi, el trap EXIT se dispara igual que en una salida
+# limpia, con lo que el registro decia "salida normal" y no habia forma de
+# distinguir "el usuario eligio Salir" de "el script se murio de golpe". Ya
+# habia pasado en la rama de juegos de Linux -con $rdir, $RUNNER_KIND y
+# $WINEPREFIX, que ahi no existen- y volvio a pasar en SteamOS.
+#
+# errtrace hace que el trap ERR valga tambien dentro de las funciones y los
+# subshells, que es justo donde estan los lanzamientos.
+set -o errtrace
+# LA ORDEN CULPABLE NO SE PISA DURANTE LA LIMPIEZA.
+#
+# El primer intento guardaba SIEMPRE la ultima orden fallida, y la limpieza
+# esta llena de "kill" a procesos que ya murieron -que devuelven 1 y no son
+# ningun fallo-. Resultado: el registro culpaba a un "kill -9" del cierre en
+# vez de a lo que de verdad tumbo el lanzamiento. Una pista equivocada es
+# peor que ninguna, porque manda a mirar donde no hay nada.
+trap '[ "${WP_SALIENDO:-0}" = 1 ] || WP_ULTIMA_ORDEN="$BASH_COMMAND"' ERR
+# Y EL CODIGO DE SALIDA, que distingue las dos cosas sin adivinar.
+trap '_rc_fin=$?; if [ "$_rc_fin" != 0 ] && [ "$WP_CIERRE_MOTIVO" = "salida normal" ]; then
+          WP_CIERRE_MOTIVO="MUERTE INESPERADA (rc=$_rc_fin)"
+      fi
+      cleanup_all' EXIT
 
 
 # ----------------------------------------------------------------------------
@@ -16255,9 +16728,10 @@ trap cleanup_all EXIT INT TERM
 DETECTAR_PY="$RUNTIME_DIR/detectar.py"
 
 write_detectar() {
-    grep -q "WPROTON_HELPER detectar.py 012add21edf1" "$DETECTAR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER detectar.py 39e3a526b1b0" "$DETECTAR_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$DETECTAR_PY" <<'DETEOF'
+# WPROTON_HELPER detectar.py 39e3a526b1b0
 # WPROTON_HELPER detectar.py 012add21edf1
 # -*- coding: utf-8 -*-
 # WProton - deteccion del ejecutable de un juego
@@ -17301,9 +17775,106 @@ home_portable() {
     #
     # Asi quien quiera aislar un juego -porque pisa ajustes de otro, o para
     # llevarselo aparte- solo tiene que cambiarle el prefijo a "propio".
-    local gid="$1"
+    # $2 = carpeta del juego (punto de montaje o carpeta suelta), opcional
+    # $3 = ruta del lanzador, para el convenio <lanzador>.home de AppImage
+    local gid="$1" raiz="${2:-}" lanzador="${3:-}"
     [ -n "$gid" ] || return 1
     local h
+    # 1) EL CONVENIO DE APPIMAGE: <lanzador>.home AL LADO DEL EJECUTABLE.
+    #
+    # Un AppImage busca por su cuenta una carpeta llamada exactamente igual que
+    # el con ".home" detras -"Xemu.AppImage.home"- y la usa como carpeta
+    # personal. Es su forma estandar de ser portatil, y si el paquete la trae,
+    # es la que hay que usar: dentro esta el juego ya configurado.
+    #
+    # Se prueban dos formas, porque se usan las dos:
+    #
+    #   Xemu.AppImage.home   el nombre completo, que es lo que dice el convenio
+    #   Xemu.home            sin la extension, que tambien se ve por ahi
+    #
+    # SOLO CUENTAN LAS QUE ACABAN EN ".home". Al lado del lanzador hay muchas
+    # mas carpetas -"Super Mario Remastered_Data" de Unity, "lib", "share"- y
+    # ninguna es una carpeta personal. Aceptar cualquier carpeta con el nombre
+    # del juego seria meter al juego a escribir en sus propios datos.
+    if [ -n "$lanzador" ]; then
+        local _ldir _lbase
+        _ldir="$(dirname "$lanzador")"
+        _lbase="$(basename "$lanzador")"
+        if [ -d "$_ldir/$_lbase.home" ]; then
+            printf '%s' "$_ldir/$_lbase.home"
+            return 0
+        fi
+        if [ -d "$_ldir/${_lbase%.*}.home" ]; then
+            printf '%s' "$_ldir/${_lbase%.*}.home"
+            return 0
+        fi
+        # 1c) CUALQUIER *.home AL LADO, AUNQUE NO SE LLAME COMO EL LANZADOR.
+        #
+        # EL CASO QUE ESTO RESUELVE
+        #
+        # El lanzador que detectamos suele ser un .sh que por dentro llama a
+        # OTRA cosa con parametros:
+        #
+        #   Crazy Taxi 3 High Roller.sh   ->  Xemu.AppImage -dvd_path ...
+        #
+        # La carpeta personal lleva el nombre del AppImage -"Xemu.AppImage.home"-
+        # no el del .sh. Buscando por el nombre del lanzador no aparece jamas.
+        #
+        # Asi que se mira si hay alguna carpeta *.home al lado, sea cual sea su
+        # nombre. Sigue sin aceptarse nada que no acabe en ".home", asi que un
+        # "Super Mario Remastered_Data" de Unity no se cuela.
+        local _cand _n_cand=0 _elegida=""
+        for _cand in "$_ldir"/*.home; do
+            [ -d "$_cand" ] || continue
+            _n_cand=$((_n_cand + 1))
+            _elegida="$_cand"
+            log "home: candidata encontrada -> $_cand"
+        done
+        [ "$_n_cand" = 0 ] && log "home: no hay ninguna carpeta *.home junto a $_lbase"
+        if [ "$_n_cand" = 1 ]; then
+            printf '%s' "$_elegida"
+            return 0
+        fi
+        if [ "$_n_cand" -gt 1 ]; then
+            # VARIAS: se prefiere la que corresponda a un fichero que EXISTA.
+            #
+            # "Xemu.AppImage.home" con Xemu.AppImage al lado es una carpeta
+            # personal de verdad; una suelta puede ser cualquier cosa. Si aun
+            # asi quedan varias, no se adivina: se dice y se sigue con las
+            # reglas de abajo. Elegir a boleo la carpeta donde el juego va a
+            # guardar sus partidas es la clase de acierto que sale caro.
+            local _mejor="" _nm=0
+            for _cand in "$_ldir"/*.home; do
+                [ -d "$_cand" ] || continue
+                [ -e "${_cand%.home}" ] || continue
+                _nm=$((_nm + 1)); _mejor="$_cand"
+            done
+            if [ "$_nm" = 1 ]; then
+                printf '%s' "$_mejor"
+                return 0
+            fi
+            log "home: hay $_n_cand carpetas *.home junto al lanzador y ninguna destaca; se ignoran" WARN
+        fi
+    fi
+    # 2) ¿EL JUEGO TRAE UNA .home SIN MAS? ENTONCES MANDA ESA.
+    #
+    # Un .wsquashfs o una carpeta pueden traer dentro una carpeta ".home" ya
+    # preparada: ajustes hechos, el juego configurado para arrancar a la
+    # primera. Si esta ahi es que quien empaqueto el juego la puso a proposito,
+    # y crear otra vacia al lado seria tirar ese trabajo.
+    #
+    # VA ANTES QUE NADA: lo que trae el juego gana a lo que decidiriamos
+    # nosotros.
+    #
+    # Funciona aunque el .wsquashfs sea de SOLO LECTURA, porque WProton monta
+    # el juego con una capa de escritura encima: lo que el juego escriba en su
+    # .home acaba en overlays/<juego>/upper y se conserva.
+    if [ -n "$raiz" ] && [ -d "$raiz/.home" ]; then
+        log "home: se usa la .home de la raiz del juego"
+        printf '%s' "$raiz/.home"
+        return 0
+    fi
+    log "home: ninguna del juego sirve; se usa la carpeta de WProton"
     if [ "${PREFIX_MODE:-shared}" = "own" ]; then
         h="$PREFIX_DIR/$gid.home"
     else
@@ -17330,8 +17901,15 @@ home_portable_exportar() {
     # el escritorio apuntaria fuera: se redirige igual.
     export XDG_STATE_HOME="$h/.local/state"
     mkdir -p "$XDG_STATE_HOME" 2>/dev/null
-    say "[+] Carpeta del juego: $h"
-    say "    Sus ajustes y partidas van ahi, no a tu carpeta personal."
+    case "$h" in
+        */.home)
+            say "[+] Carpeta del juego: $h"
+            say "    La trae el propio juego (.home): se usa esa, con lo que"
+            say "    venga configurado, en vez de crear una vacia." ;;
+        *)
+            say "[+] Carpeta del juego: $h"
+            say "    Sus ajustes y partidas van ahi, no a tu carpeta personal." ;;
+    esac
     return 0
 }
 
@@ -17366,6 +17944,7 @@ juego_es_nativo() {
     # Va PRIMERO porque es la respuesta segura y barata. Sin esto se dependia
     # de encontrar un .exe, y ahi estaba el fallo de abajo.
     if [ -n "$(find "$root" -maxdepth 2 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)" ]; then
+        log "juego_es_nativo: hay autorun.cmd -> se trata como juego de Windows"
         return 1
     fi
     # ¿Hay ejecutables de Windows? Entonces no es un juego nativo.
@@ -17382,6 +17961,7 @@ juego_es_nativo() {
     if [ -n "$( (cd "$root" 2>/dev/null && \
                  find . -maxdepth 8 -iname '*.exe' \
                      ! -ipath './windows/*' 2>/dev/null) | head -n1)" ]; then
+        log "juego_es_nativo: hay un .exe -> se trata como juego de Windows"
         return 1
     fi
 
@@ -17390,28 +17970,72 @@ juego_es_nativo() {
     # Y si no hay nada suelto pero SI existe drive_c/, se mira ahi dentro: un
     # paquete hecho con la estructura de Batocera mete el juego ahi.
     local _raiz_busq="$root"
-    if [ -z "$(find "$root" -maxdepth 1 -name '*.sh' 2>/dev/null | head -n1)" ] \
+    # Si en la raiz hay un .sh o un AppImage, la raiz ES la del juego. Sin esta
+    # segunda condicion, un juego de Linux empaquetado junto a un drive_c de
+    # Wine se buscaba dentro de drive_c, donde no hay nada suyo.
+    if [ -z "$(find "$root" -maxdepth 1 \( -name '*.sh' -o -iname '*.AppImage' \) \
+               2>/dev/null | head -n1)" ] \
        && [ -d "$root/drive_c" ]; then
         _raiz_busq="$root/drive_c"
     fi
-    for c in "$_raiz_busq"/*.sh; do
-        [ -f "$c" ] && [ -r "$c" ] || continue
+    # SE BUSCA A DOS NIVELES, NO SOLO EN LA RAIZ.
+    #
+    # Antes eran globos de un solo nivel ("$_raiz_busq"/*.sh). Si al empaquetar,
+    # el juego quedaba dentro de una subcarpeta -que es lo normal:
+    # MiJuego/MiJuego.sh- el lanzador estaba un escalon mas abajo, no se
+    # encontraba, y el juego se daba por de Windows con un prefijo que no
+    # necesita.
+    #
+    # Dos niveles y no mas: mas abajo empiezan los .sh internos del juego y se
+    # acabaria eligiendo uno que no lanza nada.
+    log "juego_es_nativo: buscando lanzador de Linux en $_raiz_busq (2 niveles)"
+    local c
+    while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
         case "$(basename "$c")" in
-            # Los de instalacion o de utilidades no son el juego.
-            install*|setup*|uninstall*|patch*) continue ;;
+            install*|setup*|uninstall*|patch*|Install*|Setup*)
+                log "  se salta $(basename "$c") (parece de instalar)"; continue ;;
         esac
+        log "  lanzador .sh encontrado: $c"
         printf '%s' "$c"
         return 0
-    done
+    done <<EOFSH
+$(find "$_raiz_busq" -maxdepth 2 -type f -iname '*.sh' 2>/dev/null | sort)
+EOFSH
 
     # 3. Un binario ELF en la raiz. Se mira la firma del fichero, no el
     #    nombre: los juegos de Linux no llevan extension.
-    for c in "$_raiz_busq"/*; do
-        [ -f "$c" ] && [ -x "$c" ] || continue
+    # LOS AppImage, POR NOMBRE Y SIN EXIGIR EL BIT DE EJECUCION.
+    #
+    # EL FALLO QUE ESTO ARREGLA
+    #
+    # Un AppImage ES un ELF, asi que en teoria lo cazaba el barrido de abajo.
+    # Pero ese barrido pide "[ -x ]", y un AppImage recien descargado NO suele
+    # venir con el bit de ejecucion puesto: squashfs conserva los permisos tal
+    # cual estaban al empaquetar, asi que dentro del .wsquashfs sigue sin serlo
+    # y el juego no se detectaba.
+    #
+    # Aqui se busca por extension, que es lo que el usuario ve, y el permiso se
+    # arregla al lanzar. Pedirle a alguien que haga chmod +x antes de empaquetar
+    # es justo el tipo de paso manual que este programa existe para evitar.
+    while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
+        log "  AppImage encontrado: $c"
+        printf '%s' "$c"
+        return 0
+    done <<EOFAI
+$(find "$_raiz_busq" -maxdepth 2 -type f -iname '*.AppImage' 2>/dev/null | sort)
+EOFAI
+    while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || continue
         case "$(head -c 4 "$c" 2>/dev/null | tr -d '\0')" in
-            *ELF*) printf '%s' "$c"; return 0 ;;
+            *ELF*) log "  binario de Linux encontrado: $c"
+                   printf '%s' "$c"; return 0 ;;
         esac
-    done
+    done <<EOFELF
+$(find "$_raiz_busq" -maxdepth 2 -type f -perm -u+x 2>/dev/null | sort)
+EOFELF
+    log "  no hay lanzador de Linux; se tratara como juego de Windows"
     return 1
 }
 
@@ -19804,9 +20428,10 @@ MAKO_DIR="$RUNTIME_DIR/mako"
 MAKO_PY="$RUNTIME_DIR/mako.py"
 
 write_mako() {
-    grep -q "WPROTON_HELPER mako.py 71dbfd484f6e" "$MAKO_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mako.py 5bd6223e7e86" "$MAKO_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MAKO_PY" <<'MAKEOF'
+# WPROTON_HELPER mako.py 5bd6223e7e86
 # WPROTON_HELPER mako.py 71dbfd484f6e
 # -*- coding: utf-8 -*-
 # WProton - MAKO Renderer (generacion de fotogramas por capa Vulkan)
@@ -20238,9 +20863,10 @@ RESHADE_LX_DIR="$RUNTIME_DIR/reshade-linux"
 RESHADE_PY="$RUNTIME_DIR/reshade.py"
 
 write_reshade_lx() {
-    grep -q "WPROTON_HELPER reshade.py 375a8cdb797e" "$RESHADE_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER reshade.py 9caffb568d9b" "$RESHADE_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$RESHADE_PY" <<'RSXEOF'
+# WPROTON_HELPER reshade.py 9caffb568d9b
 # WPROTON_HELPER reshade.py 375a8cdb797e
 # -*- coding: utf-8 -*-
 # WProton - ReShade nativo de Linux (capa Vulkan)
@@ -23752,7 +24378,8 @@ Elige otro en: Ajustes del juego -> Ejecutable
         # arrancar el juego.
         WP_HOME_JUEGO=""
         local _h
-        if _h="$(home_portable "$gid")"; then
+        # MOUNT_POINT es la carpeta del juego ya montada: si trae .home, manda.
+        if _h="$(home_portable "$gid" "${MOUNT_POINT:-}" "${EXE_PATH:-}")"; then
             WP_HOME_JUEGO="$_h"
             say "[+] Carpeta del juego: $_h"
             say "    Sus ajustes y partidas van ahi, no a tu carpeta personal."
@@ -23984,6 +24611,23 @@ Elige otro en: Ajustes del juego -> Ejecutable
     unidad_juego_reaplicar "$(dirname "${EXE_PATH:-}")"
     WP_PID_JUEGO=""
     (
+        # EL SUBSHELL CUENTA POR QUE SE MUERE. ANTES NO.
+        #
+        # EL AGUJERO QUE ESTO TAPA
+        #
+        # Un subshell tiene su PROPIA copia de las variables: si aqui dentro
+        # falla algo, lo que se guarde en WP_ULTIMA_ORDEN muere con el y el
+        # padre nunca se entera. Por eso el registro culpaba siempre a un "kill"
+        # del cierre: era lo ultimo que fallaba EN EL PADRE.
+        #
+        # Y peor: solo se redirigia al registro la orden de dentro, no el
+        # subshell entero. El mensaje de bash -"unbound variable" con el nombre
+        # y la linea, que es justo el dato que hace falta- se perdia por el
+        # camino.
+        #
+        # Con esto, si el lanzamiento se muere, el registro lo dice y dice con
+        # que orden.
+        trap 'log "LANZAMIENTO: murio en -> $BASH_COMMAND" WARN' ERR
         cd "$(dirname "$EXE_PATH")" || exit 1
         local -a PRE=()
         if [ -n "${WP_NATIVO:-}" ]; then
@@ -23998,20 +24642,18 @@ Elige otro en: Ajustes del juego -> Ejecutable
             # que se cambie aqui muere con el juego y no toca a WProton.
             [ -n "${WP_HOME_JUEGO:-}" ] \
                 && home_portable_exportar "$WP_HOME_JUEGO" >/dev/null
-            [ -x "$EXE_PATH" ] || chmod +x "$EXE_PATH" 2>/dev/null
-            if [ -x "$EXE_PATH" ]; then
-                # shellcheck disable=SC2086
-                "$EXE_PATH" $EXE_ARGS >> "$LOG_FILE" 2>&1
-            else
-                case "$EXE_PATH" in
-                    *.sh) # shellcheck disable=SC2086
-                          sh "$EXE_PATH" $EXE_ARGS >> "$LOG_FILE" 2>&1 ;;
-                    *)    printf '%s\n' "No se puede ejecutar $EXE_PATH:" \
-                              "no tiene permiso de ejecucion y el montaje" \
-                              "no deja ponerselo." >> "$LOG_FILE"
-                          exit 126 ;;
-                esac
-            fi
+            # SE LLAMA A ejecutar_nativo, NO SE REPITE SU LOGICA.
+            #
+            # Aqui habia una copia a mano de lo que ya hace ejecutar_nativo:
+            # poner el bit de ejecucion, lanzar el binario y, si no se puede,
+            # caer al interprete. Repetida, o sea que el trato cuidadoso del
+            # AppImage -que NO se puede lanzar con sh y necesita un mensaje que
+            # lo explique- existia solo en el camino de carpeta.
+            #
+            # Es el fallo recurrente del proyecto: lo que se arregla en un
+            # camino no llega al otro. Ahora los dos usan la misma funcion.
+            # shellcheck disable=SC2086
+            ejecutar_nativo "$EXE_PATH" $EXE_ARGS >> "$LOG_FILE" 2>&1
         else
         # los .bat/.cmd se lanzan con "cmd /c"
         while IFS= read -r _a; do [ -n "$_a" ] && PRE+=("$_a"); done <<EOFRA
@@ -24020,7 +24662,8 @@ EOFRA
         # shellcheck disable=SC2086
         "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
         fi
-    ) &
+        log "LANZAMIENTO: el subshell termina con rc=$?"
+    ) >> "$LOG_FILE" 2>&1 &
     WP_PID_JUEGO=$!
     WP_T0_JUEGO=$(date +%s)          # desde aqui, un TERM es una peticion real
     diag_ventanas_steam
@@ -24045,6 +24688,17 @@ EOFRA
         [ "$rc" -gt 128 ] && kill -0 "$WP_PID_JUEGO" 2>/dev/null && continue
         break
     done
+    # SE GUARDA LA DURACION ANTES DE BORRAR EL RELOJ.
+    #
+    # WP_T0_JUEGO se pone a 0 aqui, asi que quien quiera saber cuanto duro la
+    # partida DESPUES de esta linea ya no puede calcularlo. El diagnostico de
+    # fin de partida lo necesita para decidir si merece la pena rescatar las
+    # ultimas lineas que escribio el juego.
+    if [ "${WP_T0_JUEGO:-0}" != 0 ]; then
+        WP_DUR_PARTIDA=$(( $(date +%s) - WP_T0_JUEGO ))
+    else
+        WP_DUR_PARTIDA=0
+    fi
     WP_PID_JUEGO=""; WP_T0_JUEGO=0
     # Y se cierra al terminar, con su arbol: si sobrevive mantiene vivo el
     # prefijo y WProton se queda esperando a alguien que no va a morir.
@@ -24184,6 +24838,7 @@ $(tail -n 8 "$LOG_FILE")"
         # lineas aqui dentro y NADA en launch_loose_exe: ver wineserver_cerrar_prefijo.
         wineserver_cerrar_prefijo "$rdir" "${RUNNER_KIND:-}"
     fi
+    diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     say "El juego termino (rc=$rc). Saves conservados en wsquashfs/overlays/$gid/upper/"
     cleanup_mount
     return $rc
@@ -24305,9 +24960,11 @@ Que cumplas muchos mas.
 
 NOVEDADES
 
-  Los ficheros .keys ya soportan teclado y raton a la vez.
+  Añadido raton para moverse por los menus de WProton.
 
-  Corregido un fallo al restaurar copias de seguridad."
+  Mejoras en la carga de ficheros sh y AppImage.
+
+  Copia de backups de juegos entre dos equipos de la misma red."
     return 0
 }
 
@@ -27380,9 +28037,10 @@ teknoparrot_unidad() {
 TEKNOPARROT_PY="$RUNTIME_DIR/teknoparrot.py"
 
 write_teknoparrot() {
-    grep -q "WPROTON_HELPER teknoparrot.py 4b4405a3751b" "$TEKNOPARROT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teknoparrot.py 0f3f793ca288" "$TEKNOPARROT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TEKNOPARROT_PY" <<'TKPEOF'
+# WPROTON_HELPER teknoparrot.py 0f3f793ca288
 # WPROTON_HELPER teknoparrot.py 4b4405a3751b
 # -*- coding: utf-8 -*-
 # WProton - perfiles XML de TeknoParrot
@@ -30587,9 +31245,10 @@ keys_sustituye_al_mando() {
 DISCO_PY="$RUNTIME_DIR/disco.py"
 
 write_disco() {
-    grep -q "WPROTON_HELPER disco.py bddf2425d0b8" "$DISCO_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER disco.py b67c5696d59d" "$DISCO_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$DISCO_PY" <<'DISEOF'
+# WPROTON_HELPER disco.py b67c5696d59d
 # WPROTON_HELPER disco.py bddf2425d0b8
 # -*- coding: utf-8 -*-
 # WProton - utilidades de disco (tamaños, espacio, huerfanos, listados)
@@ -31185,9 +31844,10 @@ disk_games_list() {
 DLLS_PY="$RUNTIME_DIR/dlls.py"
 
 write_dlls() {
-    grep -q "WPROTON_HELPER dlls.py 0c94af1afac2" "$DLLS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER dlls.py 57792285cb93" "$DLLS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$DLLS_PY" <<'DLLEOF'
+# WPROTON_HELPER dlls.py 57792285cb93
 # WPROTON_HELPER dlls.py 0c94af1afac2
 # -*- coding: utf-8 -*-
 # WProton - overrides de DLL de Wine (WINEDLLOVERRIDES)
@@ -33984,6 +34644,17 @@ EOFRB
         [ "$rc" -gt 128 ] && kill -0 "$WP_PID_JUEGO" 2>/dev/null && continue
         break
     done
+    # SE GUARDA LA DURACION ANTES DE BORRAR EL RELOJ.
+    #
+    # WP_T0_JUEGO se pone a 0 aqui, asi que quien quiera saber cuanto duro la
+    # partida DESPUES de esta linea ya no puede calcularlo. El diagnostico de
+    # fin de partida lo necesita para decidir si merece la pena rescatar las
+    # ultimas lineas que escribio el juego.
+    if [ "${WP_T0_JUEGO:-0}" != 0 ]; then
+        WP_DUR_PARTIDA=$(( $(date +%s) - WP_T0_JUEGO ))
+    else
+        WP_DUR_PARTIDA=0
+    fi
     WP_PID_JUEGO=""; WP_T0_JUEGO=0
     acompanante_stop
     unidad_juego_reaplicar_stop
@@ -34016,6 +34687,7 @@ EOFRB
     # Fin de la partida: el blindaje se levanta y se vuelve a atender las
     # senales de cierre, como en launch_game.
     partida_fin                      # se vuelve a atender las senales
+    diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     dll_informe
     mako_informe
     reshade_lx_informe
@@ -34059,25 +34731,192 @@ EOFRB
     return $rc
 }
 
+contar_lineas() {
+    # Cuenta lineas no vacias SIN lanzar wc ni grep.
+    #
+    # Hace falta donde el proceso auxiliar falsearia la medida: si se cuenta
+    # quien usa una carpeta, un "grep" lanzado desde esa carpeta se cuenta a si
+    # mismo. Esto no crea ningun proceso.
+    local _l _n=0
+    while IFS= read -r _l; do
+        [ -n "$_l" ] && _n=$((_n + 1))
+    done <<EOFCL
+${1:-}
+EOFCL
+    printf '%s' "$_n"
+}
+
+procesos_usando() {
+    # PIDs que tienen algo abierto bajo una ruta. $1 = ruta.
+    #
+    # Sin lsof ni fuser: se mira /proc, que esta siempre. De cada proceso se
+    # comprueban el ejecutable, el directorio de trabajo y el mapa de memoria,
+    # que es donde aparecen las bibliotecas y los datos que el juego tiene
+    # abiertos desde el archivo montado.
+    # NOSOTROS NO CONTAMOS.
+    #
+    # EL FALLO QUE ESTO ARREGLA, Y QUE CAUSE YO
+    #
+    # Quien llama a esto se ejecuta CON EL DIRECTORIO DE TRABAJO DENTRO de la
+    # carpeta del juego -el lanzador hace "cd" ahi-, asi que al contar procesos
+    # que usan la carpeta se contaba A SI MISMO. La cuenta no bajaba de uno
+    # jamas y la espera no terminaba nunca: WProton se quedaba colgado despues
+    # de lanzar, y en el modo Juego de SteamOS eso acaba con Steam matandolo.
+    #
+    # Se descartan nuestro propio proceso y toda la cadena de padres, porque el
+    # subshell, su padre y WProton estan todos ahi dentro.
+    # $2 = PIDs nuestros a descartar, separados por espacios.
+    local raiz="${1:-}" p _e _c _yo _mios=" "
+    [ -n "$raiz" ] || return 0
+    # Ademas de la cadena de padres, se descartan los PIDs que nos pasen en $2:
+    # son procesos NUESTROS de la propia espera. El "sleep" del bucle hereda el
+    # directorio de trabajo del juego, asi que sin esto la espera se cuenta a si
+    # misma y no termina jamas.
+    _mios="$_mios${2:-} "
+    _yo="${BASHPID:-$$}"
+    while [ -n "$_yo" ] && [ "$_yo" != 0 ] && [ "$_yo" != 1 ]; do
+        _mios="$_mios$_yo "
+        _yo="$(awk '{print $4}' "/proc/$_yo/stat" 2>/dev/null)"
+    done
+    for p in /proc/[0-9]*; do
+        [ -d "$p" ] || continue
+        case "$_mios" in *" ${p#/proc/} "*) continue ;; esac
+        # OJO: la carpeta EXACTA cuenta, no solo lo que hay debajo.
+        #
+        # Un lanzador hace "cd" a la carpeta del juego, asi que el directorio
+        # de trabajo del proceso ES la carpeta, sin nada detras. Comparando
+        # solo con "$raiz/*" ese proceso no casaba y se daba por terminado el
+        # juego cuando seguia vivo: en la prueba, el juego duraba 6 segundos y
+        # se dejaba de esperar a los 2.
+        _e="$(readlink "$p/exe" 2>/dev/null)"
+        case "$_e" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#/proc/}"; continue ;; esac
+        _c="$(readlink "$p/cwd" 2>/dev/null)"
+        case "$_c" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#/proc/}"; continue ;; esac
+        grep -qF "$raiz/" "$p/maps" 2>/dev/null \
+            && printf '%s\n' "${p#/proc/}"
+    done
+    return 0
+}
+
+esperar_juego_nativo() {
+    # ESPERA A QUE EL JUEGO DE LINUX TERMINE DE VERDAD.
+    #
+    # EL FALLO QUE ESTO ARREGLA
+    #
+    # Un lanzador .sh casi nunca ES el juego: prepara el entorno y arranca el
+    # binario de verdad, muchas veces dejandolo de fondo. El .sh termina en
+    # medio segundo y WProton daba la partida por acabada:
+    #
+    #   19:10:14  Lanzando juego de Linux: Crazy Taxi 3 High Roller.sh
+    #   19:10:14  Cierre con el juego aun en marcha: se espera un poco
+    #   19:10:14  Cierre: desmontando
+    #
+    # En el mismo segundo. Y al desmontar, el juego que acababa de arrancar se
+    # quedaba sin sus propios ficheros. Con un juego de Windows no pasaba porque
+    # ahi se espera a que no quede ningun proceso del prefijo.
+    #
+    # COMO SE SABE QUE SIGUE VIVO: se mira quien tiene abierto algo DENTRO de
+    # la carpeta del juego. No vale con buscar el nombre del ejecutable, porque
+    # el binario real suele llamarse de otra forma que el .sh.
+    local raiz="${1:-}" espera_max="${2:-0}" t0 n
+    [ -d "$raiz" ] || return 0
+    t0="$(date +%s)"
+    log "juego nativo: el lanzador termino; se espera a los procesos dentro de $raiz"
+    # Un respiro antes de la primera mirada: el binario de verdad tarda un
+    # instante en aparecer, y sin esto se concluiria que no hay nadie.
+    # EL SLEEP VA EN SEGUNDO PLANO PARA PODER DESCARTARLO.
+    #
+    # Un "sleep" normal es hijo nuestro y hereda el directorio de trabajo del
+    # juego, asi que aparecia como "alguien usando la carpeta" y la espera no
+    # terminaba nunca. Lanzandolo aparte sabemos su PID y lo excluimos.
+    local _sp
+    sleep 2 & _sp=$!; wait "$_sp" 2>/dev/null
+    # SE CUENTA SIN LANZAR NINGUN PROCESO.
+    #
+    # EL ULTIMO ESLABON DEL MISMO FALLO
+    #
+    # Contar con "| grep -c ." parece inofensivo y no lo es: ese grep es un
+    # proceso HERMANO, con el mismo directorio de trabajo -la carpeta del
+    # juego- y por tanto se contaba a si mismo. La cuenta nunca bajaba de uno y
+    # la espera no terminaba: WProton se quedaba colgado despues de lanzar.
+    #
+    # Fueron tres capas del mismo error -la espera, su sleep y su grep-, todas
+    # por medir dentro de la carpeta que se esta midiendo. Aqui se cuenta en el
+    # propio bash, sin crear nada.
+    log "juego nativo: procesos usando la carpeta al empezar: $(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+    while :; do
+        n="$(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+        [ "${n:-0}" -gt 0 ] || break
+        if [ "$espera_max" -gt 0 ] \
+           && [ $(( $(date +%s) - t0 )) -ge "$espera_max" ]; then
+            log "juego nativo: se deja de esperar tras ${espera_max}s con $n proceso(s) dentro" WARN
+            break
+        fi
+        sleep 2 & _sp=$!; wait "$_sp" 2>/dev/null
+    done
+    log "juego nativo: ya no queda ningun proceso usando $raiz"
+    return 0
+}
+
+ejecutar_nativo() {
+    # Ejecuta el lanzador de un juego de Linux: $1 = ruta.
+    #
+    # POR QUE NO VALE "bash $lanzador" PARA TODO
+    #
+    # Para un .sh si: bash lo interpreta aunque no tenga el bit de ejecucion.
+    # Para un AppImage NO: es un binario ELF, y pasarselo a bash escupe basura
+    # por pantalla y no arranca nada. Habia una rama que hacia justo eso.
+    #
+    # Asi que primero se intenta poner el bit de ejecucion -en un .wsquashfs
+    # funciona, porque el juego se monta con una capa de escritura encima- y si
+    # no se puede, se dice CLARAMENTE en vez de intentar algo que no va a
+    # funcionar.
+    local exe="$1"
+    [ -f "$exe" ] || { fallo "No existe el lanzador: $exe"; return 1; }
+    [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
+    if [ -x "$exe" ]; then
+        "$exe"
+        local _rc=$?
+        # EL LANZADOR HA TERMINADO, PERO EL JUEGO PUEDE SEGUIR.
+        esperar_juego_nativo "$(dirname "$exe")" 0
+        return $_rc
+    fi
+    case "$exe" in
+        *.AppImage|*.appimage)
+            fallo "El AppImage no tiene permiso de ejecucion y no se ha podido
+poner ($exe).
+
+Un AppImage es un binario: no se puede lanzar de otra forma.
+Dale permisos al fichero original y vuelve a empaquetarlo."
+            return 1 ;;
+    esac
+    # Un .sh sin permisos si se puede interpretar.
+    bash "$exe"
+    local _rc2=$?
+    esperar_juego_nativo "$(dirname "$exe")" 0
+    return $_rc2
+}
+
 lanzar_nativo_suelto() {
     # Lanza un juego de Linux elegido a mano (.sh o AppImage). $1 = fichero.
     #
     # Con su carpeta personal, como los empaquetados: asi lo que pruebes
     # suelto se comporta igual que cuando lo metas en un .wsquashfs.
-    local exe="$1" gid
-    gid="$(game_id "$(dirname "$(readlink -f "$exe")")")"
+    local exe="$1" gid _raiz
+    _raiz="$(dirname "$(readlink -f "$exe")")"
+    gid="$(game_id "$_raiz")"
     say "[+] Juego de Linux: $(basename "$exe")"
     local h
-    if h="$(home_portable "$gid")"; then
+    # Se le pasa la carpeta del juego: si trae un .home dentro, manda esa.
+    if h="$(home_portable "$gid" "$_raiz" "$exe")"; then
         ( home_portable_exportar "$h"
           pad_bridge_stop
           cd "$(dirname "$exe")" || exit 1
-          [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
-          if [ -x "$exe" ]; then "$exe"; else bash "$exe"; fi )
+          ejecutar_nativo "$exe" )
     else
         say "AVISO: sin carpeta propia; el juego escribira en la tuya"
         pad_bridge_stop
-        ( cd "$(dirname "$exe")" || exit 1; bash "$exe" )
+        ( cd "$(dirname "$exe")" || exit 1; ejecutar_nativo "$exe" )
     fi
     return 0
 }
@@ -34099,16 +34938,16 @@ lanzar_script_si_existe() {
     say "[+] Juego de Linux: $(basename "$launcher")"
     local gid; gid="$(game_id "$dir")"
     local h
-    if h="$(home_portable "$gid")"; then
+    # La carpeta del juego es $dir: si ahi hay un .home, se usa ese.
+    if h="$(home_portable "$gid" "$dir" "$launcher")"; then
         ( home_portable_exportar "$h"
           pad_bridge_stop
           cd "$(dirname "$launcher")" || exit 1
-          [ -x "$launcher" ] || chmod +x "$launcher" 2>/dev/null
-          if [ -x "$launcher" ]; then "$launcher"; else bash "$launcher"; fi )
+          ejecutar_nativo "$launcher" )
     else
         say "AVISO: sin carpeta propia; el juego escribira en la tuya"
         pad_bridge_stop
-        ( cd "$(dirname "$launcher")" || exit 1; bash "$launcher" )
+        ( cd "$(dirname "$launcher")" || exit 1; ejecutar_nativo "$launcher" )
     fi
     return 0
 }
@@ -34237,7 +35076,18 @@ diag_mando_antes() {
     [ "$vistas" = 0 ] && say "    (ninguna variable de mando puesta)"
     # 2) Identificador y prefijo, que deciden que arreglos se aplican
     say "    GAMEID=${GAMEID:-umu-default}   STORE=${STORE:-none}"
-    say "    prefijo=$WINEPREFIX"
+    # EN UN JUEGO DE LINUX NO HAY PREFIJO, Y ESTA LINEA MATABA WPROTON.
+    #
+    # "$WINEPREFIX" sin proteger, y con "set -u" una variable sin definir no es
+    # un aviso: corta el script ahi mismo. Como este diagnostico se imprime
+    # JUSTO DESPUES de lanzar, WProton se moria con el juego recien arrancado y
+    # el registro no decia nada: la ultima linea era el GAMEID y detras empezaba
+    # el cierre.
+    #
+    # Costo varias tardes porque el sintoma -"WProton se cierra al lanzar un
+    # juego de Linux en el modo Juego"- apuntaba al lanzamiento, y el culpable
+    # era una linea de diagnostico que ni siquiera hace falta ahi.
+    say "    prefijo=${WINEPREFIX:-(ninguno: juego de Linux)}"
     # 3) Los dispositivos, con su ruta: si el juego coge el equivocado (los
     #    sensores de movimiento del DualSense, por ejemplo) no responde nada
     local d nombre ev js
@@ -35439,8 +36289,25 @@ menu_server_start() {
     # Es OTRO PROCESO: una variable del shell no le llega. El cronometro del
     # servidor -"preparado en N ms", que es el unico que mide sin la espera del
     # usuario- no aparecia en el registro por esto, y no porque no midiera.
+    # EL TEMA TAMBIEN AQUI, Y NO SOLO EN canvas_start.
+    #
+    # Con MENU_SERVER=1 -que es lo normal- canvas_start se va de vacio: el
+    # fondo lo pinta ESTE proceso. Si el tema solo se le pasara al lienzo
+    # suelto, los fondos de temporada no se verian en la configuracion por
+    # defecto, que es justo la que usa todo el mundo.
+    # SE APUNTA QUE VERSION DEL MODULO SE VA A EJECUTAR.
+    #
+    # Los menus viven en un proceso aparte y de larga vida. Si un dia el modulo
+    # en disco no es el que se acaba de entregar -porque el fichero no se
+    # reescribio, o porque habia un servidor de antes- no hay forma de saberlo
+    # leyendo el registro, y se acaba buscando el fallo en el sitio equivocado.
+    # La marca es el hash que pone build.sh: si no coincide con la del
+    # wproton.sh que estas usando, el modulo esta desfasado.
+    log "menus: modulo $(grep -m1 -o 'WPROTON_HELPER menu_pygame.py [0-9a-f]*' \
+        "$MENU_PYGAME_PY" 2>/dev/null | awk '{print $3}' || printf 'desconocido') | raton=${RATON_MENUS:-1}"
     MENUSRV_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-        DIAG_TIEMPOS="${DIAG_TIEMPOS:-0}" \
+        DIAG_TIEMPOS="${DIAG_TIEMPOS:-0}" WP_TEMA="$(tema_temporada)" \
+        WP_RATON="${RATON_MENUS:-1}" \
         lanzar_suelto env -u LD_PRELOAD "$PY_BIN" "$(menu_helper server)" server "$dir")"
     disown "$MENUSRV_PID" 2>/dev/null || true
     printf '%s' "$MENUSRV_PID" > "$(menusrv_pidfile)" 2>/dev/null
@@ -35578,6 +36445,47 @@ menu_server_request() {
     return "${rc:-1}"
 }
 
+tema_temporada() {
+    # EL TEMA DEL FONDO SEGUN LA FECHA, o nada el resto del año.
+    #
+    # EL CALENDARIO VIVE AQUI Y SOLO AQUI.
+    #
+    # El lienzo lo recibe hecho (WP_TEMA), asi que para cambiar fechas o añadir
+    # una fiesta se toca este case y ya. Si la fecha estuviera repartida entre
+    # el bash y el Python, un año se cambiaria una y se olvidaria la otra.
+    #
+    # LAS FECHAS, Y POR QUE ESAS
+    #
+    #   halloween   25-31 oct   el 31 es fijo, asi que "la semana del 31"
+    #                           siempre son esos dias
+    #   navidad     20-26 dic   entra antes de Nochebuena y aguanta hasta el
+    #                           dia siguiente a Navidad
+    #   finde_anyo  30 dic - 2 ene
+    #   reyes       5-6 ene
+    #
+    # Fuera de esas fechas no devuelve nada y el fondo es el de siempre: una
+    # decoracion que estuviera puesta todo el año dejaria de ser una gracia.
+    #
+    # Se puede apagar con TEMAS_TEMPORADA=0 en settings.conf, para quien
+    # prefiera su fondo tal cual.
+    # FORZADO A MANO: para verlos sin esperar a que llegue la fecha.
+    #
+    # Lo pone el modo desarrollo. Va aqui y no en quien pinta porque este es el
+    # unico sitio que decide el tema: si el forzado se colara por otro lado,
+    # habria dos caminos que responder a la misma pregunta.
+    if [ -n "${WP_TEMA_FORZADO:-}" ]; then
+        printf '%s' "$WP_TEMA_FORZADO"; return 0
+    fi
+    [ "${TEMAS_TEMPORADA:-1}" = 1 ] || return 0
+    case "$(date +%m-%d 2>/dev/null)" in
+        10-25|10-26|10-27|10-28|10-29|10-30|10-31) printf 'halloween' ;;
+        12-20|12-21|12-22|12-23|12-24|12-25|12-26) printf 'navidad' ;;
+        12-30|12-31|01-01|01-02)                   printf 'finde_anyo' ;;
+        01-05|01-06)                               printf 'reyes' ;;
+        *) return 0 ;;
+    esac
+}
+
 canvas_start() {
     [ "${WP_SALIENDO:-0}" = 1 ] && return 1   # cerrando: no arrancar
     # El servidor de menus ya mantiene una ventana viva y ademas dibuja su
@@ -35597,7 +36505,10 @@ canvas_start() {
     CANVAS_FILE="$RUNTIME_DIR/.canvas_status"
     printf 'Cargando...
 ' > "$CANVAS_FILE"
+    local _tema; _tema="$(tema_temporada)"
+    [ -n "$_tema" ] && log "Fondo: tema de temporada '$_tema'"
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 WP_MENU_FS=1 \
+        WP_TEMA="$_tema" \
         env -u LD_PRELOAD "$PY_BIN" "$(menu_helper canvas)" canvas "WProton" \
         "$CANVAS_FILE" < /dev/null >> "$LOG_FILE" 2>&1 &
     CANVAS_PID=$!
@@ -36126,6 +37037,1027 @@ $(printf '%s\n' "$det" | sed 's/|/  ->  /')"
 
 BACKUP_SYNC_DEST=""      # destino rsync (se guarda en settings)
 
+SINCRO_PY="$RUNTIME_DIR/sincro.py"
+
+write_sincro() {
+    grep -q "WPROTON_HELPER sincro.py 7cf8bec7ca9d" "$SINCRO_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$SINCRO_PY" <<'SNCEOF'
+# WPROTON_HELPER sincro.py 7cf8bec7ca9d
+# -*- coding: utf-8 -*-
+# WPROTON_HELPER sincro.py PENDIENTE
+"""Compartir copias de partidas entre equipos de la misma red.
+
+QUE HACE Y QUE NO HACE
+
+Hace: un equipo COMPARTE su carpeta de copias y otro se TRAE las que le
+falten, eligiendo el usuario en que direccion va la cosa.
+
+No hace: sincronizacion automatica en dos direcciones. Y es a proposito. Un
+sincronizador generico resuelve los choques guardando los dos ficheros con
+nombres distintos; para un documento vale, para una partida no sirve de nada,
+porque el juego lee uno solo y tu no sabes cual es el bueno. El caso malo llega
+solo: juegas en un equipo sin red, luego en el otro, y al reencontrarse uno
+pisa al otro en silencio. Con una direccion explicita eso no puede pasar.
+
+NUNCA SE PISA UNA COPIA MAS NUEVA. Si la de aqui es mas reciente que la de
+alla, se salta y se dice. Para forzarlo hay que pedirlo aparte.
+
+SEGURIDAD, LA JUSTA Y PROPORCIONADA
+
+Esto vive en la red de casa y comparte partidas, no cuentas bancarias. Aun asi
+no se deja abierto:
+
+  - se sirve SOLO la carpeta de copias, y solo ficheros .zip de dentro; los
+    nombres se limpian, asi que no se puede pedir ../../algo
+  - hace falta un CODIGO de seis cifras que se enseña en el equipo que comparte
+  - se sirve mientras el usuario lo tiene abierto, no como demonio
+
+uso:
+    sincro.py servir <carpeta> <puerto> <codigo>
+    sincro.py listar <host> <puerto> <codigo>
+    sincro.py traer  <host> <puerto> <codigo> <nombre> <destino>
+    sincro.py comprobar
+"""
+import hashlib
+import json
+import os
+import re
+import sys
+import threading
+import time
+
+try:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs, quote
+    from urllib.request import urlopen
+    from urllib.error import URLError, HTTPError
+except ImportError:  # pragma: no cover
+    sys.stderr.write("sincro: hace falta Python 3\n")
+    sys.exit(2)
+
+TROZO = 65536
+
+
+def _limpia(nombre):
+    """Deja un nombre de fichero sano: sin rutas ni sorpresas.
+
+    Se quita todo lo que huela a directorio ANTES de mirar nada mas: es la
+    unica forma de que un "..%2f..%2fetc%2fpasswd" no llegue a ninguna parte.
+    """
+    nombre = os.path.basename(nombre or '')
+    if not nombre or nombre in ('.', '..'):
+        return ''
+    if not re.match(r'^[\w .()\[\]@+-]+\.zip$', nombre, re.UNICODE):
+        return ''
+    return nombre
+
+
+def _indice(carpeta):
+    """Que copias hay aqui: nombre, tamaño y fecha."""
+    out = []
+    try:
+        for n in sorted(os.listdir(carpeta)):
+            if not n.lower().endswith('.zip'):
+                continue
+            r = os.path.join(carpeta, n)
+            if not os.path.isfile(r):
+                continue
+            st = os.stat(r)
+            out.append({'nombre': n, 'bytes': st.st_size,
+                        'fecha': int(st.st_mtime)})
+    except OSError:
+        pass
+    return out
+
+
+def _huella(ruta):
+    h = hashlib.sha256()
+    with open(ruta, 'rb') as fh:
+        for t in iter(lambda: fh.read(TROZO), b''):
+            h.update(t)
+    return h.hexdigest()
+
+
+VERSIONES = 5          # cuantas copias viejas se guardan de cada juego
+
+
+def token_de(carpeta):
+    """El token del servidor permanente, creado la primera vez.
+
+    UN TOKEN FIJO EN UN FICHERO, NO UN CODIGO DE SEIS CIFRAS.
+
+    El codigo corto vale para compartir un rato: lo lees en pantalla y lo
+    tecleas. Un servidor que esta siempre encendido y que ademas ACEPTA
+    SUBIDAS es otra cosa: quien llegue al puerto podria escribir en tus
+    partidas. Asi que el token es largo, se genera solo y se copia una vez.
+    """
+    r = os.path.join(carpeta, '.token')
+    try:
+        with open(r) as fh:
+            t = fh.read().strip()
+        if t:
+            return t
+    except OSError:
+        pass
+    t = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
+    try:
+        os.makedirs(carpeta, exist_ok=True)
+        with open(r, 'w') as fh:
+            fh.write(t)
+        os.chmod(r, 0o600)
+    except OSError:
+        pass
+    return t
+
+
+def _guarda_version(carpeta, nombre):
+    """Aparta la copia que habia antes de poner una nueva encima.
+
+    POR QUE GUARDAR VIEJAS. Una partida corrupta no se nota el mismo dia: se
+    nota tres dias despues, cuando ya la has subido y sobrescrito en todas
+    partes. Con las ultimas VERSIONES copias, se vuelve atras.
+    """
+    act = os.path.join(carpeta, nombre)
+    if not os.path.isfile(act):
+        return
+    vdir = os.path.join(carpeta, 'versiones')
+    try:
+        os.makedirs(vdir, exist_ok=True)
+        base = nombre[:-4] if nombre.lower().endswith('.zip') else nombre
+        sello = time.strftime('%Y%m%d-%H%M%S', time.localtime(os.stat(act).st_mtime))
+        os.replace(act, os.path.join(vdir, '%s--%s.zip' % (base, sello)))
+        viejas = sorted(n for n in os.listdir(vdir)
+                        if n.startswith(base + '--') and n.endswith('.zip'))
+        for n in viejas[:-VERSIONES]:
+            try:
+                os.unlink(os.path.join(vdir, n))
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _crea_handler(carpeta, codigo, permitir_subida=False):
+    class H(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def log_message(self, *a):        # sin ruido en la salida
+            pass
+
+        def _no(self, cod, txt):
+            cuerpo = txt.encode('utf-8')
+            self.send_response(cod)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(cuerpo)))
+            self.end_headers()
+            self.wfile.write(cuerpo)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            # EL CODIGO SE MIRA ANTES QUE NADA, incluso antes del nombre: asi
+            # no se puede averiguar que ficheros hay probando nombres.
+            if (q.get('c', [''])[0] or '') != codigo:
+                self._no(403, 'codigo incorrecto')
+                return
+            if u.path == '/indice':
+                cuerpo = json.dumps(_indice(carpeta)).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(cuerpo)))
+                self.end_headers()
+                self.wfile.write(cuerpo)
+                return
+            if u.path == '/copia':
+                n = _limpia(q.get('n', [''])[0])
+                if not n:
+                    self._no(400, 'nombre no valido')
+                    return
+                r = os.path.join(carpeta, n)
+                if not os.path.isfile(r):
+                    self._no(404, 'no esta')
+                    return
+                st = os.stat(r)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/zip')
+                self.send_header('Content-Length', str(st.st_size))
+                self.send_header('X-WProton-SHA256', _huella(r))
+                self.end_headers()
+                with open(r, 'rb') as fh:
+                    for t in iter(lambda: fh.read(TROZO), b''):
+                        self.wfile.write(t)
+                return
+            self._no(404, 'no')
+
+        def do_PUT(self):
+            if not permitir_subida:
+                self._no(405, 'este servidor no acepta subidas')
+                return
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if (q.get('c', [''])[0] or '') != codigo:
+                self._no(403, 'codigo incorrecto')
+                return
+            if u.path != '/subir':
+                self._no(404, 'no')
+                return
+            n = _limpia(q.get('n', [''])[0])
+            if not n:
+                self._no(400, 'nombre no valido')
+                return
+            try:
+                largo = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                largo = 0
+            if largo <= 0:
+                self._no(400, 'sin contenido')
+                return
+            # NUNCA SE PISA UNA COPIA MAS NUEVA. Es la misma regla de siempre,
+            # y aqui importa mas: al subir, el que se equivoca borra la partida
+            # buena del otro sin enterarse.
+            fecha_cli = q.get('f', ['0'])[0]
+            try:
+                fecha_cli = int(fecha_cli)
+            except ValueError:
+                fecha_cli = 0
+            act = os.path.join(carpeta, n)
+            if os.path.isfile(act) and fecha_cli:
+                if os.stat(act).st_mtime > fecha_cli + 2:
+                    self._no(409, 'aqui hay una copia mas nueva')
+                    return
+            tmp = os.path.join(carpeta, '.' + n + '.subiendo')
+            leidos = 0
+            try:
+                with open(tmp, 'wb') as fh:
+                    while leidos < largo:
+                        t = self.rfile.read(min(TROZO, largo - leidos))
+                        if not t:
+                            break
+                        fh.write(t)
+                        leidos += len(t)
+            except OSError as e:
+                self._no(500, 'no se pudo escribir: %s' % e)
+                return
+            if leidos != largo:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                self._no(400, 'llego a medias')
+                return
+            esperada = self.headers.get('X-WProton-SHA256', '')
+            if esperada and _huella(tmp) != esperada:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                self._no(400, 'llego corrupto')
+                return
+            _guarda_version(carpeta, n)
+            os.replace(tmp, act)
+            if fecha_cli:
+                try:
+                    os.utime(act, (fecha_cli, fecha_cli))
+                except OSError:
+                    pass
+            self._no(200, 'guardada')
+    return H
+
+
+def servir(carpeta, puerto, codigo, hasta=None, subida=False):
+    """Comparte la carpeta hasta que se corte el proceso."""
+    if not os.path.isdir(carpeta):
+        sys.stderr.write("sincro: no existe la carpeta %s\n" % carpeta)
+        return 1
+    srv = ThreadingHTTPServer(('0.0.0.0', int(puerto)),
+                              _crea_handler(carpeta, codigo, subida))
+    srv.daemon_threads = True
+    print("sincro: compartiendo %s en el puerto %s" % (carpeta, puerto),
+          flush=True)
+    if hasta is not None:                 # solo para la autocomprobacion
+        hilo = threading.Thread(target=srv.serve_forever, daemon=True)
+        hilo.start()
+        return srv
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()
+    return 0
+
+
+def _url(host, puerto, ruta, codigo, extra=''):
+    return 'http://%s:%s%s?c=%s%s' % (host, puerto, ruta, quote(codigo), extra)
+
+
+def listar(host, puerto, codigo):
+    try:
+        with urlopen(_url(host, puerto, '/indice', codigo), timeout=10) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except HTTPError as e:
+        sys.stderr.write("sincro: el otro equipo dice: %s\n" % e.code)
+    except (URLError, OSError, ValueError) as e:
+        sys.stderr.write("sincro: no se pudo hablar con %s:%s (%s)\n"
+                         % (host, puerto, e))
+    return None
+
+
+def traer(host, puerto, codigo, nombre, destino):
+    """Se baja una copia y COMPRUEBA que ha llegado entera.
+
+    Se escribe a un fichero temporal y solo se pone en su sitio si la huella
+    cuadra: una copia de partidas a medias es peor que no tenerla, porque
+    parece buena hasta que la restauras.
+    """
+    n = _limpia(nombre)
+    if not n:
+        sys.stderr.write("sincro: nombre no valido\n")
+        return 1
+    tmp = os.path.join(destino, '.' + n + '.parcial')
+    try:
+        os.makedirs(destino, exist_ok=True)
+        with urlopen(_url(host, puerto, '/copia', codigo,
+                          '&n=' + quote(n)), timeout=30) as r:
+            esperada = r.headers.get('X-WProton-SHA256', '')
+            with open(tmp, 'wb') as fh:
+                while True:
+                    t = r.read(TROZO)
+                    if not t:
+                        break
+                    fh.write(t)
+    except (HTTPError, URLError, OSError) as e:
+        sys.stderr.write("sincro: fallo trayendo %s (%s)\n" % (n, e))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return 1
+    real = _huella(tmp)
+    if esperada and real != esperada:
+        sys.stderr.write("sincro: %s llego corrupto, se descarta\n" % n)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return 1
+    os.replace(tmp, os.path.join(destino, n))
+    print(n, flush=True)
+    return 0
+
+
+def subir(host, puerto, codigo, ruta):
+    """Deja una copia en el servidor. No pisa una mas nueva de alli."""
+    n = _limpia(os.path.basename(ruta))
+    if not n or not os.path.isfile(ruta):
+        sys.stderr.write("sincro: no vale %s\n" % ruta)
+        return 1
+    st = os.stat(ruta)
+    try:
+        import urllib.request as _u
+        with open(ruta, 'rb') as fh:
+            pet = _u.Request(_url(host, puerto, '/subir', codigo,
+                                  '&n=' + quote(n) + '&f=%d' % int(st.st_mtime)),
+                             data=fh, method='PUT')
+            pet.add_header('Content-Length', str(st.st_size))
+            pet.add_header('X-WProton-SHA256', _huella(ruta))
+            with _u.urlopen(pet, timeout=120) as r:
+                r.read()
+    except HTTPError as e:
+        if e.code == 409:
+            # NO ES UN FALLO: el servidor tiene algo mas nuevo. Se dice y se
+            # sigue, que es justo lo que queremos que pase.
+            print("mas-nueva-alli", flush=True)
+            return 2
+        sys.stderr.write("sincro: el servidor rechazo %s (%s)\n" % (n, e.code))
+        return 1
+    except (URLError, OSError) as e:
+        sys.stderr.write("sincro: fallo subiendo %s (%s)\n" % (n, e))
+        return 1
+    print(n, flush=True)
+    return 0
+
+
+def unidad_systemd(carpeta, puerto, destino=None):
+    """Escribe la unidad de systemd del servidor permanente.
+
+    ES UNA UNIDAD DE USUARIO, NO DEL SISTEMA. No hace falta root, no toca nada
+    fuera del home, y se quita borrando un fichero. Para guardar partidas en el
+    ordenador de casa, pedir root seria desproporcionado.
+    """
+    py = sys.executable or 'python3'
+    aqui = os.path.abspath(__file__)
+    txt = """[Unit]
+Description=WProton - servidor de partidas guardadas
+After=network-online.target
+
+[Service]
+ExecStart=%s %s servidor %s %s
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+""" % (py, aqui, carpeta, puerto)
+    if destino:
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, 'w') as fh:
+            fh.write(txt)
+        print(destino, flush=True)
+    else:
+        sys.stdout.write(txt)
+    return 0
+
+
+def comparar(local, remoto):
+    """Que traer y que no. Devuelve (traer, ya_estan, mas_nuevas_aqui).
+
+    LA REGLA: se trae lo que aqui no esta, y lo que alla es MAS NUEVO. Lo que
+    aqui es mas nuevo NO se toca y se avisa, que es justo el caso en que un
+    sincronizador automatico te borraria la partida buena.
+    """
+    aqui = {e['nombre']: e for e in local}
+    traerlas, iguales, nuestras = [], [], []
+    for e in remoto:
+        m = aqui.get(e['nombre'])
+        if m is None:
+            traerlas.append(e)
+        elif e['fecha'] > m['fecha'] + 2:      # 2 s de margen por los relojes
+            traerlas.append(e)
+        elif m['fecha'] > e['fecha'] + 2:
+            nuestras.append(e)
+        else:
+            iguales.append(e)
+    return traerlas, iguales, nuestras
+
+
+def comprobar():
+    import tempfile
+    fallos = [0]
+
+    def chk(c, q):
+        if not c:
+            print("  FALLO: %s" % q)
+            fallos[0] += 1
+
+    d = tempfile.mkdtemp()
+    orig = os.path.join(d, 'origen')
+    dest = os.path.join(d, 'destino')
+    os.makedirs(orig)
+    os.makedirs(dest)
+    with open(os.path.join(orig, 'Juego A.zip'), 'wb') as fh:
+        fh.write(os.urandom(50000))
+    with open(os.path.join(orig, 'Juego B.zip'), 'wb') as fh:
+        fh.write(os.urandom(1000))
+    open(os.path.join(orig, 'no_es_zip.txt'), 'w').write('nada')
+
+    chk(_limpia('Juego A.zip') == 'Juego A.zip', "un nombre normal pasa")
+    chk(_limpia('../../etc/passwd') == '', "una ruta hacia arriba se rechaza")
+    chk(_limpia('/etc/passwd') == '', "una ruta absoluta se rechaza")
+    chk(_limpia('cosa.sh') == '', "algo que no es .zip se rechaza")
+    chk(_limpia('') == '', "un nombre vacio se rechaza")
+
+    idx = _indice(orig)
+    chk(len(idx) == 2, "el indice trae solo los .zip (salen %d)" % len(idx))
+
+    srv = servir(orig, 0, '123456', hasta=True)
+    puerto = srv.server_address[1]
+    try:
+        chk(listar('127.0.0.1', puerto, 'mal') is None,
+            "con el codigo mal no se lista nada")
+        rem = listar('127.0.0.1', puerto, '123456')
+        chk(rem is not None and len(rem) == 2, "con el codigo bien se lista")
+        chk(traer('127.0.0.1', puerto, '123456', 'Juego A.zip', dest) == 0,
+            "se trae una copia")
+        chk(os.path.isfile(os.path.join(dest, 'Juego A.zip')),
+            "la copia esta en su sitio")
+        chk(_huella(os.path.join(dest, 'Juego A.zip'))
+            == _huella(os.path.join(orig, 'Juego A.zip')),
+            "lo que llego es identico a lo que habia")
+        chk(traer('127.0.0.1', puerto, '123456', '../../etc/passwd', dest) != 0,
+            "no se puede traer algo de fuera de la carpeta")
+        chk(traer('127.0.0.1', puerto, 'mal', 'Juego B.zip', dest) != 0,
+            "con el codigo mal no se trae nada")
+        chk(not os.path.exists(os.path.join(dest, '.Juego B.zip.parcial')),
+            "no quedan ficheros a medias")
+
+        # La comparacion, que es donde esta el peligro de perder partidas
+        loc = [{'nombre': 'A.zip', 'bytes': 1, 'fecha': 100},
+               {'nombre': 'B.zip', 'bytes': 1, 'fecha': 500}]
+        rem2 = [{'nombre': 'A.zip', 'bytes': 1, 'fecha': 900},
+                {'nombre': 'B.zip', 'bytes': 1, 'fecha': 100},
+                {'nombre': 'C.zip', 'bytes': 1, 'fecha': 100}]
+        t, ig, nu = comparar(loc, rem2)
+        chk([x['nombre'] for x in t] == ['A.zip', 'C.zip'],
+            "se trae la mas nueva de alla y la que falta")
+        chk([x['nombre'] for x in nu] == ['B.zip'],
+            "la que aqui es mas nueva NO se trae")
+        t2, ig2, _ = comparar(loc, [{'nombre': 'B.zip', 'bytes': 1,
+                                     'fecha': 501}])
+        chk(t2 == [] and len(ig2) == 1,
+            "un segundo de diferencia no cuenta como mas nueva")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    # ── EL SERVIDOR PERMANENTE: subidas, versiones y el token ───────────────
+    alm = os.path.join(d, 'almacen')
+    os.makedirs(alm)
+    t1 = token_de(alm)
+    chk(len(t1) == 32, "el token se crea y es largo")
+    chk(token_de(alm) == t1, "el token no cambia entre arranques")
+
+    srv2 = servir(alm, 0, t1, hasta=True, subida=True)
+    p2 = srv2.server_address[1]
+    try:
+        chk(subir('127.0.0.1', p2, 'mal', os.path.join(orig, 'Juego B.zip')) != 0,
+            "con el token mal no se sube")
+        chk(subir('127.0.0.1', p2, t1, os.path.join(orig, 'Juego B.zip')) == 0,
+            "se sube una copia")
+        guardada = os.path.join(alm, 'Juego B.zip')
+        chk(os.path.isfile(guardada), "la copia esta en el servidor")
+        chk(_huella(guardada) == _huella(os.path.join(orig, 'Juego B.zip')),
+            "lo subido es identico a lo que habia")
+
+        # Una version mas nueva SI entra, y la vieja se guarda aparte
+        nuevo = os.path.join(d, 'Juego B.zip')
+        with open(nuevo, 'wb') as fh:
+            fh.write(os.urandom(2000))
+        os.utime(nuevo, (time.time() + 60, time.time() + 60))
+        chk(subir('127.0.0.1', p2, t1, nuevo) == 0, "se sube una mas nueva")
+        chk(os.path.getsize(guardada) == 2000, "la nueva sustituye a la vieja")
+        vdir = os.path.join(alm, 'versiones')
+        chk(os.path.isdir(vdir) and len(os.listdir(vdir)) == 1,
+            "la vieja se guarda en versiones/")
+
+        # Y una MAS VIEJA no pisa a la de alli: es la regla que salva partidas
+        viejo = os.path.join(d, 'viejo', 'Juego B.zip')
+        os.makedirs(os.path.dirname(viejo))
+        with open(viejo, 'wb') as fh:
+            fh.write(b'x' * 10)
+        os.utime(viejo, (time.time() - 9999, time.time() - 9999))
+        chk(subir('127.0.0.1', p2, t1, viejo) == 2,
+            "una copia mas vieja NO pisa la del servidor")
+        chk(os.path.getsize(guardada) == 2000,
+            "y la del servidor sigue intacta")
+
+        # EL MODO "COMPARTIR UN RATO" NO ACEPTA SUBIDAS.
+        #
+        # Se levanta OTRO servidor para esto. La primera version de la prueba
+        # reutilizaba el de antes, que ya estaba cerrado: el fallo que media
+        # era "conexion rechazada", no el rechazo de la subida. Una prueba que
+        # pasa por el motivo equivocado es peor que no tenerla, porque da una
+        # seguridad que no existe.
+        srv3 = servir(orig, 0, 'abc123', hasta=True)      # sin subida=True
+        try:
+            chk(subir('127.0.0.1', srv3.server_address[1], 'abc123',
+                      os.path.join(orig, 'Juego B.zip')) != 0,
+                "el modo 'compartir un rato' rechaza subidas")
+            chk(listar('127.0.0.1', srv3.server_address[1], 'abc123') is not None,
+                "...pero ese mismo servidor sigue dejando listar")
+        finally:
+            srv3.shutdown()
+            srv3.server_close()
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    u = unidad_systemd(alm, 8788, os.path.join(d, 'u', 'wproton.service'))
+    txt = open(os.path.join(d, 'u', 'wproton.service')).read()
+    chk('servidor' in txt and str(8788) in txt, "la unidad de systemd se escribe")
+    chk('[Install]' in txt, "la unidad se puede activar")
+
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
+    if fallos[0]:
+        print("sincro.py: %d fallo(s)" % fallos[0])
+        return 1
+    print("sincro.py: todo correcto")
+    return 0
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == 'comprobar':
+        return comprobar()
+    if len(argv) >= 5 and argv[1] == 'servir':
+        return servir(argv[2], argv[3], argv[4])
+    if len(argv) >= 4 and argv[1] == 'servidor':
+        # Permanente: token de fichero y subidas permitidas.
+        c = token_de(argv[2])
+        print("sincro: token %s" % c, flush=True)
+        return servir(argv[2], argv[3], c, subida=True)
+    if len(argv) >= 3 and argv[1] == 'token':
+        print(token_de(argv[2]))
+        return 0
+    if len(argv) >= 4 and argv[1] == 'unidad':
+        return unidad_systemd(argv[2], argv[3],
+                              argv[4] if len(argv) > 4 else None)
+    if len(argv) >= 6 and argv[1] == 'subir':
+        return subir(argv[2], argv[3], argv[4], argv[5])
+    if len(argv) >= 5 and argv[1] == 'listar':
+        r = listar(argv[2], argv[3], argv[4])
+        if r is None:
+            return 1
+        for e in r:
+            print("%s\t%d\t%d" % (e['nombre'], e['bytes'], e['fecha']))
+        return 0
+    if len(argv) >= 7 and argv[1] == 'traer':
+        return traer(argv[2], argv[3], argv[4], argv[5], argv[6])
+    sys.stderr.write(__doc__.split('uso:')[-1].strip() + "\n")
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))
+SNCEOF
+}
+
+sincro_py() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 127
+    write_sincro || return 127
+    "$PY_BIN" "$SINCRO_PY" "$@"
+}
+
+sincro_mi_ip() {
+    # La IP de este equipo en la red de casa.
+    #
+    # Se pregunta por la ruta hacia fuera en vez de listar interfaces: con
+    # varias -wifi, cable, docker, wireguard- listar te da cuatro y no sabes
+    # cual decirle al otro. Esta es la que de verdad usa el equipo para salir,
+    # que es la que el otro puede alcanzar.
+    local ip=""
+    if command -v ip >/dev/null 2>&1; then
+        ip="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
+    fi
+    [ -z "$ip" ] && command -v hostname >/dev/null 2>&1 \
+        && ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    printf '%s' "${ip:-(no se pudo averiguar)}"
+}
+
+sincro_equipos_listar() {
+    # Los equipos guardados, uno por linea: nombre|ip|codigo.
+    printf '%s' "${SINCRO_EQUIPOS:-}" | tr ';' '\n' | awk 'NF'
+}
+
+sincro_equipo_guardar() {
+    # $1 = nombre, $2 = ip, $3 = codigo. Si el nombre ya estaba, se sustituye.
+    #
+    # SE GUARDA EL CODIGO CON EL EQUIPO. Sin el, "no volver a pedir el codigo"
+    # no se puede cumplir: el que comparte exige uno siempre, y saltarselo por
+    # nuestra cuenta solo haria que fallara la conexion sin explicar por que.
+    local nombre="$1" ip="$2" cod="$3" out="" l
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        case "$l" in "$nombre|"*) continue ;; esac
+        out="$out$l;"
+    done <<EOFEQ
+$(sincro_equipos_listar)
+EOFEQ
+    SINCRO_EQUIPOS="$out$nombre|$ip|$cod"
+    save_settings
+    log "sincro: equipo guardado '$nombre' ($ip)"
+}
+
+sincro_equipo_elegir() {
+    # Devuelve "ip|codigo" del equipo elegido, o nada si se quiere escribir a
+    # mano. Se imprime a la salida, asi que aqui NO se puede usar say.
+    local opciones="" l nombre ip
+    while IFS='|' read -r nombre ip _; do
+        [ -n "$nombre" ] || continue
+        opciones="$opciones$nombre ($ip)
+"
+    done <<EOFEL
+$(sincro_equipos_listar)
+EOFEL
+    [ -n "$opciones" ] || return 1
+    local sel
+    # shellcheck disable=SC2046
+    sel="$(IFS=$'\n'; set -f; menu "Equipo del que traer las copias" \
+        $(printf '%s' "$opciones") \
+        "Escribir otro equipo a mano" \
+        "<< Volver")" || return 2
+    case "$sel" in
+        "<< Volver"|"") return 2 ;;
+        "Escribir otro"*) return 1 ;;
+    esac
+    local elegido="${sel%% (*}"
+    while IFS='|' read -r nombre ip cod; do
+        [ "$nombre" = "$elegido" ] && { printf '%s|%s' "$ip" "$cod"; return 0; }
+    done <<EOFEL2
+$(sincro_equipos_listar)
+EOFEL2
+    return 1
+}
+
+sincro_compartir() {
+    # Deja las copias a disposicion del otro equipo mientras esta abierto.
+    #
+    # NO ES UN DEMONIO A PROPOSITO. Se comparte mientras tienes el dialogo
+    # delante y se corta al cerrarlo: un servicio abierto en segundo plano que
+    # nadie recuerda es justo lo que no se quiere en una consola.
+    local codigo puerto ip pid
+    # CODIGO FIJO SI EL USUARIO LO HA QUERIDO ASI.
+    #
+    # De serie sale uno nuevo cada vez, que es lo mas seguro. Pero entonces el
+    # otro equipo tiene que escribirlo SIEMPRE, y para dos maquinas de casa que
+    # se pasan partidas a diario eso cansa. Con un codigo fijo, el otro lo
+    # guarda una vez con el nombre del equipo y ya no lo pide mas.
+    #
+    # Sigue haciendo falta un codigo: lo que se quita es teclearlo, no la
+    # puerta.
+    if [ -n "${SINCRO_CODIGO:-}" ]; then
+        codigo="$SINCRO_CODIGO"
+    else
+        codigo="$(printf '%06d' "$(( (RANDOM * 32768 + RANDOM) % 1000000 ))")"
+    fi
+    puerto="${SINCRO_PUERTO:-8788}"
+    ip="$(sincro_mi_ip)"
+    mkdir -p "$BACKUP_DIR"
+    write_sincro || { ui_error "No se pudo preparar el modulo de sincronizacion"; return 1; }
+    pid="$(lanzar_suelto "$PY_BIN" "$SINCRO_PY" servir "$BACKUP_DIR" "$puerto" "$codigo")" || pid=""
+    if [ -z "$pid" ]; then
+        ui_error "No se pudo compartir (puerto $puerto ocupado?)"
+        return 1
+    fi
+    sleep 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+        ui_error "El compartidor se cerro solo. Mira el registro."
+        return 1
+    fi
+    log "sincro: compartiendo $BACKUP_DIR en $ip:$puerto"
+    ui_info "COMPARTIENDO TUS COPIAS
+
+En el otro equipo, entra en Partidas guardadas -> Sincronizar
+-> Traer copias de otro equipo, y escribe:
+
+    Equipo:  $ip
+    Puerto:  $puerto
+    Codigo:  $codigo
+
+Se comparte mientras esta ventana este abierta. Al aceptar se
+deja de compartir."
+    kill "$pid" 2>/dev/null
+    log "sincro: se deja de compartir"
+    return 0
+}
+
+sincro_traer() {
+    # Se trae del otro equipo lo que falta y lo que alla es mas nuevo.
+    local host codigo puerto lista_rem n=0 guardado="" rc_el
+    puerto="${SINCRO_PUERTO:-8788}"
+    # SI HAY EQUIPOS GUARDADOS, SE ELIGE DE LA LISTA Y NO SE PIDE NADA MAS.
+    guardado="$(sincro_equipo_elegir)"; rc_el=$?
+    case "$rc_el" in
+        2) return 0 ;;                      # el usuario se volvio
+        0) host="${guardado%%|*}"; codigo="${guardado#*|}" ;;
+        *) host=""; codigo="" ;;
+    esac
+    if [ -z "$host" ]; then
+        host="$(ask_text "Equipo que comparte (IP)" "${SINCRO_HOST:-}" num)" || return 0
+        [ -n "$host" ] || return 0
+        codigo="$(ask_text "Codigo de seis cifras que sale en el otro equipo" "" num)" || return 0
+        [ -n "$codigo" ] || return 0
+        SINCRO_HOST="$host"; save_settings
+        # SE OFRECE GUARDARLO, pero solo despues de que haya funcionado: ver
+        # mas abajo. Guardar ahora una IP o un codigo equivocados solo serviria
+        # para volver a fallar mañana sin saber por que.
+    fi
+    mkdir -p "$BACKUP_DIR"
+    loading_say "Hablando con $host..."
+    lista_rem="$(sincro_py listar "$host" "$puerto" "$codigo" 2>>"$LOG_FILE")"
+    loading_clear
+    if [ -z "$lista_rem" ]; then
+        ui_error "No se pudo hablar con $host:$puerto.
+
+Comprueba que en el otro equipo esta abierta la ventana de
+'Compartir mis copias' y que el codigo es el que sale alli."
+        return 1
+    fi
+    # QUE TRAER: lo que aqui no esta, y lo que alla es mas nuevo. Lo que aqui
+    # es mas nuevo NO se toca, que es donde un sincronizador automatico te
+    # borraria la partida buena.
+    local nombre bytes fecha loc_fecha nuevas="" mias=""
+    while IFS="$(printf '\t')" read -r nombre bytes fecha; do
+        [ -n "$nombre" ] || continue
+        if [ -f "$BACKUP_DIR/$nombre" ]; then
+            loc_fecha="$(stat -c %Y "$BACKUP_DIR/$nombre" 2>/dev/null || echo 0)"
+            if [ "$fecha" -gt $(( loc_fecha + 2 )) ]; then
+                nuevas="$nuevas$nombre
+"
+            elif [ "$loc_fecha" -gt $(( fecha + 2 )) ]; then
+                mias="$mias$nombre
+"
+            fi
+        else
+            nuevas="$nuevas$nombre
+"
+        fi
+    done <<EOFSNC
+$lista_rem
+EOFSNC
+    if [ -z "$nuevas" ]; then
+        ui_info "No hay nada que traer: ya tienes todo lo de $host$([ -n "$mias" ] && printf ',\ny ademas aqui hay copias mas nuevas que alli.')"
+        return 0
+    fi
+    ui_ask "Se van a traer de $host:
+
+$(printf '%s' "$nuevas" | sed 's/^/  /')
+$([ -n "$mias" ] && printf '\nNO se tocan estas, que aqui son MAS NUEVAS:\n%s\n' "$(printf '%s' "$mias" | sed 's/^/  /')")
+Continuar?" || return 0
+    while IFS= read -r nombre; do
+        [ -n "$nombre" ] || continue
+        loading_say "Trayendo $nombre..."
+        if sincro_py traer "$host" "$puerto" "$codigo" "$nombre" "$BACKUP_DIR" \
+                >>"$LOG_FILE" 2>&1; then
+            n=$((n+1))
+            say "[sincro] traida: $nombre"
+        else
+            say "[sincro] FALLO al traer: $nombre"
+        fi
+    done <<EOFTR
+$nuevas
+EOFTR
+    loading_clear
+    # AHORA SI SE OFRECE GUARDARLO: ya sabemos que la IP y el codigo valen.
+    if [ -z "$guardado" ] && [ "$n" -gt 0 ]; then
+        if ui_ask "Traidas $n copia(s) de $host.
+
+Guardar este equipo para no tener que escribir la IP y el
+codigo la proxima vez?"; then
+            local nombre
+            nombre="$(ask_text "Nombre para este equipo (p.ej. Deck o Sobremesa)" "")"
+            [ -n "$nombre" ] && sincro_equipo_guardar "$nombre" "$host" "$codigo"
+        fi
+        return 0
+    fi
+    ui_info "Traidas $n copia(s) de $host.
+
+Para usar una: Partidas guardadas -> Restaurar una copia."
+    return 0
+}
+
+sincro_servidor_menu() {
+    # EL SERVIDOR PERMANENTE DE PARTIDAS.
+    #
+    # Es el mismo sincro.py, pero arrancado por systemd en vez de por WProton:
+    # vive mientras viva la maquina y ademas ACEPTA SUBIDAS. Asi las dos
+    # consolas dejan ahi sus copias y se las llevan cuando les toca, sin tener
+    # que coincidir encendidas.
+    #
+    # UNIDAD DE USUARIO, NO DEL SISTEMA. No hace falta root, no se toca nada
+    # fuera del home y se quita borrando un fichero. Para guardar partidas en
+    # el ordenador de casa, pedir root seria desproporcionado.
+    local sel unidad="$HOME/.config/systemd/user/wproton-partidas.service"
+    while true; do
+        sel="$(menu "Servidor de partidas
+
+Un equipo guarda las copias de todos. Se instala en el que mas
+tiempo este encendido." \
+            "Instalar el servidor AQUI" \
+            "Ver el estado y el token" \
+            "Quitar el servidor de aqui" \
+            "Usar un servidor: ${SINCRO_SERVIDOR:-sin configurar}" \
+            "Subir mis copias al servidor" \
+            "<< Volver")" || return
+        case "$sel" in
+            "<< Volver"|"") return ;;
+            "Instalar el servidor AQUI")
+                if ! command -v systemctl >/dev/null 2>&1; then
+                    ui_error "Aqui no hay systemd, asi que no se puede dejar
+en marcha solo. Puedes usar 'Compartir mis copias' a mano."
+                    continue
+                fi
+                mkdir -p "$BACKUP_DIR"
+                write_sincro || { ui_error "No se pudo preparar el modulo"; continue; }
+                sincro_py unidad "$BACKUP_DIR" "${SINCRO_PUERTO:-8788}" "$unidad" \
+                    >>"$LOG_FILE" 2>&1
+                if [ ! -f "$unidad" ]; then
+                    ui_error "No se pudo escribir la unidad en:
+$unidad"
+                    continue
+                fi
+                systemctl --user daemon-reload >>"$LOG_FILE" 2>&1
+                if systemctl --user enable --now wproton-partidas.service \
+                        >>"$LOG_FILE" 2>&1; then
+                    # PARA QUE SIGA VIVO CON LA SESION CERRADA.
+                    #
+                    # Un servicio de usuario muere al salir de la sesion salvo
+                    # que se habilite "lingering". Sin esto, el servidor se
+                    # apagaria justo cuando mas falta hace: con el ordenador
+                    # encendido y nadie delante.
+                    loginctl enable-linger "$(id -un)" >>"$LOG_FILE" 2>&1 || true
+                    # ¿SE LLEGA AL SERVIDOR DESDE LA RED, O SOLO DESDE AQUI?
+                    #
+                    # Es el obstaculo mas probable y el peor de diagnosticar:
+                    # el servicio arranca, aqui responde, y desde la otra
+                    # maquina no hay manera. Casi siempre es el cortafuegos.
+                    #
+                    # Se prueba por la IP DE LA RED y no por 127.0.0.1: contra
+                    # localhost responde aunque el puerto este cerrado a todo
+                    # el mundo, asi que esa prueba no valdria para nada.
+                    sleep 1
+                    local _ip _tk _ok=0
+                    _ip="$(sincro_mi_ip)"
+                    _tk="$(sincro_py token "$BACKUP_DIR" 2>/dev/null)"
+                    case "$_ip" in
+                        *[0-9]*) sincro_py listar "$_ip" "${SINCRO_PUERTO:-8788}" "$_tk" \
+                                    >/dev/null 2>>"$LOG_FILE" && _ok=1 ;;
+                    esac
+                    if [ "$_ok" != 1 ]; then
+                        log "sincro: el servidor no responde por $_ip; cortafuegos?" WARN
+                        ui_info "AVISO: el servidor esta en marcha, pero no responde
+por su propia IP de red ($_ip).
+
+Lo normal es que sea el CORTAFUEGOS. Hay que dejar pasar el
+puerto ${SINCRO_PUERTO:-8788}:
+
+  firewalld:  sudo firewall-cmd --add-port=${SINCRO_PUERTO:-8788}/tcp --permanent
+              sudo firewall-cmd --reload
+  ufw:        sudo ufw allow ${SINCRO_PUERTO:-8788}/tcp
+
+Si no tienes cortafuegos, puede que sea la red: comprueba que
+los dos equipos estan en la misma."
+                    fi
+                    ui_info "Servidor instalado y en marcha.
+
+Carpeta: $BACKUP_DIR
+Puerto:  ${SINCRO_PUERTO:-8788}
+IP:      $(sincro_mi_ip)
+Token:   $(sincro_py token "$BACKUP_DIR" 2>/dev/null)
+
+En el OTRO equipo: Servidor de partidas -> Usar un servidor,
+y escribe esa IP. El token se pide una vez."
+                else
+                    ui_error "No se pudo arrancar el servicio.
+Mira el registro."
+                fi ;;
+            "Ver el estado y el token")
+                local est="parado"
+                command -v systemctl >/dev/null 2>&1 \
+                    && systemctl --user is-active wproton-partidas.service \
+                        >/dev/null 2>&1 && est="EN MARCHA"
+                ui_info "Servidor aqui: $est
+
+Carpeta: $BACKUP_DIR
+Puerto:  ${SINCRO_PUERTO:-8788}
+IP:      $(sincro_mi_ip)
+Token:   $(sincro_py token "$BACKUP_DIR" 2>/dev/null || printf 'aun no hay')" ;;
+            "Quitar el servidor de aqui")
+                ui_ask "Se para el servidor y se quita del arranque.
+
+Las copias NO se borran. Seguir?" || continue
+                systemctl --user disable --now wproton-partidas.service \
+                    >>"$LOG_FILE" 2>&1 || true
+                rm -f "$unidad"
+                systemctl --user daemon-reload >>"$LOG_FILE" 2>&1 || true
+                ui_info "Servidor quitado. Las copias siguen en:
+$BACKUP_DIR" ;;
+            "Usar un servidor:"*)
+                local ip tk
+                ip="$(ask_text "IP del servidor de partidas" "${SINCRO_SERVIDOR:-}" num)"
+                [ -n "$ip" ] || continue
+                tk="$(ask_text "Token que sale en el servidor" "${SINCRO_TOKEN:-}")"
+                [ -n "$tk" ] || continue
+                SINCRO_SERVIDOR="$ip"; SINCRO_TOKEN="$tk"; save_settings
+                # SE COMPRUEBA AHORA, no cuando haga falta. Una IP o un token
+                # mal escritos se descubririan al subir una partida, que es el
+                # peor momento posible.
+                loading_say "Probando $ip..."
+                local prueba; prueba="$(sincro_py listar "$ip" "${SINCRO_PUERTO:-8788}" "$tk" 2>>"$LOG_FILE")"
+                loading_clear
+                if [ -n "$prueba" ] || sincro_py listar "$ip" "${SINCRO_PUERTO:-8788}" "$tk" >/dev/null 2>&1; then
+                    ui_info "Servidor configurado y respondiendo:
+$ip:${SINCRO_PUERTO:-8788}"
+                else
+                    ui_error "No responde $ip:${SINCRO_PUERTO:-8788}.
+
+Se ha guardado igualmente, pero revisa la IP, el token y que
+el servidor este encendido."
+                fi ;;
+            "Subir mis copias al servidor")
+                [ -n "${SINCRO_SERVIDOR:-}" ] || { ui_info "Configura antes el servidor."; continue; }
+                local f n=0 vieja=0 fallo=0 rc
+                for f in "$BACKUP_DIR"/*.zip; do
+                    [ -f "$f" ] || continue
+                    loading_say "Subiendo $(basename "$f")..."
+                    sincro_py subir "$SINCRO_SERVIDOR" "${SINCRO_PUERTO:-8788}" \
+                        "$SINCRO_TOKEN" "$f" >>"$LOG_FILE" 2>&1
+                    rc=$?
+                    case "$rc" in
+                        0) n=$((n+1)) ;;
+                        2) vieja=$((vieja+1)) ;;   # alli hay una mas nueva
+                        *) fallo=$((fallo+1)) ;;
+                    esac
+                done
+                loading_clear
+                ui_info "Subidas: $n
+Ya habia una mas nueva alli: $vieja
+Fallaron: $fallo" ;;
+        esac
+    done
+}
+
 backup_sync_menu() {
     # Sincroniza backups/ con otra máquina o carpeta usando herramientas
     # externas. WProton no reinventa la sincronizacion: solo la lanza.
@@ -36134,9 +38066,73 @@ backup_sync_menu() {
         sel="$(menu "Sincronizar backups/ con otro sitio" \
             "Destino rsync: ${BACKUP_SYNC_DEST:-sin configurar}" \
             "Sincronizar AHORA con rsync" \
+            "Compartir mis copias con otro equipo (red local)" \
+            "Traer copias de otro equipo (red local)" \
+            "Puerto para la red local: ${SINCRO_PUERTO:-8788}" \
+            "Codigo al compartir: $([ -n "${SINCRO_CODIGO:-}" ] && printf 'fijo (%s)' "$SINCRO_CODIGO" || printf 'uno nuevo cada vez')" \
+            "Equipos guardados: $(sincro_equipos_listar | grep -c . || true)" \
+            "Servidor de partidas >>" \
             "Preparar carpeta para Syncthing" \
             "<< Volver")" || return
         case "$sel" in
+            "Puerto para la red local:"*)
+                # SE COMPRUEBA QUE SEA UN PUERTO DE VERDAD.
+                #
+                # Un valor a medias -vacio, con letras o fuera de rango- dejaria
+                # la sincronizacion sin funcionar y el motivo saldria como un
+                # "no se pudo hablar con el otro equipo", que manda a buscar el
+                # fallo a la red cuando esta aqui al lado.
+                #
+                # Por debajo de 1024 hacen falta permisos de root, asi que
+                # tampoco valen.
+                local _p
+                _p="$(ask_text "Puerto (1024-65535)" "${SINCRO_PUERTO:-8788}" num)"
+                case "$_p" in
+                    ''|*[!0-9]*) ui_info "Eso no es un numero. Se deja en ${SINCRO_PUERTO:-8788}." ;;
+                    *) if [ "$_p" -ge 1024 ] && [ "$_p" -le 65535 ] 2>/dev/null; then
+                           SINCRO_PUERTO="$_p"; save_settings
+                           ui_info "Puerto: $SINCRO_PUERTO
+
+Tiene que ser el MISMO en los dos equipos."
+                       else
+                           ui_info "Fuera de rango (1024-65535). Se deja en ${SINCRO_PUERTO:-8788}."
+                       fi ;;
+                esac ;;
+            "Codigo al compartir:"*)
+                if [ -n "${SINCRO_CODIGO:-}" ]; then
+                    SINCRO_CODIGO=""; save_settings
+                    ui_info "A partir de ahora saldra un codigo NUEVO cada vez.
+
+Es lo mas seguro, pero el otro equipo tendra que escribirlo
+siempre."
+                else
+                    SINCRO_CODIGO="$(printf '%06d' "$(( (RANDOM * 32768 + RANDOM) % 1000000 ))")"
+                    save_settings
+                    ui_info "Codigo fijo: $SINCRO_CODIGO
+
+El otro equipo lo escribe una vez, lo guarda con el nombre
+que quiera, y ya no se lo pides mas.
+
+Si alguna vez quieres invalidarlo, vuelve a esta opcion dos
+veces: se genera otro."
+                fi ;;
+            "Equipos guardados:"*)
+                if [ -z "$(sincro_equipos_listar)" ]; then
+                    ui_info "Todavia no hay ninguno.
+
+Se te ofrece guardarlo la primera vez que traigas copias de
+un equipo y funcione."
+                else
+                    ui_info "Equipos guardados:
+
+$(sincro_equipos_listar | while IFS='|' read -r _n _i _c; do printf '  %s  ->  %s\n' "$_n" "$_i"; done)
+
+Para olvidarlos todos, ponlo a cero en settings.conf
+(SINCRO_EQUIPOS)."
+                fi ;;
+            "Servidor de partidas"*) sincro_servidor_menu ;;
+            "Compartir mis copias"*) sincro_compartir || true ;;
+            "Traer copias de otro equipo"*) sincro_traer || true ;;
             "Destino rsync:"*)
                 BACKUP_SYNC_DEST="$(ask_text "Destino rsync (carpeta local, disco USB o usuario@equipo:/ruta)" "${BACKUP_SYNC_DEST:-}")"
                 save_settings ;;
@@ -36894,6 +38890,43 @@ $dst"
     return 0
 }
 
+dev_probar_tema() {
+    # VER LOS FONDOS DE TEMPORADA SIN ESPERAR A LA FECHA.
+    #
+    # El tema lo lee el proceso que pinta AL ARRANCAR, asi que no vale con
+    # cambiar una variable: hay que rearrancarlo. Se para el servidor de menus
+    # (y el lienzo, si es el que hay) y se vuelve a levantar con el tema
+    # puesto; el siguiente menu ya sale con el fondo nuevo.
+    #
+    # "Como toque por fecha" devuelve al comportamiento normal, para no dejarse
+    # un tema puesto en marzo sin darse cuenta.
+    local sel
+    sel="$(menu "Probar un fondo de temporada
+
+Se rearrancan los menus para verlo. Con 'como toque por fecha'
+vuelve a lo normal." \
+        "halloween    (25-31 de octubre)" \
+        "navidad      (20-26 de diciembre)" \
+        "finde_anyo   (30 dic - 2 ene)" \
+        "reyes        (5-6 de enero)" \
+        "como toque por fecha  (quitar el forzado)" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "<< Volver"|"") return 0 ;;
+        "como toque"*)  WP_TEMA_FORZADO="" ;;
+        *)              WP_TEMA_FORZADO="${sel%% *}" ;;
+    esac
+    export WP_TEMA_FORZADO
+    log "dev: tema forzado a '${WP_TEMA_FORZADO:-(ninguno)}'"
+    menu_server_stop 2>/dev/null || true
+    canvas_stop 2>/dev/null || true
+    canvas_start 2>/dev/null || true
+    ui_info "Fondo: ${WP_TEMA_FORZADO:-como toque por fecha}
+
+Sal de este menu para verlo. Dura hasta que cierres WProton."
+    return 0
+}
+
 dev_menu() {
     # Solo aparece con DEV_MODE=1 en settings.conf. No esta documentado.
     local sel
@@ -36905,6 +38938,7 @@ dev_menu() {
             "Grabar los menus - 60 s" \
             "Grabar la pantalla entera - 30 s (puede salir en negro)" \
             "Ver la carpeta de capturas" \
+            "Probar un fondo de temporada" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
@@ -36913,6 +38947,7 @@ dev_menu() {
             "Grabar los menus - 30"*)    dev_video_menus 30 5  || true ;;
             "Grabar los menus - 60"*)    dev_video_menus 60 5  || true ;;
             "Grabar la pantalla entera"*) dev_video 30 10 || true ;;
+            "Probar un fondo de temporada"*) dev_probar_tema || true ;;
             "Ver la carpeta"*)
                 ui_info "Capturas en:
 $(dev_dir)
@@ -38599,6 +40634,21 @@ find_paquetes() {
            -o -name '.TemporaryItems' \) -prune -o \
         -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
                    -o -iname '*.dwarfs' \) -print 2>/dev/null
+    # LOS JUEGOS DE LINUX SUELTOS, Y SOLO EN EL PRIMER NIVEL.
+    #
+    # Un .sh o un .AppImage dejado en la carpeta de juegos ES un juego, y hasta
+    # ahora no salia en la biblioteca: el escaneo solo miraba los tres formatos
+    # empaquetados. Se podia añadir -el menu de añadir los acepta y el
+    # explorador los enseña- pero luego no aparecia en Jugar.
+    #
+    # MAXDEPTH 1 A PROPOSITO, no la profundidad del resto. Casi todos los juegos
+    # traen sus propios .sh por dentro (start.sh, setup.sh, el lanzador de una
+    # carpeta que YA sale como juego). Si se buscaran a tres niveles, un solo
+    # juego llenaria la lista de entradas que no son juegos. En el primer nivel
+    # de la carpeta de juegos, en cambio, lo que hay puesto lo ha puesto el
+    # usuario a proposito.
+    find "$raiz" -maxdepth 1 -type f \
+        \( -iname '*.sh' -o -iname '*.AppImage' \) -print 2>/dev/null
 }
 
 
@@ -39226,6 +41276,100 @@ hdr_pega_texto() {
     fi
 }
 
+dxvk_cache_de_juego() {
+    # Los ficheros de cache de shaders que pertenecen a ESTE juego.
+    #
+    # DXVK y VKD3D nombran su fichero con el nombre del ejecutable, y WProton
+    # los junta todos en cache/dxvk y cache/vkd3d en vez de dejarlos sueltos
+    # por los prefijos. Eso permite borrar la de un juego sin tocar las demas,
+    # que es justo lo que hace falta aqui.
+    local exe="${1:-}" base
+    base="$(basename "$exe")"
+    base="${base%.*}"
+    [ -n "$base" ] || return 0
+    find "$CACHE_DIR/dxvk" "$CACHE_DIR/vkd3d" -maxdepth 1 -type f \
+        \( -name "$base.dxvk-cache" -o -name "$base.dxvk-cache-tmp" \
+           -o -name "$base.vkd3d-cache" -o -name "$base.vkd3d-cache-tmp" \) \
+        2>/dev/null
+}
+
+dxvk_cache_borrar() {
+    # BORRA LA CACHE DE SHADERS DE UN JUEGO.
+    #
+    # PARA QUE SIRVE
+    #
+    # La cache de shaders de DXVK se va llenando mientras juegas y hace que los
+    # tirones del principio desaparezcan. Pero si se corrompe -un cierre brusco,
+    # un cambio de runner, un driver nuevo- el juego puede petar al arrancar,
+    # quedarse en negro o dar tirones que no se van. Borrarla obliga a
+    # regenerarla desde cero.
+    #
+    # ES UNA ACCION, NO UN INTERRUPTOR. En Batocera esto es un ajuste que se
+    # queda puesto; aqui no, a proposito. Un ajuste permanente borraria la cache
+    # EN CADA ARRANQUE, con lo que el juego no llegaria a tener cache nunca y
+    # tendrias tirones para siempre sin saber por que. Se hace una vez, que es
+    # cuando sirve.
+    local gid="${1:-}" exe="${2:-}" ficheros n=0 bytes=0 f
+    ficheros="$(dxvk_cache_de_juego "$exe")"
+    if [ -z "$ficheros" ]; then
+        ui_info "Este juego no tiene cache de shaders guardada.
+
+Se crea sola la primera vez que juegas. Si el juego va a
+tirones al principio y luego se suaviza, es que la esta
+generando: es normal."
+        return 0
+    fi
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        n=$((n+1))
+        bytes=$(( bytes + $(stat -c %s "$f" 2>/dev/null || echo 0) ))
+    done <<EOFDX
+$ficheros
+EOFDX
+    ui_ask "Se va a borrar la cache de shaders de $gid:
+
+$(printf '%s' "$ficheros" | sed 's|.*/|  |')
+
+Son $n fichero(s), $(human_size "$bytes").
+
+La proxima partida ira a tirones mientras se regenera, y
+luego volvera a ir fina. Seguir?" || return 0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rm -f "$f" 2>/dev/null && log "dxvk: borrada la cache $f"
+    done <<EOFDX2
+$ficheros
+EOFDX2
+    say "[+] Cache de shaders borrada: $n fichero(s), $(human_size "$bytes")"
+    # LA DE MESA VA APARTE Y SE PREGUNTA, porque NO se puede separar por juego.
+    #
+    # Mesa nombra sus entradas por el contenido del shader, no por el juego, asi
+    # que o se borra entera o no se borra. Como afecta a todos los juegos, se
+    # avisa y se deja elegir en vez de llevarselo por delante en silencio.
+    local mesa_b=0
+    [ -d "$CACHE_DIR/mesa" ] && mesa_b="$(du -sb "$CACHE_DIR/mesa" 2>/dev/null | cut -f1)"
+    if [ "${mesa_b:-0}" -gt 0 ]; then
+        if ui_ask "Hecho.
+
+Queda la cache del DRIVER (Mesa), $(human_size "$mesa_b"), que NO se
+puede separar por juego: o se borra entera o no se toca.
+
+Si el problema sigue despues de esto, prueba a borrarla
+tambien. Afecta a TODOS los juegos, que tendran tirones la
+primera partida.
+
+Borrarla tambien?"; then
+            rm -rf "$CACHE_DIR/mesa" 2>/dev/null
+            mkdir -p "$CACHE_DIR/mesa" 2>/dev/null
+            say "[+] Cache del driver (Mesa) borrada: $(human_size "$mesa_b")"
+            log "dxvk: borrada tambien la cache de Mesa ($mesa_b bytes)"
+        fi
+    else
+        ui_info "Cache de shaders borrada: $n fichero(s), $(human_size "$bytes")."
+    fi
+    return 0
+}
+
 cfg_rendimiento_menu() {
     # Ajustes que casi nunca hay que tocar: se sacaron del menu principal del
     # juego, que habia llegado a 42 lineas y era incomodo de recorrer con el
@@ -39243,6 +41387,7 @@ cfg_rendimiento_menu() {
             "Fsync: $(onoff "$FSYNC")" \
             "Esync: $(onoff "$ESYNC")" \
             "DXVK Async + GPL: $(onoff "$DXVK_ASYNC")" \
+            "Borrar la cache de shaders de este juego" \
             "WineD3D (OpenGL, juegos viejos): $(onoff "$WINED3D")" \
             "FSR escalado pantalla completa: $(onoff "$FSR")" \
             "Memoria 4 GB para juegos de 32 bits (LAA): $(onoff "$LAA")" \
@@ -40485,6 +42630,7 @@ desactivalo aquí mismo." ;;
         "Fsync:"*)        FSYNC=$((1-FSYNC));           write_full_profile "$gid" ;;
         "Esync:"*)        ESYNC=$((1-ESYNC));           write_full_profile "$gid" ;;
         "DXVK Async"*)    DXVK_ASYNC=$((1-DXVK_ASYNC)); write_full_profile "$gid" ;;
+        "Borrar la cache de shaders"*) dxvk_cache_borrar "$gid" "${EXE_PATH:-}" ;;
         "WineD3D"*)       WINED3D=$((1-WINED3D));       write_full_profile "$gid" ;;
         "FSR"*)           FSR=$((1-FSR));               write_full_profile "$gid" ;;
         "LAA"*|"Memoria 4 GB"*)
