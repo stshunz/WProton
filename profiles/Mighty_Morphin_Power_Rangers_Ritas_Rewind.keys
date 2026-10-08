@@ -1,0 +1,17 @@
+{
+    "actions_player1": [
+        {
+            "trigger": "r3",
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        }
+		,
+        {
+            "trigger": ["hotkey", "start"],
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        }
+    ]
+}

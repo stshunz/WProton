@@ -1,0 +1,31 @@
+{
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "r3",
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": [
+        "hotkey",
+        "x"
+      ],
+      "type": "key",
+      "target": "TECLADO_VIRTUAL"
+    }
+  ]
+}

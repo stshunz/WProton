@@ -1,0 +1,285 @@
+{
+    "actions_player1": [
+        {
+            "trigger": "r3",
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        },
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_1"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_X"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_C"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_V"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        }
+    ],
+    "actions_player2": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_Y"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_T"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_G"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_H"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_2"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_D"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_F"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_Y"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_T"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_G"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_H"
+        }
+    ],
+    "actions_player3": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_I"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_U"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_J"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_K"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_3"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_Q"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_R"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_E"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_I"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_U"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_J"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_K"
+        }
+    ],
+    "actions_player4": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_P"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_O"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_L"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_SEMICOLON"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_4"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_7"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_6"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_9"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_8"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_P"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_O"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_L"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_SEMICOLON"
+        }
+    ]
+}

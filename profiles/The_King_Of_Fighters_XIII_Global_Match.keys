@@ -1,0 +1,25 @@
+{
+    "actions_player1": [
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+			"description": "Salir del Juego",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        },
+        {
+            "trigger": "r3",
+            "type": "key",
+			"description": "Salir del Juego",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        }
+    ]
+}

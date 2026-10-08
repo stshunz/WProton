@@ -1,0 +1,192 @@
+{
+    "actions_player1": [
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ENTER"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "pagedown",
+            "type": "key",
+            "target": "KEY_V"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_V"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_X"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_C"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_B"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_N"
+        },
+        {
+            "trigger": "select",
+            "type": "key",
+            "target": "KEY_ESC"
+        }
+    ],
+    "actions_player2": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_D"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_U"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_D"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_F"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_F"
+        },
+        {
+            "trigger": "pagedown",
+            "type": "key",
+            "target": "KEY_R"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_R"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_G"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_H"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_T"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_Y"
+        }
+    ]
+}

@@ -1,0 +1,201 @@
+{
+    "actions_player1": [
+        {
+            "trigger": "r3",
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        },
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "exec",
+            "target": "batocera-es-swissknife --emukill",
+            "description": "Salir del Juego"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "select",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ENTER"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_C"
+        },
+        {
+            "trigger": "joystick2left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick2right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_V"
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_X"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_E"
+        },
+        {
+            "trigger": "pagedown",
+            "type": "key",
+            "target": "KEY_R"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_Q"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_SPACE"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_B"
+        }
+    ],
+    "actions_player2": [
+        {
+            "trigger": "select",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_X"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ENTER"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_C"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_V"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "joystick2left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick2right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_E"
+        },
+        {
+            "trigger": "pagedown",
+            "type": "key",
+            "target": "KEY_R"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_Q"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_SPACE"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_B"
+        }
+    ]
+}

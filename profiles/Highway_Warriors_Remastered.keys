@@ -1,0 +1,90 @@
+{
+    "actions_player1": [
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_D"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": "select",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_SPACE"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_L"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_D"
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_W"
+        },
+        {
+            "trigger": "joystick2up",
+            "type": "key",
+            "target": "KEY_LEFTSHIFT"
+        },
+        {
+            "trigger": "joystick2down",
+            "type": "key",
+            "target": "KEY_LEFTCTRL"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_Z"
+        }
+    ]
+}

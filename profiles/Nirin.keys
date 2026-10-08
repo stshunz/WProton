@@ -1,0 +1,17 @@
+{
+    "actions_player1": [
+        {
+            "trigger": "r3",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+            "target": "KEY_ESC"
+        }
+    ]
+}

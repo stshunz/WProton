@@ -1,0 +1,36 @@
+{
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_1"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "KEY_W"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "KEY_Q"
+    }
+  ],
+  "mouse": {
+    "axis": "joystick1",
+    "click_left": "r3",
+    "speed": 900
+  },
+  "wproton_para": "Walking_dead"
+}

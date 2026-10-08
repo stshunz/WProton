@@ -1,0 +1,145 @@
+{
+    "actions_player1": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ENTER"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "r3",
+            "type": "key",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        },
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        }
+    ],
+    "actions_player2": [
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_KP8"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_KP2"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_KP4"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_KP6"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_END"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_DELETE"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_INSERT"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_DELETE"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_KP8"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_KP2"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_KP4"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_KP6"
+        }
+    ]
+}

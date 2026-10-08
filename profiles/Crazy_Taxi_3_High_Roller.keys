@@ -1,0 +1,121 @@
+{
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "select",
+      "type": "key",
+      "target": "KEY_5"
+    },
+    {
+      "trigger": "up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "r3",
+      "type": "key",
+      "target": "BTN_RIGHT"
+    },
+    {
+      "trigger": "joystick1up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "joystick1down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "joystick1left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "joystick1right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_LEFTSHIFT"
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_LEFTCTRL"
+    },
+    {
+      "trigger": "pageup",
+      "type": "key",
+      "target": "KEY_LEFTCTRL"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "KEY_LEFTSHIFT"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_SPACE"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "joystick2up",
+      "type": "key",
+      "target": "KEY_LEFTCTRL"
+    },
+    {
+      "trigger": "joystick2down",
+      "type": "key",
+      "target": "KEY_LEFTSHIFT"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_C"
+    }
+  ],
+  "wproton_para": "Crazy_Taxi_3_High_Roller"
+}

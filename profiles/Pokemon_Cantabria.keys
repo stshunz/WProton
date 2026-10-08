@@ -1,0 +1,115 @@
+{
+    "actions_player1": [
+        {
+            "trigger": [
+                "hotkey",
+                "start"
+            ],
+            "type": "key",
+            "target": [
+                "KEY_LEFTALT",
+                "KEY_F4"
+            ]
+        },
+        {
+            "trigger": "up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "start",
+            "type": "key",
+            "target": "KEY_ENTER"
+        },
+        {
+            "trigger": "b",
+            "type": "key",
+            "target": "KEY_C"
+        },
+        {
+            "trigger": "y",
+            "type": "key",
+            "target": "KEY_Z"
+        },
+        {
+            "trigger": "a",
+            "type": "key",
+            "target": "KEY_ESC"
+        },
+        {
+            "trigger": "joystick1up",
+            "type": "key",
+            "target": "KEY_UP"
+        },
+        {
+            "trigger": "joystick1down",
+            "type": "key",
+            "target": "KEY_DOWN"
+        },
+        {
+            "trigger": "joystick1left",
+            "type": "key",
+            "target": "KEY_LEFT"
+        },
+        {
+            "trigger": "joystick1right",
+            "type": "key",
+            "target": "KEY_RIGHT"
+        },
+        {
+            "trigger": "joystick2up",
+            "type": "key",
+            "target": "KEY_PAGEUP"
+        },
+        {
+            "trigger": "joystick2down",
+            "type": "key",
+            "target": "KEY_PAGEDOWN"
+        },
+        {
+            "trigger": "r2",
+            "type": "key",
+            "target": "KEY_LEFTALT"
+        },
+        {
+            "trigger": "l2",
+            "type": "key",
+            "target": "KEY_LEFTALT"
+        },
+        {
+            "trigger": "pageup",
+            "type": "key",
+            "target": "KEY_S"
+        },
+        {
+            "trigger": "pagedown",
+            "type": "key",
+            "target": "KEY_A"
+        },
+        {
+            "trigger": "x",
+            "type": "key",
+            "target": "KEY_F5"
+        },
+        {
+            "trigger": "select",
+            "type": "key",
+            "target": "KEY_D"
+        }
+    ]
+}

@@ -1,0 +1,25 @@
+{
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "r3",
+      "type": "key",
+      "target": "batocera-es-swissknife --emukill"
+    }
+  ],
+  "mouse": {
+    "axis": "joystick2",
+    "click_left": "r3",
+    "speed": 900
+  }
+}
