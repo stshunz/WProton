@@ -1,3 +1,4 @@
+# WPROTON_HELPER steam_add.py 3f6725b2040c
 #!/usr/bin/env python3
 # WProton - accesos directos de Steam
 #

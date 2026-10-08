@@ -1,3 +1,4 @@
+# WPROTON_HELPER disco.py bddf2425d0b8
 # -*- coding: utf-8 -*-
 # WProton - utilidades de disco (tamaños, espacio, huerfanos, listados)
 #

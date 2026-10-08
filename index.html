@@ -198,6 +198,8 @@ details p{color:var(--tenue);margin:11px 0 0;font-size:15.5px}
 .cierre{text-align:center;padding:84px 0}
 .cierre h2{font-size:clamp(28px,3.4vw,38px)}
 .cierre p{color:var(--tenue);max-width:34em;margin:14px auto 28px}
+.cierre .gracias{font-size:.95rem;max-width:40em;margin-top:30px;padding-top:24px;border-top:1px solid var(--borde)}
+.cierre .gracias b{color:var(--texto)}
 footer{border-top:1px solid var(--borde);padding:34px 0;color:var(--tenue);font-size:14.5px}
 footer .envoltura{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between}
 footer a{color:var(--tenue)}
@@ -406,36 +408,86 @@ footer a{color:var(--tenue)}
 
     <div class="galeria">
       <figure class="captura">
-        <img src="img/ficha.jpg" alt="Lista de juegos de WProton con la carátula, la ficha y la sinopsis del juego seleccionado" loading="lazy" width="1280" height="720">
+        <img src="img/biblioteca-ficha.jpg" alt="Lista de juegos de WProton con la carátula, la ficha y la sinopsis del juego seleccionado" loading="lazy" width="1920" height="1080">
         <figcaption><b>La biblioteca.</b> A la derecha, la carátula y la ficha
           del juego resaltado: año, estudio, género, nota, cuánto se tarda en
           terminarlo, lo que llevas jugado y una sinopsis. Siempre los mismos
           datos, con un guion donde no los hay.</figcaption>
       </figure>
       <figure class="captura">
-        <img src="img/rejilla.jpg" alt="Vista de rejilla de WProton: los juegos como carátulas grandes" loading="lazy" width="960" height="540">
-        <figcaption><b>O en rejilla, si prefieres las carátulas.</b> La misma
-          biblioteca, con los juegos como portadas. Se cambia de una vista a
-          otra en <i>Biblioteca y preferencias</i>.</figcaption>
+        <img src="img/menu-principal.png" alt="Menú principal de WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>El menú principal.</b> Jugar, añadir un juego y poco más
+          a la vista. Lo de cada día arriba; lo que se toca una vez al año,
+          dentro.</figcaption>
       </figure>
       <figure class="captura">
-        <img src="img/anchas.jpg" alt="Vista de carátulas panorámicas de WProton, cuatro por fila" loading="lazy" width="1280" height="720">
+        <img src="img/biblioteca-rejilla.jpg" alt="Vista de rejilla de WProton: los juegos como carátulas grandes" loading="lazy" width="1920" height="1080">
+        <figcaption><b>O en rejilla, si prefieres las carátulas.</b> La misma
+          biblioteca, con los juegos como portadas. Se cambia de una vista a
+          otra con <i>Select+X</i>, sin salir de la lista.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/biblioteca-anchas.jpg" alt="Vista de carátulas panorámicas de WProton, cuatro por fila" loading="lazy" width="1920" height="1080">
         <figcaption><b>Y con carátulas panorámicas.</b> Menos juegos a la vez,
           pero se reconocen mejor. Debajo de cada uno, el tiempo jugado y
           cuándo fue la última vez.</figcaption>
       </figure>
       <figure class="captura">
-        <img src="img/ajustes.png" alt="Pantalla de ajustes de un juego en WProton" loading="lazy" width="960" height="540">
+        <img src="img/ajustes-juego.png" alt="Pantalla de ajustes de un juego en WProton" loading="lazy" width="1920" height="1080">
         <figcaption><b>Los ajustes de un juego.</b> Cada juego guarda los suyos:
           runner, prefijo, argumentos, mando… Lo que casi nunca se toca queda
-          recogido en dos submenús.</figcaption>
+          recogido en submenús.</figcaption>
       </figure>
       <figure class="captura">
-        <img src="img/runners.png" alt="Menú de runners y herramientas de WProton" loading="lazy" width="960" height="540">
+        <img src="img/rendimiento.png" alt="Menú de rendimiento y compatibilidad de WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Rendimiento y compatibilidad.</b> MangoHud, Fsync, DXVK,
+          FSR, gamescope, generación de fotogramas… Interruptores, no ficheros
+          de configuración.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/mandos.png" alt="Menú de mandos de WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Mandos.</b> Cuando un juego no ve el tuyo, aquí está el
+          arreglo: cómo lo lee Wine, el puente de Steam Input y el mando
+          virtual.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/asistente-runner.png" alt="Asistente de WProton: elegir Proton o Wine para el juego" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Añadir un juego son tres preguntas.</b> Con qué Proton o
+          Wine, cuál es el ejecutable y si quiere prefijo propio o compartido.
+          Si no lo tienes claro, acepta lo que propone.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/runners-herramientas.png" alt="Menú de runners y herramientas de WProton" loading="lazy" width="1920" height="1080">
         <figcaption><b>Runners y herramientas.</b> Descargar versiones de Proton
           o Wine, librerías de Windows, añadir WProton a Steam y poco más:
           todo desde aquí, sin salir a la terminal.</figcaption>
       </figure>
+      <figure class="captura">
+        <img src="img/descargar-runner.png" alt="Lista de fuentes de runners de WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Catorce fuentes de runners.</b> GE-Proton, Kron4ek,
+          UMU-Proton, CachyOS, Wine-GE… Se bajan y se cambian desde el menú;
+          un juego que no arranca suele arreglarse probando otro.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/instalar-librerias.png" alt="Menú de instalación de librerías de Windows en WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Librerías de Windows.</b> Visual C++, .NET, DirectX,
+          códecs de vídeo… agrupadas por para qué sirven, en vez de una lista
+          de nombres de winetricks.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/partidas-guardadas.png" alt="Menú de partidas guardadas de un juego en WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Tus partidas, a salvo.</b> WProton sabe dónde guarda cada
+          juego y hace una copia en un zip. Desde ahí se restauran, y se pasan
+          a otro equipo de la misma red aunque tenga las carpetas en otro
+          sitio.</figcaption>
+      </figure>
+      <figure class="captura">
+        <img src="img/gestion-archivos.png" alt="Menú de gestión de archivos de WProton" loading="lazy" width="1920" height="1080">
+        <figcaption><b>Gestión de archivos.</b> Cuánto ocupa cada juego, montajes
+          colgados, caché de shaders y prefijos huérfanos. Lo que normalmente
+          hay que ir a buscar a mano.</figcaption>
+      </figure>
+    </div>
     </div>
   </div>
 </section>
@@ -486,8 +538,8 @@ footer a{color:var(--tenue)}
     <details>
       <summary>Cerrar el juego desde el menú de Steam</summary>
       <p>En el menú de Steam, <em>Salir del juego</em> sobre la fila de WProton
-         cierra el juego y te devuelve a los menús, sin cerrar WProton. Hasta
-         la 1.75 no hacía nada: WProton ignoraba esa señal porque Steam manda
+         cierra el juego y te devuelve a los menús, sin cerrar WProton. Antes
+         no hacía nada: WProton ignoraba esa señal porque Steam manda
          la misma al cerrarse su ventana para dejar paso al juego, y atenderla
          desmontaba el juego a medio arrancar. Ahora se distinguen.</p>
     </details>
@@ -522,6 +574,9 @@ footer a{color:var(--tenue)}
   <div class="envoltura">
     <h2>Un fichero y a jugar</h2>
     <p>Descárgalo, dale permiso de ejecución y ábrelo. Lo demás lo hace él.</p>
+    <p class="gracias"><b>Muchas gracias a Michel, Fransis y MRDeu</b> por todas
+       las horas de testeo que habéis metido a WProton. Sin vosotros este
+       proyecto no habría sido posible.</p>
     <div class="botones" style="justify-content:center">
       <a class="boton boton-primario" href="https://github.com/stshunz/WProton/releases/latest">
         Descargar la última versión
@@ -539,7 +594,7 @@ footer a{color:var(--tenue)}
     <span>WProton — software libre, hecho por y para quien juega en Linux.</span>
     <span>
       <a href="https://github.com/stshunz/WProton">Código</a> ·
-      <a href="https://github.com/stshunz/WProton/blob/main/CHANGELOG.md">Novedades</a> ·
+      <a href="https://github.com/stshunz/WProton/blob/main/NOVEDADES-2.0.md">Novedades</a> ·
       <a href="https://github.com/stshunz/WProton/issues">Avisar de un fallo</a>
     </span>
   </div>

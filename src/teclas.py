@@ -15,7 +15,7 @@
 #   keys_texto_poner() / keys_teclado_poner()-> poner_accion()
 #   keys_raton_leer() / keys_raton_poner()  -> raton_leer() / raton_poner()
 #   keys_sustituye_al_mando()               -> sustituye_al_mando()
-#   keys_ejemplo_crear()                    -> ejemplo()
+#   (la fila del menu se quito en 1.67)     -> ejemplo()
 #   el heredoc PYESC de keys_editor()       -> componer()
 #
 # ESTO YA ERA PYTHON
@@ -107,6 +107,94 @@ def leer(ruta):
     except (OSError, ValueError):
         return {}
     return d if isinstance(d, dict) else {}
+
+
+CAMPO_DUENO = "wproton_para"
+
+
+def reparar_marca_vieja(ruta):
+    """Repara el .keys que una version anterior dejo ilegible, SIN perder el gid.
+
+    LA MARCA VA DENTRO DEL JSON, NO COMO COMENTARIO.
+
+    Una version de WProton la escribia como una linea "# wproton-para: X" al
+    principio del fichero. Un .keys ES UN JSON, y un JSON no admite
+    comentarios: cualquier fichero marcado asi dejaba de poder leerse
+    ("Expecting value: line 1 column 1") y el mapeador se moria al arrancar.
+
+    Los ficheros afectados siguen en el disco de quien los tenga, asi que no
+    basta con dejar de estropearlos: hay que arreglarlos. Y hay que CONSERVAR
+    el gid de esa linea, no solo tirarla: es la unica copia que queda de a quien
+    pertenece el fichero. (Una version de esta funcion la borraba sin mas, y el
+    .keys se quedaba sin dueno.)
+
+    Devuelve el gid recuperado, o "" si el fichero no estaba en ese caso.
+    """
+    try:
+        with open(ruta, encoding="utf-8") as fh:
+            lineas = fh.readlines()
+    except OSError:
+        return ""
+    if not lineas or not lineas[0].lstrip().startswith("# wproton-para:"):
+        return ""
+    gid = lineas[0].split(":", 1)[1].strip()
+    resto = "".join(lineas[1:])
+    try:
+        d = json.loads(resto)          # solo se escribe si queda JSON valido
+    except ValueError:
+        return ""
+    if not isinstance(d, dict):
+        return ""
+    if gid:
+        d[CAMPO_DUENO] = gid
+    if guardar(ruta, d):
+        return gid
+    return ""
+
+
+def dueno(ruta):
+    """El juego al que pertenece un .keys, o "" si no lo dice.
+
+    Guardando la marca como un campo mas del objeto, el fichero sigue siendo
+    JSON valido y lo entienden tanto WProton como cualquier otra herramienta,
+    que simplemente ignorara un campo que no conoce.
+    """
+    reparar_marca_vieja(ruta)
+    d = leer(ruta)
+    v = d.get(CAMPO_DUENO, "")
+    return v.strip() if isinstance(v, str) else ""
+
+
+def marcar(ruta, gid, forzar=False):
+    """Deja escrito dentro del .keys a que juego pertenece.
+
+    Por defecto, si ya lo dice NO se toca: la marca original manda, y es lo que
+    impide que el .keys de un juego se aplique a otro.
+
+    Con forzar=True se reescribe aunque ya tuviera dueno. Eso es para cuando el
+    usuario lo ha decidido explicitamente -asignar un fichero a mano a ESTE
+    juego, o un fichero que esta en profiles/ con el nombre de ESTE juego-, y
+    sin ello el fichero quedaba inservible: estaba puesto donde toca pero
+    seguia diciendo ser de otro, asi que WProton lo ignoraba y el juego se
+    quedaba sin teclas mientras el menu decia que no habia ninguna.
+
+    Devuelve True si el fichero quedo marcado (ya lo estuviera o no).
+    """
+    if not gid:
+        return False
+    reparar_marca_vieja(ruta)
+    d = leer(ruta)
+    if not d:
+        # Fichero ilegible o vacio: no se inventa nada, y sobre todo no se
+        # sobrescribe lo que haya, que podria ser recuperable a mano.
+        return False
+    previo = d.get(CAMPO_DUENO)
+    if not forzar and isinstance(previo, str) and previo.strip():
+        return True
+    if isinstance(previo, str) and previo.strip() == gid:
+        return True                    # ya era de este juego: nada que escribir
+    d[CAMPO_DUENO] = gid
+    return guardar(ruta, d)
 
 
 def acciones(datos):
@@ -707,9 +795,32 @@ def main(argv):
             "  componer <destino> <teclas> [combos] [raton]\n"
             "  combos   <fichero>                      cuantas combinaciones lleva\n"
             "  ejemplo  <fichero>                      escribe el .keys de ejemplo\n"
+            "  dueno    <fichero>                      de que juego dice ser\n"
+            "  marcar   <fichero> <gid> [forzar]       lo apunta dentro del JSON\n"
+            "  reparar  <fichero>                      arregla la marca vieja\n"
             "  comprobar                               auto-diagnostico\n")
         return 2
     orden = argv[1]
+
+    if orden == "dueno":
+        if len(argv) < 3:
+            return 2
+        # dueno() ya repara de paso la marca vieja que rompia el JSON.
+        sys.stdout.write(dueno(argv[2]))
+        return 0
+
+    if orden == "marcar":
+        if len(argv) < 4:
+            return 2
+        # El tercer argumento opcional "forzar" reescribe una marca previa.
+        forzar = len(argv) > 4 and argv[4] == "forzar"
+        return 0 if marcar(argv[2], argv[3], forzar) else 1
+
+    if orden == "reparar":
+        if len(argv) < 3:
+            return 2
+        sys.stdout.write(reparar_marca_vieja(argv[2]))
+        return 0
 
     if orden == "comprobar":
         fallos = comprobar()

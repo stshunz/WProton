@@ -39,11 +39,36 @@ import signal
 import sys
 import time
 
+# LAS RUTAS DE WProton, ANTES DE IMPORTAR evdev.
+#
+# EL FALLO QUE COSTO DOS TARDES
+#
+# evdev NO esta en el Python del sistema: WProton lo instala en su propio
+# runtime/libs_pyX.Y para no tocar nada de la maquina. mapeador.py preparaba
+# sys.path con esas rutas antes de importarlo; aqui habia un "import evdev"
+# pelado, asi que este modulo se moria SIEMPRE con "falta python-evdev",
+# estuviera instalado o no.
+#
+# El registro del 16/09 lo enseña contradiciendose en diez segundos:
+#
+#   23:26:13  [+] evdev ya disponible (mapeador .keys listo)
+#   23:26:23  mando_virtual: falta python-evdev
+#
+# Los dos decian la verdad: uno buscaba en libs_pyX.Y y el otro no.
+_RT = os.path.dirname(os.path.abspath(__file__))          # runtime/
+_BASE_DIR = os.path.dirname(_RT)                          # raiz de WProton
+sys.path.insert(0, os.path.join(_RT, 'libs_py%d.%d' % sys.version_info[:2]))
+for _d in (os.path.join(_BASE_DIR, 'evmapy'), os.path.join(_RT, 'evmapy'),
+           os.path.join(_BASE_DIR, 'libs_py%d.%d' % sys.version_info[:2])):
+    if os.path.isdir(_d):
+        sys.path.insert(0, _d)
+
 try:
     import evdev
     from evdev import ecodes
 except ImportError:
     sys.stderr.write("mando_virtual: falta python-evdev\n")
+    sys.stderr.write("mando_virtual: buscado en %s\n" % ", ".join(sys.path[:4]))
     sys.exit(2)
 
 
@@ -57,9 +82,21 @@ except ImportError:
 # Lo que decide como te ve un juego NO es el nombre, sino el par
 # vendor/product: es lo que miran SDL y Wine para saber que mando es y que
 # iconos dibujar. Por eso se cambian los tres numeros y no solo el texto.
+# EL NOMBRE LLEVA "WProton" DELANTE, A PROPOSITO.
+#
+# Antes el de Xbox se llamaba exactamente "Microsoft X-Box 360 pad", y el mando
+# VIRTUAL DE STEAM se llama "Microsoft X-Box 360 pad 0". En un registro o en un
+# menu son indistinguibles: el 17/09 el usuario vio "mando Xbox 360" al entrar
+# en otro juego y penso que el ajuste se le habia quedado pegado. No era el
+# ajuste -los perfiles no arrastran nada, se comprobo- era el NOMBRE del mando
+# que Steam ofrece, que es el mismo que usabamos nosotros.
+#
+# El fabricante/modelo NO se toca: SDL mapea por vendor/product, asi que sigue
+# reconociendose como un Xbox 360 de verdad y los botones salen bien. Lo unico
+# que cambia es como se lee.
 MANDOS = {
-    "xbox": ("Microsoft X-Box 360 pad", 0x045E, 0x028E, 0x0114),
-    "ds4":  ("Sony Interactive Entertainment Wireless Controller",
+    "xbox": ("WProton Xbox 360 pad", 0x045E, 0x028E, 0x0114),
+    "ds4":  ("WProton Sony Wireless Controller",
              0x054C, 0x09CC, 0x8111),
 }
 NOMBRE_VIRTUAL = MANDOS["xbox"][0]

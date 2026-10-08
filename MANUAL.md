@@ -6,6 +6,8 @@ Si solo quieres jugar, con los tres primeros apartados tienes de sobra.
 ---
 ## 1. Primeros pasos
 
+![El menú principal de WProton](img/menu-principal.png)
+
 ### Antes de empezar
 
 **Hace falta conexión a internet para instalar.** WProton se descarga a sí
@@ -44,6 +46,17 @@ Al abrirlo por primera vez te preguntará **dónde tienes los juegos**, con dos 
 Los menús se abren **a pantalla completa**. Si prefieres verlos en ventana, pulsa **Select + A** (o **F11**) y quedará recordado.
 
 ### Añadir tu primer juego
+
+![Paso 1 de 3: elegir Proton o Wine](img/asistente-runner.png)
+
+![Paso 2 de 3: elegir el ejecutable del juego](img/asistente-ejecutable.png)
+
+![Prefijo: compartido, propio del juego o el de TeknoParrot](img/asistente-prefijo.png)
+
+![Paso 3 de 3: los ajustes básicos, con lo recomendado ya marcado](img/asistente-ajustes.png)
+
+![Al terminar: el perfil creado, con su runner y su prefijo](img/asistente-final.png)
+
 
 **Si ya tienes un juego empaquetado** (`.wsquashfs`, `.squashfs` o `.dwarfs`), no hay nada que preparar: **cópialo a tu carpeta de juegos —`games/` por defecto— y ya aparece en *Jugar***. También puedes abrirlo directamente desde el navegador de archivos o desde la línea de comandos:
 
@@ -133,13 +146,13 @@ Ese mismo teclado en pantalla se usa para escribir argumentos, notas o cualquier
 
 ---
 
-![La biblioteca de WProton: lista de juegos con la carátula, la ficha y la sinopsis del seleccionado](img/ficha.jpg)
+![La biblioteca de WProton: lista de juegos con la carátula, la ficha y la sinopsis del seleccionado](img/biblioteca-ficha.jpg)
 
 ## 3. Ajustes de un juego
 
 Desde la lista de juegos, ponte encima de uno y pulsa **X** (o entra en *Ajustes de un juego*).
 
-![Pantalla de ajustes de un juego](img/ajustes.png)
+![Pantalla de ajustes de un juego: arriba lo del día a día, abajo los submenús](img/ajustes-juego.png)
 
 Arriba está lo del día a día. Lo que casi nunca se toca vive en dos submenús: **Rendimiento y compatibilidad** (MangoHud, Fsync, DXVK, FSR, gamescope…) y **Herramientas del prefijo** (winecfg, winetricks, dgVoodoo2, OptiScaler).
 
@@ -225,10 +238,43 @@ Si ya tienes una colección de carátulas, cópiala en la carpeta que
 corresponda: los ficheros se llaman igual que el juego, con espacios o con
 guiones bajos — las dos formas valen.
 
-> Para las descargas de SteamGridDB hace falta una clave gratuita
+![Carátulas y perfiles de la comunidad](img/caratulas-comunidad.png)
+
+### Las 4:3 las pone WProton
+
+![Carátula y ficha de un juego: la 4:3 se baja del repositorio](img/caratula-y-ficha.png)
+
+Las carátulas **4:3** no se buscan en ningún sitio: salen de la carpeta
+`covers_43/` del repositorio de WProton, recortadas a 640x480 una por una. Por
+eso son la forma que viene puesta de serie.
+
+No hay que pedirlas: **la primera vez que cargas un juego**, WProton mira si el
+repositorio tiene una con su nombre y la baja. Si ya tenías una 4:3 ahí puesta
+—a mano o de antes— no se toca.
+
+El nombre del fichero del repositorio y el de tu juego no tienen que coincidir
+exactamente: se comparan sin mayúsculas ni separadores, y se admite la coletilla
+de versión o de grupo que traen las descargas. Así `covers_43/Rave Racer.jpg`
+vale para un `Rave_Racer.wsquashfs`, y `Mina.the.Hollower.v1.0.2` encuentra la de
+*Mina the Hollower*. La carátula se guarda con **el nombre de tu juego**, no con
+el del repositorio: si se guardara con el de allá, no la encontraría nadie.
+
+También se puede pedir a mano, cuando el repositorio acaba de añadir la de tu
+juego: *Ajustes del juego → Carátula y ficha → **Carátula 4:3: descargarla del
+repositorio de WProton***. Esa opción consulta la lista recién traída, sin
+esperar a que caduque la del día, y avisa si todavía no hay ninguna.
+
+Si te falta la de algún juego, puedes proponerla: un `png` o `jpg` a 640x480 en
+la carpeta `covers_43/` del repositorio, con el nombre del juego.
+
+> Para las descargas de SteamGridDB —las **verticales** y las
+> **panorámicas**— hace falta una clave gratuita
 > (steamgriddb.com → Profile → Preferences → API). En vez de teclearla con el
 > mando, puedes pegarla en un fichero de texto y dejarlo junto a `wproton.sh`:
 > WProton la recoge, la guarda a buen recaudo y borra el fichero.
+>
+> Para las 4:3 **no hace falta clave ninguna**: si solo pides esas, WProton ya
+> no te la pregunta.
 
 **Descargar datos de los juegos** (en *Biblioteca y preferencias*) hace lo
 mismo con la información: baja de una vez la **ficha de Steam** (año, género,
@@ -238,7 +284,7 @@ cada juego.
 
 El panel de la derecha enseña la carátula, la ficha y la sinopsis:
 
-![La ficha de un juego: carátula, año, desarrollo, género, nota, duración y sinopsis](img/ficha.jpg)
+![La ficha de un juego: carátula, año, desarrollo, género, nota, duración y sinopsis](img/biblioteca-lista.jpg)
 
 ### La nota, y los juegos que no están en Steam
 
@@ -371,6 +417,11 @@ Además del mando y el teclado, los menús responden al ratón:
 | Clic izquierdo | Entra en esa fila (como A o Intro) |
 | Clic derecho | En la lista de juegos, abre los **ajustes de ese juego**; en el resto, vuelve atrás |
 | Rueda | Sube y baja **media pantalla** por golpe |
+| Flechas de la barra lateral | Desplazan media pantalla; solo salen si la lista no cabe |
+
+El puntero es **morado**, del color de la marca, con un borde oscuro para que se
+lea también sobre una carátula clara. El puntero blanco del sistema se perdía en
+estos fondos, y además cambia de un equipo a otro.
 
 El clic derecho selecciona antes la fila que hay debajo: abrir los ajustes de un
 juego que no es el que señalas sería peor que no hacer nada.
@@ -378,6 +429,12 @@ juego que no es el que señalas sería peor que no hacer nada.
 La rueda mueve media pantalla porque con tres filas por golpe una lista de
 cincuenta juegos son diecisiete vueltas, y entonces no compensa frente a la
 búsqueda.
+
+Cuando la lista no cabe en pantalla aparecen **flechas arriba y abajo** en los
+extremos de la barra lateral. Se apagan en gris cuando ya no hay más por ese
+lado. Su zona de clic es más ancha que el dibujo —acertar un triángulo de diez
+píxeles con el puntero es incómodo— pero nunca invade la lista, para que los
+últimos píxeles de una fila no desplacen en vez de elegir el juego.
 
 **El puntero se esconde solo** tras unos segundos quieto y vuelve al primer
 movimiento: en una Deck sin ratón un puntero plantado en medio sobra, y con
@@ -407,6 +464,8 @@ lanza como juego de Linux, sin Wine de por medio.
 > Si aun así no se puede poner (un archivo de solo lectura de verdad), se dice
 > claramente en vez de intentar `bash` sobre un binario, que es lo que hacía una
 > de las ramas y solo escupía basura.
+
+![Archivo y mantenimiento: lo que se toca de uvas a peras](img/archivo-mantenimiento.png)
 
 ### Un juego puede traer su propia carpeta personal (`.home`)
 
@@ -480,6 +539,40 @@ a todos.
 > tener caché nunca y tendrías tirones para siempre sin saber por qué. Se hace
 > una vez, que es cuando sirve.
 
+![El menú del mapeador .keys de un juego](img/mapeador-keys.png)
+
+### Mapear teclas al stick derecho
+
+El editor de `.keys` ofrece las ocho direcciones de los dos sticks:
+
+```
+Stick izquierdo arriba / abajo / izquierda / derecha
+Stick derecho   arriba / abajo / izquierda / derecha
+```
+
+> **Ojo con el ratón virtual.** Por defecto se mueve con el **stick derecho**.
+> Si además le asignas una tecla a una dirección de ese stick, hará las dos
+> cosas a la vez: mover el puntero y mandar la pulsación. El síntoma —el cursor
+> se va solo mientras el juego recibe teclas— no se parece en nada a su causa,
+> así que el editor avisa al asignarla y te deja cambiar de idea. Puedes pasar
+> el ratón al stick izquierdo en ese mismo menú, o quitarlo si el juego no lo
+> necesita.
+
+### El tema cristal
+
+Está en los **dos motores**. Con pygame trae los paneles translúcidos, los dos
+focos de color del fondo y la viñeta; con Qt trae además el brillo giratorio de
+la selección y el texto dibujado con halo.
+
+Esos dos últimos se quedan fuera de pygame a propósito: pygame dibuja por
+software, y un degradado cónico girando bajo la fila seleccionada hay que
+recalcularlo en cada fotograma. En la Deck eso se come el presupuesto del menú
+entero. Preferimos que cristal se vea bien y vaya fino a que se vea igual que en
+Qt y raspe.
+
+El fondo con los focos y la viñeta se dibuja **una sola vez** y se guarda: no
+cambia, así que cada fotograma es una copia de imagen.
+
 ### Fondos de temporada
 
 El fondo que se ve entre menús cambia solo en unas fechas:
@@ -513,16 +606,26 @@ siguiente ya sale con el fondo elegido; «como toque por fecha» vuelve a lo
 normal. El forzado dura hasta que cierres WProton.
 
 
+![Mandos: SDL, Steam Input, mando Sony y mando virtual](img/mandos.png)
+
+![Rendimiento y compatibilidad: MangoHud, MAKO, ReShade, Fsync, DXVK, FSR, gamescope…](img/rendimiento.png)
+
+![Herramientas del prefijo: winecfg, winetricks, dgVoodoo2, OptiScaler, ReShade](img/herramientas-prefijo.png)
+
+![Casos especiales: lo que necesitan muy pocos juegos](img/casos-especiales.png)
+
+![Protonfixes / UMU: el identificador que usa protonfixes](img/protonfixes-umu.png)
+
 ### Cómo está organizado el menú del juego
 
-Tres agrupaciones nuevas en 1.75, porque la pantalla se había convertido en un
+Tres agrupaciones, porque la pantalla se había convertido en un
 cajón de sastre:
 
 | Submenú | Qué hay dentro |
 |---|---|
 | **Mandos >>** | SDL/hidraw, puente Steam Input → XInput, mando Sony, **mando virtual**, escribir SDL en el registro del prefijo |
 | **Protonfixes / UMU >>** | El `GAMEID` y la búsqueda en la base de umu |
-| **Carátula y ficha >>** | Las dos carátulas, la ficha del juego, las notas y las estadísticas |
+| **Carátula y ficha >>** | Las carátulas (elegir una imagen, la 4:3 del repositorio, buscar en SteamGridDB), la ficha del juego, las notas y las estadísticas |
 | **Archivo y mantenimiento >>** | Reinstalar el `.bat` del juego, copias de partidas, comprobar el archivo, acceso directo, repetir el asistente, borrar saves del overlay y borrar la configuración |
 | *Mapeador .keys* | Se queda **fuera**: convertir el mando en pulsaciones de teclado es otra cosa distinta de elegir cómo se lee el mando |
 
@@ -821,7 +924,7 @@ En el registro se ve qué hizo, siempre:
 Mando virtual: apagado para este juego (MANDO_VIRTUAL=0)
 ```
 
-> Hasta la 1.75 esta opción **no funcionaba en la mayoría de juegos**: la
+> En versiones anteriores esta opción **no funcionaba en la mayoría de juegos**: la
 > llamada que crea el mando virtual estaba dentro del bloque que busca el
 > fichero `.keys`, así que solo se creaba en los juegos que tuvieran uno.
 > Elegías «Mando Xbox», se guardaba en el perfil, y no pasaba nada — sin ningún
@@ -874,7 +977,7 @@ juegos y no para el resto, y funciona desde el modo Juego sin cerrar Steam.
 > además tener Steam cerrado, así que desde el modo Juego no se puede. Por eso
 > no se hace por ahí.
 
-**Desde 1.75 WProton lo resuelve solo.** Si el único mando que hay es virtual y
+**WProton lo resuelve solo.** Si el único mando que hay es virtual y
 el runner lee por hidraw, pone `PROTON_USE_SDL` sin preguntar y lo dice:
 
 ```
@@ -900,7 +1003,7 @@ llega sin intermediarios.
 Funciona: en el menú de Steam, *Salir del juego* sobre la fila de **WProton**
 cierra el juego y te devuelve a los menús de WProton, sin cerrar WProton.
 
-Hasta la 1.75 no hacía nada, y el motivo no era Steam. En el modo Juego, Steam
+Antes no hacía nada, y el motivo no era Steam. En el modo Juego, Steam
 manda un `TERM` a WProton **al cerrarse su ventana** para dejar paso al juego, y
 atender ése desmontaba el `.wsquashfs` con el juego dentro. Por eso WProton
 ignoraba esas señales a secas — y con ellas, la que manda Steam cuando pulsas
@@ -1001,6 +1104,8 @@ Acuérdate de volver a ponerlos a `0`: el registro crece bastante.
 
 ## 5. Partidas guardadas
 
+![Partidas guardadas de un juego: copiar, restaurar y ver dónde guarda](img/partidas-guardadas.png)
+
 WProton **aprende dónde guarda cada juego**. Al jugar, observa qué ficheros escribe y localiza la carpeta exacta (por ejemplo `AppData/Roaming/Yacht Club Games/Mina the Hollower`), ignorando cachés y temporales.
 
 En *Ajustes de un juego → Partidas guardadas*:
@@ -1025,15 +1130,22 @@ En *Biblioteca y preferencias*:
 
 - **Vista de juegos**: lista o **rejilla de carátulas**. En la lista, el panel de la derecha muestra la carátula del juego resaltado y sus datos.
 
-![Vista de rejilla: los juegos como carátulas grandes](img/rejilla.jpg)
+> **Cómo arranca WProton recén descargado**: menú **moderno**, vista de
+> **lista** y carátulas **4:3**. Es la combinación que funciona sin que el
+> usuario tenga que hacer nada: las 4:3 vienen del repositorio y las otras
+> formas dependen de que uno se saque una clave de SteamGridDB. Todo se
+> cambia aquí mismo y queda guardado.
+
+![Vista de rejilla: los juegos como carátulas grandes](img/biblioteca-rejilla.jpg)
 
 La vista de **carátulas panorámicas** enseña menos juegos a la vez, pero se
 reconocen mejor. La cinta de la esquina marca los favoritos, y debajo de
 cada uno sale el tiempo jugado y cuándo fue la última vez:
 
-![Vista de carátulas panorámicas, cuatro por fila](img/anchas.jpg)
+![Vista de carátulas panorámicas, cuatro por fila](img/biblioteca-anchas.jpg)
+
 - **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
-- **Descargar carátulas**: necesita una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API). Se pide una sola vez.
+- **Descargar carátulas**: las **4:3** salen de la carpeta `covers_43/` del repositorio de WProton y no piden nada; las **verticales** y las **panorámicas** necesitan una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API), que se pide una sola vez y solo si las has pedido.
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
 - **Tamaño de la letra**: normal, grande o muy grande. En consolas portátiles se agradece "grande".
 - **Ordenar juegos por**: nombre, últimos jugados o más jugados. Los favoritos van siempre primero.
@@ -1057,6 +1169,8 @@ Combinado con la vista de rejilla y las carátulas, queda como un lanzador de co
 ---
 
 ## 8. Gestión de archivos
+
+![Gestión de archivos: tamaños, montajes colgados, caché de shaders y huérfanos](img/gestion-archivos.png)
 
 *Gestión de archivos* en el menú principal:
 
@@ -1177,6 +1291,8 @@ Batocera, y es lo que hace funcionar *Aliens Armageddon*.
 juego suele decir `C:\game\game.exe`. Si usas un prefijo distinto del incluido,
 ese `C:` es otro sitio y el juego no encontraría nada: WProton enlaza las
 carpetas del paquete dentro del `C:` que se esté usando.
+
+![Instalar librerías: primero se elige en qué prefijo](img/instalar-librerias-prefijo.png)
 
 ### Un prefijo para todos los juegos de TeknoParrot
 
@@ -1477,6 +1593,10 @@ Se puede cambiar el tiempo y la combinación en `settings.conf`
 
 ## 14. Actualizar WProton
 
+![Lo que trae la versión instalada](img/novedades.png)
+
+![Runners y herramientas](img/runners-herramientas.png)
+
 Cuando hay versión nueva, **la fila del menú principal cambia de texto**:
 
 ```
@@ -1505,6 +1625,18 @@ respuesta, no avisa y ya lo hará en el siguiente arranque.
 | `lang/` | Idiomas |
 
 Los ajustes generales están en `settings.conf`, que es un fichero de texto normal y corriente, comentado, por si prefieres editarlo a mano.
+
+---
+
+## Gracias
+
+Esta es la primera versión de WProton lista para el público general, y no habría
+llegado aquí sola.
+
+**Muchas gracias a Michel, Fransis y MRDeu** por todas las horas de testeo que
+habéis metido a WProton: por probarlo una y otra vez, por los registros a las
+tantas y por encontrar los fallos que en el equipo de uno nunca aparecen. Sin
+vosotros este proyecto no habría sido posible.
 
 ---
 

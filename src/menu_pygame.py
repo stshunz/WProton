@@ -257,9 +257,99 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
 # veces.
 # Se puede apagar con RATON_MENUS=0 en settings.conf, para quien no lo quiera.
 RATON = os.environ.get('WP_RATON', '1') != '0'
+
+
+def fondo_cristal(W, H):
+    """El fondo del tema cristal: dos focos de color y una vineta.
+
+    SE CALCULA UNA SOLA VEZ Y SE GUARDA.
+
+    Son cientos de circulos con transparencia; hacerlos en cada fotograma seria
+    absurdo, porque el fondo NO CAMBIA. Se dibuja al primer uso, se guarda, y a
+    partir de ahi cada fotograma es una copia de imagen. Solo se rehace si
+    cambia el tamaño de la ventana.
+    """
+    if _FONDO_CRIS[0] is not None and _FONDO_CRIS[1] == (W, H):
+        return _FONDO_CRIS[0]
+    fondo = pygame.Surface((W, H))
+    fondo.fill(TH['bg'])
+    # Dos focos: uno del acento y otro del acento secundario, en esquinas
+    # opuestas. Se pintan de fuera hacia dentro para que el borde quede suave.
+    for (cx, cy, col, rad) in ((int(W * 0.18), int(H * 0.22), TH['acc'], int(min(W, H) * 0.55)),
+                               (int(W * 0.86), int(H * 0.80), TH.get('acc2', TH['acc']),
+                                int(min(W, H) * 0.50))):
+        capa = pygame.Surface((rad * 2, rad * 2), pygame.SRCALPHA)
+        pasos = 28
+        for i in range(pasos, 0, -1):
+            r = int(rad * i / float(pasos))
+            a = int(26 * (1 - i / float(pasos)) ** 2)
+            if a <= 0 or r <= 0:
+                continue
+            pygame.draw.circle(capa, (col[0], col[1], col[2], a), (rad, rad), r)
+        fondo.blit(capa, (cx - rad, cy - rad), special_flags=pygame.BLEND_RGBA_ADD)
+    # Vineta: oscurece los bordes para que el centro destaque.
+    if TH.get('vineta'):
+        vin = pygame.Surface((W, H), pygame.SRCALPHA)
+        grosor = max(40, int(min(W, H) * 0.18))
+        for i in range(grosor):
+            a = int(90 * (i / float(grosor)) ** 2)
+            pygame.draw.rect(vin, (0, 0, 0, a),
+                             (grosor - i - 1, grosor - i - 1,
+                              W - 2 * (grosor - i - 1), H - 2 * (grosor - i - 1)),
+                             width=1, border_radius=12)
+        fondo.blit(vin, (0, 0))
+    _FONDO_CRIS[0] = fondo
+    _FONDO_CRIS[1] = (W, H)
+    return fondo
+
+
+def cursor_morado():
+    """Pone un puntero propio, del morado de la marca.
+
+    POR QUE UNO PROPIO Y NO EL DEL SISTEMA
+
+    El puntero de serie es blanco y en estos menus -fondos oscuros, morado y
+    cian- se pierde. Ademas, en la Deck y en el modo Juego el puntero del
+    sistema puede ser distinto en cada equipo; asi se ve igual en todos.
+
+    Se dibuja a mano: una flecha con borde oscuro para que se lea tambien sobre
+    un fondo claro, como una caratula. Si la version de pygame no admite
+    cursores por superficie, se deja el del sistema y no pasa nada: es un
+    adorno, no puede tumbar los menus.
+    """
+    try:
+        w, h = 20, 30
+        cur = pygame.Surface((w, h), pygame.SRCALPHA)
+        # El contorno primero y la flecha encima: asi queda un borde oscuro de
+        # un pixel que la despega de cualquier fondo.
+        punta = [(1, 1), (1, 22), (6, 17), (9, 26), (13, 24), (10, 16), (16, 16)]
+        pygame.draw.polygon(cur, (16, 10, 28), [(x, y + 1) for x, y in punta])
+        pygame.draw.polygon(cur, (16, 10, 28), [(x + 1, y) for x, y in punta])
+        pygame.draw.polygon(cur, MORADO_W, punta)
+        pygame.mouse.set_cursor(pygame.cursors.Cursor((0, 0), cur))
+        return True
+    except Exception as e:
+        print("menu_pygame: no se pudo poner el puntero morado (%s)" % e,
+              flush=True)
+        return False
 # Se dice en el registro: si alguien reporta que el raton no va, lo primero es
 # saber si esta version lo trae siquiera y si viene encendido.
 print("menu_pygame: raton en los menus: %s" % ('SI' if RATON else 'no'), flush=True)
+if os.environ.get('WP_DEV') == '1':
+    print("menu_pygame: modo desarrollo: F12 o el CLIC DEL STICK IZQUIERDO "
+          "hacen una captura", flush=True)
+# Zonas pulsables de las flechas de desplazamiento: [arriba, abajo]. Las
+# rellena el dibujado en cada fotograma y las lee el manejador del raton, para
+# que las dos usen EXACTAMENTE la misma geometria. Calcularlas dos veces es la
+# forma clasica de que el dibujo y el clic acaben en sitios distintos.
+FLECHAS = [None, None]
+# El carril de la barra (x, y, ancho, alto) y cuantas filas representa, para
+# poder arrastrarla. Lo rellena el dibujado en cada fotograma, igual que las
+# flechas, para que dibujo y zona pulsable no se calculen dos veces.
+BARRA = [None, 0]
+ARRASTRANDO = [False]
+CURSOR_PUESTO = [False]   # el puntero morado se pone una sola vez
+_FONDO_CRIS = [None, None]   # el fondo de cristal, ya dibujado, y su tamaño
 RATON_T0 = [0.0]          # cuando se movio por ultima vez
 RATON_OCULTAR = 3.0       # segundos sin moverlo para esconder el puntero
 
@@ -478,6 +568,16 @@ RAW_BTN = {304: pygame.K_RETURN, 315: pygame.K_RETURN,
            308: pygame.K_TAB,
            310: pygame.K_F1, 311: pygame.K_F2}
 SELECT_BTN = 314          # BTN_SELECT: con A pulsa pantalla completa
+# CAPTURA DE PANTALLA CON EL MANDO, SOLO EN MODO DESARROLLO.
+#
+# F12 no sirve en una Deck: no hay teclado. Y las capturas de los menus para el
+# manual hay que hacerlas precisamente ahi, que es donde se ven como los va a
+# ver la gente.
+#
+# Se usa el CLIC DEL STICK IZQUIERDO (BTN_THUMBL), que no hace nada en los
+# menus. Va solo con DEV_MODE=1: en uso normal no existe, asi que no puede
+# molestar a nadie ni llenar el disco de fotos sin querer.
+CAPTURA_BTN = 317         # BTN_THUMBL (clic del stick izquierdo)
 # Peticion de "volver al menu principal": la pone el hilo que lee el mando y
 # la atiende el bucle principal. De modulo porque son dos funciones
 # distintas, y una lista para poder mutarla desde el hilo sin declararla
@@ -713,6 +813,8 @@ def evdev_thread():
                             # Con una bandera son cosas independientes y no
                             # hay tecla que se pueda pisar mañana.
                             home_req[0] = True
+                elif t == EV_KEY_RAW and c == CAPTURA_BTN and v == 1 and DEV:
+                    post_key(pygame.K_F12)      # la misma via que F12
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
                         sel_combo[0] = True
@@ -924,6 +1026,39 @@ THEMES = {
         'layout': 'panel', 'row': 48,
         'acc2': (168, 120, 255), 'ok': (86, 226, 160),
         'btn': True, 'labelcolor': True, 'shape': 'notch',
+    },
+    # ------------------------------------------------------------------
+    # CRISTAL: la version de pygame del tema que ya existia en Qt.
+    #
+    # QUE TRAE Y QUE NO
+    #
+    # En Qt, cristal hace cinco cosas: paneles translucidos, dos focos de color
+    # en el fondo, vineta, un brillo giratorio en la seleccion y el texto
+    # dibujado como trazo con halo. Aqui estan las TRES PRIMERAS, que son las
+    # que dan el aspecto; el brillo giratorio y el texto como trazo se quedan
+    # fuera a proposito.
+    #
+    # El motivo es honesto: pygame dibuja por software. Un gradiente conico
+    # girando bajo la fila seleccionada hay que recalcularlo en cada fotograma,
+    # y en la Deck eso se come el presupuesto del menu entero. Preferimos que
+    # cristal se vea bien y vaya fino a que se vea igual que en Qt y raspe.
+    #
+    # Quien quiera los cinco efectos tiene el motor Qt, que dibuja acelerado.
+    'cristal': {
+        'bg': (10, 14, 24), 'bg2': (22, 28, 48),
+        'fg': (238, 244, 255), 'dim': (146, 158, 184),
+        'sel_bg': (40, 62, 104), 'sel_fg': (255, 255, 255),
+        'acc': (122, 198, 255), 'dir': (168, 190, 255),
+        'warn': (255, 198, 120), 'kb_bg': (18, 24, 40),
+        'panel': (30, 40, 64), 'border': (96, 124, 176), 'card': (36, 48, 76),
+        'radius': 18, 'pill': True, 'rule': False, 'glow': True,
+        'layout': 'panel', 'row': 52,
+        'acc2': (196, 160, 255), 'ok': (128, 232, 176),
+        'btn': True, 'labelcolor': True, 'shape': 'pill',
+        # lo propio de este tema, con los mismos nombres que en Qt
+        'glass': True,      # paneles y filas translucidos
+        'orbes': True,      # dos focos de color en el fondo
+        'vineta': True,     # oscurecido suave en los bordes
     },
     # Arcade synthwave: rejilla en perspectiva, escaneado CRT, marcador de
     # seleccion y esquinas de HUD. Nada minimalista, a proposito.
@@ -1330,8 +1465,9 @@ AYUDAS_ES = [
      'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
      'vistazo lo que te queda pendiente.'),
     ('Descargar carátulas',
-     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
-     'desde SteamGridDB. Hace falta una clave gratuita.'),
+     'Baja de una vez las caratulas que falten. Las 4:3 salen de la carpeta '
+     'covers_43 del repositorio de WProton y no piden nada; las verticales y '
+     'las panoramicas vienen de SteamGridDB y necesitan su clave gratuita.'),
     ('Clave de RAWG',
      'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
      'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
@@ -1517,6 +1653,10 @@ AYUDAS_ES = [
      'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
     ('Carátula: buscar en SteamGridDB',
      'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula 4:3: descargarla',
+     'Trae la 4:3 de ESTE juego de la carpeta covers_43 del repositorio de '
+     'WProton. No hace falta clave ninguna. Normalmente ya se baja sola la '
+     'primera vez que cargas el juego; esto es por si la han subido despues.'),
     ('Carátula: elegir una imagen',
      'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
     ('Ficha del juego',
@@ -1835,8 +1975,8 @@ AYUDAS_ES = [
     ('Tamaño de la letra:',
      'Lo grande que se ve todo. En portatil conviene grande.'),
     ('Tema de los menus:',
-     'El aspecto: clasico, moderno, arcade o cristal (este ultimo solo se ve '
-     'con el motor Qt).'),
+     'El aspecto: clasico, moderno, arcade o cristal. Cristal se ve en los dos '
+     'motores; con Qt trae ademas el brillo giratorio y el texto con halo.'),
     ('Motor de los menus:',
      'Con que se dibujan los menus: pygame (ligero, 12 MB) o Qt (se ve mejor, '
      'ocupa 200-300 MB). Los dos conviven; auto usa Qt si esta instalado.'),
@@ -2231,6 +2371,45 @@ def move(d):
     if sel >= scroll + vis():
         scroll = sel - vis() + 1
 
+def barra_a_fila(my):
+    """De una posicion vertical del raton a la fila que le corresponde.
+
+    Se usa al pulsar o arrastrar la barra lateral. Devuelve None si la barra no
+    esta dibujada (lista corta) o si no hay nada que desplazar.
+    """
+    r = BARRA[0]
+    total = BARRA[1] or 0
+    if not r or total <= 0:
+        return None
+    _, ty, _, th = r
+    if th <= 0:
+        return None
+    frac = (my - ty) / float(th)
+    frac = max(0.0, min(1.0, frac))
+    return int(round(frac * (total - 1)))
+
+def mover_vista(delta):
+    """Mueve la seleccion N filas ARRASTRANDO LA VISTA, sin dar la vuelta.
+
+    POR QUE EXISTE, Y EL FALLO QUE ARREGLA
+
+    La rueda y las flechas escribian "sel" directamente para esquivar el
+    antirrebote del teclado. Funcionaba a medias: "sel" cambiaba pero "scroll"
+    no, y quien mueve la vista es "scroll". Resultado: la seleccion se iba
+    fuera de pantalla y LA LISTA NO SE MOVIA. Con el mando no se notaba porque
+    el dpad si pasa por move().
+
+    Aqui se usa move(), que ya sabe arrastrar la vista, pero con el salto
+    recortado a los extremos: move() da la vuelta de la ultima a la primera, y
+    eso con el dpad esta bien y con la rueda marea.
+    """
+    global sel
+    if not view:
+        return
+    objetivo = max(0, min(len(view) - 1, sel + delta))
+    if objetivo != sel:
+        move(objetivo - sel)
+
 def toggle():
     if MODE == 'check' and view:
         it = items[view[sel]]
@@ -2340,12 +2519,38 @@ def grid_move(dx, dy):
     elif row >= first + vis_r:
         scroll = (row - vis_r + 1) * GCOLS
 
+def corte_etiqueta(label):
+    """El primer ':' que de verdad separa etiqueta y valor; -1 si no hay.
+
+    Unos dos puntos ENTRE NUMEROS son una proporcion ("4:3", "16:9") o una
+    hora, no un separador. Sin esto, la fila
+
+        "Caratula 4:3: descargarla del repositorio de WProton"
+
+    se pintaba como etiqueta "Caratula 4" y valor "3: descargarla del
+    repositorio...", que es tal cual como salio en una captura del manual.
+    """
+    n = len(label)
+    for i, c in enumerate(label):
+        if c != ':':
+            continue
+        antes = label[i - 1] if i else ''
+        despues = label[i + 1] if i + 1 < n else ''
+        if antes.isdigit() and despues.isdigit():
+            continue
+        return i
+    return -1
+
+
 def row_segments(label, base_color):
     # "Prefijo: compartido" -> etiqueta en color de acento, valor en blanco.
     # "MangoHud: ON" -> ON en verde, OFF apagado.
     if not TH.get('labelcolor') or ':' not in label:
         return [(label, base_color)]
-    k, _, v = label.partition(':')
+    _i = corte_etiqueta(label)
+    if _i < 0:
+        return [(label, base_color)]
+    k, v = label[:_i], label[_i + 1:]
     # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
     if ' - ' in k or len(k) > 36:
         return [(label, base_color)]
@@ -2789,7 +2994,10 @@ def run_session():
             if BGSURF is not None:
                 screen.blit(BGSURF, (0, 0))
             else:
-                screen.fill(TH['bg'])
+                if TH.get('orbes'):
+                    screen.blit(fondo_cristal(W, H), (0, 0))
+                else:
+                    screen.fill(TH['bg'])
             draw_header()
             y = HEAD + FS(10)
             for l in lineas[pos:pos + visibles]:
@@ -3131,10 +3339,28 @@ def run_session():
             #
             # Se deja fuera el teclado en pantalla (kb_open) y la rejilla: ahi
             # la seleccion no es una lista de filas y el calculo no vale.
+            elif ev.type == pygame.MOUSEBUTTONUP and RATON:
+                ARRASTRANDO[0] = False
             elif ev.type == pygame.MOUSEMOTION and RATON and not kb_open:
                 RATON_T0[0] = time.time()
+                # ARRASTRANDO LA BARRA: la lista sigue al puntero.
+                #
+                # Mientras se arrastra NO se mira la fila de debajo del raton:
+                # el puntero esta sobre la barra, no sobre la lista, y hacer
+                # las dos cosas a la vez daria saltos.
+                if ARRASTRANDO[0]:
+                    _f = barra_a_fila(ev.pos[1])
+                    if _f is not None and _f != sel:
+                        mover_vista(_f - sel)
+                    continue
                 try:
                     pygame.mouse.set_visible(True)
+                    # SOLO LA PRIMERA VEZ: poner el cursor crea una superficie,
+                    # y hacerlo en cada movimiento del raton seria trabajo de
+                    # verdad para nada.
+                    if not CURSOR_PUESTO[0]:
+                        CURSOR_PUESTO[0] = True
+                        cursor_morado()
                 except Exception:
                     pass
                 if MODE != 'grid':
@@ -3145,6 +3371,36 @@ def run_session():
             elif ev.type == pygame.MOUSEBUTTONDOWN and RATON and not kb_open:
                 RATON_T0[0] = time.time()
                 if ev.button == 1:
+                    # LAS FLECHAS, ANTES QUE NADA.
+                    #
+                    # Estan al lado de la lista y su zona de clic es ancha: si
+                    # se mirara primero la fila, un clic en la flecha tocaria
+                    # tambien la fila que tiene detras y entraria en el juego en
+                    # vez de desplazar. Se comprueban antes y se sale.
+                    _mx, _my = ev.pos[0], ev.pos[1]
+                    _hecho = 0
+                    for _idx, _r in enumerate(FLECHAS):
+                        if not _r:
+                            continue
+                        if _r[0] <= _mx <= _r[0] + _r[2] and _r[1] <= _my <= _r[1] + _r[3]:
+                            _paso = max(1, vis() // 2)
+                            if MODE != 'grid':
+                                mover_vista(-_paso if _idx == 0 else _paso)
+                            else:
+                                grid_move(0, -1 if _idx == 0 else 1)
+                            _hecho = 1
+                            break
+                    if _hecho:
+                        continue
+                    # ¿SOBRE LA BARRA? SE SALTA AHI Y SE EMPIEZA A ARRASTRAR.
+                    _r = BARRA[0]
+                    if _r and _r[0] <= _mx <= _r[0] + _r[2] \
+                           and _r[1] <= _my <= _r[1] + _r[3]:
+                        _f = barra_a_fila(_my)
+                        if _f is not None:
+                            mover_vista(_f - sel)
+                            ARRASTRANDO[0] = True
+                        continue
                     # Clic izquierdo: si es sobre una fila, se selecciona esa y
                     # se entra. Sobre otra cosa no se hace nada: un clic al aire
                     # no deberia activar lo que hubiera seleccionado.
@@ -3186,9 +3442,8 @@ def run_session():
                 elif ev.button in (4, 5):
                     # Rueda en pygame antiguo: se mueve igual, sin teclas.
                     if MODE != 'grid':
-                        _paso = max(1, vis() // 2)
-                        sel = max(0, min(len(view) - 1,
-                                         sel - _paso if ev.button == 4 else sel + _paso))
+                        _paso = max(1, vis() // 3)
+                        mover_vista(-_paso if ev.button == 4 else _paso)
                     else:
                         grid_move(0, -1 if ev.button == 4 else 1)
             elif ev.type == getattr(pygame, 'MOUSEWHEEL', -1) and RATON and not kb_open:
@@ -3212,8 +3467,14 @@ def run_session():
                 # seleccion y ya, que ademas es exacto.
                 _y = int(getattr(ev, 'y', 0))
                 if _y and MODE != 'grid':
-                    _paso = max(1, vis() // 2) * min(abs(_y), 3)
-                    sel = max(0, min(len(view) - 1, sel - _paso if _y > 0 else sel + _paso))
+                    # UN TERCIO DE PANTALLA, NO MEDIA.
+                    #
+                    # Media resultaba brusca: en una lista corta te plantaba al
+                    # otro extremo de un golpe y se perdia el sitio. Un tercio
+                    # deja siempre varias filas en comun entre antes y despues,
+                    # que es lo que hace que la vista se siga con la mirada.
+                    _paso = max(1, vis() // 3) * min(abs(_y), 3)
+                    mover_vista(-_paso if _y > 0 else _paso)
                 elif _y:
                     grid_move(0, -1 if _y > 0 else 1)
             elif ev.type == pygame.KEYDOWN:
@@ -3402,16 +3663,61 @@ def run_session():
         # Barra lateral: avisa de que hay más opciones de las que caben en pantalla
         _total = len(view)
         _vis = (grid_rows_vis() * GCOLS) if MODE == 'grid' else vis()
+        FLECHAS[0] = None
+        FLECHAS[1] = None
         if _total > _vis:
             _tr_x = (LIST_X + LIST_W + 2) if PANEL_UI else (W - 14)
             _tr_y = LIST_Y + 8
             _tr_h = LIST_H - 16
-            pygame.draw.rect(screen, TH['card'], (_tr_x, _tr_y, 6, _tr_h), border_radius=3)
-            _kh = max(28, int(_tr_h * _vis / float(_total)))
+            # FLECHAS ARRIBA Y ABAJO PARA DESPLAZAR CON EL RATON.
+            #
+            # La barra sola avisa de que hay mas, pero no se puede usar: son
+            # seis pixeles y no hay nada que pulsar. Con el mando sobra -el
+            # dpad ya mueve- pero con el raton hace falta algo donde hacer
+            # clic, y es lo primero que busca quien viene de un escritorio.
+            #
+            # Van EN LOS EXTREMOS DE LA BARRA, que es donde se esperan, y la
+            # zona pulsable es mas ancha que el dibujo: acertar un triangulo de
+            # diez pixeles con el puntero es incomodo.
+            _ar = 16
+            _mid_y = _tr_y + _ar
+            _mid_h = max(10, _tr_h - _ar * 2)
+            pygame.draw.rect(screen, TH['card'], (_tr_x, _mid_y, 6, _mid_h), border_radius=3)
+            _kh = max(28, int(_mid_h * _vis / float(_total)))
             _maxoff = max(1, _total - _vis)
-            _ky = _tr_y + int((_tr_h - _kh) * min(1.0, scroll / float(_maxoff)))
+            _ky = _mid_y + int((_mid_h - _kh) * min(1.0, scroll / float(_maxoff)))
             pygame.draw.rect(screen, ACC if TH['glow'] else (120, 130, 150),
                              (_tr_x, _ky, 6, _kh), border_radius=3)
+            _cx = _tr_x + 3
+            _col_ar = ACC if scroll > 0 else TH['card']
+            _col_ab = ACC if (scroll + _vis) < _total else TH['card']
+            pygame.draw.polygon(screen, _col_ar,
+                                [(_cx, _tr_y + 2), (_cx - 6, _tr_y + 12),
+                                 (_cx + 6, _tr_y + 12)])
+            _by = _tr_y + _tr_h
+            pygame.draw.polygon(screen, _col_ab,
+                                [(_cx, _by - 2), (_cx - 6, _by - 12),
+                                 (_cx + 6, _by - 12)])
+            # LA ZONA DE CLIC, MAS ANCHA QUE EL DIBUJO PERO SIN COMERSE LA LISTA.
+            #
+            # Se ensancha hacia los lados para poder acertar con el puntero,
+            # pero nunca por dentro del borde de la lista: si no, los ultimos
+            # pixeles de cada fila desplazarian en vez de elegir el juego, y eso
+            # desconcierta mas de lo que ayuda.
+            _fx = max(_tr_x - 9, LIST_X + LIST_W + 1)
+            _fw = (_tr_x + 6 + 9) - _fx
+            FLECHAS[0] = (_fx, _tr_y - 2, _fw, _ar + 4)
+            FLECHAS[1] = (_fx, _by - _ar - 2, _fw, _ar + 4)
+            # LA BARRA TAMBIEN SE PUEDE PULSAR Y ARRASTRAR.
+            #
+            # Es lo que hace cualquiera que venga de un escritorio: coger la
+            # barra y moverla, o pulsar en el hueco para saltar hasta ahi. Con
+            # listas de cincuenta juegos es mucho mas rapido que la rueda.
+            #
+            # Se guarda el carril (sin las flechas) y el total, que es lo que
+            # hace falta para convertir una posicion de pantalla en una fila.
+            BARRA[0] = (_fx, _mid_y, _fw, _mid_h)
+            BARRA[1] = _total
         if view and not PANEL_UI:
             pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
             screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
@@ -3619,7 +3925,10 @@ def draw_idle(status=''):
     elif _TEMA_COLS is not None:
         screen.fill(_TEMA_COLS['bg'])
     else:
-        screen.fill(TH['bg'])
+        if TH.get('orbes'):
+            screen.blit(fondo_cristal(W, H), (0, 0))
+        else:
+            screen.fill(TH['bg'])
     if _TEMA_COLS is not None:
         _dibuja_particulas(screen, W, H)
     # LA MARCA SE PREPARA UNA VEZ, NO QUINCE VECES POR SEGUNDO.

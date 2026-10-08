@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.75"
+WPROTON_VERSION="2.0"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -159,7 +159,13 @@ WP_PICK=""                               # resultado de pick_squash_ui
 WIZ_QUIERE_DLL=0                         # el asistente pidio elegir DLL overrides
 WIZ_QUIERE_KEYS=0                        # el asistente pidio configurar el .keys
 GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
-LIST_COVER=vertical                      # forma de la carátula en la vista de lista
+# LA 4:3 DE SERIE.
+#
+# Es la forma que WProton trae hecha: las 4:3 vienen de la carpeta covers_43/
+# del repositorio, recortadas a 640x480 una por una. Las verticales dependen
+# de que el usuario se saque una API key de SteamGridDB, asi que de fabrica
+# la vista de lista se queda sin carátula para casi todo el mundo.
+LIST_COVER=43                            # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
 THEME="moderno"                          # menus: clasico | moderno | arcade | cristal (Qt)
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
@@ -172,6 +178,9 @@ TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navid
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 MENU_UI=auto                             # motor de menus: auto | pygame | qt
 OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
+# La glibc del equipo MAS ANTIGUO donde quieres que funcionen tus paquetes.
+# 2.36 cubre SteamOS 3.x (Steam Deck). Subela si solo usas equipos modernos.
+GLIBC_OBJETIVO="2.36"
 RATON_MENUS=1                            # 1 = manejar los menus con el raton
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
@@ -249,7 +258,8 @@ LIST_COVER="$LIST_COVER"
 # Última carpeta usada en el navegador de ficheros:
 LAST_BROWSE="$LAST_BROWSE"
 # Aspecto de los menus: clasico | moderno | arcade | cristal
-#   (cristal solo se ve con el motor Qt; con pygame sale moderno)
+#   (cristal se ve en los dos motores; con Qt trae ademas el brillo giratorio
+#    de la seleccion y el texto con halo, que en pygame costarian fotogramas)
 THEME="$THEME"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
@@ -1084,6 +1094,7 @@ Instalalas con el gestor de paquetes de tu distribucion."
         say "AVISO: faltan$falta; los juegos empaquetados no se podran montar"
         WP_SIN_FUSE="$falta"
     fi
+    log "Este equipo tiene glibc $(glibc_de_este_equipo) (GLIBC_OBJETIVO=${GLIBC_OBJETIVO:-2.36} en settings.conf)"
     log "Herramientas: squashfuse=$SQUASHFUSE_BIN$(tool_is_ours "$SQUASHFUSE_BIN" && printf ' [portable]' || printf ' [sistema]') | overlayfs=$OVERLAYFS_BIN$(tool_is_ours "$OVERLAYFS_BIN" && printf ' [portable]' || printf ' [sistema]') | fusermount=$FUSERMOUNT_BIN"
 }
 
@@ -1623,6 +1634,121 @@ write_mando_virtual() {
 MVIROF
 }
 
+# ---------------------------------------------------------------------
+#  DE QUIEN ES UN .keys: SE SABE, NO SE ADIVINA
+#
+#  EL PROBLEMA DE FONDO
+#
+#  Hasta ahora la pertenencia de un .keys se DEDUCIA de donde estaba: al lado
+#  del juego, en una carpeta padre, el unico de la carpeta... Cualquier regla
+#  asi falla en el siguiente caso raro, porque todas son suposiciones sobre la
+#  misma informacion insuficiente.
+#
+#  Caso real del 29/09: Halo NUNCA tuvo un .keys dentro. WProton encontro un
+#  "padto.keys" generico varias carpetas mas arriba -de los que Batocera pone
+#  para lo que caiga-, lo copio a profiles/Halo_Combat_Evolved.keys y a partir
+#  de ahi parecia suyo. El mapeador capturaba el mando, lo traducia a teclas y
+#  los controles del juego no respondian. Borrar el original ya no servia: la
+#  copia mandaba.
+#
+#  LA SOLUCION: QUE EL FICHERO LO DIGA
+#
+#  Un .keys de WProton lleva una cabecera con el juego al que pertenece. Asi
+#  la decision deja de ser una adivinanza:
+#
+#      # wproton-para: Halo_Combat_Evolved
+#
+#  - Lleva el identificador de ESTE juego -> es suyo. Se aplica venga de donde
+#    venga.
+#  - Lleva el de OTRO -> no es suyo. No se aplica y se dice en el registro.
+#  - No lleva ninguno -> es ajeno (los de Batocera, los comodines). No se
+#    aplica solo: se ofrece adoptarlo, y solo si el usuario acepta se copia
+#    con la marca puesta.
+#
+#  Hay una excepcion razonada para no romper lo que ya funciona: un fichero
+#  llamado EXACTAMENTE como el juego y puesto a su lado (<juego>.keys,
+#  <juego>.wsquashfs.keys) es explicito por su nombre. Ese se acepta y se le
+#  pone la marca la primera vez. Lo que no se acepta nunca es un comodin.
+# LA MARCA VA DENTRO DEL JSON, NO DELANTE.
+#
+# EL FALLO QUE ESTO ARREGLA
+#
+# El primer intento ponia una linea de comentario "# wproton-para: X" al
+# principio del fichero. Pero un .keys ES UN JSON, y un JSON no admite
+# comentarios: el mapeador reventaba nada mas abrirlo con
+#
+#   Error al cargar .keys: Expecting value: line 1 column 1 (char 0)
+#
+# ...y ningun .keys volvia a funcionar, ni los que siempre habian ido bien.
+#
+# Ahora la marca es un campo mas del propio JSON. Lo lee y lo escribe el mismo
+# modulo que ya entiende el formato, asi que no hay forma de corromperlo.
+KEYS_CAMPO="wproton_para"
+
+keys_dueno() {
+    # De que juego dice ser este .keys. "" si no lo dice. $1 = fichero.
+    #
+    # LO HACE teclas.py, QUE ES QUIEN ENTIENDE EL FORMATO.
+    #
+    # El primer intento leia y escribia el fichero con python incrustado aqui
+    # dentro. Dos motivos para no hacerlo asi:
+    #
+    #   - En este proyecto el python va en modulos, no suelto en el bash.
+    #   - Y sobre todo: un .keys es JSON, y teclas.py ya sabe leerlo. Tratarlo
+    #     desde fuera fue lo que llevo a meterle una linea de comentario
+    #     delante y dejarlo ilegible para el mapeador.
+    #
+    # teclas.py repara de paso los ficheros que quedaron rotos por aquello.
+    local f="${1:-}"
+    [ -f "$f" ] || return 0
+    write_teclas
+    teclas_py dueno "$f" 2>/dev/null
+}
+
+keys_marcar() {
+    # Apunta DENTRO del JSON a que juego pertenece. $1 = fichero, $2 = gid.
+    #
+    # Si ya tiene dueño no se toca: la marca original manda.
+    local f="${1:-}" gid="${2:-}"
+    [ -f "$f" ] && [ -n "$gid" ] || return 1
+    write_teclas
+    if teclas_py marcar "$f" "$gid" 2>/dev/null; then
+        log "keys: $f marcado como de $gid"
+        return 0
+    fi
+    log "keys: no se pudo marcar $f (¿no es JSON valido?)" WARN
+    return 1
+}
+
+keys_remarcar() {
+    # Como keys_marcar, pero PISANDO la marca que hubiera. $1 = fichero, $2 = gid.
+    #
+    # Solo para cuando el usuario lo ha decidido a mano: asignar un fichero a
+    # este juego, o un .keys que esta en profiles/ con el nombre de este juego.
+    # En esos dos casos la marca de otro juego es un resto de su procedencia, no
+    # una decision de nadie, y respetarla dejaba el fichero inservible.
+    local f="${1:-}" gid="${2:-}"
+    [ -f "$f" ] && [ -n "$gid" ] || return 1
+    write_teclas
+    if teclas_py marcar "$f" "$gid" forzar 2>/dev/null; then
+        log "keys: $f remarcado como de $gid"
+        return 0
+    fi
+    log "keys: no se pudo remarcar $f (¿no es JSON valido?)" WARN
+    return 1
+}
+
+keys_es_de() {
+    # ¿Este .keys es de este juego? $1 = fichero, $2 = gid.
+    #
+    # Devuelve 0 si es suyo, 1 si es de otro, 2 si no lo dice.
+    local d; d="$(keys_dueno "${1:-}")"
+    [ -z "$d" ] && return 2
+    [ "$d" = "${2:-}" ] && return 0
+    return 1
+}
+
+
 keys_copiar_a_profiles() {
     # Copia a profiles/ el .keys que venia dentro del juego. $1 = origen,
     # $2 = gid. Devuelve 0 si a partir de ahora hay que usar el de profiles/.
@@ -1634,136 +1760,118 @@ keys_copiar_a_profiles() {
     [ -f "$destino" ] && return 1          # ya hay uno tuyo: ese manda
     mkdir -p "$PROFILE_DIR" 2>/dev/null || return 1
     cp -f "$origen" "$destino" 2>/dev/null || return 1
-    say "[+] Teclas del juego copiadas a profiles/$gid.keys"
+    keys_marcar "$destino" "$gid"
+    say "[+] Teclas copiadas a profiles/$gid.keys (desde $origen)"
     say "    (el original se queda dentro del juego; lo que edites aqui manda)"
     return 0
 }
 
 find_keys_file() {
-    # $1 = ruta del juego (wsquashfs o exe), $2 = gid.
+    # El .keys que le toca a este juego, o nada. $1 = ruta, $2 = gid.
     #
-    # PRIMERO EL DE profiles/, que es el que edita el usuario.
+    # EL ORDEN ES EL CRITERIO. Se va de lo mas explicito a lo mas dudoso, y lo
+    # dudoso NO se coge solo: se ofrece.
+    local p="$1" gid="$2" k d _r
+    # 1) EL DE profiles/: es el del usuario y manda sobre todo.
     #
-    # Antes iba el ultimo, detras de los que vienen junto al juego. El editor
-    # guarda SIEMPRE en profiles/, asi que en un juego que ya traia su .keys
-    # (los de Batocera lo traen) se editaba, se guardaba... y se seguia usando
-    # el original: parecia que no guardaba nada. Un tester lo describio como
-    # "se vuelve loco", y tenia toda la razon.
-    #
-    # Con este orden, el fichero del juego es el punto de partida y lo que tu
-    # cambies manda a partir de entonces. Para volver al original basta con
-    # borrar el de profiles/.
-    # Y EN UNA CARPETA, EL QUE VA DENTRO.
-    #
-    # Batocera coloca el .keys en dos sitios distintos segun el formato, y es
-    # logico: en un .wsquashfs va FUERA, con el nombre del juego, porque
-    # dentro no se puede escribir; en una carpeta .pc va DENTRO, junto al
-    # autorun.cmd, y ahi el nombre del juego no pinta nada.
-    #
-    # Nosotros solo mirabamos fuera, asi que los juegos en carpeta con su
-    # .keys dentro se lanzaban sin mapeo: el mismo juego funcionaba
-    # comprimido y no en carpeta.
-    local p="$1" gid="$2" k
-    # EL DE profiles/ MANDA: es el nuestro, con la eleccion del usuario ya
-    # aplicada. Si existe, no se mira nada mas.
+    # Se comprueba la marca igualmente: si quedo uno de antes de este cambio,
+    # se le pone ahora y a partir de ahi ya se sabe de quien es.
     if [ -f "$PROFILE_DIR/$gid.keys" ]; then
-        printf '%s' "$PROFILE_DIR/$gid.keys"; return 0
+        # La reparacion de los .keys que quedaron rotos la hace teclas.py cada
+        # vez que los lee, asi que aqui no hay que pedirla aparte.
+        # EL RESULTADO SE GUARDA ANTES DE MIRARLO.
+        #
+        # Escribirlo como "if keys_es_de ...; fi" y luego "case $?" NO funciona:
+        # despues de un if, $? es el resultado DEL IF (0), no el de la condicion.
+        # Por eso no entraba en ninguna rama y se caia al final de la funcion
+        # sin devolver nada: ningun .keys de profiles/ se cargaba.
+            keys_es_de "$PROFILE_DIR/$gid.keys" "$gid"; _r=$?
+        case "$_r" in
+            0)  printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
+            2)  # Sin marca: es de antes. Se acepta -esta en profiles/ y lleva
+                # el nombre del juego- y se marca para que no vuelva a dudarse.
+                keys_marcar "$PROFILE_DIR/$gid.keys" "$gid"
+                printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
+            1)  # DICE SER DE OTRO JUEGO, PERO ESTA EN profiles/ CON EL NOMBRE
+                # DE ESTE. Aqui manda el sitio, no la marca: se corrige y se usa.
+                #
+                # Antes se rechazaba, y eso dejaba al juego en el peor estado
+                # posible: el fichero ahi puesto, el menu diciendo "no tiene
+                # keys" y el mapeador sin cargar nada. Lo conto un tester:
+                # "te las crea bien, pero si vas a editarlas te dice que no
+                # tiene keys, y el archivo esta".
+                #
+                # A profiles/<juego>.keys solo llega lo que ponemos nosotros o
+                # lo que el usuario pone a proposito -asignar un fichero, o
+                # copiarlo ahi con ese nombre exacto-. La marca ajena es un
+                # resto de su procedencia (venia del .keys de otro juego), no
+                # una decision de nadie. Rechazarla era hacerle caso a la
+                # procedencia por encima del usuario.
+                #
+                # La marca SIGUE MANDANDO donde se gano el sueldo: en los
+                # ficheros que aparecen junto al juego o por sus carpetas
+                # (puntos 2, 3 y 4), que es de donde vino el problema de Halo.
+                local _dueno_viejo; _dueno_viejo="$(keys_dueno "$PROFILE_DIR/$gid.keys")"
+                log "keys: $PROFILE_DIR/$gid.keys decia ser de '$_dueno_viejo'; esta en profiles/ con el nombre de '$gid', asi que pasa a ser suyo"
+                keys_remarcar "$PROFILE_DIR/$gid.keys" "$gid"
+                printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
+        esac
     fi
-    # EL QUE SE LLAMA COMO EL JUEGO TAMBIEN SE COPIA A profiles/.
+    # 2) EL QUE SE LLAMA COMO EL JUEGO, A SU LADO: explicito por su nombre.
     #
-    # Antes se usaba DONDE ESTABA, y era el unico que no se copiaba: el
-    # padto.keys y los sueltos si. Eso trae dos problemas:
-    #
-    #   - Ese fichero suele vivir en una carpeta COMPARTIDA con Batocera.
-    #     Tocarlo -al editarlo, o al aplicarle el estilo de botones- cambia
-    #     algo que no es nuestro, y en Batocera puede dejar de ir.
-    #   - La eleccion de estilo (Xbox o Batocera) se guarda en el perfil, pero
-    #     el fichero seguia siendo el de fuera. Con la copia, lo que se usa y
-    #     lo elegido viajan juntos.
-    #
-    # Se copia una vez; a partir de ahi manda el de profiles/, que es la rama
-    # de arriba.
+    # "<juego>.keys" junto al .wsquashfs es una decision deliberada sobre ESTE
+    # juego. Se acepta, se marca y se copia a profiles/, porque ya era suyo.
     for k in "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] || continue
+        keys_es_de "$k" "$gid"; _r=$?
+        [ "$_r" = 1 ] && { log "keys: $k es de otro juego, se ignora" WARN; continue; }
+        keys_marcar "$k" "$gid"
         keys_copiar_a_profiles "$k" "$gid" && k="$PROFILE_DIR/$gid.keys"
         printf '%s' "$k"
         return 0
     done
-    # Y EL QUE SE ENCUENTRE DENTRO SE COPIA A profiles/.
+    # 3) UN pad*.keys EN LA CARPETA DEL JUEGO: ahi si, y solo ahi.
     #
-    # Un tester descubrio que asignando el mismo fichero desde el menu -que lo
-    # guarda en profiles/ con el nombre del juego- le funcionaba, y dejandolo
-    # dentro de la carpeta no. Sea cual sea el motivo de fondo, copiarlo tiene
-    # ventajas por si solo:
+    # NO SE SUBE POR LAS CARPETAS PADRE. NI SIQUIERA PARA PREGUNTAR.
     #
-    #   - el editor guarda SIEMPRE en profiles/, asi que a partir de ahi lo
-    #     que cambies manda y no vuelve a ganar el original;
-    #   - el original se queda intacto dentro del juego, para Batocera;
-    #   - y en un .wsquashfs el de dentro vive en un montaje temporal, con lo
-    #     que la copia es lo unico que persiste.
+    # Antes se subia buscando "padto.keys" y compañia hasta la raiz de la
+    # biblioteca. Eso es lo que rompio los controles de Halo: encontro un
+    # comodin de Batocera varias carpetas mas arriba, puesto ahi para otra
+    # cosa, y lo aplico como si fuera suyo.
     #
-    # Solo la primera vez: si ya hay uno en profiles/, ese manda (se busca
-    # antes, arriba) y no se pisa.
+    # Y ofrecerlo tampoco vale: un fichero que aparece a saber de donde, del
+    # que no se sabe quien lo puso ni para que, no es una eleccion informada.
+    # Preguntar por el solo traslada al usuario una duda que nosotros tampoco
+    # sabemos resolver.
     #
-    # Dentro de la carpeta del juego. "padto.keys" es el nombre que usa
-    # Batocera; se aceptan variantes por si cambia, pero SOLO si hay uno: con
-    # varios no se adivina cual es el bueno.
-    # SI LLEGA UN EJECUTABLE, SE MIRA SU CARPETA.
-    #
-    # Esto solo buscaba el "padto.keys" cuando le pasaban una CARPETA. Y desde
-    # el asistente de los juegos de carpeta llega el EJECUTABLE, asi que no lo
-    # encontraba: el fichero se copiaba a profiles/ mas tarde y funcionaba,
-    # pero no se llegaba a preguntar el estilo de botones (Xbox o Batocera).
-    #
-    # Un tester lo noto al repasar su coleccion: los .pc con padto.keys no le
-    # preguntaban, y los .wsquashfs con su .keys si.
-    #
-    # Con el exe se sube a su carpeta, y ademas a la RAIZ del juego, porque el
-    # ejecutable puede estar muy adentro y el padto.keys va en la raiz.
-    local dir=""
-    if [ -d "$p" ]; then
-        dir="$p"
-    elif [ -f "$p" ]; then
-        dir="$(dirname "$p")"
-    fi
-    # SE SUBE HASTA LA CARPETA DEL JUEGO.
-    #
-    # El padto.keys va en la RAIZ del juego, y el ejecutable puede estar en un
-    # subdirectorio -"bin/", o mucho mas adentro-. Se sube carpeta a carpeta
-    # buscandolo, con dos topes para no coger el de otro juego:
-    #
-    #   - la raiz conocida (WP_RAIZ_JUEGO), si esta puesta
-    #   - la carpeta cuyo nombre da ESTE identificador, que es la del juego
-    #
-    # Sin ninguno de los dos no se sube: mejor no encontrarlo que asignarle a
-    # un juego las teclas del de al lado.
-    local _sube="" _k2
-    if [ -d "$p" ]; then _sube="$p"; elif [ -f "$p" ]; then _sube="$(dirname "$p")"; fi
-    while [ -n "$_sube" ] && [ "$_sube" != "/" ]; do
-        for _k2 in "$_sube/padto.keys" "$_sube/pad2key.keys" "$_sube/padtokey.keys"; do
+    # Dentro de la carpeta del juego es otra cosa: ahi lo puso alguien PARA
+    # ESTE juego, igual que un "<juego>.keys". Se acepta y se marca.
+    local _dirj="" _k2
+    if [ -d "$p" ]; then _dirj="$p"; elif [ -f "$p" ]; then _dirj="$(dirname "$p")"; fi
+    if [ -n "$_dirj" ]; then
+        for _k2 in "$_dirj/padto.keys" "$_dirj/pad2key.keys" "$_dirj/padtokey.keys"; do
             [ -f "$_k2" ] || continue
+            keys_es_de "$_k2" "$gid"; _r=$?
+            [ "$_r" = 1 ] && { log "keys: $_k2 es de otro juego, se ignora" WARN; continue; }
+            log "keys: $_k2 esta en la carpeta del juego: se usa"
+            keys_marcar "$_k2" "$gid"
             keys_copiar_a_profiles "$_k2" "$gid" && _k2="$PROFILE_DIR/$gid.keys"
             printf '%s' "$_k2"
             return 0
         done
-        # Topes: la raiz del juego o la carpeta que da este identificador.
-        [ "$_sube" = "${WP_RAIZ_JUEGO:-}" ] && break
-        [ "$(game_id "$_sube")" = "$gid" ] && break
-        _sube="$(dirname "$_sube")"
-    done
+    fi
+    # 4) UN .keys SUELTO EN LA CARPETA DEL JUEGO: solo si dice ser de este.
+    #
+    # Antes se cogia "el unico .keys que haya" sin mas. Un juego puede traer el
+    # de otro por un copia y pega, y entonces se aplicaba tan campante.
+    local dir=""
+    if [ -d "$p" ]; then dir="$p"; elif [ -f "$p" ]; then dir="$(dirname "$p")"; fi
     if [ -n "$dir" ]; then
-        for k in "$dir/padto.keys" "$dir/pad2key.keys" "$dir/padtokey.keys"; do
-            [ -f "$k" ] || continue
-            keys_copiar_a_profiles "$k" "$gid" && k="$PROFILE_DIR/$gid.keys"
-            printf '%s' "$k"
-            return 0
-        done
         local sueltos n
         sueltos="$(find "$dir" -maxdepth 1 -type f -name '*.keys' 2>/dev/null)"
         n="$(printf '%s\n' "$sueltos" | grep -c .)"
-        if [ "$n" = 1 ]; then
-            keys_copiar_a_profiles "$sueltos" "$gid" \
-                && sueltos="$PROFILE_DIR/$gid.keys"
+        if [ "$n" = 1 ] && keys_es_de "$sueltos" "$gid"; then
+            keys_copiar_a_profiles "$sueltos" "$gid" && sueltos="$PROFILE_DIR/$gid.keys"
             printf '%s' "$sueltos"
             return 0
         fi
@@ -7048,9 +7156,7 @@ first_run_wizard() {
         ui_info "Perfil creado: profiles/$gid.conf
 Juego de Linux: sin runner ni prefijo.
 
-Puedes cambiarlo cuando quieras:
-menu principal -> Ajustes de un juego,
-o pulsando X sobre el juego en la lista."
+Todo esto se cambia desde Ajustes de un juego, o pulsando X en la lista."
         return 0
     fi
     wizard_pick_runner || return 1
@@ -7091,9 +7197,7 @@ ejemplo, sin ellos arranca Half-Life 2 en ingles."
 Runner: $(runner_etiqueta "${RUNNER:-}") | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
 DLL overrides: $DLL_OVERRIDES}
 
-Puedes cambiar todo esto cuando quieras:
-menu principal -> Ajustes de un juego,
-o pulsando X sobre el juego en la lista."
+Todo esto se cambia desde Ajustes de un juego, o pulsando X en la lista."
     return 0
 }
 
@@ -10267,7 +10371,19 @@ diag_mando_vigilante() {
             esac
         fi
     fi
-    diag_mando_antes
+    # EL DIAGNOSTICO DE MANDO, AL FONDO: NO SE ESPERA A EL.
+    #
+    # POR QUE
+    #
+    # Recorre dispositivos, pregunta a fuser quien los tiene abiertos y mira
+    # procesos. En la Deck en modo Juego eso tarda unos CUATRO SEGUNDOS, y son
+    # cuatro segundos entre pulsar A y ver el juego. Es informacion util para
+    # el registro, pero el juego no depende de ella para nada.
+    #
+    # Y en modo Juego se ejecuta SIEMPRE, porque su condicion es justo que el
+    # unico mando sea el virtual de Steam. Por eso alli los juegos tardaban mas
+    # que en escritorio.
+    ( diag_mando_antes ) >/dev/null 2>&1 &
     local exe_base="${1:-}"
     [ -n "$exe_base" ] || return 0
     # EN SEGUNDO PLANO Y CON LA ENTRADA CERRADA: si se queda esperando algo,
@@ -10345,6 +10461,14 @@ launch_game() {
     # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
     # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
     profile_exists "$gid" || community_offer_for "$gid" || true
+
+    # Y la carátula 4:3 del repositorio, si este juego aun no tiene ninguna.
+    # Esto SI se mira siempre, no solo en los juegos nuevos: quien lleva meses
+    # con su biblioteca tambien tiene que ver aparecer las carátulas.
+    #
+    # No puede tumbar el arranque: todo lo de dentro es silencioso y la lista
+    # del repositorio va con tiempo limite.
+    covers43_offer_for "$gid" || true
 
     # Recordar como "último juego jugado"
     local abs_squash; abs_squash="$(readlink -f "$squash" 2>/dev/null || printf '%s' "$squash")"
@@ -10954,31 +11078,29 @@ EOFRA
     if [ "${_repes:-0}" -ge 1000 ] && [ $dur -ge 12 ]; then
         say "AVISO: el registro del juego repite la misma linea $_repes veces:"
         say "       ${_linea_rep#*[0-9] }"
-        # LA LINEA REPETIDA TIENE QUE PARECER UN ERROR PARA ABRIR UN DIALOGO.
+        # ESTO NO ABRE NINGUN DIALOGO: VA AL REGISTRO Y YA.
         #
-        # Antes se llamaba a fallo_analizar con EL REGISTRO ENTERO, asi que el
-        # diagnostico que salia podia no tener NADA que ver con la linea que se
-        # repetia: se juntaban dos hechos sin relacion y se presentaban como
-        # causa y efecto. Un juego que funciono bien y que repetia una linea
-        # inocua acababa con un dialogo diciendole al usuario que instalara
-        # dotnet48.
+        # POR QUE SE QUITO EL AVISO EN PANTALLA
         #
-        # Si la linea repetida no parece un error, se queda en el registro y no
-        # se interrumpe a nadie: un juego que ha funcionado no merece un
-        # dialogo de error al salir.
+        # Salia al TERMINAR la partida, o sea cuando el juego ya se ha jugado.
+        # Muchos juegos escriben miles de lineas repetidas por su cuenta -avisos
+        # de Wine, mensajes del motor- sin que pase nada malo, asi que lo comun
+        # era ver un cuadro de error justo despues de una partida que habia ido
+        # perfecta. Eso no ayuda: ni hay nada que arreglar, ni el usuario puede
+        # hacer nada con esa informacion en ese momento. Solo desconcierta.
+        #
+        # El dato sigue guardado entero, con su diagnostico, para cuando un
+        # juego SI falle y haya que mirar el registro: ahi es donde vale.
         case "$(printf '%s' "${_linea_rep#*[0-9] }" | tr 'A-Z' 'a-z')" in
             *err:*|*error*|*fail*|*fatal*|*cannot*|*unable*|*"not found"*|*segfault*|*crash*)
                 local _sug_bucle
                 _sug_bucle="$(fallo_analizar "$LOG_FILE" "$rc")" || true
                 if [ -n "$_sug_bucle" ]; then
-                    ui_error "El juego ha estado escribiendo el mismo error miles de veces.
-
-Si el juego te ha funcionado bien, puedes ignorar esto.
-
-$_sug_bucle"
+                    log "El bucle repetido parece un error; el diagnostico queda en el registro"
+                    printf '%s\n' "$_sug_bucle" >> "$LOG_FILE" 2>/dev/null
                 fi ;;
             *)
-                log "El bucle del registro no parece un error; no se avisa en pantalla" ;;
+                log "El bucle del registro no parece un error" ;;
         esac
     fi
     # UNA SALIDA EN POCOS SEGUNDOS ES UN FALLO AUNQUE EL CODIGO SEA 0.
@@ -10988,13 +11110,29 @@ $_sug_bucle"
     # ha salido a los pocos segundos", y si aqui solo se miraba rc!=0 no se
     # analizaba nada. Ahora cualquier salida rapida pasa por el analizador; si
     # no reconoce nada y el codigo era 0, no molesta.
+    # ESTO VA AL REGISTRO, NO A UN CUADRO DE ERROR.
+    #
+    # POR QUE SE QUITO DE LA PANTALLA
+    #
+    # La condicion es "codigo de salida 0 y menos de 12 segundos", y eso NO
+    # significa que algo haya fallado. Un juego que abre su lanzador y lo
+    # cierras, uno que arrancas y decides salir enseguida, uno que delega en
+    # otro proceso y termina... todos pasan por aqui con rc=0.
+    #
+    # Y el diagnostico que lo acompaña sale de analizar EL REGISTRO ENTERO, que
+    # puede acusar a cualquier cosa escrita antes y sin relacion: de ahi venia
+    # un "es .NET y Mono esta desactivado, instala dotnet48" detras de partidas
+    # que habian ido perfectas.
+    #
+    # Un cuadro de error que sale cuando no hay error enseña a ignorar los
+    # cuadros de error. El dato sigue entero en el registro para cuando un
+    # juego SI falle.
     local _sug_rapida=""
     if [ $rc -eq 0 ] && [ $dur -lt 12 ]; then
         _sug_rapida="$(fallo_analizar "$LOG_FILE" "$rc")" || true
         if [ -n "$_sug_rapida" ]; then
-            ui_error "El juego se ha cerrado a los ${dur}s.
-
-$_sug_rapida"
+            log "El juego duro solo ${dur}s con codigo 0. Diagnostico, por si sirve:"
+            printf '%s\n' "$_sug_rapida" >> "$LOG_FILE" 2>/dev/null
         fi
     fi
     if [ $rc -ne 0 ] && [ $dur -lt 10 ]; then
@@ -11168,15 +11306,37 @@ Que cumplas muchos mas.
     # CORTO. Esto se lee en una pantalla de consola y con el mando en la mano:
     # si no cabe de un vistazo, no se lee. Dos o tres lineas por version, lo que
     # de verdad nota quien la usa.
+    #
+    # CADA PUNTO, EN UNA SOLA LINEA.
+    #
+    # Esto se pinta con una fila por linea, asi que un punto partido a mano en
+    # dos salia como DOS filas, y la segunda ("el suyo.") quedaba suelta y sin
+    # sentido. Se vio en una captura para el manual.
+    # LOS AGRADECIMIENTOS, LO PRIMERO.
+    #
+    # La 2.0 es la primera que sale para todo el mundo, y no habria llegado
+    # aqui sin la gente que lleva meses probandola y mandando registros. Eso va
+    # delante de las novedades, no en una nota al pie.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
+
+PRIMERA VERSION LISTA PARA EL PUBLICO GENERAL
+
+  Muchas gracias a Michel, Fransis y MRDeu por todas las horas de testeo.
+  Sin vosotros este proyecto no habria sido posible.
 
 NOVEDADES
 
-  Añadido raton para moverse por los menus de WProton.
+  Las caratulas 4:3 las trae WProton de su repositorio.
 
-  Mejoras en la carga de ficheros sh y AppImage.
+  Arranca ya configurado con menu moderno, lista y caratulas 4:3.
 
-  Copia de backups de juegos entre dos equipos de la misma red."
+  Mejoras en la carga y compresion de juegos Linux.
+
+  Mejoras en el movimiento del raton.
+
+  Las teclas del mando ya no se aplican a otro juego.
+
+  El paquete se guarda en la carpeta de juegos de la que salio."
     return 0
 }
 
@@ -15512,6 +15672,59 @@ EOFPORT
     return 0
 }
 
+bundled_prefix_enlazar_usuario() {
+    # ENLAZA steamuser AL USUARIO CON EL QUE SE EMPAQUETO EL PREFIJO.
+    #
+    # EL PROBLEMA
+    #
+    # Un prefijo empaquetado en Batocera -o en cualquier sitio donde Wine corra
+    # como root- guarda las cosas del usuario en drive_c/users/root. Proton, en
+    # cambio, siempre trabaja como "steamuser".
+    #
+    # El juego arranca igual, asi que parece que todo va bien, pero cualquier
+    # cosa que el juego busque en SUS carpetas -Documentos, Guardados,
+    # Configuracion- la busca en las de steamuser, que estan vacias. Caso real:
+    # un Dante's Inferno cuyos ficheros de DLC viven en
+    # drive_c/users/root/Documents y no se cargaban nunca. Sin ningun error:
+    # simplemente no habia DLC.
+    #
+    # LA SOLUCION
+    #
+    # Un enlace: users/steamuser apunta a users/root. Las dos rutas llevan a
+    # los mismos ficheros, asi que da igual con que nombre los busque el juego.
+    # Es lo que hacen las herramientas que convierten prefijos entre sistemas.
+    #
+    # Se crea RELATIVO para que el prefijo siga siendo portatil: con una ruta
+    # absoluta, el enlace apuntaria al equipo donde se creo.
+    local pfx="${1:-}" udir
+    [ -n "$pfx" ] && [ -d "$pfx/drive_c/users" ] || return 0
+    [ -e "$pfx/drive_c/users/steamuser" ] && return 0
+    # ¿Que usuario trae? Se descartan los de Wine, que no son del juego.
+    local cand=""
+    for udir in "$pfx"/drive_c/users/*; do
+        [ -d "$udir" ] || continue
+        case "$(basename "$udir")" in
+            Public|"All Users"|Default|"Default User"|steamuser) continue ;;
+        esac
+        cand="$udir"
+        break
+    done
+    [ -n "$cand" ] || return 0
+    local nom; nom="$(basename "$cand")"
+    if ln -s "$nom" "$pfx/drive_c/users/steamuser" 2>/dev/null; then
+        say "[+] Prefix incluido: el prefijo se hizo con el usuario '$nom' y"
+        say "    Proton usa 'steamuser': se enlazan, para que el juego"
+        say "    encuentre sus Documentos, guardados y DLC."
+        log "prefijo: enlazado users/steamuser -> $nom"
+        return 0
+    fi
+    say "[!] Prefix incluido: no se pudo enlazar users/steamuser -> $nom."
+    say "    Si al juego le faltan guardados o DLC, es por esto: sus ficheros"
+    say "    estan en drive_c/users/$nom y Proton mira en users/steamuser."
+    log "prefijo: NO se pudo enlazar users/steamuser -> $nom" WARN
+    return 1
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -15691,6 +15904,7 @@ bundled_prefix_prepare() {
     elif [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ "$_hay_steamuser" = 0 ]; then
         say "[+] Prefix incluido: se usa tal cual (no trae users/steamuser,"
         say "    asi que Proton no tiene que renombrar nada de solo lectura)"
+        bundled_prefix_enlazar_usuario "$BUNDLED_PREFIX_DIR"
     fi
     # SE DICE POR QUE NO SE USA, en vez de salir callando.
     #
@@ -17211,6 +17425,81 @@ Conviene probarlo antes de borrar nada."
     return 1
 }
 
+bibliotecas_lista() {
+    # Todas las carpetas de juegos configuradas, una por linea.
+    printf '%s\n' "$GAMES_PATH"
+    local r
+    # LAS EXTRA VAN SEPARADAS POR SALTOS DE LINEA, NO POR DOS PUNTOS.
+    #
+    # Lo comprobe en el sitio donde se añaden, no de memoria: ahi se concatenan
+    # con un salto de linea. Suponer ":" -que es lo habitual en variables de
+    # ruta- hacia que la lista solo devolviera la carpeta principal, y entonces
+    # todo iba a parar ahi otra vez, que es justo el fallo que se arregla.
+    printf '%s\n' "${GAMES_PATHS_EXTRA:-}" | while IFS= read -r r; do
+        [ -n "$r" ] && [ "$r" != "$GAMES_PATH" ] && printf '%s\n' "$r"
+    done
+    return 0
+}
+
+biblioteca_de() {
+    # ¿En que carpeta de juegos vive esta ruta? "" si en ninguna. $1 = ruta.
+    #
+    # Se compara la ruta REAL de las dos, no el texto: con enlaces simbolicos
+    # -y en una Deck la tarjeta suele estarlo- dos rutas distintas pueden ser
+    # el mismo sitio, y comparando cadenas no se acierta.
+    local p="${1:-}" real r rr
+    [ -n "$p" ] || return 1
+    real="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)/$(basename "$p")"
+    while IFS= read -r r; do
+        [ -n "$r" ] && [ -d "$r" ] || continue
+        rr="$(cd "$r" 2>/dev/null && pwd -P)" || continue
+        case "$real/" in "$rr"/*) printf '%s' "$r"; return 0 ;; esac
+    done <<EOFB
+$(bibliotecas_lista)
+EOFB
+    return 1
+}
+
+destino_del_paquete() {
+    # Donde dejar el .wsquashfs de un juego. $1 = carpeta origen del juego.
+    #
+    # POR QUE NO VALE PONERLO SIEMPRE EN GAMES_PATH
+    #
+    # Antes el paquete iba SIEMPRE a la carpeta principal, viniera el juego de
+    # donde viniera. Con una sola carpeta daba igual; con dos no: si tienes los
+    # juegos de la tarjeta SD en una ruta adicional y empaquetas uno de ahi, el
+    # .wsquashfs aparecia en el disco interno. Ni te enterabas, y encima puede
+    # no caber.
+    #
+    # LO NATURAL ES DEJARLO DONDE ESTABA: si el juego vivia en la tarjeta, su
+    # paquete se queda en la tarjeta. Eso no hay ni que preguntarlo.
+    #
+    # Solo se pregunta cuando de verdad hay duda: cuando el juego NO esta en
+    # ninguna de las carpetas configuradas -por ejemplo lo has traido de
+    # Descargas- y hay mas de una donde elegir.
+    local origen="${1:-}" dest n
+    dest="$(biblioteca_de "$origen")" && { printf '%s' "$dest"; return 0; }
+    n="$(contar_lineas "$(bibliotecas_lista)")"
+    if [ "${n:-1}" -le 1 ]; then
+        printf '%s' "$GAMES_PATH"; return 0
+    fi
+    # Varias carpetas y el juego no esta en ninguna: que elija el usuario.
+    local filas="" r
+    while IFS= read -r r; do
+        [ -n "$r" ] || continue
+        filas="$filas
+$r  [$(human_size "$(df -PB1 "$r" 2>/dev/null | awk 'NR==2{print $4}')" 2>/dev/null) libres]"
+    done <<EOFD
+$(bibliotecas_lista)
+EOFD
+    local sel
+    sel="$(menu "¿Donde guardar el paquete de este juego?" $(printf '%s' "$filas" | sed '/^$/d'))" \
+        || { printf '%s' "$GAMES_PATH"; return 0; }
+    # La fila lleva el espacio libre detras: se queda solo la ruta.
+    printf '%s' "${sel%%  \[*}"
+    return 0
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
@@ -17227,7 +17516,12 @@ build_wsquashfs() {
             }
         fi
     fi
-    [ "$fmt" = "dwarfs" ] && out="$GAMES_PATH/${name}.dwarfs" || out="$GAMES_PATH/${name}.wsquashfs"
+    # DONDE SE GUARDA: en la misma carpeta de juegos de la que salio.
+    local _dest; _dest="$(destino_del_paquete "$src")"
+    [ -n "$_dest" ] || _dest="$GAMES_PATH"
+    mkdir -p "$_dest" 2>/dev/null
+    [ "$_dest" = "$GAMES_PATH" ] || say "[i] El paquete se guarda en $_dest (de donde salio el juego)"
+    [ "$fmt" = "dwarfs" ] && out="$_dest/${name}.dwarfs" || out="$_dest/${name}.wsquashfs"
     local need; need="$(dir_bytes "$src")"
     if [ -n "$need" ] && ! check_space "$(( need * 7 / 10 ))" "$GAMES_PATH" "empaquetar '$name'"; then
         return 1
@@ -17240,11 +17534,91 @@ build_wsquashfs() {
             || { rm -f "$out"; fallo "El empaquetado a DwarFS fallo (mira el registro)"; return 1; }
     else
         need_mksquashfs
+        # Donde acaba el registro AHORA, para leer luego solo lo que escriba
+        # este intento.
+        local _log_antes; _log_antes="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
         # -percentage: mksquashfs va escribiendo solo el numero, pensado
         # justo para alimentar una barra de progreso.
-        run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
-            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage \
-            || { rm -f "$out"; fallo "El empaquetado fallo (mira el registro)"; return 1; }
+        if ! run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
+                mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage; then
+            rm -f "$out"
+            # ¿ES EL FALLO CONOCIDO DE mksquashfs? ENTONCES SE REINTENTA SOLO.
+            #
+            # "BUG in get_virt_disk, <numero> not found" es un fallo del propio
+            # mksquashfs, no nuestro: esta reportado como el issue 360 de
+            # squashfs-tools -su autor lo marca como duplicado del 362- y se ve
+            # en la version 4.7.5. Salta a media compresion y deja el archivo a
+            # medias.
+            #
+            # Aparece en la deteccion de ficheros duplicados, asi que se vuelve
+            # a intentar con esa deteccion apagada: el archivo sale un poco mas
+            # grande y a cambio se crea.
+            #
+            # Se reintenta SOLO ante ese fallo concreto. Reintentar a ciegas
+            # ante cualquier error seria hacer esperar el doble para volver a
+            # fallar por lo mismo.
+            # SE ESPERA A QUE EL MENSAJE LLEGUE AL FICHERO ANTES DE BUSCARLO.
+            #
+            # mksquashfs escribe su "FATAL ERROR" por una tuberia, y esa linea
+            # puede aterrizar en el registro DESPUES de que nosotros miremos.
+            # Sin esta espera, el reintento automatico no se disparaba y el
+            # usuario veia "El empaquetado fallo" a secas, con el mensaje del
+            # fallo apareciendo en el registro justo despues. Medio segundo
+            # aqui no lo nota nadie.
+            sleep 1
+            # SE MIRA SOLO LO QUE ESCRIBIO ESTE INTENTO, NO EL REGISTRO ENTERO.
+            #
+            # El registro es ACUMULATIVO: lleva dentro todo lo de la sesion. Un
+            # "Permission denied" de hace media hora -de montar un disco, de
+            # cualquier cosa- hacia creer que el empaquetado habia fallado por
+            # permisos, y entonces NO se reintentaba sin duplicados: salia "El
+            # empaquetado fallo" y el reintento que habria salvado el archivo no
+            # llegaba a ejecutarse nunca.
+            local _motivo_conocido=0 _salida
+            _salida="$(tail -c +$(( ${_log_antes:-0} + 1 )) "$LOG_FILE" 2>/dev/null)"
+            case "$_salida" in
+                *"BUG in get_virt_disk"*) _motivo_conocido=1 ;;
+            esac
+            if [ "$_motivo_conocido" = 0 ]; then
+                case "$_salida" in
+                    *"No space left"*|*"Permission denied"*|*"Read-only file system"*) ;;
+                    *) _motivo_conocido=2 ;;
+                esac
+            fi
+            log "empaquetado: motivo = $_motivo_conocido (1=fallo conocido de mksquashfs, 2=sin explicacion, 0=disco o permisos)"
+            if [ "$_motivo_conocido" != 0 ]; then
+                if [ "$_motivo_conocido" = 1 ]; then
+                    say "[!] mksquashfs fallo por un fallo conocido suyo"
+                    say "    (BUG in get_virt_disk). Se reintenta sin buscar"
+                    say "    duplicados: el archivo saldra algo mas grande."
+                else
+                    say "[!] mksquashfs fallo y el registro no dice por que."
+                    say "    Se reintenta sin buscar duplicados, que es de donde"
+                    say "    salen sus fallos raros."
+                fi
+                log "empaquetado: reintento con -no-duplicates por el fallo conocido de mksquashfs" WARN
+                if ! run_con_porcentaje "Reintentando '$name' sin duplicados..." \
+                        mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
+                        -no-duplicates -percentage; then
+                    rm -f "$out"
+                    fallo "El empaquetado fallo dos veces.
+
+Es un fallo de mksquashfs (squashfs-tools), no de WProton:
+  FATAL ERROR: BUG in get_virt_disk
+
+Dos salidas:
+  - Actualiza squashfs-tools: esta corregido en versiones
+    mas nuevas.
+  - O empaqueta en DwarFS: Biblioteca y preferencias ->
+    Formato para los juegos que empaquetes -> dwarfs.
+    Comprime mas y no usa mksquashfs."
+                    return 1
+                fi
+            else
+                fallo "El empaquetado fallo (mira el registro)"
+                return 1
+            fi
+        fi
     fi
     rm -rf "${OVERLAY_BASE:?}/${name}"
     printf '%s' "$out"
@@ -17256,6 +17630,13 @@ do_pack_dir() {
     # Empaqueta la carpeta y pregunta el borrado. NO lanza (decide el llamador).
     # Deja la ruta resultante en PACKED_OUT.
     local dir="$1" name="$2" out
+    # LAS LIBRERIAS DEL JUEGO, ANTES DE COMPRIMIR.
+    #
+    # VA AQUI Y NO EN CADA MENU: por esta funcion pasan TODOS los caminos que
+    # empaquetan una carpeta -el de los ajustes del juego y los dos del
+    # asistente-. Ponerlo en uno solo seria repetir el fallo de siempre: algo
+    # que se arregla en un camino y no en los otros.
+    libs_antes_de_empaquetar "$dir" "$name"
     out="$(build_wsquashfs "$dir" "$name")"
     if [ -n "$out" ] && [ -s "$out" ]; then
         say "[OK] Empaquetado: $out"
@@ -18116,6 +18497,10 @@ launch_loose_exe() {
             gid="$_carp"
         fi
     fi
+    # La carátula 4:3 del repositorio, igual que en launch_game. Aqui tenia
+    # que estar tambien: por este camino entran las carpetas sueltas, que son
+    # justo las que mas a menudo se quedan sin carátula.
+    covers43_offer_for "$gid" || true
     BUNDLED_PREFIX_DIR=""
     BUNDLED_RUNNER_DIR=""
     [ "${PREFIX_MODE:-}" = "bundled" ] && PREFIX_MODE="shared"
@@ -18747,6 +19132,15 @@ procesos_usando() {
     # Se descartan nuestro propio proceso y toda la cadena de padres, porque el
     # subshell, su padre y WProton estan todos ahi dentro.
     # $2 = PIDs nuestros a descartar, separados por espacios.
+    # AQUI NO HAY "ERRORES": FALLAR ES LO NORMAL.
+    #
+    # Se recorre /proc entero, y readlink falla en todos los procesos ajenos
+    # -que son casi todos-. Con la trampa de errores puesta, cada fallo escribia
+    # una linea en el registro: en una partida real de la Deck salieron 2019
+    # lineas, todas iguales, cada una con su escritura a disco y dentro del
+    # bucle que se repite cada dos segundos. Ademas de ensuciar el registro,
+    # frenaba el arranque de los juegos.
+    trap - ERR
     local raiz="${1:-}" p _e _c _yo _mios=" "
     [ -n "$raiz" ] || return 0
     # Ademas de la cadena de padres, se descartan los PIDs que nos pasen en $2:
@@ -18799,6 +19193,7 @@ esperar_juego_nativo() {
     # COMO SE SABE QUE SIGUE VIVO: se mira quien tiene abierto algo DENTRO de
     # la carpeta del juego. No vale con buscar el nombre del ejecutable, porque
     # el binario real suele llamarse de otra forma que el .sh.
+    trap - ERR                # lo mismo: aqui fallar es parte del trabajo
     local raiz="${1:-}" espera_max="${2:-0}" t0 n
     [ -d "$raiz" ] || return 0
     t0="$(date +%s)"
@@ -18825,8 +19220,15 @@ esperar_juego_nativo() {
     # por medir dentro de la carpeta que se esta midiendo. Aqui se cuenta en el
     # propio bash, sin crear nada.
     log "juego nativo: procesos usando la carpeta al empezar: $(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+    local _pgid
+    _pgid="$(cat "$RUNTIME_DIR/.juego_pgid" 2>/dev/null)"
     while :; do
         n="$(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+        # ¿Y queda alguien del grupo del lanzador? Cuenta igual: el juego puede
+        # estar corriendo desde otra carpeta.
+        if [ "${n:-0}" = 0 ] && [ -n "$_pgid" ]; then
+            pgrep -g "$_pgid" >/dev/null 2>&1 && n=1
+        fi
         [ "${n:-0}" -gt 0 ] || break
         if [ "$espera_max" -gt 0 ] \
            && [ $(( $(date +%s) - t0 )) -ge "$espera_max" ]; then
@@ -18836,6 +19238,501 @@ esperar_juego_nativo() {
         sleep 2 & _sp=$!; wait "$_sp" 2>/dev/null
     done
     log "juego nativo: ya no queda ningun proceso usando $raiz"
+    return 0
+}
+
+# LIBRERIAS QUE NUNCA SE COPIAN: las pone el equipo donde se juega.
+#
+# Es la lista de AppImage (su "excludelist"), que lleva años puliendose. Son de
+# dos clases y por dos motivos distintos:
+#
+#   - La familia de glibc y libstdc++: copiarlas rompe el juego en cuanto el
+#     equipo destino tenga una version distinta, que es casi siempre.
+#   - Las del driver de video (libGL, libEGL, libdrm...): tienen que ser LAS
+#     DEL EQUIPO, porque hablan con su tarjeta grafica. Una copiada de otro sitio
+#     deja el juego sin aceleracion o directamente no arranca.
+LIBS_NUNCA="ld-linux.so.2 ld-linux-x86-64.so.2 libanl.so.1 libBrokenLocale.so.1
+libcidn.so.1 libc.so.6 libdl.so.2 libm.so.6 libmvec.so.1 libnsl.so.1
+libnss_compat.so.2 libnss_db.so.2 libnss_dns.so.2 libnss_files.so.2
+libnss_hesiod.so.2 libnss_nisplus.so.2 libnss_nis.so.2 libpthread.so.0
+libresolv.so.2 librt.so.1 libthread_db.so.1 libutil.so.1 libcrypt.so.1
+libstdc++.so.6 libgcc_s.so.1
+libGL.so.1 libEGL.so.1 libGLdispatch.so.0 libGLX.so.0 libOpenGL.so.0
+libGLESv2.so.2 libdrm.so.2 libglapi.so.0 libgbm.so.1
+libvulkan.so.1 libxcb-dri2.so.0 libxcb-dri3.so.0"
+
+libs_antes_de_empaquetar() {
+    # SI EL JUEGO ES DE LINUX, SE LLEVA SUS LIBRERIAS ANTES DE EMPAQUETAR.
+    #
+    # POR QUE VA AQUI Y NO EN UN MENU APARTE
+    #
+    # Se puso primero como opcion suelta en "Archivo y mantenimiento", y no
+    # sirve de nada: quien empaqueta un juego va directo a EMPAQUETAR y nunca
+    # pasa por ahi. Y cuando se entera de que faltaban librerias ya esta con el
+    # .wsquashfs hecho en el otro equipo, que es de solo lectura.
+    #
+    # El momento bueno es este: el juego todavia es una carpeta, esta en el
+    # equipo donde funciona, y las librerias que tiene ese equipo son justo las
+    # buenas. Despues seria tarde.
+    #
+    # Solo aplica a juegos de LINUX. Uno de Windows lleva sus DLL dentro y de
+    # las del sistema se encarga Wine.
+    local raiz="${1:-}" gid="${2:-el juego}"
+    [ -d "$raiz" ] || return 0
+    juego_es_nativo "$raiz" >/dev/null 2>&1 || return 0
+    # Si ya trae lib/, se respeta: quien la puso sabra por que.
+    if [ -d "$raiz/lib" ] || [ -d "$raiz/lib64" ]; then
+        log "libs: el juego ya trae su carpeta lib/, no se toca"
+        return 0
+    fi
+    say "[i] Juego de Linux: se miran las librerias que necesita"
+    juego_libs_recoger "$raiz" "$gid"
+    return 0
+}
+
+glibc_que_pide() {
+    # La version de glibc mas alta que exige un binario. $1 = fichero.
+    #
+    # Es el dato que decide si una libreria va a funcionar en otro equipo: un
+    # .so compilado contra glibc 2.43 no arranca en uno que tenga la 2.38, y el
+    # error que da -"version GLIBC_2.43 not found"- no dice de donde salio.
+    local f="${1:-}" v=""
+    [ -f "$f" ] || return 0
+    if command -v objdump >/dev/null 2>&1; then
+        v="$(objdump -T "$f" 2>/dev/null | sed -n 's/.*GLIBC_\([0-9][0-9.]*\).*/\1/p' \
+             | sort -t. -k1,1n -k2,2n | tail -n1)"
+    elif command -v strings >/dev/null 2>&1; then
+        v="$(strings -a "$f" 2>/dev/null | sed -n 's/^GLIBC_\([0-9][0-9.]*\)$/\1/p' \
+             | sort -t. -k1,1n -k2,2n | tail -n1)"
+    fi
+    printf '%s' "$v"
+}
+
+glibc_de_este_equipo() {
+    # La glibc que hay instalada aqui.
+    local v=""
+    v="$(ldd --version 2>/dev/null | head -n1 | sed -n 's/.*[^0-9]\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+    printf '%s' "$v"
+}
+
+glibc_mayor() {
+    # ¿Es $1 mayor que $2? Compara "2.43" contra "2.38" por partes.
+    local a="${1:-0}" b="${2:-0}"
+    [ -n "$a" ] && [ -n "$b" ] || return 1
+    local a1 a2 b1 b2
+    a1="${a%%.*}"; a2="${a#*.}"; a2="${a2%%.*}"
+    b1="${b%%.*}"; b2="${b#*.}"; b2="${b2%%.*}"
+    [ "${a1:-0}" -gt "${b1:-0}" ] && return 0
+    [ "${a1:-0}" -lt "${b1:-0}" ] && return 1
+    [ "${a2:-0}" -gt "${b2:-0}" ]
+}
+
+
+
+
+ARCH_ARCHIVO="https://archive.archlinux.org/packages"
+
+lib_traer_de_arch() {
+    # BAJA UNA LIBRERIA DEL ARCHIVO DE ARCH, EN UNA VERSION QUE SIRVA.
+    #
+    # $1 = paquete (sdl3, libx11...)  $2 = carpeta lib/ del juego
+    # $3 = glibc maxima que puede pedir (la del equipo mas antiguo)
+    #
+    # POR QUE DEL ARCHIVO Y NO DEL REPOSITORIO NORMAL
+    #
+    # El paquete actual de Arch esta compilado contra la glibc actual de Arch, o
+    # sea que tiene el MISMO problema que copiar la libreria del equipo: no
+    # arranca en uno mas antiguo.
+    #
+    # El archivo de Arch guarda TODAS las versiones anteriores. Se prueban de la
+    # mas nueva a la mas vieja y se coge la PRIMERA cuya glibc encaje en el
+    # equipo destino. Eso da una libreria moderna pero que arranca en la Deck,
+    # que es justo lo que hace falta.
+    #
+    # SteamOS es Arch por debajo, asi que sus paquetes son los que mejor encajan.
+    # $4 = 32 o 64 (por defecto 64)
+    local pkg="${1:-}" destino="${2:-}" tope="${3:-}" bits="${4:-64}"
+    [ -n "$pkg" ] && [ -d "$destino" ] || return 1
+    # EN 32 BITS, EL PAQUETE ES OTRO Y LAS .so ESTAN EN OTRO SITIO.
+    #
+    # Arch llama "lib32-sdl3" al de 32 bits y lo mete en usr/lib32. Bajando el
+    # de 64 para un juego de 32 no se arregla nada: el juego ni arranca, dice
+    # "wrong ELF class". Es lo que le pasaba a Halo.
+    local subdir="usr/lib"
+    if [ "$bits" = 32 ]; then
+        case "$pkg" in lib32-*) ;; *) pkg="lib32-$pkg" ;; esac
+        subdir="usr/lib32"
+    fi
+    command -v curl >/dev/null 2>&1 || { say "[!] Falta curl"; return 1; }
+    local letra; letra="$(printf '%s' "$pkg" | cut -c1)"
+    local indice tmp
+    tmp="$(mktemp -d 2>/dev/null)" || return 1
+    say "[i] Buscando $pkg en el archivo de Arch..."
+    indice="$(curl -fsSL --max-time 30 "$ARCH_ARCHIVO/$letra/$pkg/" 2>/dev/null)" || {
+        say "[!] No se pudo leer el archivo de Arch para $pkg"
+        rm -rf "$tmp"; return 1; }
+    # OJO: la barra se abre DESPUES de leer el indice. Si se abriera antes,
+    # cualquiera de las salidas de aqui arriba la dejaria puesta en pantalla
+    # para siempre, y eso es peor que no tener barra.
+    # Los ficheros del indice, de mas nuevo a mas viejo.
+    local vers
+    vers="$(printf '%s' "$indice" \
+            | sed -n "s/.*href=\"\($pkg-[0-9][^\"]*-x86_64\.pkg\.tar\.[xz]st*\)\".*/\1/p" \
+            | grep -v '\.sig$' | sort -r -V | head -n 40)"
+    # CUARENTA VERSIONES, NO DOCE.
+    #
+    # Con doce se quedo a UNA de acertar: en la prueba del 28/09 bajo hasta
+    # sdl3-3.4.0-3, que pide glibc 2.38, y ahi se le acabaron los intentos. Las
+    # versiones de Arch salen casi a diario, asi que doce son dos semanas de
+    # nada; para retroceder de verdad hacen falta bastantes mas.
+    [ -n "$vers" ] || { say "[!] El archivo de Arch no tiene versiones de $pkg"; rm -rf "$tmp"; return 1; }
+    # UNA BARRA DE PROGRESO, PORQUE ESTO TARDA.
+    #
+    # Se prueban hasta cuarenta versiones, y cada una es una descarga completa
+    # del paquete mas descomprimirlo. Sin nada en pantalla parece que el
+    # programa se ha colgado, y la gente lo mata a mitad.
+    #
+    # El porcentaje es sobre las versiones PROBADAS, no sobre los bytes: lo que
+    # de verdad no se sabe es cuantas habra que probar hasta dar con una que
+    # sirva, y asi se ve que avanza en cada intento.
+    local _total; _total="$(contar_lineas "$vers")"
+    progress_start "Buscando $pkg compatible con glibc $tope"
+    local f url so pide n=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        n=$((n+1))
+        progress_set "$(( n * 100 / (_total > 0 ? _total : 1) ))" \
+                     "Probando $f ($n de $_total)"
+        url="$ARCH_ARCHIVO/$letra/$pkg/$f"
+        rm -rf "$tmp/x"; mkdir -p "$tmp/x"
+        curl -fsSL --max-time 120 "$url" -o "$tmp/p.pkg" 2>/dev/null || continue
+        ( cd "$tmp/x" && tar xf "$tmp/p.pkg" 2>/dev/null ) || continue
+        # Las .so de verdad que trae el paquete.
+        so="$(find "$tmp/x/$subdir" -maxdepth 1 -name '*.so.*' -type f 2>/dev/null | head -n1)"
+        [ -n "$so" ] || continue
+        pide="$(glibc_que_pide "$so")"
+        if [ -n "$tope" ] && [ -n "$pide" ] && glibc_mayor "$pide" "$tope"; then
+            log "arch: $f pide glibc $pide, mas que $tope: se prueba una anterior"
+            continue
+        fi
+        # Vale: se copian todas sus .so al juego.
+        local c=0 lib
+        for lib in $(find "$tmp/x/$subdir" -maxdepth 1 \( -name '*.so' -o -name '*.so.*' \) 2>/dev/null); do
+            cp -L "$lib" "$destino/$(basename "$lib")" 2>/dev/null && c=$((c+1))
+        done
+        progress_set 100 "$pkg listo"
+        progress_stop
+        say "[+] $pkg: traida la version $f (pide glibc ${pide:-?}), $c fichero(s)"
+        log "arch: $pkg <- $url (glibc ${pide:-?})"
+        rm -rf "$tmp"
+        return 0
+    done <<EOFV
+$vers
+EOFV
+    progress_stop
+    say "[!] Se probaron $n versiones de $pkg y ninguna sirve para glibc $tope"
+    say "    Prueba a subir GLIBC_OBJETIVO en settings.conf si tu equipo mas"
+    say "    antiguo tiene una glibc mas moderna que $tope."
+    rm -rf "$tmp"
+    return 1
+}
+
+elf_bits() {
+    # 32 o 64, segun el ELF. $1 = fichero.
+    #
+    # HACE FALTA MAS DE LO QUE PARECE
+    #
+    # Muchos juegos de Linux son de 32 bits -Halo entre ellos- y entonces TODO
+    # cambia: sus librerias salen de /usr/lib32, y en Arch los paquetes se
+    # llaman "lib32-loquesea". Bajando el de 64 bits no sirve de nada: el juego
+    # dice "wrong ELF class: ELFCLASS32" y no arranca.
+    local f="${1:-}" b
+    [ -f "$f" ] || return 0
+    b="$(od -An -t u1 -j 4 -N 1 "$f" 2>/dev/null | tr -d ' ')"
+    case "$b" in
+        1) printf '32' ;;
+        2) printf '64' ;;
+        *) printf '' ;;
+    esac
+}
+
+paquete_arch_de_libreria() {
+    # De que paquete de Arch sale una libreria. $1 = libSDL3.so.0 -> sdl3
+    #
+    # Son los casos que salen de verdad en juegos. Si no esta en la tabla, se
+    # prueba con el nombre sin "lib" ni version, que acierta bastante en Arch.
+    local l="${1:-}"
+    case "$l" in
+        libSDL3*)      printf 'sdl3' ;;
+        libSDL2*)      printf 'sdl2' ;;
+        libSDL-1.2*)   printf 'sdl12-compat' ;;
+        libopenal*)    printf 'openal' ;;
+        libvorbis*)    printf 'libvorbis' ;;
+        libogg*)       printf 'libogg' ;;
+        libfreetype*)  printf 'freetype2' ;;
+        libcurl*)      printf 'curl' ;;
+        libpng16*)     printf 'libpng' ;;
+        libjpeg*)      printf 'libjpeg-turbo' ;;
+        libfluidsynth*) printf 'fluidsynth' ;;
+        libmpg123*)    printf 'mpg123' ;;
+        libtheora*)    printf 'libtheora' ;;
+        *) printf '%s' "$(printf '%s' "$l" | sed 's/^lib//; s/\.so.*//; s/[0-9]*$//' \
+                          | tr 'A-Z' 'a-z')" ;;
+    esac
+}
+
+juego_libs_recoger() {
+    # COPIA AL JUEGO LAS LIBRERIAS QUE NECESITA Y NO SON DEL SISTEMA.
+    #
+    # PARA QUE SIRVE
+    #
+    # Un juego de Linux empaquetado en un equipo puede no arrancar en otro
+    # porque le falta una libreria. Ir una por una -arrancar, ver cual falla,
+    # copiarla, repetir- es inviable: un juego puede necesitar veinte.
+    #
+    # Esto lo hace de una vez: pregunta a ldd por TODAS las que necesitan los
+    # binarios del juego, descarta las que debe poner el equipo donde se juega
+    # (ver LIBS_NUNCA) y copia el resto a lib/ dentro del juego. Al lanzar,
+    # WProton usa esa carpeta sola.
+    #
+    # SE HACE EN EL EQUIPO DONDE EL JUEGO SI FUNCIONA, que es el unico que tiene
+    # las librerias buenas.
+    local raiz="${1:-}" gid="${2:-el juego}"
+    [ -d "$raiz" ] || { fallo "No encuentro la carpeta del juego."; return 1; }
+    command -v ldd >/dev/null 2>&1 || {
+        fallo "Falta 'ldd' en este equipo y sin el no se pueden averiguar
+las librerias que necesita el juego."
+        return 1; }
+    local destino="$raiz/lib"
+    # LOS BINARIOS DEL JUEGO: ejecutables ELF y las .so que ya traiga.
+    #
+    # Se miran tambien las .so propias porque ellas arrastran sus dependencias:
+    # mirando solo el ejecutable se escapa la mitad.
+    local bins; bins="$(find "$raiz" -maxdepth 4 -type f \
+        \( -perm -u+x -o -name '*.so' -o -name '*.so.*' \) 2>/dev/null | head -n 200)"
+    [ -n "$bins" ] || { fallo "No encuentro ningun ejecutable en la carpeta."; return 1; }
+    loading_start "Mirando que librerias necesita $gid..."
+    local todas="" b lin ruta nombre
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        # Solo ELF: un .sh o un .txt con permiso de ejecucion no tiene ldd.
+        case "$(head -c 4 "$b" 2>/dev/null | tr -d '\0')" in
+            *ELF*) ;;
+            *) continue ;;
+        esac
+        while IFS= read -r lin; do
+            case "$lin" in
+                *"=> /"*) ;;
+                *) continue ;;
+            esac
+            nombre="$(printf '%s' "$lin" | awk '{print $1}')"
+            ruta="$(printf '%s' "$lin" | sed -n 's/.*=> *\([^ ]*\).*/\1/p')"
+            [ -f "$ruta" ] || continue
+            # ¿De las que pone el equipo? Entonces no se toca.
+            case " $LIBS_NUNCA " in
+                *" $nombre "*) continue ;;
+            esac
+            # ¿Ya la trae el propio juego? Entonces tampoco.
+            case "$ruta" in "$raiz"/*) continue ;; esac
+            todas="$todas$nombre|$ruta
+"
+        done <<EOFLDD
+$(ldd "$b" 2>/dev/null)
+EOFLDD
+    done <<EOFBIN
+$bins
+EOFBIN
+    loading_stop
+    todas="$(printf '%s' "$todas" | sort -u | grep -v '^$' || true)"
+    if [ -z "$todas" ]; then
+        ui_info "$gid no necesita ninguna libreria de fuera.
+
+Todas las que usa las pone cualquier equipo con Linux, asi
+que el paquete ya deberia funcionar en otros sitios."
+        return 0
+    fi
+    local cuantas; cuantas="$(contar_lineas "$todas")"
+    local lista; lista="$(printf '%s' "$todas" | cut -d'|' -f1 | sed 's/^/  /' | head -n 25)"
+    ui_ask "$gid necesita $cuantas libreria(s) que no pone el sistema:
+
+$lista
+
+Se copiaran a lib/ dentro del juego, para que funcione en
+cualquier equipo. Despues hay que volver a empaquetarlo.
+
+Seguir?" || return 0
+    mkdir -p "$destino" 2>/dev/null || { fallo "No se pudo crear $destino"; return 1; }
+    local n=0 fallos=0 par
+    while IFS= read -r par; do
+        [ -n "$par" ] || continue
+        nombre="${par%%|*}"; ruta="${par#*|}"
+        if cp -L "$ruta" "$destino/$nombre" 2>/dev/null; then
+            n=$((n+1)); log "libs: copiada $nombre desde $ruta"
+        else
+            fallos=$((fallos+1)); log "libs: NO se pudo copiar $nombre desde $ruta" WARN
+        fi
+    done <<EOFCP
+$todas
+EOFCP
+    # SE APUNTA CONTRA QUE GLIBC SE COMPILARON.
+    #
+    # POR QUE ESTE DATO ES EL QUE IMPORTA
+    #
+    # Una libreria copiada de un equipo moderno no arranca en uno mas antiguo:
+    # "version GLIBC_2.43 not found". El error aparece en el OTRO equipo, con
+    # el .wsquashfs ya hecho y de solo lectura, y no dice de donde salio.
+    #
+    # Guardando aqui el maximo que exigen, WProton puede avisar ANTES de que el
+    # juego falle, y en el equipo donde todavia se puede arreglar.
+    local _tope="" _v
+    for par in $(printf '%s' "$todas" | cut -d'|' -f1); do
+        _v="$(glibc_que_pide "$destino/$par")"
+        [ -n "$_v" ] || continue
+        if [ -z "$_tope" ] || glibc_mayor "$_v" "$_tope"; then _tope="$_v"; fi
+    done
+    # LO QUE PIDA DEMASIADO, SE SUSTITUYE POR UNA VERSION DEL ARCHIVO DE ARCH.
+    #
+    # Aqui esta la diferencia entre "avisar de que no va a funcionar" y que
+    # funcione. Si una libreria copiada de este equipo pide una glibc mas nueva
+    # que la del objetivo, se busca en el archivo de Arch una version anterior
+    # de ese mismo paquete que si encaje, y se pone en su lugar.
+    local _obj="${GLIBC_OBJETIVO:-2.36}"
+    # DE CUANTOS BITS ES EL JUEGO: decide que paquetes hay que bajar.
+    local _bits _b1
+    for _b1 in $bins; do
+        _bits="$(elf_bits "$_b1")"
+        [ -n "$_bits" ] && break
+    done
+    [ -n "$_bits" ] || _bits=64
+    say "[i] El juego es de $_bits bits"
+    if [ -n "$_tope" ] && glibc_mayor "$_tope" "$_obj"; then
+        say "[i] Hay librerias que piden glibc $_tope y el objetivo es $_obj."
+        say "    Se buscan versiones compatibles en el archivo de Arch."
+        local _l _p _v
+        for _l in $(printf '%s' "$todas" | cut -d'|' -f1); do
+            _v="$(glibc_que_pide "$destino/$_l")"
+            [ -n "$_v" ] || continue
+            glibc_mayor "$_v" "$_obj" || continue
+            _p="$(paquete_arch_de_libreria "$_l")"
+            [ -n "$_p" ] || continue
+            lib_traer_de_arch "$_p" "$destino" "$_obj" "${_bits:-64}" \
+                || say "[!] $_l se queda como estaba: pedira glibc $_v"
+        done
+        # Se vuelve a medir, que puede haber bajado.
+        _tope=""
+        for _l in $(printf '%s' "$todas" | cut -d'|' -f1); do
+            _v="$(glibc_que_pide "$destino/$_l")"
+            [ -n "$_v" ] || continue
+            if [ -z "$_tope" ] || glibc_mayor "$_v" "$_tope"; then _tope="$_v"; fi
+        done
+    fi
+    if [ -n "$_tope" ]; then
+        printf '%s' "$_tope" > "$destino/.glibc_minima" 2>/dev/null
+        say "[i] Estas librerias piden glibc $_tope o mas nueva"
+        say "    Este equipo tiene la $(glibc_de_este_equipo)."
+        say "    En un equipo con una glibc MAS VIEJA que $_tope el juego NO"
+        say "    arrancara. Si te pasa, empaqueta desde ese equipo: lo que se"
+        say "    copie alli vale en los dos."
+        log "libs: las copiadas piden glibc $_tope" WARN
+    fi
+    say "[+] Copiadas $n libreria(s) a $destino"
+    [ "$fallos" -gt 0 ] && say "[!] $fallos no se pudieron copiar (mira el registro)"
+    ui_info "Listas $n libreria(s) en lib/ dentro del juego.
+
+Ahora vuelve a empaquetarlo y el .wsquashfs funcionara en
+otros equipos sin depender de lo que tengan instalado.
+
+Si al probarlo todavia falta alguna, vuelve a ejecutar esto:
+cada pasada encuentra las que arrastran las nuevas."
+    return 0
+}
+
+diag_libreria_que_falta() {
+    # ¿EL JUEGO SE QUEJO DE UNA LIBRERIA QUE NO ESTA?
+    #
+    # Es el fallo mas comun al llevar un juego de Linux de un equipo a otro, y
+    # el mensaje que suelta el juego -"error while loading shared libraries"-
+    # se pierde entre todo lo demas del registro. Aqui se caza, se dice QUE
+    # libreria falta y se explica como arreglarlo de una vez para siempre.
+    local raiz="${1:-}" desde="${2:-0}" _sal _lib
+    [ -r "${LOG_FILE:-}" ] || return 0
+    # PRIMERO EL CASO MALO: una libreria DEMASIADO NUEVA.
+    #
+    # Es distinto de que falte, y el consejo tiene que ser el CONTRARIO.
+    #
+    #   ./halo: /usr/lib32/libm.so.6: version `GLIBC_2.43' not found
+    #           (required by .../lib/libSDL3.so.0)
+    #
+    # Aqui la libreria SI esta: la copiamos nosotros desde un equipo con una
+    # glibc mas moderna, y en este no vale. Copiar mas librerias no lo arregla,
+    # LO EMPEORA: cada una nueva arrastra la misma exigencia.
+    local _vieja
+    _vieja="$(tail -c +$(( desde + 1 )) "$LOG_FILE" 2>/dev/null \
+              | grep -m1 "version \`GLIBC_" || true)"
+    if [ -n "$_vieja" ]; then
+        local _ver _cual
+        _ver="$(printf '%s' "$_vieja" | sed -n "s/.*version \`\(GLIBC_[0-9.]*\).*/\1/p")"
+        _cual="$(printf '%s' "$_vieja" | sed -n 's/.*required by *\([^)]*\).*/\1/p')"
+        say "[!] UNA LIBRERIA DEL JUEGO ES DEMASIADO NUEVA PARA ESTE EQUIPO"
+        say "    Pide ${_ver:-una glibc mas moderna} y aqui no la hay."
+        say "    La culpable: ${_cual:-(mira el registro)}"
+        say ""
+        say "    OJO: copiar MAS librerias NO lo arregla, lo empeora. Esa"
+        say "    libreria se compilo en un equipo con un Linux mas moderno"
+        say "    que este, y arrastra esa exigencia alla donde vaya."
+        say ""
+        say "    Lo que si funciona, por orden:"
+        say "      1. Empaquetar el juego DESDE el equipo mas antiguo de los"
+        say "         dos (aqui, la Deck): lo que se copie ahi vale en ambos."
+        say "      2. Quitar esa libreria de la carpeta lib/ del juego y"
+        say "         dejar que la ponga este equipo, si la tiene."
+        say "      3. Usar una version del juego compilada para Linux antiguo:"
+        say "         los ports que se distribuyen para Steam Deck lo estan."
+        log "juego nativo: libreria demasiado nueva (${_ver:-?}) en ${_cual:-?}" WARN
+        return 0
+    fi
+    _sal="$(tail -c +$(( desde + 1 )) "$LOG_FILE" 2>/dev/null \
+            | grep -m1 'error while loading shared libraries' || true)"
+    [ -n "$_sal" ] || return 0
+    # SE QUITA EL NOMBRE DEL PROPIO EJECUTABLE.
+    #
+    # El mensaje tiene dos formas y la primera engaña:
+    #
+    #   ./halo: error while loading shared libraries: libSDL3.so.0: cannot open
+    #   ./halo: error while loading shared libraries: ./halo: wrong ELF class
+    #
+    # En la segunda, lo que va detras de los dos puntos es EL PROPIO JUEGO, no
+    # una libreria: en el registro del 28/09 salio "AL JUEGO LE FALTA UNA
+    # LIBRERIA: ./halo.real", que no dice nada. Si lo que se saca acaba en .so
+    # es una libreria; si no, es otro problema y se dice cual.
+    _lib="$(printf '%s' "$_sal" | sed -n 's/.*shared libraries: *\([^:]*\).*/\1/p')"
+    case "$_sal" in
+        *"wrong ELF class"*)
+            say "[!] EL JUEGO Y SUS LIBRERIAS NO SON DE LOS MISMOS BITS"
+            say "    Un juego de 32 bits necesita librerias de 32 bits."
+            say "    Vuelve a empaquetarlo: WProton ya mira de cuantos bits es"
+            say "    el juego y se trae las que le tocan."
+            log "juego nativo: mezcla de 32 y 64 bits ($_sal)" WARN
+            return 0 ;;
+    esac
+    case "$_lib" in
+        *.so|*.so.*) ;;
+        *)  say "[!] El juego no arranca: $_sal"
+            log "juego nativo: no arranca ($_sal)" WARN
+            return 0 ;;
+    esac
+    say "[!] AL JUEGO LE FALTA UNA LIBRERIA DEL SISTEMA: ${_lib:-(no se sabe cual)}"
+    say "    Este equipo no la tiene y el que empaqueto el juego si."
+    say ""
+    say "    Para que el paquete funcione en cualquier sitio, copia esa"
+    say "    libreria a una carpeta lib/ DENTRO del juego y vuelve a"
+    say "    empaquetarlo. WProton la usa sola si esta ahi:"
+    say ""
+    say "      $raiz/lib/${_lib:-libloquesea.so}"
+    say ""
+    say "    En el equipo donde SI funciona, para saber de donde sacarla:"
+    say "      ldd <el ejecutable del juego> | grep ${_lib:-lib}"
+    log "juego nativo: falta la libreria ${_lib:-?} en este equipo" WARN
     return 0
 }
 
@@ -18854,12 +19751,74 @@ ejecutar_nativo() {
     # funcionar.
     local exe="$1"
     [ -f "$exe" ] || { fallo "No existe el lanzador: $exe"; return 1; }
+    # LAS LIBRERIAS QUE EL JUEGO TRAIGA CONSIGO.
+    #
+    # PARA QUE SIRVE
+    #
+    # Un juego de Linux empaquetado en un equipo puede no arrancar en otro
+    # porque le falta una libreria del SISTEMA. Caso real del 28/09: un Halo
+    # empaquetado en CachyOS no arrancaba en la Deck con
+    #
+    #   ./halo: error while loading shared libraries: libSDL3.so.0
+    #
+    # El .wsquashfs llevaba el juego pero no esa libreria, que CachyOS tiene y
+    # SteamOS no. Es el mismo problema de siempre de los juegos nativos.
+    #
+    # LA SOLUCION QUE SE OFRECE: si el juego trae una carpeta lib/ o lib64/, se
+    # usa. Asi basta con copiar ahi el .so que falte y el paquete pasa a ser de
+    # verdad portatil, sin depender de lo que tenga instalado cada equipo.
+    local _raiz_lib; _raiz_lib="$(dirname "$exe")"
+    # Donde acaba el registro ahora, para leer luego solo lo que escriba el juego.
+    local _log_antes_nat; _log_antes_nat="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
+    local _lp=""
+    [ -d "$_raiz_lib/lib" ]   && _lp="$_raiz_lib/lib"
+    [ -d "$_raiz_lib/lib64" ] && _lp="${_lp:+$_lp:}$_raiz_lib/lib64"
+    if [ -n "$_lp" ]; then
+        # ¿SIRVEN EN ESTE EQUIPO? SI NO, MEJOR NO USARLAS.
+        #
+        # Si se empaqueto en un equipo con una glibc mas moderna, esas
+        # librerias no arrancan aqui y ADEMAS TAPAN a las del sistema, que
+        # quiza si servirian. Usarlas garantiza el fallo; no usarlas al menos
+        # deja una oportunidad.
+        local _pide _hay
+        _pide="$(cat "$_raiz_lib/lib/.glibc_minima" 2>/dev/null)"
+        _hay="$(glibc_de_este_equipo)"
+        if [ -n "$_pide" ] && [ -n "$_hay" ] && glibc_mayor "$_pide" "$_hay"; then
+            say "[!] Las librerias que trae el juego piden glibc $_pide y aqui"
+            say "    hay la $_hay: NO se usan, se prueba con las del sistema."
+            say "    Para arreglarlo de verdad, vuelve a empaquetar el juego"
+            say "    DESDE este equipo, que es el que tiene la glibc mas vieja."
+            log "libs: la carpeta lib/ del juego pide glibc $_pide y aqui hay $_hay: se ignora" WARN
+        else
+            export LD_LIBRARY_PATH="$_lp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            say "[+] Librerias propias del juego: $_lp"
+        fi
+    fi
     [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
     if [ -x "$exe" ]; then
-        "$exe"
+        # EN SU PROPIO GRUPO DE PROCESOS, PARA PODER SEGUIRLE LA PISTA.
+        #
+        # POR QUE NO BASTA CON LA CARPETA
+        #
+        # Buscar quien usa la carpeta del juego funciona cuando el juego vive
+        # ahi. Pero un lanzador .sh puede arrancar algo que esta EN OTRO SITIO
+        # -otro binario, un AppImage, un Proton- y entonces no se encuentra a
+        # nadie: en el registro del 28/09, Halo daba "procesos usando la carpeta
+        # al empezar: 0" con el juego corriendo, asi que WProton volvia al menu
+        # y Select no tenia nada que cerrar.
+        #
+        # Con setsid, el lanzador y todo lo que cuelgue de el quedan en un GRUPO
+        # propio, y un grupo se puede mirar y cerrar entero aunque los procesos
+        # se hayan ido a otra carpeta o los haya adoptado init.
+        setsid "$exe" &
+        local _pg=$!
+        printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+        wait "$_pg" 2>/dev/null
         local _rc=$?
         # EL LANZADOR HA TERMINADO, PERO EL JUEGO PUEDE SEGUIR.
         esperar_juego_nativo "$(dirname "$exe")" 0
+        diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
+        rm -f "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
         return $_rc
     fi
     case "$exe" in
@@ -18886,7 +19845,34 @@ lanzar_nativo_suelto() {
     local exe="$1" gid _raiz
     _raiz="$(dirname "$(readlink -f "$exe")")"
     gid="$(game_id "$_raiz")"
+    # EL PERFIL SE CARGA ANTES DE TOCAR NADA.
+    #
+    # No es un detalle: al acabar la partida se llama a stats_record, que
+    # usa write_full_profile, y ESE ESCRIBE EL PERFIL ENTERO desde las
+    # variables que haya en memoria. Sin cargarlo antes, no es que el
+    # contador de partidas se pusiera a cero: es que se borrarian TODOS
+    # los ajustes del juego -runner, prefijo, mandos, librerias- y se
+    # quedarian los valores de fabrica.
+    load_profile "$gid" >/dev/null 2>&1 || true
+    # La carátula 4:3 del repositorio, como en los otros lanzadores.
+    covers43_offer_for "$gid" || true
     say "[+] Juego de Linux: $(basename "$exe")"
+    # EL VIGILANTE DE SALIDA, TAMBIEN POR AQUI.
+    #
+    # Hay TRES caminos que lanzan un juego y el vigilante solo se
+    # arrancaba en dos. Los juegos de Linux elegidos desde la lista pasan
+    # por este tercero, asi que mantener Select no hacia absolutamente
+    # nada y habia que cerrar con Alt+F4.
+    #
+    # Se le pasa el lanzador porque aqui no existe $EXE_PATH.
+    guardia_salida_start "$exe"
+    # EL RELOJ DE LA PARTIDA, PARA LAS ESTADISTICAS.
+    #
+    # Sin esto, un juego lanzado por este camino no contaba como jugado:
+    # no salia como "ultimo juego lanzado" ni sumaba tiempo ni partidas.
+    # Es el mismo olvido de siempre: estaba en los dos lanzadores grandes
+    # y no en estos.
+    local _st0; _st0="$(date +%s)"
     local h
     # Se le pasa la carpeta del juego: si trae un .home dentro, manda esa.
     if h="$(home_portable "$gid" "$_raiz" "$exe")"; then
@@ -18899,6 +19885,10 @@ lanzar_nativo_suelto() {
         pad_bridge_stop
         ( cd "$(dirname "$exe")" || exit 1; ejecutar_nativo "$exe" )
     fi
+    # Se apunta la partida: cuantas veces, cuanto tiempo y cuando fue la
+    # ultima. stats_record ignora por su cuenta las de menos de 20 s, que
+    # son arranques fallidos.
+    stats_record "$gid" "$(( $(date +%s) - _st0 ))"
     return 0
 }
 
@@ -18917,7 +19907,34 @@ lanzar_script_si_existe() {
     launcher="$(juego_es_nativo "$dir")" || return 1
     [ -n "$launcher" ] || return 1
     say "[+] Juego de Linux: $(basename "$launcher")"
+    # EL VIGILANTE DE SALIDA, TAMBIEN POR AQUI.
+    #
+    # Hay TRES caminos que lanzan un juego y el vigilante solo se
+    # arrancaba en dos. Los juegos de Linux elegidos desde la lista pasan
+    # por este tercero, asi que mantener Select no hacia absolutamente
+    # nada y habia que cerrar con Alt+F4.
+    #
+    # Se le pasa el lanzador porque aqui no existe $EXE_PATH.
+    guardia_salida_start "$launcher"
+    # EL RELOJ DE LA PARTIDA, PARA LAS ESTADISTICAS.
+    #
+    # Sin esto, un juego lanzado por este camino no contaba como jugado:
+    # no salia como "ultimo juego lanzado" ni sumaba tiempo ni partidas.
+    # Es el mismo olvido de siempre: estaba en los dos lanzadores grandes
+    # y no en estos.
+    local _st0; _st0="$(date +%s)"
     local gid; gid="$(game_id "$dir")"
+    # EL PERFIL SE CARGA ANTES DE TOCAR NADA.
+    #
+    # No es un detalle: al acabar la partida se llama a stats_record, que
+    # usa write_full_profile, y ESE ESCRIBE EL PERFIL ENTERO desde las
+    # variables que haya en memoria. Sin cargarlo antes, no es que el
+    # contador de partidas se pusiera a cero: es que se borrarian TODOS
+    # los ajustes del juego -runner, prefijo, mandos, librerias- y se
+    # quedarian los valores de fabrica.
+    load_profile "$gid" >/dev/null 2>&1 || true
+    # La carátula 4:3 del repositorio, como en los otros lanzadores.
+    covers43_offer_for "$gid" || true
     local h
     # La carpeta del juego es $dir: si ahi hay un .home, se usa ese.
     if h="$(home_portable "$gid" "$dir" "$launcher")"; then
@@ -18930,6 +19947,10 @@ lanzar_script_si_existe() {
         pad_bridge_stop
         ( cd "$(dirname "$launcher")" || exit 1; ejecutar_nativo "$launcher" )
     fi
+    # Se apunta la partida: cuantas veces, cuanto tiempo y cuando fue la
+    # ultima. stats_record ignora por su cuenta las de menos de 20 s, que
+    # son arranques fallidos.
+    stats_record "$gid" "$(( $(date +%s) - _st0 ))"
     return 0
 }
 
@@ -19432,11 +20453,27 @@ r2|R2 (gatillo derecho)
 l3|L3 (stick izquierdo pulsado)
 r3|R3 (stick derecho pulsado)
 start|Start
-select|Select
-joystick1up|Stick izquierdo arriba
+select|Select"
+
+# LOS STICKS, EN SU PROPIO SUBMENU.
+#
+# POR QUE NO VAN EN LA LISTA PRINCIPAL
+#
+# Estaban al final, en las posiciones 21 a 24 de 26. En la pantalla caben unas
+# trece filas, asi que para llegar al stick derecho habia que bajar veinte
+# veces con el mando: en la practica, nadie los encontraba. Un tester lo pidio
+# como si fuera una funcion que faltaba, y llevaba meses puesta.
+#
+# Agrupados en un submenu caben de sobra y ademas la lista principal se queda
+# en diecisiete filas, que si entran de una vez.
+KEYS_STICKS="joystick1up|Stick izquierdo arriba
 joystick1down|Stick izquierdo abajo
 joystick1left|Stick izquierdo izquierda
-joystick1right|Stick izquierdo derecha"
+joystick1right|Stick izquierdo derecha
+joystick2up|Stick derecho arriba
+joystick2down|Stick derecho abajo
+joystick2left|Stick derecho izquierda
+joystick2right|Stick derecho derecha"
 
 keys_tecla_elegir() {
     # Devuelve el nombre de tecla (KEY_...) que elija el usuario.
@@ -19910,6 +20947,43 @@ puntero. Los gatillos suelen estar ocupados por el juego." \
     done
 }
 
+keys_sticks_editar() {
+    # Submenu para asignar teclas a las ocho direcciones de los dos sticks.
+    #
+    # $1 = fichero temporal con las asignaciones (mismo formato que el editor)
+    #
+    # Se trabaja sobre el MISMO temporal que la pantalla principal, asi que lo
+    # que se cambie aqui se guarda con el resto al dar a GUARDAR. Separarlo en
+    # otro fichero habria sido pedir que un dia se queden descompasados.
+    local tmp="$1" sel nom largo actual opciones tecla
+    while :; do
+        opciones=""
+        while IFS='|' read -r nom largo; do
+            [ -n "$nom" ] || continue
+            actual="$(grep -m1 "^$nom|" "$tmp" 2>/dev/null | cut -d'|' -f2)"
+            opciones="$opciones$largo: ${actual:-—}
+"
+        done <<EOFST
+$KEYS_STICKS
+EOFST
+        # shellcheck disable=SC2046
+        sel="$(IFS=$'\n'; set -f; menu "Sticks: que tecla pulsa cada direccion" \
+               $opciones "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+        esac
+        largo="${sel%%: *}"
+        nom="$(printf '%s' "$KEYS_STICKS" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
+        [ -n "$nom" ] || continue
+        tecla="$(keys_tecla_elegir "$largo")" || continue
+        # Se escribe igual que en la pantalla principal: se quita la linea
+        # anterior de ese destino y se añade la nueva. "__QUITAR__" deja el
+        # destino sin asignar.
+        grep -v "^$nom|" "$tmp" > "$tmp.n" 2>/dev/null; mv -f "$tmp.n" "$tmp"
+        [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
+    done
+}
+
 keys_editor() {
     # Crear o retocar el .keys de un juego, boton a boton.
     #
@@ -19975,6 +21049,20 @@ EOFCOMBIS
         # El raton va como una fila mas, al final. El mapeador ya sabia
         # moverlo desde hace tiempo, pero no habia por donde configurarlo:
         # habia que escribir la seccion "mouse" a mano en el .keys.
+        # LA FILA DE LOS STICKS, ARRIBA Y CON LA CUENTA A LA VISTA.
+        #
+        # Asi se ve de un vistazo si hay algo asignado ahi sin tener que entrar,
+        # que era parte del problema: las direcciones estaban tan abajo que
+        # nadie sabia si las tenia puestas o no.
+        local _nst=0 _sn
+        while IFS='|' read -r _sn _; do
+            [ -n "$_sn" ] || continue
+            grep -q "^$_sn|" "$tmp" 2>/dev/null && _nst=$((_nst+1))
+        done <<EOFSN
+$KEYS_STICKS
+EOFSN
+        opciones="${opciones}Sticks (izquierdo y derecho) >>   $([ "$_nst" -gt 0 ] && printf '%s asignadas' "$_nst" || printf 'ninguna')
+"
         opciones="$opciones$(keys_raton_fila "$tmpr")
 $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
@@ -19993,6 +21081,9 @@ Rellenar: juego de teclado y raton   (WASD, flechas, clics)
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
+                continue ;;
+            "Sticks (izquierdo y derecho)"*)
+                keys_sticks_editar "$tmp"
                 continue ;;
             "Rellenar: juego de teclado y raton"*)
                 keys_plantilla_teclado "$tmp" "$tmpr"
@@ -20015,6 +21106,29 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
         largo="${sel%%:*}"
         nom="$(printf '%s' "$KEYS_BOTONES" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
         [ -n "$nom" ] || continue
+        # EL STICK DERECHO LO USA TAMBIEN EL RATON VIRTUAL.
+        #
+        # Por defecto el raton de los .keys se mueve con joystick2. Si se le
+        # asigna ademas una tecla a una direccion de ese stick, el stick haria
+        # las dos cosas a la vez: mover el puntero y mandar la pulsacion. El
+        # sintoma -el cursor se va solo mientras el juego recibe teclas- no se
+        # parece en nada a su causa, asi que se avisa aqui, que es donde se
+        # puede cambiar de idea.
+        case "$nom" in
+            joystick2*)
+                if [ "$(keys_raton_leer "$destino" axis 2>/dev/null)" = joystick2 ] \
+                   || [ -z "$(keys_raton_leer "$destino" axis 2>/dev/null)" ]; then
+                    ui_ask "El raton virtual de este .keys usa el STICK DERECHO.
+
+Si le asignas una tecla a \"$largo\", ese stick hara las dos
+cosas a la vez: mover el puntero y mandar la tecla.
+
+Puedes cambiar el raton al stick izquierdo en el mismo menu,
+o quitarlo si el juego no lo necesita.
+
+Asignar la tecla de todas formas?" || continue
+                fi ;;
+        esac
         tecla="$(keys_tecla_elegir "$largo")" || continue
         grep -v "^$nom|" "$tmp" > "$tmp.n" 2>/dev/null; mv -f "$tmp.n" "$tmp"
         [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
@@ -20034,7 +21148,14 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
-    if ! keys_componer "$destino" "$tmp" "$tmpc" "$tmpr"; then
+    # AL GUARDAR, SE MARCA DE QUIEN ES.
+    #
+    # Un .keys hecho aqui es de este juego por definicion: lo acaba de crear el
+    # usuario para el. Dejarlo sin marca lo convertiria en un fichero anonimo
+    # mas, que es de donde venia todo el problema.
+    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr"; then
+        keys_marcar "$destino" "$gid"
+    else
         ui_error "No se pudo guardar el mapeo en:
 $destino
 
@@ -20106,6 +21227,30 @@ guardia_salida_start() {
     write_menu_pygame
     local marca="$RUNTIME_DIR/.salir_juego"
     rm -f "$marca" 2>/dev/null
+    # LA CARPETA DEL JUEGO, EN UN FICHERO Y NO EN UNA VARIABLE.
+    #
+    # El vigilante corre en un subshell propio y no ve lo que el padre asigne
+    # despues de crearlo. Por un fichero si se entera, y ademas sirve aunque el
+    # padre haya cambiado de juego.
+    rm -f "$RUNTIME_DIR/.juego_raiz" "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+    # SE MIRA EL LANZADOR, NO LA VARIABLE WP_NATIVO.
+    #
+    # WP_NATIVO solo se asigna en el camino de imagen; en el de carpeta no
+    # existe, asi que fiandose de ella el vigilante no se enteraba de que el
+    # juego era de Linux y llamaba a wine_matar_prefijo, que ahi no cierra
+    # nada. El sintoma era que Select no hacia nada.
+    #
+    # La extension del ejecutable no miente en ninguno de los dos caminos.
+    # $1 = lanzador, opcional. Los tres caminos de lanzamiento guardan la ruta
+    # en variables distintas ($EXE_PATH, $exe, $launcher), asi que se admite
+    # que nos la pasen en vez de adivinar cual mirar.
+    local _lanz="${1:-${EXE_PATH:-}}"
+    case "$_lanz" in
+        *.sh|*.AppImage|*.appimage)
+            dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
+        *)  [ -n "${WP_NATIVO:-}" ] && [ -n "$_lanz" ] \
+                && dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
+    esac
     export WP_OCULTAR_CURSOR="${OCULTAR_CURSOR:-1}"
     GUARDIA_PID="$(lanzar_suelto "$PY_BIN" "$MENU_PYGAME_PY" guardia \
                    "$marca" "$(pad_exit_segundos)" "${PAD_EXIT_COMBO:-select}")"
@@ -20140,7 +21285,7 @@ guardia_salida_start() {
     local titulo; titulo="$(basename "${EXE_PATH:-juego}" .exe)"
     local sesion="$RUNTIME_DIR/.guardia_sesion"
     printf '%s' "$$" > "$sesion" 2>/dev/null
-    ( orden="" vueltas=0
+    ( orden="" vueltas=0 _raiz="" _p="" _n=0 _pg=""
       while :; do
           # 30 horas de tope (270000 vueltas de 0,4 s): ninguna partida dura
           # tanto, y asi no puede quedarse uno eterno pase lo que pase
@@ -20173,13 +21318,64 @@ guardia_salida_start() {
                       #
                       # Aqui si tenemos su PID, asi que se cierra su arbol
                       # entero, que es para lo que existe matar_con_hijos.
-                      if [ -n "${WP_NATIVO:-}" ]; then
-                          if [ -n "${WP_PID_JUEGO:-}" ]; then
-                              say "[+] Cerrando el juego de Linux"
-                              matar_con_hijos "$WP_PID_JUEGO"
-                          else
-                              say "AVISO: no se sabe que proceso cerrar"
+                      # ¿HAY CARPETA APUNTADA? ENTONCES ES UN JUEGO DE LINUX.
+                      #
+                      # Antes se preguntaba por WP_NATIVO, que en el camino de
+                      # carpeta no existe: el vigilante creia que era un juego
+                      # de Windows y llamaba a wine_matar_prefijo, que ahi no
+                      # cierra nada. El fichero lo escribe quien lanza, y solo
+                      # existe si el juego es nativo.
+                      if [ -s "$RUNTIME_DIR/.juego_raiz" ]; then
+                          # CERRAR UN JUEGO DE LINUX: POR LA CARPETA, NO POR EL PID.
+                          #
+                          # DOS FALLOS ENCADENADOS, Y POR ESO NO FUNCIONABA
+                          #
+                          # 1. Este vigilante es un subshell que se crea ANTES de
+                          #    lanzar el juego, asi que su copia de WP_PID_JUEGO
+                          #    esta VACIA para siempre: se asigna casi 200 lineas
+                          #    mas abajo, en el padre. Siempre caia en "no se sabe
+                          #    que proceso cerrar".
+                          #
+                          # 2. Y aunque lo supiera, no bastaria: ese PID es el de
+                          #    nuestro subshell, y un lanzador .sh arranca el juego
+                          #    de fondo y termina. El juego de verdad ya no es hijo
+                          #    nuestro -lo ha adoptado init-, asi que matar al
+                          #    subshell con sus hijos no le alcanza.
+                          #
+                          # Lo que SI identifica al juego es la carpeta desde la
+                          # que se ejecuta. Se deja escrita en un fichero al
+                          # lanzar, porque una variable no cruza a este subshell.
+                          _raiz="$(cat "$RUNTIME_DIR/.juego_raiz" 2>/dev/null)"
+                          [ -n "${WP_PID_JUEGO:-}" ] && matar_con_hijos "$WP_PID_JUEGO"
+                          # PRIMERO EL GRUPO, QUE ES LO QUE SIEMPRE ALCANZA.
+                          #
+                          # El lanzador se arranca con setsid, asi que el y todo
+                          # lo que cuelgue de el estan en un grupo propio. Cerrar
+                          # el grupo entero funciona aunque el juego se ejecute
+                          # desde otra carpeta -que es el caso de Halo- o lo haya
+                          # adoptado init.
+                          _pg="$(cat "$RUNTIME_DIR/.juego_pgid" 2>/dev/null)"
+                          if [ -n "$_pg" ]; then
+                              say "[+] Cerrando el grupo del juego ($_pg)"
+                              kill -TERM -"$_pg" 2>/dev/null
+                              sleep 2
+                              kill -9 -"$_pg" 2>/dev/null
                           fi
+                          # Y ademas por la carpeta, por si algo se quedo fuera
+                          # del grupo.
+                          if [ -n "$_raiz" ] && [ -d "$_raiz" ]; then
+                              _n=0
+                              for _p in $(procesos_usando "$_raiz"); do
+                                  kill -TERM "$_p" 2>/dev/null && _n=$((_n+1))
+                              done
+                              sleep 1
+                              for _p in $(procesos_usando "$_raiz"); do
+                                  kill -9 "$_p" 2>/dev/null
+                              done
+                              [ "$_n" -gt 0 ] && say "[+] Cerrados $_n proceso(s) mas en $_raiz"
+                          fi
+                          [ -z "$_pg" ] && [ -z "$_raiz" ] \
+                              && say "AVISO: no se sabe que cerrar (ni grupo ni carpeta)"
                           break
                       fi
                       wine_matar_prefijo "${RUNNER_DIR_ACTUAL:-}" || {
@@ -22793,6 +23989,230 @@ EOFCX
     return 1
 }
 
+# ----------------------------------------------------------------------------
+# 4h. CARATULAS 4:3 DEL REPOSITORIO (covers_43/)
+#
+#     Las 4:3 son NUESTRAS: la carpeta covers_43/ del repositorio las lleva ya
+#     recortadas a 640x480, con el nombre del juego. Antes se pedian a
+#     SteamGridDB, y de ahi salian a medias: muchos juegos no tienen esa forma
+#     y la que hay suele ser una captura de pantalla recortada a lo bruto.
+#
+#     Funciona igual que los perfiles de la comunidad: una lista del contenido
+#     de la carpeta (cacheada un dia) y una descarga directa de raw. La lista
+#     se consulta la primera vez que se carga cada juego, asi que la carátula
+#     aparece sin que haya que pedir nada.
+# ----------------------------------------------------------------------------
+COVERS43_INDEX="$RUNTIME_DIR/.covers43_index"
+
+covers43_list() {
+    # Ficheros de imagen de la carpeta covers_43/ del repositorio.
+    #
+    # --max-time: esto se consulta al arrancar un juego. Si GitHub se queda
+    # colgado, el juego NO se espera: se tira sin carátula y ya.
+    #
+    # La API de contenidos devuelve hasta 1000 ficheros por carpeta. De
+    # momento sobra; si algun dia se pasa, habra que ir por la API de arboles.
+    curl -fsSL --max-time 12 \
+        "https://api.github.com/repos/$WPROTON_REPO/contents/covers_43" 2>/dev/null \
+        | grep -oE '"name": *"[^"]*\.(png|jpg|jpeg|webp|PNG|JPG|JPEG|WEBP)"' \
+        | cut -d'"' -f4 | sort
+}
+
+covers43_index_refresh() {
+    # Lista cacheada un dia, como la de los perfiles. Sin red no se avisa de
+    # nada: simplemente no hay carátulas nuevas esta vez.
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    if [ -f "$COVERS43_INDEX" ]; then
+        local edad
+        edad=$(( $(date +%s) - $(stat -c %Y "$COVERS43_INDEX" 2>/dev/null || echo 0) ))
+        [ "$edad" -lt 86400 ] && return 0
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    covers43_list > "$COVERS43_INDEX.tmp" 2>/dev/null
+    if [ -s "$COVERS43_INDEX.tmp" ]; then
+        mv -f "$COVERS43_INDEX.tmp" "$COVERS43_INDEX"
+    else
+        rm -f "$COVERS43_INDEX.tmp"
+        return 1
+    fi
+    return 0
+}
+
+covers43_match() {
+    # $1 = gid -> nombre del fichero de covers_43/ que le corresponde, si lo hay.
+    #
+    # Mismo criterio que community_match (de donde viene esto): se compara sin
+    # mayusculas ni separadores, y se admite la coletilla de version o grupo
+    # que traen las descargas, pero solo si lo que sobra es claramente eso.
+    # Asi "Doom" no se lleva por delante a "Doom Eternal".
+    local gid="$1" clave linea lclave resto
+    [ -f "$COVERS43_INDEX" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    [ -n "$clave" ] || return 1
+    # 1) coincidencia exacta
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "${linea%.*}")"
+        [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
+    done < "$COVERS43_INDEX"
+    # 2) el juego lleva version o grupo detras del nombre de la carátula
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "${linea%.*}")"
+        [ ${#lclave} -ge 6 ] || continue      # nombres muy cortos: no arriesgar
+        case "$clave" in
+            "$lclave"*)
+                resto="${clave#"$lclave"}"
+                nombre_coletilla "$resto" && { printf '%s' "$linea"; return 0; } ;;
+        esac
+    done < "$COVERS43_INDEX"
+    return 1
+}
+
+url_escapar() {
+    # Un trozo de ruta listo para una URL.
+    #
+    # Si el nombre no tiene nada que escapar -lo normal- sale tal cual y no se
+    # despierta a Python: esto corre al arrancar un juego.
+    local s="${1:-}" e
+    case "$s" in
+        *[!A-Za-z0-9._~-]*) ;;
+        *) printf '%s' "$s"; return 0 ;;
+    esac
+    e="$(urlencode_py "$s")"
+    printf '%s' "${e:-$s}"
+}
+
+es_imagen() {
+    # Lo descargado, ¿es de verdad una imagen?
+    #
+    # Hace falta porque raw.githubusercontent devuelve una pagina de texto
+    # cuando el fichero no existe, y guardarla como "<juego>.png" deja al
+    # juego con una carátula rota que no se ve de donde sale.
+    local f="${1:-}" tipo cab
+    [ -s "$f" ] || return 1
+    if command -v file >/dev/null 2>&1; then
+        tipo="$(file -b --mime-type "$f" 2>/dev/null)"
+        case "$tipo" in image/*) return 0 ;; esac
+    fi
+    # Sin 'file', o si no lo reconoce: por los bytes de la cabecera.
+    cab="$(LC_ALL=C head -c 16 "$f" 2>/dev/null | od -An -tx1 -v 2>/dev/null | tr -d ' \n')"
+    case "$cab" in
+        89504e47*)                      return 0 ;;   # PNG
+        ffd8ff*)                        return 0 ;;   # JPEG
+        47494638*)                      return 0 ;;   # GIF
+        52494646????????57454250*)      return 0 ;;   # RIFF....WEBP
+    esac
+    return 1
+}
+
+covers43_fetch() {
+    # $1 = nombre del fichero en covers_43/, $2 = gid del juego LOCAL.
+    #
+    # Se guarda con el nombre del juego de AQUI, no con el del repositorio:
+    # el fichero de alla puede llamarse "Halo.Combat.Evolved.png" y el juego
+    # de uno "Halo_Combat_Evolved". Si se guardara con el nombre de alla, la
+    # carátula no la encontraria nadie y pareceria que la descarga no hizo nada.
+    local name="${1:-}" gid="${2:-}" tmp url ext e
+    [ -n "$name" ] && [ -n "$gid" ] || return 1
+    ext="$(printf '%s' "${name##*.}" | tr 'A-Z' 'a-z')"
+    case "$ext" in png|jpg|jpeg|webp) ;; *) return 1 ;; esac
+    mkdir -p "$COVERS_43_DIR" 2>/dev/null || return 1
+    tmp="$(mktemp)" || return 1
+    url="https://raw.githubusercontent.com/$WPROTON_REPO/main/covers_43/$(url_escapar "$name")"
+    if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"
+        log "covers_43: no se pudo descargar $name" WARN
+        return 1
+    fi
+    if ! es_imagen "$tmp"; then
+        rm -f "$tmp"
+        log "covers_43: lo descargado para $name no es una imagen; descartado" WARN
+        return 1
+    fi
+    # Fuera las otras extensiones del mismo juego: si antes habia un .jpg y
+    # ahora llega un .png, quedarian las dos y ganaria la que tocara por orden.
+    for e in png jpg jpeg webp; do
+        [ "$e" = "$ext" ] && continue
+        rm -f "$COVERS_43_DIR/$gid.$e" 2>/dev/null
+    done
+    if ! cat "$tmp" > "$COVERS_43_DIR/$gid.$ext" 2>/dev/null; then
+        rm -f "$tmp"
+        log "covers_43: no se pudo escribir en $COVERS_43_DIR" WARN
+        return 1
+    fi
+    rm -f "$tmp"
+    log "covers_43: $name -> $gid.$ext"
+    return 0
+}
+
+covers43_offer_for() {
+    # La primera vez que se carga un juego: si no tiene carátula 4:3 y el
+    # repositorio tiene una con su nombre, traerla.
+    #
+    # NO SE PREGUNTA, a diferencia de los perfiles de la comunidad: una
+    # carátula no cambia en nada como se juega, y un dialogo justo antes de
+    # arrancar el juego es lo ultimo que quiere nadie. Si ya hay una 4:3
+    # puesta -a mano o de antes- no se toca.
+    local gid="${1:-}" cand
+    [ -n "$gid" ] || return 1
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    cover_tipo_real "$gid" 43 >/dev/null 2>&1 && return 1   # ya la tiene
+    covers43_index_refresh || return 1
+    cand="$(covers43_match "$gid")" || return 1
+    say "[covers_43] el repositorio tiene carátula 4:3 para $gid: $cand"
+    covers43_fetch "$cand" "$gid" || return 1
+    say "[+] Carátula 4:3 descargada del repositorio"
+    return 0
+}
+
+caratula43_repo_manual() {
+    # "Carátula 4:3: descargarla del repositorio", en los ajustes del juego.
+    #
+    # Aqui si se habla: el usuario acaba de pedirlo y tiene que saber si salio
+    # bien, si el repositorio no la tiene todavia o si no hubo red.
+    local gid="${1:-}" cand previa _ok
+    [ -n "$gid" ] || return 1
+    loading_say "Buscando una carátula 4:3 para '$gid' en el repositorio..."
+    # El usuario la pide AHORA: lista fresca, sin esperar a que caduque la
+    # cacheada de un dia (puede que la carátula se subiera esta mañana).
+    rm -f "$COVERS43_INDEX" 2>/dev/null
+    covers43_index_refresh
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+    if ! cand="$(covers43_match "$gid")" || [ -z "$cand" ]; then
+        ui_info "El repositorio todavía no tiene carátula 4:3 para:
+
+$gid
+
+Puedes ponerla a mano con 'Carátula: elegir una imagen', o
+proponerla en la carpeta covers_43/ del repositorio."
+        return 1
+    fi
+    previa="$(cover_tipo_real "$gid" 43 2>/dev/null)" || previa=""
+    if [ -n "$previa" ]; then
+        ui_ask "Ya tienes una carátula 4:3 para este juego:
+$(basename "$previa")
+
+Sustituirla por la del repositorio?
+($cand)" || return 1
+    fi
+    if covers43_fetch "$cand" "$gid"; then
+        ui_info "Carátula 4:3 descargada del repositorio:
+
+$cand"
+        return 0
+    fi
+    ui_error "No se pudo descargar $cand"
+    return 1
+}
+
 cover_escaneo() {
     # Caratula del escaneo de ES-DE / EmulationStation, junto al juego.
     # $1 = ruta del juego (carpeta o fichero), $2 = tipo (vertical/wide/43).
@@ -23158,14 +24578,21 @@ $f"
 }
 
 sgdb_download_covers() {
-    # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
-    # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
-    # vista.
+    # Descarga caratulas en tanda. Se elige que forma: bajar las tres gasta el
+    # triple de peticiones y de tiempo, y mucha gente usa una sola vista.
+    #
+    # DE DONDE SALE CADA UNA:
+    #   vertical y panoramica -> SteamGridDB (hace falta su API key)
+    #   4:3                   -> carpeta covers_43/ de NUESTRO repositorio
+    #
+    # Las 4:3 ya no se piden a SteamGridDB: casi ningun juego tiene esa forma
+    # alli, y lo que devolvia era una captura recortada a lo bruto. Las
+    # nuestras van hechas a 640x480.
     local quiere
     quiere="$(menu "¿Qué carátulas quieres descargar?" \
-        "Solo verticales (2:3)" \
-        "Solo panorámicas (tipo Steam)" \
-        "Solo cuadradas (4:3)" \
+        "Solo verticales (2:3, de SteamGridDB)" \
+        "Solo panorámicas (tipo Steam, de SteamGridDB)" \
+        "Solo cuadradas 4:3 (del repositorio de WProton)" \
         "Todas (las tres formas)" \
         "<< Volver")" || return 0
     local tipos
@@ -23176,23 +24603,47 @@ sgdb_download_covers() {
         "Todas"*)     tipos="vertical wide 43" ;;
         *) return 0 ;;
     esac
-    # la clave puede venir de un fichero aparte
-    SGDB_KEY="$(sgdb_key_leer)"
-    if [ -z "$SGDB_KEY" ]; then
-        local k
-        k="$(ask_text "Pega tu API key de SteamGridDB
+    # LAS QUE DE VERDAD VAN A STEAMGRIDDB.
+    #
+    # Si solo se han pedido las 4:3 no hace falta API key ninguna: seria
+    # absurdo pedirsela al usuario para no usarla.
+    local tipos_sgdb=""
+    local _t0
+    for _t0 in $tipos; do
+        [ "$_t0" = 43 ] || tipos_sgdb="$tipos_sgdb $_t0"
+    done
+    tipos_sgdb="${tipos_sgdb# }"
+    # La lista del repositorio, UNA vez para toda la tanda y recien traida:
+    # quien pide las carátulas ahora quiere las que se subieron hoy.
+    case " $tipos " in
+        *" 43 "*)
+            loading_say "Consultando las carátulas 4:3 del repositorio..."
+            rm -f "$COVERS43_INDEX" 2>/dev/null
+            covers43_index_refresh || say "AVISO: no se pudo consultar covers_43/ del repositorio"
+            loading_clear ;;
+    esac
+    # LA CLAVE DE STEAMGRIDDB, SOLO SI SE VA A USAR.
+    #
+    # Antes se pedia siempre. Quien solo quiera las 4:3 -que salen de nuestro
+    # repositorio- no tiene por que darse de alta en ningun sitio.
+    if [ -n "$tipos_sgdb" ]; then
+        SGDB_KEY="$(sgdb_key_leer)"
+        if [ -z "$SGDB_KEY" ]; then
+            local k
+            k="$(ask_text "Pega tu API key de SteamGridDB
 (gratis en steamgriddb.com -> Profile -> Preferences -> API)
 
 Se guardara en sgdb.key, solo legible por ti, y NO en
 settings.conf (que se comparte al pedir ayuda)." "")"
-        [ -z "$k" ] && return 1
-        SGDB_KEY="$k"
-        # en su propio fichero y sin permisos para nadie mas
-        if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
-            chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
-            say "[+] Clave guardada en sgdb.key (solo legible por ti)"
-        else
-            save_settings           # si no se pudo escribir, como antes
+            [ -z "$k" ] && return 1
+            SGDB_KEY="$k"
+            # en su propio fichero y sin permisos para nadie mas
+            if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+                chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+                say "[+] Clave guardada en sgdb.key (solo legible por ti)"
+            else
+                save_settings           # si no se pudo escribir, como antes
+            fi
         fi
     fi
     mkdir -p "$COVERS_DIR"
@@ -23213,7 +24664,11 @@ settings.conf (que se comparte al pedir ayuda)." "")"
 $list
 EOF0
     [ "$pend" -eq 0 ] && { ui_info "No falta ninguna carátula de las pedidas."; return 0; }
-    progress_start "Descargando carátulas de SteamGridDB"
+    if [ -n "$tipos_sgdb" ]; then
+        progress_start "Descargando carátulas"
+    else
+        progress_start "Descargando carátulas 4:3 del repositorio"
+    fi
     while IFS= read -r f; do
         gid="$(game_id "$f")"
         # Saltar el juego SOLO si ya tiene todas las que se han pedido.
@@ -23229,53 +24684,87 @@ EOF0
         total=$((total+1)); idx=$((idx+1))
         title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
         progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $title"
-        say "[SGDB] Buscando carátula: $title"
-        q="$(urlencode_py "$title")"
-        gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-            "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
-        if printf '%s' "$gjson" | grep -q '"success": *false'; then
-            progress_stop
-            ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
+        local bajada=0
+        # ---- LA 4:3, DE NUESTRO REPOSITORIO -------------------------------
+        case " $tipos " in
+            *" 43 "*)
+                if ! cover_tipo_real "$gid" 43 >/dev/null 2>&1; then
+                    local _c43
+                    if _c43="$(covers43_match "$gid")" && [ -n "$_c43" ]; then
+                        if covers43_fetch "$_c43" "$gid"; then
+                            bajada=1
+                            say "[covers_43]   OK -> $_c43"
+                        fi
+                    else
+                        say "[covers_43]   el repositorio no tiene 4:3 para: $title"
+                    fi
+                fi ;;
+        esac
+        # ---- LAS OTRAS DOS, DE STEAMGRIDDB --------------------------------
+        if [ -n "$tipos_sgdb" ]; then
+            # ¿Falta alguna de LAS DE STEAMGRIDDB? Si solo faltaba la 4:3, no
+            # se gasta una peticion de la API en este juego.
+            local _falta_sgdb=0
+            for _t in $tipos_sgdb; do
+                cover_tipo_real "$gid" "$_t" >/dev/null 2>&1 || _falta_sgdb=1
+            done
+            if [ "$_falta_sgdb" = 1 ]; then
+                say "[SGDB] Buscando carátula: $title"
+                q="$(urlencode_py "$title")"
+                gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                    "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
+                if printf '%s' "$gjson" | grep -q '"success": *false'; then
+                    progress_stop
+                    ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
+                fi
+                gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
+                if [ -z "$gameid" ]; then
+                    say "[SGDB]   sin resultados para: $title"
+                else
+                    # Se piden las DOS: la vertical para la rejilla clasica y la
+                    # horizontal para la vista de carátulas anchas. Cada una se
+                    # guarda con su nombre, asi que no se pisan.
+                    local destino dims
+                    for tipo in $tipos_sgdb; do
+                        destino="$(covers_dir_de "$tipo")"
+                        case "$tipo" in
+                            vertical) dims="600x900" ;;
+                            wide)     dims="920x430,460x215" ;;
+                        esac
+                        mkdir -p "$destino" 2>/dev/null
+                        # No se vuelve a descargar lo que ya hay: la vertical
+                        # podria ser una que el usuario eligio a mano.
+                        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+                        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+                            2>>"$LOG_FILE")"
+                        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+                        if [ -z "$url" ]; then
+                            say "[SGDB]   sin carátula $tipo ($dims) para: $title"
+                            continue
+                        fi
+                        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+                        if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+                            bajada=1
+                            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+                        fi
+                    done
+                fi
+            fi
         fi
-        gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
-        [ -z "$gameid" ] && { say "[SGDB]   sin resultados para: $title"; continue; }
-        # Se piden las DOS: la vertical para la rejilla clasica y la
-        # horizontal para la vista de carátulas anchas. Cada una se guarda
-        # con su nombre, asi que no se pisan.
-        local destino dims bajada=0
-        for tipo in $tipos; do
-            destino="$(covers_dir_de "$tipo")"
-            case "$tipo" in
-                vertical) dims="600x900" ;;
-                wide)     dims="920x430,460x215" ;;
-                43)       dims="640x480,512x384" ;;
-            esac
-            mkdir -p "$destino" 2>/dev/null
-            # si ya la tenemos, no se vuelve a pedir
-            # No se vuelve a descargar lo que ya hay: la vertical podria ser
-            # una que el usuario eligio a mano.
-            cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
-            ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
-                2>>"$LOG_FILE")"
-            url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-            if [ -z "$url" ]; then
-                say "[SGDB]   sin carátula $tipo ($dims) para: $title"
-                continue
-            fi
-            ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-            if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
-                bajada=1
-                say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
-            fi
-        done
         [ "$bajada" = 1 ] && got=$((got+1))
     done <<EOF2
 $list
 EOF2
     progress_stop
+    # El consejo del final, con la carpeta QUE TOCA. Decir "covers/" cuando se
+    # acaban de pedir las 4:3 manda al usuario a la carpeta equivocada.
+    local _donde="covers/<juego>.png"
+    if [ -z "$tipos_sgdb" ]; then
+        _donde="covers_43/<juego>.png"
+    fi
     ui_info "Carátulas: $got descargadas de $total pendientes.
-(Las que falten: pon un png/jpg a mano en covers/<juego>.png)"
+(Las que falten: pon un png/jpg a mano en $_donde)"
 }
 
 browse_start() {
@@ -24725,6 +26214,52 @@ Borrarla tambien?"; then
     return 0
 }
 
+capas_vulkan_chocan() {
+    # ¿MAKO Y RESHADE LINUX A LA VEZ? ESO NO PUEDE SER.
+    #
+    # POR QUE
+    #
+    # ReShade (Linux) es vkBasalt, y desde MAKO Renderer v4.0.0 MAKO trae SU
+    # PROPIO fork de vkBasalt y coloca sus capas por delante. Su autor lo dice
+    # sin rodeos: no combinar MAKO con otro envoltorio Vulkan de generacion de
+    # fotogramas o escalado en el mismo juego.
+    #
+    # Las dos capas se pisan, y lo que se ve no es un error claro: son
+    # artefactos, tirones o un cuelgue al arrancar. Un fallo asi por registro es
+    # dificilisimo de atar, asi que se corta antes.
+    #
+    # $1 = que se esta encendiendo: "mako" o "reshade".
+    # Devuelve 0 (hay choque) si lo OTRO ya esta puesto.
+    case "${1:-}" in
+        mako)    [ "${RESHADE_LX:-0}" = 1 ] ;;
+        reshade) [ "${MAKO:-0}" = 1 ] ;;
+        *)       return 1 ;;
+    esac
+}
+
+capas_vulkan_avisar() {
+    # Explica el choque y pregunta si se apaga lo otro. 0 = seguir adelante.
+    local quiero="${1:-}" otro otro_txt
+    if [ "$quiero" = mako ]; then otro="ReShade (Linux)"; else otro="MAKO"; fi
+    otro_txt="$otro"
+    ui_ask "No se pueden usar los dos en el mismo juego.
+
+$otro_txt ya esta activado, y desde MAKO Renderer v4.0.0 MAKO
+trae su propio vkBasalt, que es justo lo que usa ReShade
+(Linux). Las dos capas se pisan: veras artefactos, tirones o
+que el juego no arranca.
+
+Se apaga $otro_txt y se sigue?" || return 1
+    if [ "$quiero" = mako ]; then
+        RESHADE_LX=0
+        say "[i] ReShade (Linux) apagado para dejar sitio a MAKO"
+    else
+        MAKO=0
+        say "[i] MAKO apagado para dejar sitio a ReShade (Linux)"
+    fi
+    return 0
+}
+
 cfg_rendimiento_menu() {
     # Ajustes que casi nunca hay que tocar: se sacaron del menu principal del
     # juego, que habia llegado a 42 lineas y era incomodo de recorrer con el
@@ -25173,6 +26708,7 @@ cfg_ficha_menu() {
     while true; do
         sel="$(menu "Carátula y ficha - $gid" \
             "Carátula: elegir una imagen (vertical u horizontal)" \
+            "Carátula 4:3: descargarla del repositorio de WProton" \
             "Carátula: buscar en SteamGridDB por nombre" \
             "Ficha del juego (año, editor, notas de la crítica)" \
             "Notas: ${NOTAS:-(ninguna)}" \
@@ -25207,6 +26743,7 @@ cfg_archivo_menu() {
             "Volver a instalar lo que trae el juego (.bat)" \
             "Partidas guardadas: copias y restauracion" \
             "Comprobar el archivo y ver cuanto ocupa" \
+            "Traer las librerias que necesita (juegos de Linux)" \
             "Acceso directo en el escritorio" \
             "Repetir asistente de primera ejecucion" \
             "Borrar saves del overlay (upper/)" \
@@ -25470,7 +27007,18 @@ cfg_ap_teclas() {
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
         "Mapeador .keys"*)
+            # EL SUBMENU SE QUEDA ABIERTO Y SE VUELVE A CALCULAR CADA VUELTA.
+            #
+            # Antes era de un solo uso: se elegia una opcion y se volvia al menu
+            # de ajustes del juego. Eso hacia que, tras crear el .keys, hubiera
+            # que salir y entrar otra vez para ver que ya existia; mientras
+            # tanto el titulo seguia diciendo "ninguno" y parecia que no se
+            # habia guardado nada. Y aqui dentro hay cinco ajustes que se tocan
+            # seguidos (estilo, teclado, exclusivo...), asi que salir en cada
+            # uno sobraba igualmente.
             local kmenu kopts=() kres=""
+            while :; do
+            kopts=(); kres=""
             # EL .keys SE BUSCA AQUI.
             #
             # Se leia "$kf0", que es una local de game_config_menu: se veia
@@ -25479,6 +27027,15 @@ cfg_ap_teclas() {
             # linea tenerlo propio.
             local kf0=""
             kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
+            # EL TITULO TAMBIEN SE CALCULA AQUI, POR LO MISMO.
+            #
+            # Se leia "$kstat", otra local de game_config_menu que solo se veia
+            # por ambito dinamico. Dos problemas: desde cualquier otro menu,
+            # set -u mata el script; y aunque se llegue desde ahi, el valor es
+            # el de ANTES de entrar, asi que tras crear el .keys el titulo
+            # seguia diciendo "ninguno".
+            local kstat="ninguno (auto si existe <juego>.keys)"
+            [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
             # Si ya hay un .keys, lo primero que se ofrece es VERLO. Antes
             # habia que entrar al editor para enterarte de que tenia dentro,
             # y con un fichero traido de fuera ni eso.
@@ -25635,14 +27192,36 @@ otro." ;;
                     local kfsel
                     kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
                     if [ -n "$kfsel" ] && [ -f "$kfsel" ]; then
-                        cp -f "$kfsel" "$PROFILE_DIR/$gid.keys"
-                        ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys
+                        mkdir -p "$PROFILE_DIR" 2>/dev/null
+                        if ! cp -f "$kfsel" "$PROFILE_DIR/$gid.keys" 2>/dev/null; then
+                            ui_error "No se pudo copiar a profiles/$gid.keys"
+                        else
+                        # LA COPIA SE MARCA COMO DE ESTE JUEGO, PISANDO LO QUE
+                        # TRAJERA.
+                        #
+                        # Faltaba, y era el fallo: el .keys que se asigna suele
+                        # ser el de OTRO juego (justamente para eso se asigna,
+                        # para reaprovecharlo), y venia marcado como suyo. La
+                        # copia se quedaba con esa marca, asi que a partir de
+                        # ahi WProton la veia como "de otro juego": el menu
+                        # decia "no tiene keys" y el mapeador no cargaba nada,
+                        # con el fichero ahi puesto y el mensaje de "Asignado"
+                        # recien dado. Asignarlo ES decir que es de este juego.
+                        local _du; _du="$(keys_dueno "$PROFILE_DIR/$gid.keys")"
+                        keys_remarcar "$PROFILE_DIR/$gid.keys" "$gid"
+                        ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys${_du:+
+
+Venia marcado como de '$_du'; ahora es de este juego.}
+
 El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
+                        fi
                     fi ;;
                 "Quitar"*)
                     rm -f "$PROFILE_DIR/$gid.keys"
                     ui_info "Eliminado profiles/$gid.keys" ;;
-            esac ;;
+                "<< Volver"|"") return 0 ;;
+            esac
+            done ;;
         *) return 1 ;;
     esac
     return 0
@@ -25766,7 +27345,8 @@ Si el juego ya es un .wsquashfs, juégalo una vez y vuelve a
 entrar aquí: estará montado y se podrá empaquetar."
             fi ;;
         ">> EMPAQUETAR A WSQUASHFS <<")
-            # El juego es una carpeta: comprimirlo conservando su perfil
+            # El juego es una carpeta: comprimirlo conservando su perfil.
+            #
             if do_pack_dir "$squash" "$gid"; then
                 ui_info "Empaquetado: $(basename "$PACKED_OUT")
 La configuración de '$gid' se conserva para el wsquashfs."
@@ -25776,6 +27356,24 @@ La configuración de '$gid' se conserva para el wsquashfs."
                 [ -d "$squash" ] || return 0   # la carpeta ya no existe
             fi ;;
         "Partidas guardadas"*) backup_menu "$gid" ;;
+        "Traer las librerias que necesita"*)
+            # SE TRABAJA SOBRE EL JUEGO YA MONTADO.
+            #
+            # Si es un .wsquashfs hay que montarlo para ver lo que hay dentro, y
+            # ademas es de solo lectura: se avisa de que hay que reempaquetar.
+            # Si es una carpeta, se copia directamente ahi.
+            local _lraiz="$squash"
+            [ -f "$squash" ] && _lraiz="${MOUNT_POINT:-}"
+            if [ -z "$_lraiz" ] || [ ! -d "$_lraiz" ]; then
+                ui_error "Para esto hay que tener el juego accesible.
+
+Con un .wsquashfs, entra primero en el juego una vez para
+que se monte, o hazlo con el juego todavia en carpeta
+(antes de empaquetarlo), que es lo comodo."
+            else
+                juego_libs_recoger "$_lraiz" "$gid"
+            fi
+            ;;
         "Comprobar el archivo"*)
             local gsz osz psz
             gsz="$(dir_bytes "$squash")"
@@ -25823,6 +27421,8 @@ cfg_ap_ficha() {
     case "$sel" in
         "Carátula: elegir"*)
             caratula_manual "$gid" ;;
+        "Carátula 4:3: descargarla"*)
+            caratula43_repo_manual "$gid" || true ;;
         "Carátula: buscar en SteamGridDB"*)
             sgdb_buscar_manual "$gid" || true ;;
         "Ficha del juego"*)
@@ -25898,6 +27498,9 @@ Instalarlo ahora?" || return 0
                 write_full_profile "$gid"
                 ui_info "ReShade (Linux) desactivado para este juego."
             else
+                if capas_vulkan_chocan reshade; then
+                    capas_vulkan_avisar reshade || return 0
+                fi
                 RESHADE_LX=1
                 write_full_profile "$gid"
                 ui_info "ReShade (Linux) activado.
@@ -25957,6 +27560,13 @@ Copiala en: $MAKO_DIR/Lossless.dll"
                 "4x" \
                 "adaptativo  (varia segun haga falta)" \
                 "<< Volver")" || _mk=""
+            # Si se va a ENCENDER y ReShade esta puesto, hay que resolverlo.
+            case "$_mk" in
+                ""|"<< Volver"|"no"*) ;;
+                *) if capas_vulkan_chocan mako; then
+                       capas_vulkan_avisar mako || _mk=""
+                   fi ;;
+            esac
             case "$_mk" in
                 ""|"<< Volver") ;;
                 "no"*)          MAKO=0; write_full_profile "$gid" ;;
@@ -27595,7 +29205,7 @@ media_menu() {
     local sel
     while true; do
         sel="$(menu "Carátulas y perfiles de la comunidad" \
-            "Descargar carátulas (SteamGridDB)" \
+            "Descargar carátulas (repositorio y SteamGridDB)" \
             "Descargar datos de los juegos (Steam y duración)" \
             "Clave de RAWG (notas y juegos que no están en Steam)" \
             "Perfiles de la comunidad (juegos que necesitan ajustes)" \

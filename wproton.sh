@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="1.76"
+WPROTON_VERSION="2.0"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -159,7 +159,13 @@ WP_PICK=""                               # resultado de pick_squash_ui
 WIZ_QUIERE_DLL=0                         # el asistente pidio elegir DLL overrides
 WIZ_QUIERE_KEYS=0                        # el asistente pidio configurar el .keys
 GAMES_VIEW="list"                        # list | grid | banner (panorámica) | cuadro (4:3)
-LIST_COVER=vertical                      # forma de la carátula en la vista de lista
+# LA 4:3 DE SERIE.
+#
+# Es la forma que WProton trae hecha: las 4:3 vienen de la carpeta covers_43/
+# del repositorio, recortadas a 640x480 una por una. Las verticales dependen
+# de que el usuario se saque una API key de SteamGridDB, asi que de fabrica
+# la vista de lista se queda sin carátula para casi todo el mundo.
+LIST_COVER=43                            # forma de la carátula en la vista de lista
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
 THEME="moderno"                          # menus: clasico | moderno | arcade | cristal (Qt)
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
@@ -476,6 +482,7 @@ write_lang_en() {
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
  "Carpeta principal de juegos": "Main games folder",
+ "Carátula 4:3: descargarla del repositorio de WProton": "4:3 cover: download it from the WProton repository",
  "Carátula: buscar en SteamGridDB por nombre": "Cover: search SteamGridDB by name",
  "Carátula: elegir una imagen del sistema": "Cover: choose an image from your system",
  "Carátulas por fila": "Covers per row",
@@ -504,8 +511,9 @@ write_lang_en() {
  "Desactivado": "Disabled",
  "Desarrollo": "Developer",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
- "Descargando carátulas de SteamGridDB": "Downloading covers from SteamGridDB",
- "Descargar carátulas (SteamGridDB)": "Download covers (SteamGridDB)",
+ "Descargando carátulas": "Downloading covers",
+ "Descargando carátulas 4:3 del repositorio": "Downloading 4:3 covers from the repository",
+ "Descargar carátulas (repositorio y SteamGridDB)": "Download covers (repository and SteamGridDB)",
  "Descargar extractores GOG (innoextract + innounp)": "Download GOG extractors (innoextract + innounp)",
  "Descargar herramientas DwarFS (mkdwarfs + driver)": "Download DwarFS tools (mkdwarfs + driver)",
  "Descargar herramientas FUSE portables (squashfuse, overlayfs)": "Download portable FUSE tools (squashfuse, overlayfs)",
@@ -634,9 +642,9 @@ write_lang_en() {
  "Sincronizar AHORA con rsync": "Sync NOW with rsync",
  "Sincronizar backups/ con otro sitio": "Sync backups/ with another place",
  "Sincronizar la carpeta backups (rsync / Syncthing)": "Sync the backups folder (rsync / Syncthing)",
- "Solo cuadradas (4:3)": "4:3 only",
- "Solo panorámicas (tipo Steam)": "Panoramic only (Steam style)",
- "Solo verticales (2:3)": "Vertical only (2:3)",
+ "Solo cuadradas 4:3 (del repositorio de WProton)": "4:3 only (from the WProton repository)",
+ "Solo panorámicas (tipo Steam, de SteamGridDB)": "Panoramic only (Steam style, from SteamGridDB)",
+ "Solo verticales (2:3, de SteamGridDB)": "Vertical only (2:3, from SteamGridDB)",
  "Sustituir todo (se pierde tu configuración actual)": "Replace everything (your current setup is lost)",
  "Tamaño de la letra": "Text size",
  "Tamaño de la letra en los menus": "Text size in menus",
@@ -2443,9 +2451,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py df4f7547b85a" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 7bd01b6abda1" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py df4f7547b85a
+# WPROTON_HELPER mapeador.py 7bd01b6abda1
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -3607,11 +3615,21 @@ def main():
             #
             # Asi que la vigila el propio mapeador, que si tiene los eventos.
             _hot = ids.get("hotkey", ids.get("select"))
-            _tiene_salida = any(_hot in c["req"] for c in map_combos) if _hot else False
-            if not _tiene_salida:
-                print("[keys] Este .keys no trae combinacion de salida: se"
-                      " vigila 'mantener Select %g s' desde aqui"
-                      % _salida_seg, flush=True)
+            # MANTENER SELECT SIEMPRE CIERRA EL JUEGO. SIN EXCEPCIONES.
+            #
+            # EL FALLO QUE ESTO ARREGLA
+            #
+            # Antes esto se desactivaba si el .keys traia "alguna combinacion
+            # que usara Select". Y esa comprobacion no distingue nada: un
+            # "Select + X abre el teclado en pantalla" la cumple igual, y
+            # entonces el usuario se quedaba sin forma de salir del juego.
+            # Mantener Select cinco segundos no hacia nada y habia que ir a
+            # Alt+F4, que en el modo Juego de la Deck no esta a mano.
+            #
+            # No hay conflicto real con las combinaciones: una combinacion se
+            # pulsa y se suelta en un instante; esto exige CINCO SEGUNDOS
+            # sostenidos. Quien no quiera esta salida tiene PAD_EXIT=0.
+            _tiene_salida = False
             _salida_marca = os.environ.get('WP_SALIR_MARCA', '')
             # El MISMO tiempo que el guardian, no uno inventado.
             #
@@ -3623,6 +3641,9 @@ def main():
             except ValueError:
                 _salida_seg = 5.0
             _salida_seg = max(1.0, min(30.0, _salida_seg))
+            print("[keys] Mantener Select %g s cierra el juego (lo vigila el"
+                  " mapeador, que es quien tiene el mando capturado)"
+                  % _salida_seg, flush=True)
         else:
             print("[keys] AVISO: no se pudo capturar ningun mando. Si el juego"
                   " soporta mando, puede que ignore las teclas.", flush=True)
@@ -4780,31 +4801,73 @@ MVIROF
 #  llamado EXACTAMENTE como el juego y puesto a su lado (<juego>.keys,
 #  <juego>.wsquashfs.keys) es explicito por su nombre. Ese se acepta y se le
 #  pone la marca la primera vez. Lo que no se acepta nunca es un comodin.
-KEYS_MARCA="# wproton-para:"
+# LA MARCA VA DENTRO DEL JSON, NO DELANTE.
+#
+# EL FALLO QUE ESTO ARREGLA
+#
+# El primer intento ponia una linea de comentario "# wproton-para: X" al
+# principio del fichero. Pero un .keys ES UN JSON, y un JSON no admite
+# comentarios: el mapeador reventaba nada mas abrirlo con
+#
+#   Error al cargar .keys: Expecting value: line 1 column 1 (char 0)
+#
+# ...y ningun .keys volvia a funcionar, ni los que siempre habian ido bien.
+#
+# Ahora la marca es un campo mas del propio JSON. Lo lee y lo escribe el mismo
+# modulo que ya entiende el formato, asi que no hay forma de corromperlo.
+KEYS_CAMPO="wproton_para"
 
 keys_dueno() {
-    # El juego al que pertenece un .keys, o "" si no lo dice. $1 = fichero.
+    # De que juego dice ser este .keys. "" si no lo dice. $1 = fichero.
+    #
+    # LO HACE teclas.py, QUE ES QUIEN ENTIENDE EL FORMATO.
+    #
+    # El primer intento leia y escribia el fichero con python incrustado aqui
+    # dentro. Dos motivos para no hacerlo asi:
+    #
+    #   - En este proyecto el python va en modulos, no suelto en el bash.
+    #   - Y sobre todo: un .keys es JSON, y teclas.py ya sabe leerlo. Tratarlo
+    #     desde fuera fue lo que llevo a meterle una linea de comentario
+    #     delante y dejarlo ilegible para el mapeador.
+    #
+    # teclas.py repara de paso los ficheros que quedaron rotos por aquello.
     local f="${1:-}"
     [ -f "$f" ] || return 0
-    head -n 20 "$f" 2>/dev/null \
-        | sed -n "s|^$KEYS_MARCA *\(.*\)$|\1|p" | head -n1 | tr -d ' \r'
+    write_teclas
+    teclas_py dueno "$f" 2>/dev/null
 }
 
 keys_marcar() {
-    # Le pone la marca a un .keys. $1 = fichero, $2 = gid.
+    # Apunta DENTRO del JSON a que juego pertenece. $1 = fichero, $2 = gid.
     #
-    # Si ya la tiene, no se toca: la marca original manda, y reescribirla
-    # seria justo lo que este cambio quiere evitar.
-    local f="${1:-}" gid="${2:-}" tmp
+    # Si ya tiene dueño no se toca: la marca original manda.
+    local f="${1:-}" gid="${2:-}"
     [ -f "$f" ] && [ -n "$gid" ] || return 1
-    [ -n "$(keys_dueno "$f")" ] && return 0
-    tmp="$(mktemp)" || return 1
-    printf '%s %s\n' "$KEYS_MARCA" "$gid" > "$tmp"
-    cat "$f" >> "$tmp" 2>/dev/null
-    cp -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; return 1; }
-    rm -f "$tmp"
-    log "keys: marcado $f como de $gid"
-    return 0
+    write_teclas
+    if teclas_py marcar "$f" "$gid" 2>/dev/null; then
+        log "keys: $f marcado como de $gid"
+        return 0
+    fi
+    log "keys: no se pudo marcar $f (¿no es JSON valido?)" WARN
+    return 1
+}
+
+keys_remarcar() {
+    # Como keys_marcar, pero PISANDO la marca que hubiera. $1 = fichero, $2 = gid.
+    #
+    # Solo para cuando el usuario lo ha decidido a mano: asignar un fichero a
+    # este juego, o un .keys que esta en profiles/ con el nombre de este juego.
+    # En esos dos casos la marca de otro juego es un resto de su procedencia, no
+    # una decision de nadie, y respetarla dejaba el fichero inservible.
+    local f="${1:-}" gid="${2:-}"
+    [ -f "$f" ] && [ -n "$gid" ] || return 1
+    write_teclas
+    if teclas_py marcar "$f" "$gid" forzar 2>/dev/null; then
+        log "keys: $f remarcado como de $gid"
+        return 0
+    fi
+    log "keys: no se pudo remarcar $f (¿no es JSON valido?)" WARN
+    return 1
 }
 
 keys_es_de() {
@@ -4840,23 +4903,50 @@ find_keys_file() {
     #
     # EL ORDEN ES EL CRITERIO. Se va de lo mas explicito a lo mas dudoso, y lo
     # dudoso NO se coge solo: se ofrece.
-    local p="$1" gid="$2" k d
+    local p="$1" gid="$2" k d _r
     # 1) EL DE profiles/: es el del usuario y manda sobre todo.
     #
     # Se comprueba la marca igualmente: si quedo uno de antes de este cambio,
     # se le pone ahora y a partir de ahi ya se sabe de quien es.
     if [ -f "$PROFILE_DIR/$gid.keys" ]; then
-        if keys_es_de "$PROFILE_DIR/$gid.keys" "$gid"; then
-            printf '%s' "$PROFILE_DIR/$gid.keys"; return 0
-        fi
-        case $? in
+        # La reparacion de los .keys que quedaron rotos la hace teclas.py cada
+        # vez que los lee, asi que aqui no hay que pedirla aparte.
+        # EL RESULTADO SE GUARDA ANTES DE MIRARLO.
+        #
+        # Escribirlo como "if keys_es_de ...; fi" y luego "case $?" NO funciona:
+        # despues de un if, $? es el resultado DEL IF (0), no el de la condicion.
+        # Por eso no entraba en ninguna rama y se caia al final de la funcion
+        # sin devolver nada: ningun .keys de profiles/ se cargaba.
+            keys_es_de "$PROFILE_DIR/$gid.keys" "$gid"; _r=$?
+        case "$_r" in
+            0)  printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
             2)  # Sin marca: es de antes. Se acepta -esta en profiles/ y lleva
                 # el nombre del juego- y se marca para que no vuelva a dudarse.
                 keys_marcar "$PROFILE_DIR/$gid.keys" "$gid"
                 printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
-            1)  # Dice ser de OTRO juego. Eso no se toca ni se usa.
-                log "keys: $PROFILE_DIR/$gid.keys dice ser de '$(keys_dueno "$PROFILE_DIR/$gid.keys")': no se usa" WARN
-                return 1 ;;
+            1)  # DICE SER DE OTRO JUEGO, PERO ESTA EN profiles/ CON EL NOMBRE
+                # DE ESTE. Aqui manda el sitio, no la marca: se corrige y se usa.
+                #
+                # Antes se rechazaba, y eso dejaba al juego en el peor estado
+                # posible: el fichero ahi puesto, el menu diciendo "no tiene
+                # keys" y el mapeador sin cargar nada. Lo conto un tester:
+                # "te las crea bien, pero si vas a editarlas te dice que no
+                # tiene keys, y el archivo esta".
+                #
+                # A profiles/<juego>.keys solo llega lo que ponemos nosotros o
+                # lo que el usuario pone a proposito -asignar un fichero, o
+                # copiarlo ahi con ese nombre exacto-. La marca ajena es un
+                # resto de su procedencia (venia del .keys de otro juego), no
+                # una decision de nadie. Rechazarla era hacerle caso a la
+                # procedencia por encima del usuario.
+                #
+                # La marca SIGUE MANDANDO donde se gano el sueldo: en los
+                # ficheros que aparecen junto al juego o por sus carpetas
+                # (puntos 2, 3 y 4), que es de donde vino el problema de Halo.
+                local _dueno_viejo; _dueno_viejo="$(keys_dueno "$PROFILE_DIR/$gid.keys")"
+                log "keys: $PROFILE_DIR/$gid.keys decia ser de '$_dueno_viejo'; esta en profiles/ con el nombre de '$gid', asi que pasa a ser suyo"
+                keys_remarcar "$PROFILE_DIR/$gid.keys" "$gid"
+                printf '%s' "$PROFILE_DIR/$gid.keys"; return 0 ;;
         esac
     fi
     # 2) EL QUE SE LLAMA COMO EL JUEGO, A SU LADO: explicito por su nombre.
@@ -4865,9 +4955,8 @@ find_keys_file() {
     # juego. Se acepta, se marca y se copia a profiles/, porque ya era suyo.
     for k in "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] || continue
-        if keys_es_de "$k" "$gid"; then :; else
-            [ $? = 1 ] && { log "keys: $k es de otro juego, se ignora" WARN; continue; }
-        fi
+        keys_es_de "$k" "$gid"; _r=$?
+        [ "$_r" = 1 ] && { log "keys: $k es de otro juego, se ignora" WARN; continue; }
         keys_marcar "$k" "$gid"
         keys_copiar_a_profiles "$k" "$gid" && k="$PROFILE_DIR/$gid.keys"
         printf '%s' "$k"
@@ -4894,9 +4983,8 @@ find_keys_file() {
     if [ -n "$_dirj" ]; then
         for _k2 in "$_dirj/padto.keys" "$_dirj/pad2key.keys" "$_dirj/padtokey.keys"; do
             [ -f "$_k2" ] || continue
-            if keys_es_de "$_k2" "$gid"; then :; else
-                [ $? = 1 ] && { log "keys: $_k2 es de otro juego, se ignora" WARN; continue; }
-            fi
+            keys_es_de "$_k2" "$gid"; _r=$?
+            [ "$_r" = 1 ] && { log "keys: $_k2 es de otro juego, se ignora" WARN; continue; }
             log "keys: $_k2 esta en la carpeta del juego: se usa"
             keys_marcar "$_k2" "$gid"
             keys_copiar_a_profiles "$_k2" "$gid" && _k2="$PROFILE_DIR/$gid.keys"
@@ -5233,9 +5321,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 4ae00ebd93da" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 99571a897ea1" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 4ae00ebd93da
+# WPROTON_HELPER menu_pygame.py 99571a897ea1
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5581,6 +5669,11 @@ if os.environ.get('WP_DEV') == '1':
 # que las dos usen EXACTAMENTE la misma geometria. Calcularlas dos veces es la
 # forma clasica de que el dibujo y el clic acaben en sitios distintos.
 FLECHAS = [None, None]
+# El carril de la barra (x, y, ancho, alto) y cuantas filas representa, para
+# poder arrastrarla. Lo rellena el dibujado en cada fotograma, igual que las
+# flechas, para que dibujo y zona pulsable no se calculen dos veces.
+BARRA = [None, 0]
+ARRASTRANDO = [False]
 CURSOR_PUESTO = [False]   # el puntero morado se pone una sola vez
 _FONDO_CRIS = [None, None]   # el fondo de cristal, ya dibujado, y su tamaño
 RATON_T0 = [0.0]          # cuando se movio por ultima vez
@@ -6698,8 +6791,9 @@ AYUDAS_ES = [
      'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
      'vistazo lo que te queda pendiente.'),
     ('Descargar carátulas',
-     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
-     'desde SteamGridDB. Hace falta una clave gratuita.'),
+     'Baja de una vez las caratulas que falten. Las 4:3 salen de la carpeta '
+     'covers_43 del repositorio de WProton y no piden nada; las verticales y '
+     'las panoramicas vienen de SteamGridDB y necesitan su clave gratuita.'),
     ('Clave de RAWG',
      'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
      'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
@@ -6885,6 +6979,10 @@ AYUDAS_ES = [
      'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
     ('Carátula: buscar en SteamGridDB',
      'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula 4:3: descargarla',
+     'Trae la 4:3 de ESTE juego de la carpeta covers_43 del repositorio de '
+     'WProton. No hace falta clave ninguna. Normalmente ya se baja sola la '
+     'primera vez que cargas el juego; esto es por si la han subido despues.'),
     ('Carátula: elegir una imagen',
      'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
     ('Ficha del juego',
@@ -7599,6 +7697,23 @@ def move(d):
     if sel >= scroll + vis():
         scroll = sel - vis() + 1
 
+def barra_a_fila(my):
+    """De una posicion vertical del raton a la fila que le corresponde.
+
+    Se usa al pulsar o arrastrar la barra lateral. Devuelve None si la barra no
+    esta dibujada (lista corta) o si no hay nada que desplazar.
+    """
+    r = BARRA[0]
+    total = BARRA[1] or 0
+    if not r or total <= 0:
+        return None
+    _, ty, _, th = r
+    if th <= 0:
+        return None
+    frac = (my - ty) / float(th)
+    frac = max(0.0, min(1.0, frac))
+    return int(round(frac * (total - 1)))
+
 def mover_vista(delta):
     """Mueve la seleccion N filas ARRASTRANDO LA VISTA, sin dar la vuelta.
 
@@ -7730,12 +7845,38 @@ def grid_move(dx, dy):
     elif row >= first + vis_r:
         scroll = (row - vis_r + 1) * GCOLS
 
+def corte_etiqueta(label):
+    """El primer ':' que de verdad separa etiqueta y valor; -1 si no hay.
+
+    Unos dos puntos ENTRE NUMEROS son una proporcion ("4:3", "16:9") o una
+    hora, no un separador. Sin esto, la fila
+
+        "Caratula 4:3: descargarla del repositorio de WProton"
+
+    se pintaba como etiqueta "Caratula 4" y valor "3: descargarla del
+    repositorio...", que es tal cual como salio en una captura del manual.
+    """
+    n = len(label)
+    for i, c in enumerate(label):
+        if c != ':':
+            continue
+        antes = label[i - 1] if i else ''
+        despues = label[i + 1] if i + 1 < n else ''
+        if antes.isdigit() and despues.isdigit():
+            continue
+        return i
+    return -1
+
+
 def row_segments(label, base_color):
     # "Prefijo: compartido" -> etiqueta en color de acento, valor en blanco.
     # "MangoHud: ON" -> ON en verde, OFF apagado.
     if not TH.get('labelcolor') or ':' not in label:
         return [(label, base_color)]
-    k, _, v = label.partition(':')
+    _i = corte_etiqueta(label)
+    if _i < 0:
+        return [(label, base_color)]
+    k, v = label[:_i], label[_i + 1:]
     # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
     if ' - ' in k or len(k) > 36:
         return [(label, base_color)]
@@ -8524,8 +8665,20 @@ def run_session():
             #
             # Se deja fuera el teclado en pantalla (kb_open) y la rejilla: ahi
             # la seleccion no es una lista de filas y el calculo no vale.
+            elif ev.type == pygame.MOUSEBUTTONUP and RATON:
+                ARRASTRANDO[0] = False
             elif ev.type == pygame.MOUSEMOTION and RATON and not kb_open:
                 RATON_T0[0] = time.time()
+                # ARRASTRANDO LA BARRA: la lista sigue al puntero.
+                #
+                # Mientras se arrastra NO se mira la fila de debajo del raton:
+                # el puntero esta sobre la barra, no sobre la lista, y hacer
+                # las dos cosas a la vez daria saltos.
+                if ARRASTRANDO[0]:
+                    _f = barra_a_fila(ev.pos[1])
+                    if _f is not None and _f != sel:
+                        mover_vista(_f - sel)
+                    continue
                 try:
                     pygame.mouse.set_visible(True)
                     # SOLO LA PRIMERA VEZ: poner el cursor crea una superficie,
@@ -8564,6 +8717,15 @@ def run_session():
                             _hecho = 1
                             break
                     if _hecho:
+                        continue
+                    # ¿SOBRE LA BARRA? SE SALTA AHI Y SE EMPIEZA A ARRASTRAR.
+                    _r = BARRA[0]
+                    if _r and _r[0] <= _mx <= _r[0] + _r[2] \
+                           and _r[1] <= _my <= _r[1] + _r[3]:
+                        _f = barra_a_fila(_my)
+                        if _f is not None:
+                            mover_vista(_f - sel)
+                            ARRASTRANDO[0] = True
                         continue
                     # Clic izquierdo: si es sobre una fila, se selecciona esa y
                     # se entra. Sobre otra cosa no se hace nada: un clic al aire
@@ -8606,7 +8768,7 @@ def run_session():
                 elif ev.button in (4, 5):
                     # Rueda en pygame antiguo: se mueve igual, sin teclas.
                     if MODE != 'grid':
-                        _paso = max(1, vis() // 2)
+                        _paso = max(1, vis() // 3)
                         mover_vista(-_paso if ev.button == 4 else _paso)
                     else:
                         grid_move(0, -1 if ev.button == 4 else 1)
@@ -8631,7 +8793,13 @@ def run_session():
                 # seleccion y ya, que ademas es exacto.
                 _y = int(getattr(ev, 'y', 0))
                 if _y and MODE != 'grid':
-                    _paso = max(1, vis() // 2) * min(abs(_y), 3)
+                    # UN TERCIO DE PANTALLA, NO MEDIA.
+                    #
+                    # Media resultaba brusca: en una lista corta te plantaba al
+                    # otro extremo de un golpe y se perdia el sitio. Un tercio
+                    # deja siempre varias filas en comun entre antes y despues,
+                    # que es lo que hace que la vista se siga con la mirada.
+                    _paso = max(1, vis() // 3) * min(abs(_y), 3)
                     mover_vista(-_paso if _y > 0 else _paso)
                 elif _y:
                     grid_move(0, -1 if _y > 0 else 1)
@@ -8866,6 +9034,16 @@ def run_session():
             _fw = (_tr_x + 6 + 9) - _fx
             FLECHAS[0] = (_fx, _tr_y - 2, _fw, _ar + 4)
             FLECHAS[1] = (_fx, _by - _ar - 2, _fw, _ar + 4)
+            # LA BARRA TAMBIEN SE PUEDE PULSAR Y ARRASTRAR.
+            #
+            # Es lo que hace cualquiera que venga de un escritorio: coger la
+            # barra y moverla, o pulsar en el hueco para saltar hasta ahi. Con
+            # listas de cincuenta juegos es mucho mas rapido que la rueda.
+            #
+            # Se guarda el carril (sin las flechas) y el total, que es lo que
+            # hace falta para convertir una posicion de pantalla en una fila.
+            BARRA[0] = (_fx, _mid_y, _fw, _mid_h)
+            BARRA[1] = _total
         if view and not PANEL_UI:
             pos = f_sm.render('%d/%d' % (sel + 1, len(view)), True, DIM)
             screen.blit(pos, (W - 24 - pos.get_width(), max(4, HEAD - 30)))
@@ -9921,10 +10099,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py f621a811d824" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py 733d91c98417" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py f621a811d824
+# WPROTON_HELPER menu_qt.py 733d91c98417
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -10484,8 +10662,9 @@ AYUDAS_ES = [
      'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
      'vistazo lo que te queda pendiente.'),
     ('Descargar carátulas',
-     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
-     'desde SteamGridDB. Hace falta una clave gratuita.'),
+     'Baja de una vez las caratulas que falten. Las 4:3 salen de la carpeta '
+     'covers_43 del repositorio de WProton y no piden nada; las verticales y '
+     'las panoramicas vienen de SteamGridDB y necesitan su clave gratuita.'),
     ('Clave de RAWG',
      'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
      'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
@@ -10671,6 +10850,10 @@ AYUDAS_ES = [
      'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
     ('Carátula: buscar en SteamGridDB',
      'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula 4:3: descargarla',
+     'Trae la 4:3 de ESTE juego de la carpeta covers_43 del repositorio de '
+     'WProton. No hace falta clave ninguna. Normalmente ya se baja sola la '
+     'primera vez que cargas el juego; esto es por si la han subido despues.'),
     ('Carátula: elegir una imagen',
      'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
     ('Ficha del juego',
@@ -11544,6 +11727,29 @@ class TareaImagen(QtCore.QRunnable):
 # QSS costaria mas que pintarlo. Los widgets de Qt entran donde aportan:
 # el editor de texto y las barras de progreso.
 # ---------------------------------------------------------------------------
+def corte_etiqueta(label):
+    """El primer ':' que de verdad separa etiqueta y valor; -1 si no hay.
+
+    Unos dos puntos ENTRE NUMEROS son una proporcion ("4:3", "16:9") o una
+    hora, no un separador. Sin esto, la fila
+
+        "Caratula 4:3: descargarla del repositorio de WProton"
+
+    se pintaba como etiqueta "Caratula 4" y valor "3: descargarla del
+    repositorio...", que es tal cual como salio en una captura del manual.
+    """
+    n = len(label)
+    for i, c in enumerate(label):
+        if c != ':':
+            continue
+        antes = label[i - 1] if i else ''
+        despues = label[i + 1] if i + 1 < n else ''
+        if antes.isdigit() and despues.isdigit():
+            continue
+        return i
+    return -1
+
+
 class Pantalla(QtWidgets.QWidget):
 
     termina = Signal(int)      # codigo de salida de la peticion en curso
@@ -11975,7 +12181,10 @@ class Pantalla(QtWidgets.QWidget):
         # "MangoHud: ON" -> ON en verde, OFF apagado.
         if not TH.get('labelcolor') or ':' not in label:
             return [(label, base)]
-        k, _, v = label.partition(':')
+        _i = corte_etiqueta(label)
+        if _i < 0:
+            return [(label, base)]
+        k, v = label[:_i], label[_i + 1:]
         # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
         if ' - ' in k or len(k) > 36:
             return [(label, base)]
@@ -20375,9 +20584,7 @@ first_run_wizard() {
         ui_info "Perfil creado: profiles/$gid.conf
 Juego de Linux: sin runner ni prefijo.
 
-Puedes cambiarlo cuando quieras:
-menu principal -> Ajustes de un juego,
-o pulsando X sobre el juego en la lista."
+Todo esto se cambia desde Ajustes de un juego, o pulsando X en la lista."
         return 0
     fi
     wizard_pick_runner || return 1
@@ -20418,9 +20625,7 @@ ejemplo, sin ellos arranca Half-Life 2 en ingles."
 Runner: $(runner_etiqueta "${RUNNER:-}") | Prefijo: $(prefix_label)${DLL_OVERRIDES:+
 DLL overrides: $DLL_OVERRIDES}
 
-Puedes cambiar todo esto cuando quieras:
-menu principal -> Ajustes de un juego,
-o pulsando X sobre el juego en la lista."
+Todo esto se cambia desde Ajustes de un juego, o pulsando X en la lista."
     return 0
 }
 
@@ -24400,6 +24605,14 @@ launch_game() {
     # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
     profile_exists "$gid" || community_offer_for "$gid" || true
 
+    # Y la carátula 4:3 del repositorio, si este juego aun no tiene ninguna.
+    # Esto SI se mira siempre, no solo en los juegos nuevos: quien lleva meses
+    # con su biblioteca tambien tiene que ver aparecer las carátulas.
+    #
+    # No puede tumbar el arranque: todo lo de dentro es silencioso y la lista
+    # del repositorio va con tiempo limite.
+    covers43_offer_for "$gid" || true
+
     # Recordar como "último juego jugado"
     local abs_squash; abs_squash="$(readlink -f "$squash" 2>/dev/null || printf '%s' "$squash")"
     if [ "$abs_squash" != "$LAST_GAME" ]; then
@@ -25040,13 +25253,29 @@ EOFRA
     # ha salido a los pocos segundos", y si aqui solo se miraba rc!=0 no se
     # analizaba nada. Ahora cualquier salida rapida pasa por el analizador; si
     # no reconoce nada y el codigo era 0, no molesta.
+    # ESTO VA AL REGISTRO, NO A UN CUADRO DE ERROR.
+    #
+    # POR QUE SE QUITO DE LA PANTALLA
+    #
+    # La condicion es "codigo de salida 0 y menos de 12 segundos", y eso NO
+    # significa que algo haya fallado. Un juego que abre su lanzador y lo
+    # cierras, uno que arrancas y decides salir enseguida, uno que delega en
+    # otro proceso y termina... todos pasan por aqui con rc=0.
+    #
+    # Y el diagnostico que lo acompaña sale de analizar EL REGISTRO ENTERO, que
+    # puede acusar a cualquier cosa escrita antes y sin relacion: de ahi venia
+    # un "es .NET y Mono esta desactivado, instala dotnet48" detras de partidas
+    # que habian ido perfectas.
+    #
+    # Un cuadro de error que sale cuando no hay error enseña a ignorar los
+    # cuadros de error. El dato sigue entero en el registro para cuando un
+    # juego SI falle.
     local _sug_rapida=""
     if [ $rc -eq 0 ] && [ $dur -lt 12 ]; then
         _sug_rapida="$(fallo_analizar "$LOG_FILE" "$rc")" || true
         if [ -n "$_sug_rapida" ]; then
-            ui_error "El juego se ha cerrado a los ${dur}s.
-
-$_sug_rapida"
+            log "El juego duro solo ${dur}s con codigo 0. Diagnostico, por si sirve:"
+            printf '%s\n' "$_sug_rapida" >> "$LOG_FILE" 2>/dev/null
         fi
     fi
     if [ $rc -ne 0 ] && [ $dur -lt 10 ]; then
@@ -25220,16 +25449,35 @@ Que cumplas muchos mas.
     # CORTO. Esto se lee en una pantalla de consola y con el mando en la mano:
     # si no cabe de un vistazo, no se lee. Dos o tres lineas por version, lo que
     # de verdad nota quien la usa.
+    #
+    # CADA PUNTO, EN UNA SOLA LINEA.
+    #
+    # Esto se pinta con una fila por linea, asi que un punto partido a mano en
+    # dos salia como DOS filas, y la segunda ("el suyo.") quedaba suelta y sin
+    # sentido. Se vio en una captura para el manual.
+    # LOS AGRADECIMIENTOS, LO PRIMERO.
+    #
+    # La 2.0 es la primera que sale para todo el mundo, y no habria llegado
+    # aqui sin la gente que lleva meses probandola y mandando registros. Eso va
+    # delante de las novedades, no en una nota al pie.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
+PRIMERA VERSION LISTA PARA EL PUBLICO GENERAL
+
+  Muchas gracias a Michel, Fransis y MRDeu por todas las horas de testeo.
+  Sin vosotros este proyecto no habria sido posible.
+
 NOVEDADES
+
+  Las caratulas 4:3 las trae WProton de su repositorio.
+
+  Arranca ya configurado con menu moderno, lista y caratulas 4:3.
 
   Mejoras en la carga y compresion de juegos Linux.
 
   Mejoras en el movimiento del raton.
 
-  Las teclas del mando ya no se aplican a un juego que no es
-  el suyo.
+  Las teclas del mando ya no se aplican a otro juego.
 
   El paquete se guarda en la carpeta de juegos de la que salio."
     return 0
@@ -30131,6 +30379,59 @@ EOFPORT
     return 0
 }
 
+bundled_prefix_enlazar_usuario() {
+    # ENLAZA steamuser AL USUARIO CON EL QUE SE EMPAQUETO EL PREFIJO.
+    #
+    # EL PROBLEMA
+    #
+    # Un prefijo empaquetado en Batocera -o en cualquier sitio donde Wine corra
+    # como root- guarda las cosas del usuario en drive_c/users/root. Proton, en
+    # cambio, siempre trabaja como "steamuser".
+    #
+    # El juego arranca igual, asi que parece que todo va bien, pero cualquier
+    # cosa que el juego busque en SUS carpetas -Documentos, Guardados,
+    # Configuracion- la busca en las de steamuser, que estan vacias. Caso real:
+    # un Dante's Inferno cuyos ficheros de DLC viven en
+    # drive_c/users/root/Documents y no se cargaban nunca. Sin ningun error:
+    # simplemente no habia DLC.
+    #
+    # LA SOLUCION
+    #
+    # Un enlace: users/steamuser apunta a users/root. Las dos rutas llevan a
+    # los mismos ficheros, asi que da igual con que nombre los busque el juego.
+    # Es lo que hacen las herramientas que convierten prefijos entre sistemas.
+    #
+    # Se crea RELATIVO para que el prefijo siga siendo portatil: con una ruta
+    # absoluta, el enlace apuntaria al equipo donde se creo.
+    local pfx="${1:-}" udir
+    [ -n "$pfx" ] && [ -d "$pfx/drive_c/users" ] || return 0
+    [ -e "$pfx/drive_c/users/steamuser" ] && return 0
+    # ¿Que usuario trae? Se descartan los de Wine, que no son del juego.
+    local cand=""
+    for udir in "$pfx"/drive_c/users/*; do
+        [ -d "$udir" ] || continue
+        case "$(basename "$udir")" in
+            Public|"All Users"|Default|"Default User"|steamuser) continue ;;
+        esac
+        cand="$udir"
+        break
+    done
+    [ -n "$cand" ] || return 0
+    local nom; nom="$(basename "$cand")"
+    if ln -s "$nom" "$pfx/drive_c/users/steamuser" 2>/dev/null; then
+        say "[+] Prefix incluido: el prefijo se hizo con el usuario '$nom' y"
+        say "    Proton usa 'steamuser': se enlazan, para que el juego"
+        say "    encuentre sus Documentos, guardados y DLC."
+        log "prefijo: enlazado users/steamuser -> $nom"
+        return 0
+    fi
+    say "[!] Prefix incluido: no se pudo enlazar users/steamuser -> $nom."
+    say "    Si al juego le faltan guardados o DLC, es por esto: sus ficheros"
+    say "    estan en drive_c/users/$nom y Proton mira en users/steamuser."
+    log "prefijo: NO se pudo enlazar users/steamuser -> $nom" WARN
+    return 1
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -30310,6 +30611,7 @@ bundled_prefix_prepare() {
     elif [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ "$_hay_steamuser" = 0 ]; then
         say "[+] Prefix incluido: se usa tal cual (no trae users/steamuser,"
         say "    asi que Proton no tiene que renombrar nada de solo lectura)"
+        bundled_prefix_enlazar_usuario "$BUNDLED_PREFIX_DIR"
     fi
     # SE DICE POR QUE NO SE USA, en vez de salir callando.
     #
@@ -30630,10 +30932,10 @@ run_exe_in_game() {
 TECLAS_PY="$RUNTIME_DIR/teclas.py"
 
 write_teclas() {
-    grep -q "WPROTON_HELPER teclas.py 71a66edb4f02" "$TECLAS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teclas.py 5bcd989a68a5" "$TECLAS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TECLAS_PY" <<'TECEOF'
-# WPROTON_HELPER teclas.py 71a66edb4f02
+# WPROTON_HELPER teclas.py 5bcd989a68a5
 # -*- coding: utf-8 -*-
 # WProton - formato de los ficheros .keys (mapeo de mando a teclado)
 #
@@ -30743,6 +31045,94 @@ def leer(ruta):
     except (OSError, ValueError):
         return {}
     return d if isinstance(d, dict) else {}
+
+
+CAMPO_DUENO = "wproton_para"
+
+
+def reparar_marca_vieja(ruta):
+    """Repara el .keys que una version anterior dejo ilegible, SIN perder el gid.
+
+    LA MARCA VA DENTRO DEL JSON, NO COMO COMENTARIO.
+
+    Una version de WProton la escribia como una linea "# wproton-para: X" al
+    principio del fichero. Un .keys ES UN JSON, y un JSON no admite
+    comentarios: cualquier fichero marcado asi dejaba de poder leerse
+    ("Expecting value: line 1 column 1") y el mapeador se moria al arrancar.
+
+    Los ficheros afectados siguen en el disco de quien los tenga, asi que no
+    basta con dejar de estropearlos: hay que arreglarlos. Y hay que CONSERVAR
+    el gid de esa linea, no solo tirarla: es la unica copia que queda de a quien
+    pertenece el fichero. (Una version de esta funcion la borraba sin mas, y el
+    .keys se quedaba sin dueno.)
+
+    Devuelve el gid recuperado, o "" si el fichero no estaba en ese caso.
+    """
+    try:
+        with open(ruta, encoding="utf-8") as fh:
+            lineas = fh.readlines()
+    except OSError:
+        return ""
+    if not lineas or not lineas[0].lstrip().startswith("# wproton-para:"):
+        return ""
+    gid = lineas[0].split(":", 1)[1].strip()
+    resto = "".join(lineas[1:])
+    try:
+        d = json.loads(resto)          # solo se escribe si queda JSON valido
+    except ValueError:
+        return ""
+    if not isinstance(d, dict):
+        return ""
+    if gid:
+        d[CAMPO_DUENO] = gid
+    if guardar(ruta, d):
+        return gid
+    return ""
+
+
+def dueno(ruta):
+    """El juego al que pertenece un .keys, o "" si no lo dice.
+
+    Guardando la marca como un campo mas del objeto, el fichero sigue siendo
+    JSON valido y lo entienden tanto WProton como cualquier otra herramienta,
+    que simplemente ignorara un campo que no conoce.
+    """
+    reparar_marca_vieja(ruta)
+    d = leer(ruta)
+    v = d.get(CAMPO_DUENO, "")
+    return v.strip() if isinstance(v, str) else ""
+
+
+def marcar(ruta, gid, forzar=False):
+    """Deja escrito dentro del .keys a que juego pertenece.
+
+    Por defecto, si ya lo dice NO se toca: la marca original manda, y es lo que
+    impide que el .keys de un juego se aplique a otro.
+
+    Con forzar=True se reescribe aunque ya tuviera dueno. Eso es para cuando el
+    usuario lo ha decidido explicitamente -asignar un fichero a mano a ESTE
+    juego, o un fichero que esta en profiles/ con el nombre de ESTE juego-, y
+    sin ello el fichero quedaba inservible: estaba puesto donde toca pero
+    seguia diciendo ser de otro, asi que WProton lo ignoraba y el juego se
+    quedaba sin teclas mientras el menu decia que no habia ninguna.
+
+    Devuelve True si el fichero quedo marcado (ya lo estuviera o no).
+    """
+    if not gid:
+        return False
+    reparar_marca_vieja(ruta)
+    d = leer(ruta)
+    if not d:
+        # Fichero ilegible o vacio: no se inventa nada, y sobre todo no se
+        # sobrescribe lo que haya, que podria ser recuperable a mano.
+        return False
+    previo = d.get(CAMPO_DUENO)
+    if not forzar and isinstance(previo, str) and previo.strip():
+        return True
+    if isinstance(previo, str) and previo.strip() == gid:
+        return True                    # ya era de este juego: nada que escribir
+    d[CAMPO_DUENO] = gid
+    return guardar(ruta, d)
 
 
 def acciones(datos):
@@ -31343,9 +31733,32 @@ def main(argv):
             "  componer <destino> <teclas> [combos] [raton]\n"
             "  combos   <fichero>                      cuantas combinaciones lleva\n"
             "  ejemplo  <fichero>                      escribe el .keys de ejemplo\n"
+            "  dueno    <fichero>                      de que juego dice ser\n"
+            "  marcar   <fichero> <gid> [forzar]       lo apunta dentro del JSON\n"
+            "  reparar  <fichero>                      arregla la marca vieja\n"
             "  comprobar                               auto-diagnostico\n")
         return 2
     orden = argv[1]
+
+    if orden == "dueno":
+        if len(argv) < 3:
+            return 2
+        # dueno() ya repara de paso la marca vieja que rompia el JSON.
+        sys.stdout.write(dueno(argv[2]))
+        return 0
+
+    if orden == "marcar":
+        if len(argv) < 4:
+            return 2
+        # El tercer argumento opcional "forzar" reescribe una marca previa.
+        forzar = len(argv) > 4 and argv[4] == "forzar"
+        return 0 if marcar(argv[2], argv[3], forzar) else 1
+
+    if orden == "reparar":
+        if len(argv) < 3:
+            return 2
+        sys.stdout.write(reparar_marca_vieja(argv[2]))
+        return 0
 
     if orden == "comprobar":
         fallos = comprobar()
@@ -34569,6 +34982,10 @@ launch_loose_exe() {
             gid="$_carp"
         fi
     fi
+    # La carátula 4:3 del repositorio, igual que en launch_game. Aqui tenia
+    # que estar tambien: por este camino entran las carpetas sueltas, que son
+    # justo las que mas a menudo se quedan sin carátula.
+    covers43_offer_for "$gid" || true
     BUNDLED_PREFIX_DIR=""
     BUNDLED_RUNNER_DIR=""
     [ "${PREFIX_MODE:-}" = "bundled" ] && PREFIX_MODE="shared"
@@ -35922,6 +36339,8 @@ lanzar_nativo_suelto() {
     # los ajustes del juego -runner, prefijo, mandos, librerias- y se
     # quedarian los valores de fabrica.
     load_profile "$gid" >/dev/null 2>&1 || true
+    # La carátula 4:3 del repositorio, como en los otros lanzadores.
+    covers43_offer_for "$gid" || true
     say "[+] Juego de Linux: $(basename "$exe")"
     # EL VIGILANTE DE SALIDA, TAMBIEN POR AQUI.
     #
@@ -35999,6 +36418,8 @@ lanzar_script_si_existe() {
     # los ajustes del juego -runner, prefijo, mandos, librerias- y se
     # quedarian los valores de fabrica.
     load_profile "$gid" >/dev/null 2>&1 || true
+    # La carátula 4:3 del repositorio, como en los otros lanzadores.
+    covers43_offer_for "$gid" || true
     local h
     # La carpeta del juego es $dir: si ahi hay un .home, se usa ese.
     if h="$(home_portable "$gid" "$dir" "$launcher")"; then
@@ -36517,11 +36938,27 @@ r2|R2 (gatillo derecho)
 l3|L3 (stick izquierdo pulsado)
 r3|R3 (stick derecho pulsado)
 start|Start
-select|Select
-joystick1up|Stick izquierdo arriba
+select|Select"
+
+# LOS STICKS, EN SU PROPIO SUBMENU.
+#
+# POR QUE NO VAN EN LA LISTA PRINCIPAL
+#
+# Estaban al final, en las posiciones 21 a 24 de 26. En la pantalla caben unas
+# trece filas, asi que para llegar al stick derecho habia que bajar veinte
+# veces con el mando: en la practica, nadie los encontraba. Un tester lo pidio
+# como si fuera una funcion que faltaba, y llevaba meses puesta.
+#
+# Agrupados en un submenu caben de sobra y ademas la lista principal se queda
+# en diecisiete filas, que si entran de una vez.
+KEYS_STICKS="joystick1up|Stick izquierdo arriba
 joystick1down|Stick izquierdo abajo
 joystick1left|Stick izquierdo izquierda
-joystick1right|Stick izquierdo derecha"
+joystick1right|Stick izquierdo derecha
+joystick2up|Stick derecho arriba
+joystick2down|Stick derecho abajo
+joystick2left|Stick derecho izquierda
+joystick2right|Stick derecho derecha"
 
 keys_tecla_elegir() {
     # Devuelve el nombre de tecla (KEY_...) que elija el usuario.
@@ -36995,6 +37432,43 @@ puntero. Los gatillos suelen estar ocupados por el juego." \
     done
 }
 
+keys_sticks_editar() {
+    # Submenu para asignar teclas a las ocho direcciones de los dos sticks.
+    #
+    # $1 = fichero temporal con las asignaciones (mismo formato que el editor)
+    #
+    # Se trabaja sobre el MISMO temporal que la pantalla principal, asi que lo
+    # que se cambie aqui se guarda con el resto al dar a GUARDAR. Separarlo en
+    # otro fichero habria sido pedir que un dia se queden descompasados.
+    local tmp="$1" sel nom largo actual opciones tecla
+    while :; do
+        opciones=""
+        while IFS='|' read -r nom largo; do
+            [ -n "$nom" ] || continue
+            actual="$(grep -m1 "^$nom|" "$tmp" 2>/dev/null | cut -d'|' -f2)"
+            opciones="$opciones$largo: ${actual:-—}
+"
+        done <<EOFST
+$KEYS_STICKS
+EOFST
+        # shellcheck disable=SC2046
+        sel="$(IFS=$'\n'; set -f; menu "Sticks: que tecla pulsa cada direccion" \
+               $opciones "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+        esac
+        largo="${sel%%: *}"
+        nom="$(printf '%s' "$KEYS_STICKS" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
+        [ -n "$nom" ] || continue
+        tecla="$(keys_tecla_elegir "$largo")" || continue
+        # Se escribe igual que en la pantalla principal: se quita la linea
+        # anterior de ese destino y se añade la nueva. "__QUITAR__" deja el
+        # destino sin asignar.
+        grep -v "^$nom|" "$tmp" > "$tmp.n" 2>/dev/null; mv -f "$tmp.n" "$tmp"
+        [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
+    done
+}
+
 keys_editor() {
     # Crear o retocar el .keys de un juego, boton a boton.
     #
@@ -37060,6 +37534,20 @@ EOFCOMBIS
         # El raton va como una fila mas, al final. El mapeador ya sabia
         # moverlo desde hace tiempo, pero no habia por donde configurarlo:
         # habia que escribir la seccion "mouse" a mano en el .keys.
+        # LA FILA DE LOS STICKS, ARRIBA Y CON LA CUENTA A LA VISTA.
+        #
+        # Asi se ve de un vistazo si hay algo asignado ahi sin tener que entrar,
+        # que era parte del problema: las direcciones estaban tan abajo que
+        # nadie sabia si las tenia puestas o no.
+        local _nst=0 _sn
+        while IFS='|' read -r _sn _; do
+            [ -n "$_sn" ] || continue
+            grep -q "^$_sn|" "$tmp" 2>/dev/null && _nst=$((_nst+1))
+        done <<EOFSN
+$KEYS_STICKS
+EOFSN
+        opciones="${opciones}Sticks (izquierdo y derecho) >>   $([ "$_nst" -gt 0 ] && printf '%s asignadas' "$_nst" || printf 'ninguna')
+"
         opciones="$opciones$(keys_raton_fila "$tmpr")
 $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
@@ -37078,6 +37566,9 @@ Rellenar: juego de teclado y raton   (WASD, flechas, clics)
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
+                continue ;;
+            "Sticks (izquierdo y derecho)"*)
+                keys_sticks_editar "$tmp"
                 continue ;;
             "Rellenar: juego de teclado y raton"*)
                 keys_plantilla_teclado "$tmp" "$tmpr"
@@ -37100,6 +37591,29 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
         largo="${sel%%:*}"
         nom="$(printf '%s' "$KEYS_BOTONES" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
         [ -n "$nom" ] || continue
+        # EL STICK DERECHO LO USA TAMBIEN EL RATON VIRTUAL.
+        #
+        # Por defecto el raton de los .keys se mueve con joystick2. Si se le
+        # asigna ademas una tecla a una direccion de ese stick, el stick haria
+        # las dos cosas a la vez: mover el puntero y mandar la pulsacion. El
+        # sintoma -el cursor se va solo mientras el juego recibe teclas- no se
+        # parece en nada a su causa, asi que se avisa aqui, que es donde se
+        # puede cambiar de idea.
+        case "$nom" in
+            joystick2*)
+                if [ "$(keys_raton_leer "$destino" axis 2>/dev/null)" = joystick2 ] \
+                   || [ -z "$(keys_raton_leer "$destino" axis 2>/dev/null)" ]; then
+                    ui_ask "El raton virtual de este .keys usa el STICK DERECHO.
+
+Si le asignas una tecla a \"$largo\", ese stick hara las dos
+cosas a la vez: mover el puntero y mandar la tecla.
+
+Puedes cambiar el raton al stick izquierdo en el mismo menu,
+o quitarlo si el juego no lo necesita.
+
+Asignar la tecla de todas formas?" || continue
+                fi ;;
+        esac
         tecla="$(keys_tecla_elegir "$largo")" || continue
         grep -v "^$nom|" "$tmp" > "$tmp.n" 2>/dev/null; mv -f "$tmp.n" "$tmp"
         [ "$tecla" = "__QUITAR__" ] || printf '%s|%s\n' "$nom" "$tecla" >> "$tmp"
@@ -40586,6 +41100,230 @@ EOFCX
     return 1
 }
 
+# ----------------------------------------------------------------------------
+# 4h. CARATULAS 4:3 DEL REPOSITORIO (covers_43/)
+#
+#     Las 4:3 son NUESTRAS: la carpeta covers_43/ del repositorio las lleva ya
+#     recortadas a 640x480, con el nombre del juego. Antes se pedian a
+#     SteamGridDB, y de ahi salian a medias: muchos juegos no tienen esa forma
+#     y la que hay suele ser una captura de pantalla recortada a lo bruto.
+#
+#     Funciona igual que los perfiles de la comunidad: una lista del contenido
+#     de la carpeta (cacheada un dia) y una descarga directa de raw. La lista
+#     se consulta la primera vez que se carga cada juego, asi que la carátula
+#     aparece sin que haya que pedir nada.
+# ----------------------------------------------------------------------------
+COVERS43_INDEX="$RUNTIME_DIR/.covers43_index"
+
+covers43_list() {
+    # Ficheros de imagen de la carpeta covers_43/ del repositorio.
+    #
+    # --max-time: esto se consulta al arrancar un juego. Si GitHub se queda
+    # colgado, el juego NO se espera: se tira sin carátula y ya.
+    #
+    # La API de contenidos devuelve hasta 1000 ficheros por carpeta. De
+    # momento sobra; si algun dia se pasa, habra que ir por la API de arboles.
+    curl -fsSL --max-time 12 \
+        "https://api.github.com/repos/$WPROTON_REPO/contents/covers_43" 2>/dev/null \
+        | grep -oE '"name": *"[^"]*\.(png|jpg|jpeg|webp|PNG|JPG|JPEG|WEBP)"' \
+        | cut -d'"' -f4 | sort
+}
+
+covers43_index_refresh() {
+    # Lista cacheada un dia, como la de los perfiles. Sin red no se avisa de
+    # nada: simplemente no hay carátulas nuevas esta vez.
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    if [ -f "$COVERS43_INDEX" ]; then
+        local edad
+        edad=$(( $(date +%s) - $(stat -c %Y "$COVERS43_INDEX" 2>/dev/null || echo 0) ))
+        [ "$edad" -lt 86400 ] && return 0
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    covers43_list > "$COVERS43_INDEX.tmp" 2>/dev/null
+    if [ -s "$COVERS43_INDEX.tmp" ]; then
+        mv -f "$COVERS43_INDEX.tmp" "$COVERS43_INDEX"
+    else
+        rm -f "$COVERS43_INDEX.tmp"
+        return 1
+    fi
+    return 0
+}
+
+covers43_match() {
+    # $1 = gid -> nombre del fichero de covers_43/ que le corresponde, si lo hay.
+    #
+    # Mismo criterio que community_match (de donde viene esto): se compara sin
+    # mayusculas ni separadores, y se admite la coletilla de version o grupo
+    # que traen las descargas, pero solo si lo que sobra es claramente eso.
+    # Asi "Doom" no se lleva por delante a "Doom Eternal".
+    local gid="$1" clave linea lclave resto
+    [ -f "$COVERS43_INDEX" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    [ -n "$clave" ] || return 1
+    # 1) coincidencia exacta
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "${linea%.*}")"
+        [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
+    done < "$COVERS43_INDEX"
+    # 2) el juego lleva version o grupo detras del nombre de la carátula
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        lclave="$(nombre_clave "${linea%.*}")"
+        [ ${#lclave} -ge 6 ] || continue      # nombres muy cortos: no arriesgar
+        case "$clave" in
+            "$lclave"*)
+                resto="${clave#"$lclave"}"
+                nombre_coletilla "$resto" && { printf '%s' "$linea"; return 0; } ;;
+        esac
+    done < "$COVERS43_INDEX"
+    return 1
+}
+
+url_escapar() {
+    # Un trozo de ruta listo para una URL.
+    #
+    # Si el nombre no tiene nada que escapar -lo normal- sale tal cual y no se
+    # despierta a Python: esto corre al arrancar un juego.
+    local s="${1:-}" e
+    case "$s" in
+        *[!A-Za-z0-9._~-]*) ;;
+        *) printf '%s' "$s"; return 0 ;;
+    esac
+    e="$(urlencode_py "$s")"
+    printf '%s' "${e:-$s}"
+}
+
+es_imagen() {
+    # Lo descargado, ¿es de verdad una imagen?
+    #
+    # Hace falta porque raw.githubusercontent devuelve una pagina de texto
+    # cuando el fichero no existe, y guardarla como "<juego>.png" deja al
+    # juego con una carátula rota que no se ve de donde sale.
+    local f="${1:-}" tipo cab
+    [ -s "$f" ] || return 1
+    if command -v file >/dev/null 2>&1; then
+        tipo="$(file -b --mime-type "$f" 2>/dev/null)"
+        case "$tipo" in image/*) return 0 ;; esac
+    fi
+    # Sin 'file', o si no lo reconoce: por los bytes de la cabecera.
+    cab="$(LC_ALL=C head -c 16 "$f" 2>/dev/null | od -An -tx1 -v 2>/dev/null | tr -d ' \n')"
+    case "$cab" in
+        89504e47*)                      return 0 ;;   # PNG
+        ffd8ff*)                        return 0 ;;   # JPEG
+        47494638*)                      return 0 ;;   # GIF
+        52494646????????57454250*)      return 0 ;;   # RIFF....WEBP
+    esac
+    return 1
+}
+
+covers43_fetch() {
+    # $1 = nombre del fichero en covers_43/, $2 = gid del juego LOCAL.
+    #
+    # Se guarda con el nombre del juego de AQUI, no con el del repositorio:
+    # el fichero de alla puede llamarse "Halo.Combat.Evolved.png" y el juego
+    # de uno "Halo_Combat_Evolved". Si se guardara con el nombre de alla, la
+    # carátula no la encontraria nadie y pareceria que la descarga no hizo nada.
+    local name="${1:-}" gid="${2:-}" tmp url ext e
+    [ -n "$name" ] && [ -n "$gid" ] || return 1
+    ext="$(printf '%s' "${name##*.}" | tr 'A-Z' 'a-z')"
+    case "$ext" in png|jpg|jpeg|webp) ;; *) return 1 ;; esac
+    mkdir -p "$COVERS_43_DIR" 2>/dev/null || return 1
+    tmp="$(mktemp)" || return 1
+    url="https://raw.githubusercontent.com/$WPROTON_REPO/main/covers_43/$(url_escapar "$name")"
+    if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"
+        log "covers_43: no se pudo descargar $name" WARN
+        return 1
+    fi
+    if ! es_imagen "$tmp"; then
+        rm -f "$tmp"
+        log "covers_43: lo descargado para $name no es una imagen; descartado" WARN
+        return 1
+    fi
+    # Fuera las otras extensiones del mismo juego: si antes habia un .jpg y
+    # ahora llega un .png, quedarian las dos y ganaria la que tocara por orden.
+    for e in png jpg jpeg webp; do
+        [ "$e" = "$ext" ] && continue
+        rm -f "$COVERS_43_DIR/$gid.$e" 2>/dev/null
+    done
+    if ! cat "$tmp" > "$COVERS_43_DIR/$gid.$ext" 2>/dev/null; then
+        rm -f "$tmp"
+        log "covers_43: no se pudo escribir en $COVERS_43_DIR" WARN
+        return 1
+    fi
+    rm -f "$tmp"
+    log "covers_43: $name -> $gid.$ext"
+    return 0
+}
+
+covers43_offer_for() {
+    # La primera vez que se carga un juego: si no tiene carátula 4:3 y el
+    # repositorio tiene una con su nombre, traerla.
+    #
+    # NO SE PREGUNTA, a diferencia de los perfiles de la comunidad: una
+    # carátula no cambia en nada como se juega, y un dialogo justo antes de
+    # arrancar el juego es lo ultimo que quiere nadie. Si ya hay una 4:3
+    # puesta -a mano o de antes- no se toca.
+    local gid="${1:-}" cand
+    [ -n "$gid" ] || return 1
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    cover_tipo_real "$gid" 43 >/dev/null 2>&1 && return 1   # ya la tiene
+    covers43_index_refresh || return 1
+    cand="$(covers43_match "$gid")" || return 1
+    say "[covers_43] el repositorio tiene carátula 4:3 para $gid: $cand"
+    covers43_fetch "$cand" "$gid" || return 1
+    say "[+] Carátula 4:3 descargada del repositorio"
+    return 0
+}
+
+caratula43_repo_manual() {
+    # "Carátula 4:3: descargarla del repositorio", en los ajustes del juego.
+    #
+    # Aqui si se habla: el usuario acaba de pedirlo y tiene que saber si salio
+    # bien, si el repositorio no la tiene todavia o si no hubo red.
+    local gid="${1:-}" cand previa _ok
+    [ -n "$gid" ] || return 1
+    loading_say "Buscando una carátula 4:3 para '$gid' en el repositorio..."
+    # El usuario la pide AHORA: lista fresca, sin esperar a que caduque la
+    # cacheada de un dia (puede que la carátula se subiera esta mañana).
+    rm -f "$COVERS43_INDEX" 2>/dev/null
+    covers43_index_refresh
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+    if ! cand="$(covers43_match "$gid")" || [ -z "$cand" ]; then
+        ui_info "El repositorio todavía no tiene carátula 4:3 para:
+
+$gid
+
+Puedes ponerla a mano con 'Carátula: elegir una imagen', o
+proponerla en la carpeta covers_43/ del repositorio."
+        return 1
+    fi
+    previa="$(cover_tipo_real "$gid" 43 2>/dev/null)" || previa=""
+    if [ -n "$previa" ]; then
+        ui_ask "Ya tienes una carátula 4:3 para este juego:
+$(basename "$previa")
+
+Sustituirla por la del repositorio?
+($cand)" || return 1
+    fi
+    if covers43_fetch "$cand" "$gid"; then
+        ui_info "Carátula 4:3 descargada del repositorio:
+
+$cand"
+        return 0
+    fi
+    ui_error "No se pudo descargar $cand"
+    return 1
+}
+
 cover_escaneo() {
     # Caratula del escaneo de ES-DE / EmulationStation, junto al juego.
     # $1 = ruta del juego (carpeta o fichero), $2 = tipo (vertical/wide/43).
@@ -40951,14 +41689,21 @@ $f"
 }
 
 sgdb_download_covers() {
-    # Descarga caratulas de SteamGridDB. Se elige que tipo: bajar las dos
-    # gasta el doble de peticiones y de tiempo, y mucha gente usa una sola
-    # vista.
+    # Descarga caratulas en tanda. Se elige que forma: bajar las tres gasta el
+    # triple de peticiones y de tiempo, y mucha gente usa una sola vista.
+    #
+    # DE DONDE SALE CADA UNA:
+    #   vertical y panoramica -> SteamGridDB (hace falta su API key)
+    #   4:3                   -> carpeta covers_43/ de NUESTRO repositorio
+    #
+    # Las 4:3 ya no se piden a SteamGridDB: casi ningun juego tiene esa forma
+    # alli, y lo que devolvia era una captura recortada a lo bruto. Las
+    # nuestras van hechas a 640x480.
     local quiere
     quiere="$(menu "¿Qué carátulas quieres descargar?" \
-        "Solo verticales (2:3)" \
-        "Solo panorámicas (tipo Steam)" \
-        "Solo cuadradas (4:3)" \
+        "Solo verticales (2:3, de SteamGridDB)" \
+        "Solo panorámicas (tipo Steam, de SteamGridDB)" \
+        "Solo cuadradas 4:3 (del repositorio de WProton)" \
         "Todas (las tres formas)" \
         "<< Volver")" || return 0
     local tipos
@@ -40969,23 +41714,47 @@ sgdb_download_covers() {
         "Todas"*)     tipos="vertical wide 43" ;;
         *) return 0 ;;
     esac
-    # la clave puede venir de un fichero aparte
-    SGDB_KEY="$(sgdb_key_leer)"
-    if [ -z "$SGDB_KEY" ]; then
-        local k
-        k="$(ask_text "Pega tu API key de SteamGridDB
+    # LAS QUE DE VERDAD VAN A STEAMGRIDDB.
+    #
+    # Si solo se han pedido las 4:3 no hace falta API key ninguna: seria
+    # absurdo pedirsela al usuario para no usarla.
+    local tipos_sgdb=""
+    local _t0
+    for _t0 in $tipos; do
+        [ "$_t0" = 43 ] || tipos_sgdb="$tipos_sgdb $_t0"
+    done
+    tipos_sgdb="${tipos_sgdb# }"
+    # La lista del repositorio, UNA vez para toda la tanda y recien traida:
+    # quien pide las carátulas ahora quiere las que se subieron hoy.
+    case " $tipos " in
+        *" 43 "*)
+            loading_say "Consultando las carátulas 4:3 del repositorio..."
+            rm -f "$COVERS43_INDEX" 2>/dev/null
+            covers43_index_refresh || say "AVISO: no se pudo consultar covers_43/ del repositorio"
+            loading_clear ;;
+    esac
+    # LA CLAVE DE STEAMGRIDDB, SOLO SI SE VA A USAR.
+    #
+    # Antes se pedia siempre. Quien solo quiera las 4:3 -que salen de nuestro
+    # repositorio- no tiene por que darse de alta en ningun sitio.
+    if [ -n "$tipos_sgdb" ]; then
+        SGDB_KEY="$(sgdb_key_leer)"
+        if [ -z "$SGDB_KEY" ]; then
+            local k
+            k="$(ask_text "Pega tu API key de SteamGridDB
 (gratis en steamgriddb.com -> Profile -> Preferences -> API)
 
 Se guardara en sgdb.key, solo legible por ti, y NO en
 settings.conf (que se comparte al pedir ayuda)." "")"
-        [ -z "$k" ] && return 1
-        SGDB_KEY="$k"
-        # en su propio fichero y sin permisos para nadie mas
-        if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
-            chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
-            say "[+] Clave guardada en sgdb.key (solo legible por ti)"
-        else
-            save_settings           # si no se pudo escribir, como antes
+            [ -z "$k" ] && return 1
+            SGDB_KEY="$k"
+            # en su propio fichero y sin permisos para nadie mas
+            if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+                chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+                say "[+] Clave guardada en sgdb.key (solo legible por ti)"
+            else
+                save_settings           # si no se pudo escribir, como antes
+            fi
         fi
     fi
     mkdir -p "$COVERS_DIR"
@@ -41006,7 +41775,11 @@ settings.conf (que se comparte al pedir ayuda)." "")"
 $list
 EOF0
     [ "$pend" -eq 0 ] && { ui_info "No falta ninguna carátula de las pedidas."; return 0; }
-    progress_start "Descargando carátulas de SteamGridDB"
+    if [ -n "$tipos_sgdb" ]; then
+        progress_start "Descargando carátulas"
+    else
+        progress_start "Descargando carátulas 4:3 del repositorio"
+    fi
     while IFS= read -r f; do
         gid="$(game_id "$f")"
         # Saltar el juego SOLO si ya tiene todas las que se han pedido.
@@ -41022,53 +41795,87 @@ EOF0
         total=$((total+1)); idx=$((idx+1))
         title="$(basename "$f")"; title="${title%.*}"; title="$(printf '%s' "$title" | tr '_.' '  ')"
         progress_set "$(( idx * 100 / pend ))" "($idx/$pend) $title"
-        say "[SGDB] Buscando carátula: $title"
-        q="$(urlencode_py "$title")"
-        gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-            "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
-        if printf '%s' "$gjson" | grep -q '"success": *false'; then
-            progress_stop
-            ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
+        local bajada=0
+        # ---- LA 4:3, DE NUESTRO REPOSITORIO -------------------------------
+        case " $tipos " in
+            *" 43 "*)
+                if ! cover_tipo_real "$gid" 43 >/dev/null 2>&1; then
+                    local _c43
+                    if _c43="$(covers43_match "$gid")" && [ -n "$_c43" ]; then
+                        if covers43_fetch "$_c43" "$gid"; then
+                            bajada=1
+                            say "[covers_43]   OK -> $_c43"
+                        fi
+                    else
+                        say "[covers_43]   el repositorio no tiene 4:3 para: $title"
+                    fi
+                fi ;;
+        esac
+        # ---- LAS OTRAS DOS, DE STEAMGRIDDB --------------------------------
+        if [ -n "$tipos_sgdb" ]; then
+            # ¿Falta alguna de LAS DE STEAMGRIDDB? Si solo faltaba la 4:3, no
+            # se gasta una peticion de la API en este juego.
+            local _falta_sgdb=0
+            for _t in $tipos_sgdb; do
+                cover_tipo_real "$gid" "$_t" >/dev/null 2>&1 || _falta_sgdb=1
+            done
+            if [ "$_falta_sgdb" = 1 ]; then
+                say "[SGDB] Buscando carátula: $title"
+                q="$(urlencode_py "$title")"
+                gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                    "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
+                if printf '%s' "$gjson" | grep -q '"success": *false'; then
+                    progress_stop
+                    ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
+                fi
+                gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
+                if [ -z "$gameid" ]; then
+                    say "[SGDB]   sin resultados para: $title"
+                else
+                    # Se piden las DOS: la vertical para la rejilla clasica y la
+                    # horizontal para la vista de carátulas anchas. Cada una se
+                    # guarda con su nombre, asi que no se pisan.
+                    local destino dims
+                    for tipo in $tipos_sgdb; do
+                        destino="$(covers_dir_de "$tipo")"
+                        case "$tipo" in
+                            vertical) dims="600x900" ;;
+                            wide)     dims="920x430,460x215" ;;
+                        esac
+                        mkdir -p "$destino" 2>/dev/null
+                        # No se vuelve a descargar lo que ya hay: la vertical
+                        # podria ser una que el usuario eligio a mano.
+                        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+                        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+                            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
+                            2>>"$LOG_FILE")"
+                        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
+                        if [ -z "$url" ]; then
+                            say "[SGDB]   sin carátula $tipo ($dims) para: $title"
+                            continue
+                        fi
+                        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+                        if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+                            bajada=1
+                            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+                        fi
+                    done
+                fi
+            fi
         fi
-        gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
-        [ -z "$gameid" ] && { say "[SGDB]   sin resultados para: $title"; continue; }
-        # Se piden las DOS: la vertical para la rejilla clasica y la
-        # horizontal para la vista de carátulas anchas. Cada una se guarda
-        # con su nombre, asi que no se pisan.
-        local destino dims bajada=0
-        for tipo in $tipos; do
-            destino="$(covers_dir_de "$tipo")"
-            case "$tipo" in
-                vertical) dims="600x900" ;;
-                wide)     dims="920x430,460x215" ;;
-                43)       dims="640x480,512x384" ;;
-            esac
-            mkdir -p "$destino" 2>/dev/null
-            # si ya la tenemos, no se vuelve a pedir
-            # No se vuelve a descargar lo que ya hay: la vertical podria ser
-            # una que el usuario eligio a mano.
-            cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
-            ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
-                2>>"$LOG_FILE")"
-            url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-            if [ -z "$url" ]; then
-                say "[SGDB]   sin carátula $tipo ($dims) para: $title"
-                continue
-            fi
-            ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-            if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
-                bajada=1
-                say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
-            fi
-        done
         [ "$bajada" = 1 ] && got=$((got+1))
     done <<EOF2
 $list
 EOF2
     progress_stop
+    # El consejo del final, con la carpeta QUE TOCA. Decir "covers/" cuando se
+    # acaban de pedir las 4:3 manda al usuario a la carpeta equivocada.
+    local _donde="covers/<juego>.png"
+    if [ -z "$tipos_sgdb" ]; then
+        _donde="covers_43/<juego>.png"
+    fi
     ui_info "Carátulas: $got descargadas de $total pendientes.
-(Las que falten: pon un png/jpg a mano en covers/<juego>.png)"
+(Las que falten: pon un png/jpg a mano en $_donde)"
 }
 
 browse_start() {
@@ -43012,6 +43819,7 @@ cfg_ficha_menu() {
     while true; do
         sel="$(menu "Carátula y ficha - $gid" \
             "Carátula: elegir una imagen (vertical u horizontal)" \
+            "Carátula 4:3: descargarla del repositorio de WProton" \
             "Carátula: buscar en SteamGridDB por nombre" \
             "Ficha del juego (año, editor, notas de la crítica)" \
             "Notas: ${NOTAS:-(ninguna)}" \
@@ -43310,7 +44118,18 @@ cfg_ap_teclas() {
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
         "Mapeador .keys"*)
+            # EL SUBMENU SE QUEDA ABIERTO Y SE VUELVE A CALCULAR CADA VUELTA.
+            #
+            # Antes era de un solo uso: se elegia una opcion y se volvia al menu
+            # de ajustes del juego. Eso hacia que, tras crear el .keys, hubiera
+            # que salir y entrar otra vez para ver que ya existia; mientras
+            # tanto el titulo seguia diciendo "ninguno" y parecia que no se
+            # habia guardado nada. Y aqui dentro hay cinco ajustes que se tocan
+            # seguidos (estilo, teclado, exclusivo...), asi que salir en cada
+            # uno sobraba igualmente.
             local kmenu kopts=() kres=""
+            while :; do
+            kopts=(); kres=""
             # EL .keys SE BUSCA AQUI.
             #
             # Se leia "$kf0", que es una local de game_config_menu: se veia
@@ -43319,6 +44138,15 @@ cfg_ap_teclas() {
             # linea tenerlo propio.
             local kf0=""
             kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
+            # EL TITULO TAMBIEN SE CALCULA AQUI, POR LO MISMO.
+            #
+            # Se leia "$kstat", otra local de game_config_menu que solo se veia
+            # por ambito dinamico. Dos problemas: desde cualquier otro menu,
+            # set -u mata el script; y aunque se llegue desde ahi, el valor es
+            # el de ANTES de entrar, asi que tras crear el .keys el titulo
+            # seguia diciendo "ninguno".
+            local kstat="ninguno (auto si existe <juego>.keys)"
+            [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
             # Si ya hay un .keys, lo primero que se ofrece es VERLO. Antes
             # habia que entrar al editor para enterarte de que tenia dentro,
             # y con un fichero traido de fuera ni eso.
@@ -43475,14 +44303,36 @@ otro." ;;
                     local kfsel
                     kfsel="$(browse_for_path "Elige el fichero .keys" "$(browse_start "$HOME")" "keys")" || kfsel=""
                     if [ -n "$kfsel" ] && [ -f "$kfsel" ]; then
-                        cp -f "$kfsel" "$PROFILE_DIR/$gid.keys"
-                        ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys
+                        mkdir -p "$PROFILE_DIR" 2>/dev/null
+                        if ! cp -f "$kfsel" "$PROFILE_DIR/$gid.keys" 2>/dev/null; then
+                            ui_error "No se pudo copiar a profiles/$gid.keys"
+                        else
+                        # LA COPIA SE MARCA COMO DE ESTE JUEGO, PISANDO LO QUE
+                        # TRAJERA.
+                        #
+                        # Faltaba, y era el fallo: el .keys que se asigna suele
+                        # ser el de OTRO juego (justamente para eso se asigna,
+                        # para reaprovecharlo), y venia marcado como suyo. La
+                        # copia se quedaba con esa marca, asi que a partir de
+                        # ahi WProton la veia como "de otro juego": el menu
+                        # decia "no tiene keys" y el mapeador no cargaba nada,
+                        # con el fichero ahi puesto y el mensaje de "Asignado"
+                        # recien dado. Asignarlo ES decir que es de este juego.
+                        local _du; _du="$(keys_dueno "$PROFILE_DIR/$gid.keys")"
+                        keys_remarcar "$PROFILE_DIR/$gid.keys" "$gid"
+                        ui_info "Asignado: $(basename "$kfsel") -> profiles/$gid.keys${_du:+
+
+Venia marcado como de '$_du'; ahora es de este juego.}
+
 El mapeador se engancha SOLO al lanzar el juego (sin pulsar nada)."
+                        fi
                     fi ;;
                 "Quitar"*)
                     rm -f "$PROFILE_DIR/$gid.keys"
                     ui_info "Eliminado profiles/$gid.keys" ;;
-            esac ;;
+                "<< Volver"|"") return 0 ;;
+            esac
+            done ;;
         *) return 1 ;;
     esac
     return 0
@@ -43682,6 +44532,8 @@ cfg_ap_ficha() {
     case "$sel" in
         "Carátula: elegir"*)
             caratula_manual "$gid" ;;
+        "Carátula 4:3: descargarla"*)
+            caratula43_repo_manual "$gid" || true ;;
         "Carátula: buscar en SteamGridDB"*)
             sgdb_buscar_manual "$gid" || true ;;
         "Ficha del juego"*)
@@ -45464,7 +46316,7 @@ media_menu() {
     local sel
     while true; do
         sel="$(menu "Carátulas y perfiles de la comunidad" \
-            "Descargar carátulas (SteamGridDB)" \
+            "Descargar carátulas (repositorio y SteamGridDB)" \
             "Descargar datos de los juegos (Steam y duración)" \
             "Clave de RAWG (notas y juegos que no están en Steam)" \
             "Perfiles de la comunidad (juegos que necesitan ajustes)" \

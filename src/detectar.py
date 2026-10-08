@@ -1,3 +1,4 @@
+# WPROTON_HELPER detectar.py 012add21edf1
 # -*- coding: utf-8 -*-
 # WProton - deteccion del ejecutable de un juego
 #
@@ -90,7 +91,10 @@ _PALABRAS_FILTRO = [
     r'dxdiag', r'msconfig', r'taskmgr', r'conhost', r'cmd\.exe',
     r'wscript', r'cscript', r'mshta', r'control\.exe',
     r'winver', r'mmc\.exe', r'werfault', r'drwatson', r'dwwin',
-    r'unitycrashandler', r'unityplayer',
+    # unitycrashandler LE FALTABA UNA H y por eso no filtraba nada: el
+    # fichero real es UnityCrashHandler32.exe. Se conservan las dos formas
+    # por si algun juego usa la corta.
+    r'unitycrashandler', r'unitycrashhandler', r'unityplayer',
     r'ue4prereq', r'ue5prereq', r'epicwebhelper',
     r'vcredist', r'vc_redist', r'dxsetup', r'dotnetfx',
     r'oalinst', r'physx', r'msvcr', r'msvcp',
@@ -239,9 +243,28 @@ def leer_autorun(ruta):
         else:
             r["cmd"] = bruto[1:]
     elif bruto:
-        partes = bruto.split(" ", 1)
-        r["cmd"] = partes[0]
-        r["args"] = partes[1].strip() if len(partes) > 1 else ""
+        # SIN COMILLAS Y CON ESPACIOS: se corta por la EXTENSION, no por el
+        # primer espacio.
+        #
+        # El corte por el primer espacio venia del script original y falla con
+        # cualquier juego cuyo ejecutable lleve espacios y el autorun no lo
+        # entrecomille. Caso real: "CMD=Wild Blue Skies.exe" se leia como
+        # cmd="Wild" y args="Blue Skies.exe". Con ese nombre no se encuentra
+        # nada, se cae a la heuristica, y el juego arranca con otra cosa.
+        #
+        # La regla: el mandato acaba en la ULTIMA extension de ejecutable que
+        # aparezca al final o seguida de un espacio. Asi:
+        #   Wild Blue Skies.exe        -> cmd entero, sin argumentos
+        #   hl2.exe -game portal       -> cmd="hl2.exe", args="-game portal"
+        m = re.search(r"^(.*?\.(?:exe|bat|cmd))(?:\s+(.*))?$", bruto,
+                      re.IGNORECASE)
+        if m:
+            r["cmd"] = m.group(1).strip()
+            r["args"] = (m.group(2) or "").strip()
+        else:
+            partes = bruto.split(" ", 1)
+            r["cmd"] = partes[0]
+            r["args"] = partes[1].strip() if len(partes) > 1 else ""
     r["cmd_base"] = os.path.basename(r["cmd"]) if r["cmd"] else ""
     r["env"] = valor("ENV")
     r["lang"] = valor("LANG")
@@ -413,6 +436,54 @@ def buscar_exe(raiz):
     return lotes[0] if lotes else ""
 
 
+def resolver_elegido(raiz, elegido):
+    """Localiza el ejecutable que dice el perfil. Devuelve (estado, lista).
+
+    estado: "exacto" | "unico" | "varios" | "ninguno"
+
+    POR QUE HACE FALTA
+    ------------------
+    El perfil guarda EXE_OVERRIDE relativo a la raiz del montaje, y al lanzar
+    se probaba SOLO "<raiz>/<elegido>". Si el paquete se rehace y el juego
+    pasa a colgar de drive_c/ -que es lo normal cuando se le mete un prefijo
+    de Wine estilo Batocera- esa ruta deja de existir y el juego no arranca,
+    aunque el fichero siga ahi tres carpetas mas adentro. Caso real: un perfil
+    con "ys9.exe" y el juego en "drive_c/Games/Ys_IX_-_Monstrum_Nox/ys9.exe".
+
+    LA REGLA, Y POR QUE ES ESTRICTA
+    -------------------------------
+    Se busca por FINAL DE RUTA, no por nombre suelto: con "Game/x.exe" tiene
+    que casar ".../Game/x.exe" y no un "otro/x.exe" cualquiera.
+
+    Y si hay MAS DE UN candidato NO se elige: se devuelven todos. Arrancar el
+    que no era es peor que no arrancar -el usuario cree que juega a lo que
+    eligio y puede estar abriendo un configurador o un instalador-, asi que
+    ahi tiene que decidir una persona.
+    """
+    raiz = os.path.abspath(raiz)
+    rel = (elegido or "").replace("\\", "/").strip("/")
+    if not rel:
+        return "ninguno", []
+    if os.path.isfile(os.path.join(raiz, rel)):
+        return "exacto", [os.path.join(raiz, rel)]
+
+    sufijo = "/" + rel.lower()
+    encontrados = []
+    for actual, dirs, ficheros in os.walk(raiz):
+        dirs.sort()
+        for f in sorted(ficheros):
+            completa = os.path.join(actual, f)
+            comparable = "/" + os.path.relpath(completa, raiz).replace(os.sep, "/").lower()
+            if comparable.endswith(sufijo):
+                encontrados.append(completa)
+    encontrados.sort(key=lambda r: (_hondura(raiz, r), r.lower()))
+    if not encontrados:
+        return "ninguno", []
+    if len(encontrados) == 1:
+        return "unico", encontrados
+    return "varios", encontrados
+
+
 # ----------------------------------------------------------------------------
 # PROTONDB
 # ----------------------------------------------------------------------------
@@ -526,6 +597,33 @@ def comprobar():
         if not buscar_exe(d):
             fallos.append("un juego dentro de %r sigue sin verse" % carpeta)
 
+    def esperar(que, visto, esp):
+        if visto != esp:
+            fallos.append("%s: salio %r y se esperaba %r" % (que, visto, esp))
+
+    # resolver_elegido: el caso real de Ys IX y sus vecinos
+    d = os.path.join(raiz, "resolver")
+    _crear(d, "drive_c/Games/Ys_IX/ys9.exe", "drive_c/Games/Otro/otro.exe",
+           "launcher.exe")
+    esperar("resolver exacto", resolver_elegido(d, "launcher.exe")[0], "exacto")
+    e, l = resolver_elegido(d, "ys9.exe")
+    esperar("resolver unico", e, "unico")
+    if l and not l[0].endswith("drive_c/Games/Ys_IX/ys9.exe"):
+        fallos.append("resolver: encontro %r" % l)
+    esperar("resolver con carpeta",
+            resolver_elegido(d, "Games/Ys_IX/ys9.exe")[0], "unico")
+    esperar("resolver ausente", resolver_elegido(d, "nada.exe")[0], "ninguno")
+    esperar("resolver vacio", resolver_elegido(d, "")[0], "ninguno")
+    # DOS con el mismo nombre: NO se elige
+    d2 = os.path.join(raiz, "resolver_dos")
+    _crear(d2, "a/juego.exe", "b/juego.exe")
+    e, l = resolver_elegido(d2, "juego.exe")
+    esperar("resolver ambiguo", e, "varios")
+    if len(l) != 2:
+        fallos.append("resolver ambiguo: %d candidatos" % len(l))
+    # el sufijo no debe casar a medias: "o.exe" no es "juego.exe"
+    esperar("sufijo completo", resolver_elegido(d2, "o.exe")[0], "ninguno")
+
     # protondb: variables aparte de argumentos, y sin expandir comodines
     v, a = protondb_separar("PROTON_ENABLE_WAYLAND=1 %command% -vulkan")
     if v != "PROTON_ENABLE_WAYLAND=1" or a != "-vulkan":
@@ -539,6 +637,42 @@ def comprobar():
     v, a = protondb_separar('MANGOHUD=1 %command% -opt "a b"')
     if a != "-opt a b" or v != "MANGOHUD=1":
         fallos.append("protondb_separar y las comillas: %r / %r" % (v, a))
+
+    # EL EJECUTABLE LLEVA ESPACIOS Y EL AUTORUN NO LO ENTRECOMILLA
+    d = os.path.join(raiz, "espacios")
+    _crear(d, "Wild Blue Skies.exe", "UnityCrashHandler32.exe",
+           "UnityPlayer.dll")
+    with open(os.path.join(d, "autorun.cmd"), "wb") as fh:
+        fh.write(b"CMD=Wild Blue Skies.exe\r\n")
+    a = leer_autorun(os.path.join(d, "autorun.cmd"))
+    if a["cmd"] != "Wild Blue Skies.exe":
+        fallos.append("CMD con espacios se parte mal: %r / args %r"
+                      % (a["cmd"], a["args"]))
+    if a["args"]:
+        fallos.append("CMD con espacios inventa argumentos: %r" % a["args"])
+    visto = buscar_exe(d)
+    if os.path.basename(visto) != "Wild Blue Skies.exe":
+        fallos.append("con espacios en el nombre arranca %r" % os.path.basename(visto))
+    # y sin autorun, el filtro tiene que descartar el manejador de fallos
+    os.unlink(os.path.join(d, "autorun.cmd"))
+    visto = buscar_exe(d)
+    if os.path.basename(visto) != "Wild Blue Skies.exe":
+        fallos.append("sin autorun arranca %r en vez del juego"
+                      % os.path.basename(visto))
+    if not descartado("UnityCrashHandler32.exe"):
+        fallos.append("UnityCrashHandler32.exe no se filtra")
+    # el corte por extension no debe romper el caso normal
+    a2 = leer_autorun.__doc__ is not None
+    for bruto, esp_cmd, esp_args in (
+            ("hl2.exe -game portal -novid", "hl2.exe", "-game portal -novid"),
+            ("juego.bat", "juego.bat", ""),
+            ("sin_extension -x", "sin_extension", "-x")):
+        with open(os.path.join(d, "autorun.cmd"), "w", encoding="utf-8") as fh:
+            fh.write("CMD=%s\r\n" % bruto)
+        a = leer_autorun(os.path.join(d, "autorun.cmd"))
+        if (a["cmd"], a["args"]) != (esp_cmd, esp_args):
+            fallos.append("CMD=%r -> %r / %r" % (bruto, a["cmd"], a["args"]))
+    os.unlink(os.path.join(d, "autorun.cmd"))
 
     # autorun: argumentos y claves con espacios alrededor del =
     d = os.path.join(raiz, "args")
@@ -572,6 +706,7 @@ def main(argv):
             "uso: detectar.py <orden> [...]\n"
             "  exe        <raiz>              el ejecutable del juego\n"
             "  escanear   <raiz>              lista para elegir a mano\n"
+            "  resolver   <raiz> <elegido>    localiza el exe del perfil\n"
             "  filtrar                        filtro de tuberia (rutas por stdin)\n"
             "  autorun    <raiz>              claves del autorun.cmd\n"
             "  autorun-fichero <fichero>      idem, dando el fichero\n"
@@ -628,6 +763,21 @@ def main(argv):
             return 1
         sys.stdout.write(r)
         return 0
+    if orden == "resolver":
+        # rc 0 = resuelto (exacto o unico)   1 = no esta   2 = ambiguo
+        if len(argv) < 4:
+            sys.stderr.write("detectar.py resolver: faltan <raiz> <elegido>\n")
+            return 2
+        estado, lista = resolver_elegido(argv[2], argv[3])
+        if estado in ("exacto", "unico"):
+            sys.stdout.write(lista[0])
+            return 0
+        if estado == "varios":
+            for r in lista:
+                print(r)
+            return 2
+        return 1
+
     if orden == "escanear":
         for r in escanear(raiz):
             print(r)

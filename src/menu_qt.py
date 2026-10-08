@@ -1,3 +1,4 @@
+# WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
 #
@@ -556,8 +557,9 @@ AYUDAS_ES = [
      'Marca que te lo has pasado. Sale en la ficha del juego, para saber de un '
      'vistazo lo que te queda pendiente.'),
     ('Descargar carátulas',
-     'Baja de una vez las caratulas de todos los juegos que no la tengan, '
-     'desde SteamGridDB. Hace falta una clave gratuita.'),
+     'Baja de una vez las caratulas que falten. Las 4:3 salen de la carpeta '
+     'covers_43 del repositorio de WProton y no piden nada; las verticales y '
+     'las panoramicas vienen de SteamGridDB y necesitan su clave gratuita.'),
     ('Clave de RAWG',
      'Opcional y gratuita. Rellena las notas que Steam no trae y las fichas '
      'de los juegos que no estan en Steam. Sin ella todo funciona igual.'),
@@ -743,6 +745,10 @@ AYUDAS_ES = [
      'Deja el juego como recien anadido. Se pierden sus ajustes, no el juego.'),
     ('Carátula: buscar en SteamGridDB',
      'Busca la caratula de ESTE juego por nombre, sin bajar las de todos.'),
+    ('Carátula 4:3: descargarla',
+     'Trae la 4:3 de ESTE juego de la carpeta covers_43 del repositorio de '
+     'WProton. No hace falta clave ninguna. Normalmente ya se baja sola la '
+     'primera vez que cargas el juego; esto es por si la han subido despues.'),
     ('Carátula: elegir una imagen',
      'Pon una imagen tuya como caratula: un png o jpg de tu disco.'),
     ('Ficha del juego',
@@ -1061,8 +1067,8 @@ AYUDAS_ES = [
     ('Tamaño de la letra:',
      'Lo grande que se ve todo. En portatil conviene grande.'),
     ('Tema de los menus:',
-     'El aspecto: clasico, moderno, arcade o cristal (este ultimo solo se ve '
-     'con el motor Qt).'),
+     'El aspecto: clasico, moderno, arcade o cristal. Cristal se ve en los dos '
+     'motores; con Qt trae ademas el brillo giratorio y el texto con halo.'),
     ('Motor de los menus:',
      'Con que se dibujan los menus: pygame (ligero, 12 MB) o Qt (se ve mejor, '
      'ocupa 200-300 MB). Los dos conviven; auto usa Qt si esta instalado.'),
@@ -1616,6 +1622,29 @@ class TareaImagen(QtCore.QRunnable):
 # QSS costaria mas que pintarlo. Los widgets de Qt entran donde aportan:
 # el editor de texto y las barras de progreso.
 # ---------------------------------------------------------------------------
+def corte_etiqueta(label):
+    """El primer ':' que de verdad separa etiqueta y valor; -1 si no hay.
+
+    Unos dos puntos ENTRE NUMEROS son una proporcion ("4:3", "16:9") o una
+    hora, no un separador. Sin esto, la fila
+
+        "Caratula 4:3: descargarla del repositorio de WProton"
+
+    se pintaba como etiqueta "Caratula 4" y valor "3: descargarla del
+    repositorio...", que es tal cual como salio en una captura del manual.
+    """
+    n = len(label)
+    for i, c in enumerate(label):
+        if c != ':':
+            continue
+        antes = label[i - 1] if i else ''
+        despues = label[i + 1] if i + 1 < n else ''
+        if antes.isdigit() and despues.isdigit():
+            continue
+        return i
+    return -1
+
+
 class Pantalla(QtWidgets.QWidget):
 
     termina = Signal(int)      # codigo de salida de la peticion en curso
@@ -2047,7 +2076,10 @@ class Pantalla(QtWidgets.QWidget):
         # "MangoHud: ON" -> ON en verde, OFF apagado.
         if not TH.get('labelcolor') or ':' not in label:
             return [(label, base)]
-        k, _, v = label.partition(':')
+        _i = corte_etiqueta(label)
+        if _i < 0:
+            return [(label, base)]
+        k, v = label[:_i], label[_i + 1:]
         # "arcade - synthwave: ..." no es etiqueta+valor, es una descripcion
         if ' - ' in k or len(k) > 36:
             return [(label, base)]
@@ -3110,10 +3142,58 @@ class Pantalla(QtWidgets.QWidget):
         self.saltar(paso)
 
     def saltar(self, paso):
+        """Salta una pagina dejando el puntero EN LA MISMA FILA.
+
+        Antes esto solo movia pet.sel y dejaba que el pintado recolocara el
+        desplazamiento. Ese ajuste solo garantiza que la seleccion se VEA, asi
+        que al bajar de pagina la dejaba pegada al borde de abajo: pasabas
+        pagina y el puntero se quedaba en la ultima fila, una y otra vez.
+
+        El motor pygame ya tenia esto resuelto -mismo problema, mismo arreglo-
+        y aqui se hace igual: se mueven la seleccion Y el desplazamiento
+        juntos, de forma que si estabas en la tercera fila sigues en la tercera
+        fila de la pagina siguiente.
+
+        En los extremos no se da la vuelta: se llega al principio o al final y
+        el puntero se queda donde pueda, que es lo que uno espera al pasar
+        paginas.
+        """
         pet = self.pet
         if not pet.view:
             return
-        pet.sel = max(0, min(len(pet.view) - 1, pet.sel + paso))
+        n = len(pet.view)
+
+        # EN REJILLA EL DESPLAZAMIENTO CUENTA FILAS, NO ELEMENTOS.
+        #
+        # pintar_rejilla usa pet.scroll como numero de FILA y pintar_lista lo
+        # usa como indice de ELEMENTO. Mezclarlos manda la rejilla a un sitio
+        # que no existe, asi que cada modo se ajusta con su unidad.
+        if pet.modo == 'grid':
+            cols = max(1, self.columnas())
+            filas_vis = max(1, self.filas_rejilla())
+            fila_en_pantalla = (pet.sel // cols) - pet.scroll
+            nuevo = max(0, min(n - 1, pet.sel + paso * cols))
+            pet.sel = nuevo if nuevo != pet.sel else (0 if paso < 0 else n - 1)
+            filas_tot = (n + cols - 1) // cols
+            pet.scroll = max(0, min(max(0, filas_tot - filas_vis),
+                                    (pet.sel // cols) - fila_en_pantalla))
+            self.update()
+            return
+
+        v = max(1, self.vis())
+        fila = pet.sel - pet.scroll          # en que fila de la pantalla estoy
+        nuevo = max(0, min(n - 1, pet.sel + paso))
+        if nuevo == pet.sel:                 # ya estabamos en el extremo
+            pet.sel = 0 if paso < 0 else n - 1
+        else:
+            pet.sel = nuevo
+        # El desplazamiento se recoloca para dejar el puntero en la MISMA fila,
+        # y despues se ajusta a los limites de la lista.
+        pet.scroll = max(0, min(max(0, n - v), pet.sel - fila))
+        if pet.sel < pet.scroll:
+            pet.scroll = pet.sel
+        elif pet.sel >= pet.scroll + v:
+            pet.scroll = pet.sel - v + 1
         self.update()
 
     def aceptar(self):

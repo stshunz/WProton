@@ -4,13 +4,17 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 1.75** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 2.0** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
-![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/ficha.jpg)
+![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/biblioteca-ficha.jpg)
 
 Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/PortWINE**, la descarga automática de runners de **Heroic**, los perfiles por juego de **TeknoParrot** y el lanzamiento vía **umu** de **Faugus Launcher**.
 
-📖 **[Manual de uso](MANUAL.md)** — cómo empezar, paso a paso.
+🚀 **[Guía de uso](GUIA.md)** — lo justo para empezar, en diez minutos. También en [PDF](https://github.com/stshunz/WProton/releases/latest).
+
+📖 **[Manual de uso](MANUAL.md)** — todo, apartado por apartado.
+
+📝 **[Novedades de la 2.0](NOVEDADES-2.0.md)** — qué trae esta versión.
 
 ---
 
@@ -34,11 +38,11 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **La biblioteca se abre al instante**, aunque tengas cientos de juegos: la lista se compone de una sola vez en vez de consultar cada juego por separado (con 141 juegos, de 1,5 s a 0,02 s). Si algo falla, se rehace por la vía de siempre sin que te enteres.
 - **Vista de lista** (con carátula y datos del juego en el panel lateral) **o rejilla de carátulas**:
 
-![Vista de rejilla de WProton](img/rejilla.jpg)
+![Vista de rejilla de WProton](img/biblioteca-rejilla.jpg)
 
 Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 
-![Vista de carátulas panorámicas, cuatro por fila](img/anchas.jpg)
+![Vista de carátulas panorámicas, cuatro por fila](img/biblioteca-anchas.jpg)
 , con descarga automática desde SteamGridDB o eligiendo una imagen del sistema.
 - Pantalla completa por defecto (**Select + A** para pasar a ventana) y tamaño de letra ajustable.
 - Interfaz en **castellano e inglés**, ampliable con ficheros de idioma.
@@ -176,6 +180,9 @@ cache/  logs/  games/
 - **Compartir perfiles de la comunidad**: la descarga funciona; el envío está desactivado mientras se decide un método cómodo para quien no usa Git.
 
 ## Créditos
+
+**Muchas gracias a Michel, Fransis y MRDeu** por todas las horas de testeo que
+habéis metido a WProton. Sin vosotros este proyecto no habría sido posible.
 
 - [PortProton / PortWINE](https://github.com/Castro-Fidel/PortWINE) — filosofía de menús y el arreglo del mando vía winebus.
 - [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher) y protonfixes.

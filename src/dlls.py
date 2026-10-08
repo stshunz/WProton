@@ -1,3 +1,4 @@
+# WPROTON_HELPER dlls.py 0c94af1afac2
 # -*- coding: utf-8 -*-
 # WProton - overrides de DLL de Wine (WINEDLLOVERRIDES)
 #

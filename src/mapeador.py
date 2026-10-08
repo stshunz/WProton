@@ -1159,11 +1159,21 @@ def main():
             #
             # Asi que la vigila el propio mapeador, que si tiene los eventos.
             _hot = ids.get("hotkey", ids.get("select"))
-            _tiene_salida = any(_hot in c["req"] for c in map_combos) if _hot else False
-            if not _tiene_salida:
-                print("[keys] Este .keys no trae combinacion de salida: se"
-                      " vigila 'mantener Select %g s' desde aqui"
-                      % _salida_seg, flush=True)
+            # MANTENER SELECT SIEMPRE CIERRA EL JUEGO. SIN EXCEPCIONES.
+            #
+            # EL FALLO QUE ESTO ARREGLA
+            #
+            # Antes esto se desactivaba si el .keys traia "alguna combinacion
+            # que usara Select". Y esa comprobacion no distingue nada: un
+            # "Select + X abre el teclado en pantalla" la cumple igual, y
+            # entonces el usuario se quedaba sin forma de salir del juego.
+            # Mantener Select cinco segundos no hacia nada y habia que ir a
+            # Alt+F4, que en el modo Juego de la Deck no esta a mano.
+            #
+            # No hay conflicto real con las combinaciones: una combinacion se
+            # pulsa y se suelta en un instante; esto exige CINCO SEGUNDOS
+            # sostenidos. Quien no quiera esta salida tiene PAD_EXIT=0.
+            _tiene_salida = False
             _salida_marca = os.environ.get('WP_SALIR_MARCA', '')
             # El MISMO tiempo que el guardian, no uno inventado.
             #
@@ -1175,6 +1185,9 @@ def main():
             except ValueError:
                 _salida_seg = 5.0
             _salida_seg = max(1.0, min(30.0, _salida_seg))
+            print("[keys] Mantener Select %g s cierra el juego (lo vigila el"
+                  " mapeador, que es quien tiene el mando capturado)"
+                  % _salida_seg, flush=True)
         else:
             print("[keys] AVISO: no se pudo capturar ningun mando. Si el juego"
                   " soporta mando, puede que ignore las teclas.", flush=True)

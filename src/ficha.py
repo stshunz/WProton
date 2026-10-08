@@ -1,3 +1,4 @@
+# WPROTON_HELPER ficha.py 4853cd33ebeb
 # -*- coding: utf-8 -*-
 # WProton - fichas de juego (Steam, HowLongToBeat) e identificadores
 #

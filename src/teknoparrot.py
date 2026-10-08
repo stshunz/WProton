@@ -1,3 +1,4 @@
+# WPROTON_HELPER teknoparrot.py 4b4405a3751b
 # -*- coding: utf-8 -*-
 # WProton - perfiles XML de TeknoParrot
 #

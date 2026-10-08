@@ -1,3 +1,4 @@
+# WPROTON_HELPER biblioteca.py a556af1f7ab0
 # -*- coding: utf-8 -*-
 # WProton - composicion rapida de la biblioteca
 #
