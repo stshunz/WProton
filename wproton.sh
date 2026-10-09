@@ -425,6 +425,7 @@ write_lang_en() {
  "(automático: último GE-Proton instalado)": "(automatic: latest installed GE-Proton)",
  "(juego suelto: elegir carpeta o exe...)": "(loose game: choose folder or exe...)",
  "(vacio)": "(empty)",
+ "-- sin asignar --": "-- unassigned --",
  ".. (subir)": ".. (up)",
  "1280x720": "1280x720",
  "1280x800 (Steam Deck)": "1280x800 (Steam Deck)",
@@ -473,6 +474,7 @@ write_lang_en() {
  "Borrar runner": "Delete runner",
  "Borrar saves del overlay (upper/)": "Delete overlay saves (upper/)",
  "Borrar un runner": "Delete a runner",
+ "Botones del ratón": "Mouse buttons",
  "Buscar actualizaciones": "Check for updates",
  "Buscar en la base de umu (identificador automático)": "Look up in the umu database (automatic ID)",
  "Buscar prefijos y saves huerfanos": "Find orphaned prefixes and saves",
@@ -488,6 +490,9 @@ write_lang_en() {
  "Carátulas por fila": "Covers per row",
  "Carátulas y perfiles de la comunidad": "Covers and community profiles",
  "Cerrando Steam...": "Closing Steam...",
+ "Clic central (rueda)": "Middle click (wheel)",
+ "Clic derecho": "Right click",
+ "Clic izquierdo": "Left click",
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
@@ -653,6 +658,7 @@ write_lang_en() {
  "Tema de los menus": "Menu theme",
  "Tiempo": "Time",
  "Todas (las tres formas)": "All three shapes",
+ "Traer todas las carátulas del repositorio": "Fetch every cover from the repository",
  "UMU-Proton [proton] - Open Wine Components, el de umu": "UMU-Proton [proton] - Open Wine Components, umu's own",
  "Usar la carpeta games/ de WProton": "Use WProton's games/ folder",
  "Variables extra": "Extra variables",
@@ -1688,8 +1694,6 @@ SAEOF
 # El modulo steaminput.py se quito tambien. Esta en el historial de git.
 
 
-
-
 # TODA LA MAQUINARIA DE "APAGAR STEAM INPUT EN STEAM" SE QUITO.
 #
 # Editaba el localconfig.vdf de Steam para apagar Steam Input en el atajo de
@@ -2451,9 +2455,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 7bd01b6abda1" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 1c601469eaf8" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 7bd01b6abda1
+# WPROTON_HELPER mapeador.py 1c601469eaf8
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -3445,15 +3449,46 @@ def main():
     _meje = _mouse_eje or _mcfg.get("axis", "joystick2")
     _mabs_x,_mabs_y=_MAXIS.get(_meje,(ecodes.ABS_RX,ecodes.ABS_RY))
     _mouse_activo = bool(_mouse_eje) or bool(_mcfg)
-    _mclick=ids.get(_mcfg.get("click_left","r2")) if _mcfg else None
     _mspeed=float(_mcfg.get("speed",900))
     # Mapa de triggers analógicos: en Xbox 360/One el R2 es ABS_RZ, no un botón digital
     _TRIG_ABS = {
         ids.get("r2"): (ecodes.ABS_RZ, ecodes.ABS_GAS),
         ids.get("l2"): (ecodes.ABS_Z,  ecodes.ABS_BRAKE),
     }
-    _mclick_abs = _TRIG_ABS.get(_mclick, ()) if _mclick else ()
-    _mclick_pressed = False  # Estado previo del trigger analógico
+
+    # LOS TRES BOTONES DEL RATON, NO SOLO EL IZQUIERDO.
+    #
+    # Antes solo se leia "click_left". Un tester lo conto con un juego en el
+    # que recargar es el boton derecho: podia mover el puntero con el stick y
+    # disparar con el izquierdo, pero no habia forma de recargar.
+    #
+    # Los tres van por la misma tabla para que el derecho y el central hereden
+    # sin copiar nada el manejo del gatillo analogico, que es lo que de verdad
+    # tiene miga: en casi todos los mandos R2 y L2 no mandan una pulsacion sino
+    # un eje, y hay que traducirlo con un umbral.
+    _RATON_NOMBRE = {ecodes.BTN_LEFT: "clic izquierdo",
+                     ecodes.BTN_RIGHT: "clic derecho",
+                     ecodes.BTN_MIDDLE: "clic central"}
+    _MCLICK_CAMPOS = (("click_left",   ecodes.BTN_LEFT,   "r2"),
+                      ("click_right",  ecodes.BTN_RIGHT,  None),
+                      ("click_middle", ecodes.BTN_MIDDLE, None))
+    _mclicks = {}        # codigo del boton del mando -> boton del raton
+    _mclicks_abs = {}    # codigo del eje del gatillo -> (boton del raton, estado)
+    if _mcfg:
+        for _campo, _btn, _porDefecto in _MCLICK_CAMPOS:
+            _val = _mcfg.get(_campo, _porDefecto)
+            if not _val:
+                continue
+            _cod = ids.get(_val)
+            if _cod is None:
+                continue
+            _ejes = _TRIG_ABS.get(_cod, ())
+            if _ejes:
+                for _e in _ejes:
+                    _mclicks_abs[_e] = _btn
+            else:
+                _mclicks[_cod] = _btn
+    _mclick_pressed = {}   # estado previo de cada gatillo analogico
 
     # Gatillos L2/R2 como EJE, no como boton.
     #
@@ -3743,10 +3778,17 @@ def main():
                                                   ecodes.BTN_MIDDLE]},
                                   name="Mapeador_Mouse_Portable")
             if _mouse_activo:
+                # El registro dice QUE BOTON HACE QUE CLIC, los tres.
+                # Con solo "hace clic" no habia forma de saber, leyendo el log
+                # de un tester, si el derecho estaba puesto o no.
+                _detalle = []
+                for _campo, _btn, _porDefecto in _MCLICK_CAMPOS:
+                    _v = _mcfg.get(_campo, _porDefecto)
+                    if _v:
+                        _detalle.append("%s = %s" % (_v, _RATON_NOMBRE.get(_btn, _btn)))
                 print("[keys] Raton virtual: %s mueve el puntero%s"
-                      % (_meje,
-                         (" | %s hace clic" % _mcfg.get('click_left', 'r2'))
-                         if _mclick else ""), flush=True)
+                      % (_meje, (" | " + ", ".join(_detalle)) if _detalle else ""),
+                      flush=True)
             else:
                 print("[keys] Raton virtual creado solo para los clics "
                       "(el puntero no se mueve)", flush=True)
@@ -3982,8 +4024,9 @@ def main():
                                 pendiente.discard(event.code)
 
                             # Click digital (PS4, bumpers, botones)
-                            if ui_mouse and _mclick and not _mclick_abs and event.code == _mclick:
-                                ui_mouse.write(ecodes.EV_KEY,ecodes.BTN_LEFT,event.value)
+                            if ui_mouse and event.code in _mclicks:
+                                ui_mouse.write(ecodes.EV_KEY, _mclicks[event.code],
+                                               event.value)
                                 ui_mouse.syn()
                             ui.syn()
 
@@ -3992,11 +4035,12 @@ def main():
                             if event.code == _mabs_x: _msx = event.value
                             elif event.code == _mabs_y: _msy = event.value
                             # Click analógico: R2/L2 Xbox 360 mandan ABS_RZ/ABS_Z
-                            elif ui_mouse and _mclick_abs and event.code in _mclick_abs:
+                            elif ui_mouse and event.code in _mclicks_abs:
+                                _btn = _mclicks_abs[event.code]
                                 _now_pressed = event.value > 64  # umbral: trigger > 25% de recorrido
-                                if _now_pressed != _mclick_pressed:
-                                    _mclick_pressed = _now_pressed
-                                    ui_mouse.write(ecodes.EV_KEY, ecodes.BTN_LEFT,
+                                if _now_pressed != _mclick_pressed.get(_btn, False):
+                                    _mclick_pressed[_btn] = _now_pressed
+                                    ui_mouse.write(ecodes.EV_KEY, _btn,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
                             # Los gatillos YA NO tienen camino propio: van
@@ -4160,10 +4204,19 @@ MAPEOF
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py b78ea77f2f14" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py f0b3f306ac79" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py b78ea77f2f14
+# WPROTON_HELPER mando_virtual.py f0b3f306ac79
 # -*- coding: utf-8 -*-
+# WProton - mando virtual (presenta al juego un mando distinto del tuyo)
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 """Mando virtual: presenta al juego un mando distinto del que tienes.
 
 QUE PROBLEMA RESUELVE
@@ -5321,9 +5374,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 99571a897ea1" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py ed583e22f855" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 99571a897ea1
+# WPROTON_HELPER menu_pygame.py ed583e22f855
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -7264,8 +7317,20 @@ AYUDAS_ES = [
      'Que forma de caratula se enseña en el panel de la derecha.'),
     ('Carátulas por fila:',
      'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
-    ('Clic con:',
-     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Traer todas las carátulas del repositorio',
+     'Baja de golpe TODAS las 4:3 de covers_43, no solo las de tus juegos: '
+     'cuando añadas uno nuevo su carátula ya estara puesta. Dice cuantas son '
+     'y cuanto ocupan antes de empezar, y no pide clave ninguna.'),
+    ('Clic izquierdo con:',
+     'Que boton del mando hace el clic izquierdo mientras el stick mueve el raton.'),
+    ('Clic derecho con:',
+     'Que boton hace el clic derecho. Hace falta en los juegos que lo usan para '
+     'apuntar o recargar. Se puede dejar sin asignar.'),
+    ('Clic central con:',
+     'Que boton hace el clic de la rueda. Se puede dejar sin asignar.'),
+    ('Botones del ratón',
+     'Cuelga un clic del raton a este boton del mando. Sirve aunque el stick no '
+     'mueva el puntero: WProton crea el raton virtual el solo.'),
     ('Mover con:',
      'Que stick mueve el puntero del raton.'),
     ('Velocidad:',
@@ -10099,10 +10164,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py 733d91c98417" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py cef2f095becb" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py 733d91c98417
+# WPROTON_HELPER menu_qt.py cef2f095becb
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -11135,8 +11200,20 @@ AYUDAS_ES = [
      'Que forma de caratula se enseña en el panel de la derecha.'),
     ('Carátulas por fila:',
      'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
-    ('Clic con:',
-     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Traer todas las carátulas del repositorio',
+     'Baja de golpe TODAS las 4:3 de covers_43, no solo las de tus juegos: '
+     'cuando añadas uno nuevo su carátula ya estara puesta. Dice cuantas son '
+     'y cuanto ocupan antes de empezar, y no pide clave ninguna.'),
+    ('Clic izquierdo con:',
+     'Que boton del mando hace el clic izquierdo mientras el stick mueve el raton.'),
+    ('Clic derecho con:',
+     'Que boton hace el clic derecho. Hace falta en los juegos que lo usan para '
+     'apuntar o recargar. Se puede dejar sin asignar.'),
+    ('Clic central con:',
+     'Que boton hace el clic de la rueda. Se puede dejar sin asignar.'),
+    ('Botones del ratón',
+     'Cuelga un clic del raton a este boton del mando. Sirve aunque el stick no '
+     'mueva el puntero: WProton crea el raton virtual el solo.'),
     ('Mover con:',
      'Que stick mueve el puntero del raton.'),
     ('Velocidad:',
@@ -30932,10 +31009,10 @@ run_exe_in_game() {
 TECLAS_PY="$RUNTIME_DIR/teclas.py"
 
 write_teclas() {
-    grep -q "WPROTON_HELPER teclas.py 5bcd989a68a5" "$TECLAS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teclas.py 1ae9a083c241" "$TECLAS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TECLAS_PY" <<'TECEOF'
-# WPROTON_HELPER teclas.py 5bcd989a68a5
+# WPROTON_HELPER teclas.py 1ae9a083c241
 # -*- coding: utf-8 -*-
 # WProton - formato de los ficheros .keys (mapeo de mando a teclado)
 #
@@ -31459,8 +31536,18 @@ def resumen(ruta):
         eje = raton.get("axis", "joystick2")
         filas.append("%-26s ->  %s" % (ejes.get(eje, eje),
                      "mover el raton (velocidad %s)" % raton.get("speed", 900)))
-        filas.append("%-26s ->  %s" % (nombre_boton(raton.get("click_left", "r2")),
-                                       "clic del raton"))
+        # LOS TRES CLICS, NO SOLO EL IZQUIERDO.
+        #
+        # El resumen decia "clic del raton" a secas y se callaba el derecho y
+        # el central, asi que quien los pusiera no podia comprobar desde el
+        # menu que estuvieran de verdad.
+        for _campo, _comoSeLlama, _pordefecto in (
+                ("click_left",   "clic izquierdo", "r2"),
+                ("click_right",  "clic derecho",   None),
+                ("click_middle", "clic central",   None)):
+            _b = raton.get(_campo, _pordefecto)
+            if _b:
+                filas.append("%-26s ->  %s" % (nombre_boton(_b), _comoSeLlama))
 
     # LAS ACCIONES INCOMPLETAS SE ENSEÑAN, no se saltan en silencio.
     #
@@ -34174,8 +34261,6 @@ Empaquetar '$name' a wsquashfs ahora?
 }
 
 
-
-
 INNOEXTRACT_BIN=""
 find_innoextract() {
     INNOEXTRACT_BIN=""
@@ -35813,8 +35898,6 @@ glibc_mayor() {
 }
 
 
-
-
 ARCH_ARCHIVO="https://archive.archlinux.org/packages"
 
 lib_traer_de_arch() {
@@ -36970,6 +37053,7 @@ keys_tecla_elegir() {
         "Enter" "Espacio" "Escape" "Tabulador" "Retroceso" \
         "Shift" "Control" "Alt" \
         "Teclas F (F1 a F12)" \
+        "Botones del ratón" \
         "-- quitar esta asignación --" \
         "<< Volver")" || return 1
     case "$sel" in
@@ -36990,6 +37074,28 @@ keys_tecla_elegir() {
         "Teclas F"*)
             sel="$(menu "¿Qué tecla F?" F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 "<< Volver")" || return 1
             case "$sel" in F*) printf 'KEY_%s' "$sel" ;; *) return 1 ;; esac ;;
+        "Botones del ratón")
+            # UN BOTON DEL MANDO PUEDE SER UN CLIC, SIN TOCAR EL STICK.
+            #
+            # El mapeador ya sabia mandar BTN_LEFT/RIGHT/MIDDLE desde hace
+            # tiempo -y crea el raton virtual el solo al verlos-, pero no habia
+            # por donde elegirlos: habia que escribir el .keys a mano. Lo pidio
+            # un tester que necesitaba el clic derecho para recargar.
+            #
+            # Esto es INDEPENDIENTE del submenu "Raton": alli se dice que
+            # boton hace clic MIENTRAS el stick mueve el puntero; aqui se le
+            # cuelga un clic a un boton suelto, mueva o no el puntero nadie.
+            sel="$(menu "¿Qué botón del ratón pulsa \"$1\"?" \
+                "Clic izquierdo" \
+                "Clic derecho" \
+                "Clic central (rueda)" \
+                "<< Volver")" || return 1
+            case "$sel" in
+                "Clic izquierdo") printf 'BTN_LEFT' ;;
+                "Clic derecho")   printf 'BTN_RIGHT' ;;
+                "Clic central"*)  printf 'BTN_MIDDLE' ;;
+                *) return 1 ;;
+            esac ;;
         Enter)      printf 'KEY_ENTER' ;;
         Espacio)    printf 'KEY_SPACE' ;;
         Escape)     printf 'KEY_ESC' ;;
@@ -37318,9 +37424,50 @@ keys_raton_fila() {
     fi
     eje="$(keys_raton_leer "$1" axis)"
     click="$(keys_raton_leer "$1" click_left)"
-    printf 'Raton: si  (%s mueve, %s hace clic)' \
+    local der cen extra=""
+    der="$(keys_raton_leer "$1" click_right)"
+    cen="$(keys_raton_leer "$1" click_middle)"
+    [ -n "$der" ] && extra="$extra, $(keys_boton_nombre "$der") el derecho"
+    [ -n "$cen" ] && extra="$extra, $(keys_boton_nombre "$cen") el central"
+    printf 'Raton: si  (%s mueve, %s hace clic%s)' \
         "$(keys_boton_nombre "${eje:-joystick2}")" \
-        "$(keys_boton_nombre "${click:-r2}")"
+        "$(keys_boton_nombre "${click:-r2}")" "$extra"
+}
+
+keys_raton_boton_elegir() {
+    # Que boton del mando hace un clic. $1 = titulo, $2 = 1 si se puede quitar.
+    # Imprime el nombre del boton, "__QUITAR__", o nada si se cancela.
+    #
+    # R3 VA PRIMERO Y RECOMENDADO.
+    #
+    # Lo pidieron los testers, y con motivo: los gatillos son lo que mas se usa
+    # EN el juego -disparar, acelerar, frenar- asi que poner ahi el clic choca
+    # justo en los juegos donde mas falta hace el raton. R3 es pulsar el stick
+    # derecho, o sea el mismo dedo que ya esta moviendo el puntero: se hace sin
+    # soltar, y casi ningun juego lo usa para nada.
+    local titulo="$1" sepuede="${2:-0}" sel opts=()
+    opts=("r3 - pulsar el stick derecho   (recomendado)" \
+          "l3 - pulsar el stick izquierdo" \
+          "r2 - gatillo derecho" \
+          "l2 - gatillo izquierdo" \
+          "pagedown - R1" \
+          "pageup - L1" \
+          "a - boton de abajo" \
+          "b - boton de la derecha" \
+          "x - boton de arriba" \
+          "y - boton de la izquierda")
+    [ "$sepuede" = 1 ] && opts+=("-- sin asignar --")
+    opts+=("<< Volver")
+    sel="$(menu "$titulo
+
+R3 es pulsar el stick derecho: el mismo dedo que mueve el
+puntero. Los gatillos suelen estar ocupados por el juego." "${opts[@]}")" || return 1
+    case "$sel" in
+        "<< Volver"|"") return 1 ;;
+        "-- sin asignar"*) printf '__QUITAR__' ; return 0 ;;
+    esac
+    printf '%s' "${sel%% *}"
+    return 0
 }
 
 keys_boton_nombre() {
@@ -37368,9 +37515,14 @@ keys_raton_editar() {
             eje="$(keys_raton_leer "$f" axis)";      eje="${eje:-joystick2}"
             click="$(keys_raton_leer "$f" click_left)"; click="${click:-r2}"
             vel="$(keys_raton_leer "$f" speed)";     vel="${vel:-900}"
+            local der cen
+            der="$(keys_raton_leer "$f" click_right)"
+            cen="$(keys_raton_leer "$f" click_middle)"
             sel="$(menu "Raton con el mando" \
                 "Mover con: $(keys_boton_nombre "$eje")" \
-                "Clic con: $(keys_boton_nombre "$click")" \
+                "Clic izquierdo con: $(keys_boton_nombre "$click")" \
+                "Clic derecho con: $([ -n "$der" ] && keys_boton_nombre "$der" || printf 'sin asignar')" \
+                "Clic central con: $([ -n "$cen" ] && keys_boton_nombre "$cen" || printf 'sin asignar')" \
                 "Velocidad: $vel" \
                 "Apagar el raton" \
                 "<< Volver")" || return 0
@@ -37388,37 +37540,31 @@ keys_raton_editar() {
             "Mover con:"*)
                 if [ "$eje" = "joystick2" ]; then eje=joystick1; else eje=joystick2; fi
                 keys_raton_poner "$f" axis "$eje" ;;
-            "Clic con:"*)
-                # Los que tienen sentido: los que no suelen hacer falta en el
-                # juego y caen bien con el pulgar en el stick.
+            "Clic izquierdo con:"*)
                 local nuevo
-                # R3 VA PRIMERO Y RECOMENDADO.
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC IZQUIERDO" 0)" || continue
+                [ -n "$nuevo" ] && keys_raton_poner "$f" click_left "$nuevo" ;;
+            "Clic derecho con:"*)
+                # EL DERECHO, QUE FALTABA.
                 #
-                # Lo pidieron los testers, y con motivo: los gatillos son lo que
-                # mas se usa EN el juego -disparar, acelerar, frenar- asi que
-                # poner ahi el clic choca justo en los juegos donde mas falta
-                # hace el raton. R3 es pulsar el stick derecho, o sea el mismo
-                # dedo que ya esta moviendo el puntero: se hace sin soltar, y
-                # casi ningun juego lo usa para nada.
-                #
-                # Se deja r2 en la lista, que era el de antes: quien lo tenga
-                # puesto y le vaya bien no tiene por que cambiarlo.
-                nuevo="$(menu "Que boton hace clic
-
-R3 es pulsar el stick derecho: el mismo dedo que mueve el
-puntero. Los gatillos suelen estar ocupados por el juego." \
-                    "r3 - pulsar el stick derecho   (recomendado)" \
-                    "l3 - pulsar el stick izquierdo" \
-                    "r2 - gatillo derecho" \
-                    "l2 - gatillo izquierdo" \
-                    "pagedown - R1" \
-                    "pageup - L1" \
-                    "a - boton de abajo" \
-                    "<< Volver")" || continue
+                # Lo pidio un tester con un juego donde recargar es el boton
+                # derecho del raton: podia mover el puntero y disparar, pero no
+                # recargar. Se puede dejar sin asignar, que es como estaba.
+                local nuevo
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC DERECHO" 1)" || continue
                 case "$nuevo" in
-                    "<< Volver"|"") continue ;;
-                esac
-                keys_raton_poner "$f" click_left "${nuevo%% *}" ;;
+                    "") continue ;;
+                    __QUITAR__) keys_raton_poner "$f" click_right "" ;;
+                    *)          keys_raton_poner "$f" click_right "$nuevo" ;;
+                esac ;;
+            "Clic central con:"*)
+                local nuevo
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC CENTRAL" 1)" || continue
+                case "$nuevo" in
+                    "") continue ;;
+                    __QUITAR__) keys_raton_poner "$f" click_middle "" ;;
+                    *)          keys_raton_poner "$f" click_middle "$nuevo" ;;
+                esac ;;
             "Velocidad:"*)
                 local v
                 v="$(menu "Velocidad del puntero (ahora $vel)" \
@@ -38702,12 +38848,21 @@ BACKUP_SYNC_DEST=""      # destino rsync (se guarda en settings)
 SINCRO_PY="$RUNTIME_DIR/sincro.py"
 
 write_sincro() {
-    grep -q "WPROTON_HELPER sincro.py 7cf8bec7ca9d" "$SINCRO_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER sincro.py 30a326ee5d4c" "$SINCRO_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$SINCRO_PY" <<'SNCEOF'
-# WPROTON_HELPER sincro.py 7cf8bec7ca9d
+# WPROTON_HELPER sincro.py 30a326ee5d4c
 # -*- coding: utf-8 -*-
 # WPROTON_HELPER sincro.py PENDIENTE
+# WProton - copias de partidas entre equipos de la misma red
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 """Compartir copias de partidas entre equipos de la misma red.
 
 QUE HACE Y QUE NO HACE
@@ -41118,6 +41273,15 @@ COVERS43_INDEX="$RUNTIME_DIR/.covers43_index"
 covers43_list() {
     # Ficheros de imagen de la carpeta covers_43/ del repositorio.
     #
+    # Sale una linea por carátula: "nombre<TAB>bytes". El tamaño lo da la
+    # propia API y sirve para poder decirle al usuario cuanto va a descargar
+    # ANTES de empezar, que con una coleccion que crece es la diferencia entre
+    # una descarga tranquila y una sorpresa con datos moviles.
+    #
+    # Se parte el JSON por objetos ("{") en vez de buscar los campos sueltos:
+    # asi "name" y "size" se leen del MISMO fichero pase lo que pase con el
+    # orden en que GitHub los devuelva.
+    #
     # --max-time: esto se consulta al arrancar un juego. Si GitHub se queda
     # colgado, el juego NO se espera: se tira sin carátula y ya.
     #
@@ -41125,9 +41289,20 @@ covers43_list() {
     # momento sobra; si algun dia se pasa, habra que ir por la API de arboles.
     curl -fsSL --max-time 12 \
         "https://api.github.com/repos/$WPROTON_REPO/contents/covers_43" 2>/dev/null \
-        | grep -oE '"name": *"[^"]*\.(png|jpg|jpeg|webp|PNG|JPG|JPEG|WEBP)"' \
-        | cut -d'"' -f4 | sort
+        | tr -d '\n' | tr '{' '\n' \
+        | awk -F'"' '
+            {
+                nom = ""; tam = 0
+                for (i = 1; i < NF; i++) if ($i == "name") { nom = $(i+2); break }
+                if (nom == "") next
+                if (match($0, /"size"[ \t]*:[ \t]*[0-9]+/)) {
+                    t = substr($0, RSTART, RLENGTH); sub(/[^0-9]+/, "", t); tam = t
+                }
+                if (tolower(nom) ~ /\.(png|jpg|jpeg|webp)$/) printf "%s\t%s\n", nom, tam
+            }' \
+        | sort
 }
+
 
 covers43_index_refresh() {
     # Lista cacheada un dia, como la de los perfiles. Sin red no se avisa de
@@ -41162,12 +41337,14 @@ covers43_match() {
     [ -n "$clave" ] || return 1
     # 1) coincidencia exacta
     while IFS= read -r linea; do
+        linea="${linea%%	*}"          # el indice lleva "nombre<TAB>bytes"
         [ -n "$linea" ] || continue
         lclave="$(nombre_clave "${linea%.*}")"
         [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
     done < "$COVERS43_INDEX"
     # 2) el juego lleva version o grupo detras del nombre de la carátula
     while IFS= read -r linea; do
+        linea="${linea%%	*}"
         [ -n "$linea" ] || continue
         lclave="$(nombre_clave "${linea%.*}")"
         [ ${#lclave} -ge 6 ] || continue      # nombres muy cortos: no arriesgar
@@ -41274,6 +41451,145 @@ covers43_offer_for() {
     say "[covers_43] el repositorio tiene carátula 4:3 para $gid: $cand"
     covers43_fetch "$cand" "$gid" || return 1
     say "[+] Carátula 4:3 descargada del repositorio"
+    return 0
+}
+
+
+covers43_traer_todas() {
+    # TRAE LA COLECCION ENTERA DE CARATULAS 4:3 DEL REPOSITORIO.
+    #
+    # Es distinto de "Descargar carátulas", que solo busca las de LOS JUEGOS QUE
+    # TIENES. Aqui se baja todo de una vez, asi que cuando añadas un juego mas
+    # adelante su carátula ya esta puesta y no hay que volver a descargar nada.
+    # Lo pidio un tester, y tiene razon: son unos pocos megas y se hace una vez.
+    local _ok
+    loading_say "Consultando las carátulas del repositorio..."
+    # Lista RECIEN TRAIDA: quien pulsa esto quiere las que se subieron hoy, no
+    # las de la copia de ayer.
+    rm -f "$COVERS43_INDEX" 2>/dev/null
+    covers43_index_refresh
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+
+    mkdir -p "$COVERS_43_DIR" 2>/dev/null || {
+        ui_error "No se pudo crear la carpeta covers_43"; return 1; }
+
+    # Cuantas hay, cuantas faltan y cuanto pesa lo que falta.
+    local total=0 faltan=0 bytes_faltan=0 nom tam
+    while IFS="$(printf '\t')" read -r nom tam; do
+        [ -n "$nom" ] || continue
+        total=$((total+1))
+        if [ ! -f "$COVERS_43_DIR/$nom" ]; then
+            faltan=$((faltan+1))
+            bytes_faltan=$(( bytes_faltan + ${tam:-0} ))
+        fi
+    done < "$COVERS43_INDEX"
+
+    if [ "$total" = 0 ]; then
+        ui_info "El repositorio todavía no tiene ninguna carátula 4:3."
+        return 1
+    fi
+    if [ "$faltan" = 0 ]; then
+        ui_info "Ya tienes las $total carátulas del repositorio.
+
+Las nuevas se bajan solas la primera vez que cargas un juego."
+        return 0
+    fi
+
+    ui_ask "El repositorio tiene $total carátulas 4:3 y te faltan $faltan.
+
+Se descargarán $(human_size "$bytes_faltan") en covers_43/.
+
+Se bajan TODAS, no solo las de tus juegos: así, cuando añadas
+uno nuevo, su carátula ya estará puesta." || return 1
+
+    # ---- la descarga ------------------------------------------------------
+    local idx=0 hechas=0 fallos=0 url tmp
+    progress_start "Trayendo las carátulas del repositorio"
+    tmp="$(mktemp)" || { progress_stop; ui_error "No se pudo crear un temporal"; return 1; }
+    while IFS="$(printf '\t')" read -r nom tam; do
+        [ -n "$nom" ] || continue
+        [ -f "$COVERS_43_DIR/$nom" ] && continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / faltan ))" "($idx/$faltan) ${nom%.*}"
+        url="https://raw.githubusercontent.com/$WPROTON_REPO/main/covers_43/$(url_escapar "$nom")"
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            fallos=$((fallos+1)); log "covers_43: no se pudo descargar $nom" WARN; continue
+        fi
+        # Lo mismo que en la descarga de una sola: si GitHub devuelve una
+        # pagina de error en vez de la imagen, se descarta.
+        if ! es_imagen "$tmp"; then
+            fallos=$((fallos+1)); log "covers_43: $nom no es una imagen; descartada" WARN; continue
+        fi
+        if cat "$tmp" > "$COVERS_43_DIR/$nom" 2>/dev/null; then
+            hechas=$((hechas+1))
+        else
+            fallos=$((fallos+1)); log "covers_43: no se pudo escribir $nom" WARN
+        fi
+    done < "$COVERS43_INDEX"
+    rm -f "$tmp"
+    progress_stop
+
+    # ---- y que se vean en TU biblioteca -----------------------------------
+    local puestas; puestas="$(covers43_enlazar_locales)" || puestas=0
+
+    # LAS FRASES DE MAS, SOLO SI HAY ALGO QUE CONTAR.
+    #
+    # Con ${var:+...} salian siempre: un "0" no es una cadena vacia, asi que el
+    # resumen acababa diciendo "0 no se pudieron traer" y "0 se han puesto
+    # ademas", que sobra y encima preocupa.
+    local _fall="" _ext=""
+    [ "${fallos:-0}" -gt 0 ] 2>/dev/null && _fall="
+$fallos no se pudieron traer (mira el registro)."
+    [ "${puestas:-0}" -gt 0 ] 2>/dev/null && _ext="
+
+$puestas se han puesto además con el nombre de tus juegos, que
+se llaman distinto que en el repositorio."
+    ui_info "Carátulas 4:3 del repositorio: $hechas de $faltan descargadas.$_fall$_ext
+
+Están en covers_43/. Para verlas, pon la vista de lista con
+carátula 4:3 en Biblioteca y preferencias."
+    return 0
+}
+
+covers43_enlazar_locales() {
+    # Deja cada carátula tambien con el nombre del juego de AQUI, cuando no
+    # coincide con el del repositorio. Imprime cuantas ha puesto.
+    #
+    # POR QUE HACE FALTA
+    #
+    # Al traerlas todas no se sabe a que juego va cada una, asi que se guardan
+    # con el nombre del repositorio. Y la busqueda de carátulas prueba el
+    # identificador del juego con espacios y con guiones bajos, pero no con
+    # puntos: un "Halo.Combat.Evolved.png" del repositorio no lo encontraria un
+    # juego llamado "Halo_Combat_Evolved". covers43_match SI sabe emparejarlos
+    # -es el mismo criterio de los perfiles de la comunidad-, asi que aqui se
+    # usa para dejar una copia con el nombre que el juego va a buscar.
+    local n=0 f gid cand ext
+    local lista; lista="$(find_paquetes "$GAMES_PATH" 3 | sort)" || lista=""
+    [ -n "$lista" ] || { printf '0'; return 1; }
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        gid="$(game_id "$f")"
+        [ -n "$gid" ] || continue
+        cover_tipo_real "$gid" 43 >/dev/null 2>&1 && continue   # ya se le ve una
+        cand="$(covers43_match "$gid")" || continue
+        [ -n "$cand" ] && [ -f "$COVERS_43_DIR/$cand" ] || continue
+        ext="$(printf '%s' "${cand##*.}" | tr 'A-Z' 'a-z')"
+        if cp -f "$COVERS_43_DIR/$cand" "$COVERS_43_DIR/$gid.$ext" 2>/dev/null; then
+            n=$((n+1))
+            log "covers_43: $cand -> tambien como $gid.$ext"
+        fi
+    done <<EOFCL
+$lista
+EOFCL
+    printf '%s' "$n"
     return 0
 }
 
@@ -45993,6 +46309,7 @@ library_menu() {
             "Vista de juegos: $(vista_label)" \
             "Carátula en la vista de lista: $(list_cover_label)" \
             "Carátulas por fila: $(grid_cols_label)" \
+            "Traer todas las carátulas del repositorio" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Tema de los menus: $THEME" \
@@ -46006,6 +46323,7 @@ library_menu() {
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
+            "Traer todas las carátulas"*) covers43_traer_todas || true ;;
             "Base de datos de arcades"*) arcade_consultar ;;
             "Generar fotogramas (MAKO):"*)
                 # Aqui se instala o se quita; el encendido es POR JUEGO, en
