@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.0"
+WPROTON_VERSION="2.01"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -222,6 +222,22 @@ SINCRO_SERVIDOR=""                       # servidor permanente de partidas (ip)
 SINCRO_TOKEN=""                          # token de ese servidor
 SINCRO_PUERTO=8788                       # puerto para compartir copias en la red local
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
+
+# Ultimo id de juego que devolvio SteamGridDB. Lo deja sgdb_un_juego para que
+# quien lo llame pueda pedir mas imagenes del MISMO juego -el fondo y el
+# logotipo de Steam- sin gastar otra busqueda. Declarado aqui porque con
+# "set -u" una variable sin declarar mata el script.
+SGDB_ULTIMO_ID=""
+
+# ¿Se estan trayendo perfiles de la comunidad en tanda? Con esto puesto,
+# community_fetch no abre un dialogo por cada juego.
+WP_COMUNIDAD_TANDA=0
+
+# Pid del refresco de las listas del repositorio que se lanza al arrancar, para
+# poder pararlo al cerrar. Declarado aqui porque con "set -u" una variable sin
+# declarar mata el script.
+REPO_REFRESCO_PID=""
+
 save_settings() {
     # RED DE SEGURIDAD para las carpetas de juegos.
     #
@@ -2347,6 +2363,71 @@ steam_arte_juego() {
     return 0
 }
 
+steam_arte_descargar() {
+    # LAS CARATULAS DE STEAMGRIDDB, AL AÑADIR UN JUEGO A STEAM.
+    #
+    # $1 = carpeta userdata/<id>/config, $2 = appid, $3 = gid, $4 = titulo
+    #
+    # Hasta ahora "añadir a Steam" solo copiaba las carátulas que WProton YA
+    # tuviera, asi que un juego recien añadido salia casi siempre como un
+    # cuadro gris con el nombre. Lo normal es que el usuario lo añada a Steam
+    # ANTES de haber descargado ninguna carátula: justo el caso en el que
+    # hacia falta. Lo pidio un tester.
+    #
+    # Steam usa cuatro imagenes y cada una tiene su nombre obligatorio:
+    #   <appid>p.png      vertical, la de la estanteria   (600x900)
+    #   <appid>.png       apaisada, la de la cabecera     (460x215/920x430)
+    #   <appid>_hero.png  el fondo grande de la ficha
+    #   <appid>_logo.png  el logotipo que va encima del fondo
+    #
+    # Las dos primeras salen de "grids" y se guardan TAMBIEN en las carpetas de
+    # WProton: sirven igual en su biblioteca, asi que no se descargan dos veces.
+    # El fondo y el logotipo son solo de Steam -WProton no los usa- y van
+    # directos a su carpeta grid/.
+    local cfg="$1" appid="$2" gid="$3" titulo="$4"
+    local grid="$cfg/grid" id rc puestas=0
+    [ -n "$appid" ] && [ -n "$gid" ] || return 1
+    mkdir -p "$grid" 2>/dev/null || return 1
+
+    # SIN CLAVE NO SE PREGUNTA NADA AQUI.
+    #
+    # El usuario esta añadiendo un juego a Steam, posiblemente con Steam ya
+    # cerrado y esperando: un dialogo pidiendo una API key en medio de eso es
+    # una interrupcion, y encima bloqueante. Si no hay clave se sigue con las
+    # carátulas que haya y se le dice al final, en el mismo aviso.
+    if ! sgdb_key_pedir silencioso; then
+        log "Steam: no hay clave de SteamGridDB; solo se ponen las carátulas que ya habia"
+        return 1
+    fi
+
+    loading_say "Buscando carátulas de '$titulo' en SteamGridDB..."
+    sgdb_un_juego "$gid" "$titulo" "vertical wide"
+    rc=$?
+    if [ "$rc" = 2 ]; then
+        loading_clear
+        say "AVISO: SteamGridDB rechazo la peticion (¿API key invalida?)"
+        return 1
+    fi
+    id="${SGDB_ULTIMO_ID:-}"
+    if [ -z "$id" ]; then
+        loading_clear
+        log "Steam: SteamGridDB no conoce '$titulo'"
+        return 1
+    fi
+    # El fondo y el logotipo, solo para Steam.
+    if [ ! -s "$grid/${appid}_hero.png" ] \
+       && sgdb_bajar_a "$id" heroes "" "$grid/${appid}_hero.png"; then
+        puestas=$((puestas+1)); say "[SGDB]   OK (fondo) -> ${appid}_hero.png"
+    fi
+    if [ ! -s "$grid/${appid}_logo.png" ] \
+       && sgdb_bajar_a "$id" logos "" "$grid/${appid}_logo.png"; then
+        puestas=$((puestas+1)); say "[SGDB]   OK (logotipo) -> ${appid}_logo.png"
+    fi
+    loading_clear
+    log "Steam: arte de SteamGridDB para $gid (id $id): $puestas imagen(es) propias de Steam"
+    return 0
+}
+
 anadir_wproton_a_steam() {
     # Añade el propio WProton a Steam como juego no-Steam, con sus imagenes.
     # Asi se puede entrar en la biblioteca desde el modo Juego sin salir al
@@ -2429,13 +2510,42 @@ sus accesos directos al salir y se perdería el cambio.
     [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
     if "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "$name" "$SELF" "$(dirname "$SELF")" \
         "\"$(readlink -f "$game")\"" "$icon" >> "$LOG_FILE" 2>&1; then
-        # las caratulas que ya tenemos, a la biblioteca de Steam
-        local _appid _gid
+        # EL ARTE DE LA FICHA, EN ESTE ORDEN:
+        #   1) lo que falte, descargado de SteamGridDB (y guardado tambien en
+        #      las carpetas de WProton, que sirve para su propia biblioteca)
+        #   2) copiar a Steam todo lo que haya, lo de antes y lo nuevo
+        #
+        # Primero descargar y luego copiar, no al reves: al reves se copiaba
+        # el hueco vacio y lo descargado no llegaba a Steam hasta la siguiente
+        # vez. El fondo y el logotipo los pone el propio paso 1, que son solo
+        # de Steam y no tienen sitio en las carpetas de WProton.
+        local _appid _gid _arte_sgdb=0
         _appid="$(grep -o 'appid=[0-9]*' "$LOG_FILE" | tail -n1 | cut -d= -f2)"
         _gid="$(game_id "$game")"
-        [ -n "$_appid" ] && steam_arte_juego "$(dirname "$vdf")" "$_appid" "$_gid"
+        if [ -n "$_appid" ]; then
+            steam_arte_descargar "$(dirname "$vdf")" "$_appid" "$_gid" "$name" \
+                && _arte_sgdb=1
+            steam_arte_juego "$(dirname "$vdf")" "$_appid" "$_gid"
+        fi
         [ "$reabrir" = 1 ] && steam_abrir
+        # EL AVISO DICE QUE PASO CON LAS CARATULAS.
+        #
+        # Si no hay clave de SteamGridDB, el juego entra igual pero con un
+        # cuadro gris: hay que decir POR QUE y donde se arregla, no dejar al
+        # usuario mirando un hueco sin saber si fallo algo.
+        local _nota_arte
+        if [ "$_arte_sgdb" = 1 ]; then
+            _nota_arte="Las carátulas se han traido de SteamGridDB."
+        elif [ -z "$(sgdb_key_leer)" ]; then
+            _nota_arte="Sin carátulas nuevas: no hay API key de SteamGridDB.
+Se pone en Biblioteca y preferencias -> Descargar carátulas."
+        else
+            _nota_arte="SteamGridDB no tenia carátulas para este juego.
+Puedes poner una a mano en Ajustes del juego -> Carátula."
+        fi
         ui_info "'$name' añadido a Steam como juego no-Steam.
+
+$_nota_arte
 
 $([ "$reabrir" = 1 ] && printf 'Steam se está abriendo de nuevo.' \
                      || printf 'Abre Steam para verlo.')
@@ -5374,9 +5484,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py ed583e22f855" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py ab4cdbc8e833" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py ed583e22f855
+# WPROTON_HELPER menu_pygame.py ab4cdbc8e833
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -6017,7 +6127,118 @@ def find_raw_pads():
 DEV = os.environ.get('WP_DEV') == '1'
 CAPT_DIR = os.environ.get('WP_CAPT_DIR', '')
 
-REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0}
+REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0,
+       'armado': '', 'desde': 0.0, 'poco_disco': False}
+
+# GRABAR UN TUTORIAL ENTERO, SIN RELOJ.
+#
+# La grabacion de siempre dura lo que se le diga y se para sola. Para hacer
+# videotutoriales eso no vale: no se sabe de antemano cuanto va a durar lo que
+# se quiere enseñar.
+#
+# Aqui se arma desde el menu de desarrollo y se maneja con el mando: L3 empieza
+# y R3 para. Mientras NO hay nada armado, L3 sigue haciendo la captura de
+# pantalla de siempre, asi que no se pisa nada de lo que ya estaba.
+REC_BTN_INICIO = 317      # BTN_THUMBL  (L3, pulsar el stick izquierdo)
+REC_BTN_PARO   = 318      # BTN_THUMBR  (R3, pulsar el stick derecho)
+# Un tutorial largo son muchos PNG. Si el disco se queda sin sitio, se para
+# sola antes de dejar el equipo inservible.
+REC_DISCO_MINIMO = 700 * 1024 * 1024      # 700 MB
+
+
+def rec_disco_libre(ruta):
+    try:
+        st = os.statvfs(ruta)
+        return st.f_bavail * st.f_frsize
+    except Exception:
+        return None
+
+
+def rec_marca(nombre):
+    return os.path.join(CAPT_DIR or '.', nombre)
+
+
+def rec_empezar():
+    """L3: arranca la grabacion que el menu de desarrollo dejo armada."""
+    if not REC['armado'] or REC['dir']:
+        return False
+    destino = REC['armado']
+    try:
+        os.makedirs(destino, exist_ok=True)
+        # hasta = 0 quiere decir "sin limite": lo para R3, no el reloj.
+        with open(rec_marca('.rec'), 'w') as fh:
+            fh.write('0\n%s\n' % destino)
+    except Exception:
+        return False
+    REC.update({'hasta': 0.0, 'dir': destino, 'n': 0, 'desde': time.time(),
+                'poco_disco': False})
+    sys.stderr.write('menu_pygame: grabando (sin limite) en %s\n' % destino)
+    return True
+
+
+def rec_parar(motivo='R3'):
+    """R3: para la grabacion y avisa al vigilante para que monte el video."""
+    if not REC['dir']:
+        return False
+    n, destino = REC['n'], REC['dir']
+    REC.update({'dir': '', 'armado': '', 'hasta': 0.0})
+    try:
+        os.remove(rec_marca('.rec'))
+    except Exception:
+        pass
+    try:
+        os.remove(rec_marca('.rec_armado'))
+    except Exception:
+        pass
+    try:
+        # El vigilante de bash espera ESTE fichero para montar el mp4.
+        with open(rec_marca('.rec_fin'), 'w') as fh:
+            fh.write('%d\n%s\n' % (n, destino))
+    except Exception:
+        pass
+    sys.stderr.write('menu_pygame: grabacion parada por %s (%d fotogramas)\n'
+                     % (motivo, n))
+    return True
+
+
+def rec_pintar_aviso():
+    """El punto rojo y el reloj, DESPUES de guardar el fotograma.
+
+    Se dibuja cuando el fotograma ya esta en disco, asi que sale en la pantalla
+    pero NO en el video: en un tutorial, un "REC" permanente en una esquina
+    seria justo lo que no se quiere ver.
+    """
+    if screen is None:
+        return
+    try:
+        if REC['dir']:
+            seg = int(time.time() - REC['desde'])
+            txt = 'REC  %d:%02d' % (seg // 60, seg % 60)
+            col = (255, 70, 70)
+            punto = (seg % 2 == 0)          # parpadea una vez por segundo
+        elif REC['armado']:
+            txt = 'L3 para empezar a grabar'
+            col = (255, 200, 80)
+            punto = False
+        else:
+            return
+        f = f_sm if f_sm is not None else pygame.font.Font(None, 20)
+        sf = f.render(txt, True, col)
+        x = W - sf.get_width() - FS(16)
+        y = FS(10)
+        fondo = pygame.Surface((sf.get_width() + FS(26), sf.get_height() + FS(8)),
+                               pygame.SRCALPHA)
+        fondo.fill((0, 0, 0, 170))
+        screen.blit(fondo, (x - FS(20), y - FS(4)))
+        if punto:
+            pygame.draw.circle(screen, col, (x - FS(10), y + sf.get_height() // 2),
+                               FS(5))
+        screen.blit(sf, (x, y))
+        pygame.display.update(pygame.Rect(x - FS(22), y - FS(6),
+                                          sf.get_width() + FS(30),
+                                          sf.get_height() + FS(12)))
+    except Exception:
+        pass
 
 def grabar_fotograma():
     # Graba los menus DESDE DENTRO, guardando fotogramas.
@@ -6034,24 +6255,50 @@ def grabar_fotograma():
     ahora = time.time()
     if ahora - REC['comprobado'] > 1.0:
         REC['comprobado'] = ahora
-        marca = os.path.join(CAPT_DIR or '.', '.rec')
         try:
+            marca = rec_marca('.rec')
             if os.path.isfile(marca):
                 with open(marca) as fh:
                     hasta, destino = fh.read().split('\n')[:2]
-                if float(hasta) > ahora and REC['dir'] != destino:
-                    REC.update({'hasta': float(hasta), 'dir': destino, 'n': 0})
+                hasta = float(hasta)
+                # hasta == 0 es "sin limite": esa la arranca y la para el
+                # mando, no el reloj, y no hay que volver a leerla de aqui.
+                if hasta > ahora and REC['dir'] != destino:
+                    REC.update({'hasta': hasta, 'dir': destino, 'n': 0,
+                                'desde': ahora})
                     os.makedirs(destino, exist_ok=True)
                     sys.stderr.write('menu_pygame: grabando menus en %s\n' % destino)
         except Exception:
             pass
-    if not REC['dir'] or ahora > REC['hasta']:
-        if REC['dir'] and ahora > REC['hasta']:
+        # ¿Hay una grabacion ARMADA esperando a que se pulse L3?
+        try:
+            arm = rec_marca('.rec_armado')
+            if os.path.isfile(arm):
+                if not REC['dir']:
+                    with open(arm) as fh:
+                        REC['armado'] = fh.read().split('\n')[0].strip()
+            elif not REC['dir']:
+                REC['armado'] = ''
+        except Exception:
+            pass
+        # El disco, mientras se graba sin limite: un tutorial largo son miles
+        # de PNG, y quedarse sin sitio a media faena se lleva por delante algo
+        # mas que la grabacion.
+        if REC['dir'] and REC['hasta'] == 0.0:
+            libre = rec_disco_libre(REC['dir'])
+            if libre is not None and libre < REC_DISCO_MINIMO:
+                REC['poco_disco'] = True
+                sys.stderr.write('menu_pygame: queda poco disco, paro de grabar\n')
+                rec_parar('falta de disco')
+    if not REC['dir'] or (REC['hasta'] and ahora > REC['hasta']):
+        if REC['dir'] and REC['hasta'] and ahora > REC['hasta']:
             sys.stderr.write('menu_pygame: grabacion terminada (%d fotogramas)\n'
                              % REC['n'])
             REC['dir'] = ''
+        rec_pintar_aviso()
         return
     if ahora - REC['ultimo'] < 0.1:      # 10 por segundo: suficiente y ligero
+        rec_pintar_aviso()
         return
     REC['ultimo'] = ahora
     try:
@@ -6059,6 +6306,8 @@ def grabar_fotograma():
         REC['n'] += 1
     except Exception:
         pass
+    # El aviso va DESPUES de guardar: se ve en pantalla y no en el video.
+    rec_pintar_aviso()
 
 def captura():
     # Guarda la pantalla actual del menu. Se hace desde pygame, asi que sale
@@ -6192,8 +6441,21 @@ def evdev_thread():
                             # Con una bandera son cosas independientes y no
                             # hay tecla que se pueda pisar mañana.
                             home_req[0] = True
+                elif t == EV_KEY_RAW and c == REC_BTN_PARO and v == 1 and DEV \
+                        and REC['dir']:
+                    rec_parar()                 # R3: parar de grabar
                 elif t == EV_KEY_RAW and c == CAPTURA_BTN and v == 1 and DEV:
-                    post_key(pygame.K_F12)      # la misma via que F12
+                    # L3 HACE DOS COSAS, PERO NUNCA LAS DOS A LA VEZ.
+                    #
+                    # Si hay una grabacion armada desde el menu de desarrollo,
+                    # L3 la arranca. Si no hay ninguna -que es lo normal-, L3
+                    # sigue siendo la captura de pantalla de siempre. Asi no
+                    # hubo que mover la captura a otro boton ni inventar un
+                    # combo para algo que se usa a diario.
+                    if REC['armado'] and not REC['dir']:
+                        rec_empezar()
+                    else:
+                        post_key(pygame.K_F12)      # la misma via que F12
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
                         sel_combo[0] = True
@@ -17033,6 +17295,7 @@ cleanup_all() {
     mando_virtual_stop
     log "Cierre: parando el vigilante"
     guardia_salida_stop
+    repo_refresco_stop
     # Estos dos existian pero el cierre no los llamaba: la barra de progreso
     # y el aviso de la primera instalacion podian quedarse en marcha. El aviso
     # ademas usa zenity, que no es ninguno de los procesos que vigilamos por
@@ -25546,6 +25809,16 @@ PRIMERA VERSION LISTA PARA EL PUBLICO GENERAL
 
 NOVEDADES
 
+  Los perfiles de la comunidad traen tambien las teclas del mando.
+
+  Un juego recien subido al repositorio ya se encuentra el mismo dia.
+
+  Los perfiles del repositorio se pueden traer de una vez, o todos.
+
+  Al arrancar, WProton pone al dia lo que hay en el repositorio.
+
+  Al añadir un juego a Steam, sus caratulas se descargan solas.
+
   Las caratulas 4:3 las trae WProton de su repositorio.
 
   Arranca ya configurado con menu moderno, lista y caratulas 4:3.
@@ -25652,9 +25925,112 @@ Reiniciar WProton ahora?"; then
 #     incluido...). Se descargan al profiles/ local sin pisar nada sin avisar.
 # ----------------------------------------------------------------------------
 community_list() {
-    # Lista los .conf de la carpeta profiles/ del repo (API de GitHub)
-    curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/contents/profiles" 2>/dev/null \
-        | grep -o '"name": *"[^"]*\.conf"' | cut -d'"' -f4 | sort
+    # Lo que hay en la carpeta profiles/ del repo: los .conf Y LOS .keys.
+    #
+    # Un juego puede necesitar las dos cosas: el perfil con su runner y sus
+    # ajustes, y un .keys con el mapeo del mando. Se subian los dos al
+    # repositorio, pero WProton solo se bajaba el .conf, asi que el juego
+    # quedaba configurado a medias y el mando sin mapear. Lo vio un tester.
+    #
+    # --max-time: esto se consulta AL ARRANCAR UN JUEGO. Si GitHub se queda
+    # colgado, el juego no se espera; se arranca sin perfil y ya. Lo tenia
+    # covers43_list y aqui faltaba: un GitHub lento retrasaba cada partida.
+    #
+    # El codigo HTTP y el fallo de curl se guardan para poder EXPLICAR en el
+    # registro por que no hubo lista (sin red, repositorio mal escrito, 403
+    # por limite de peticiones...). Antes esto fallaba en silencio absoluto.
+    local tmp cod
+    tmp="$(mktemp)" || return 1
+    cod="$(curl -fsSL --max-time 12 \
+              -w '%{http_code}' \
+              "https://api.github.com/repos/$WPROTON_REPO/contents/profiles" \
+              -o "$tmp" 2>>"$LOG_FILE")" || {
+        log "comunidad: curl fallo al pedir la lista de profiles/ (codigo HTTP ${cod:-?})" AVISO
+        rm -f "$tmp"; return 1; }
+    REPO_ULTIMO_HTTP="${cod:-}"
+    grep -oE '"name": *"[^"]*\.(conf|keys)"' < "$tmp" | cut -d'"' -f4 | sort
+    rm -f "$tmp"
+    return 0
+}
+
+community_solo_conf() {
+    # Del indice, solo los perfiles. Los .keys van de la mano de uno de ellos
+    # y no se eligen por separado.
+    grep -i '\.conf$'
+}
+
+community_tiene_keys() {
+    # ¿El perfil $1 (nombre del .conf) trae ademas su .keys?
+    #
+    # Se mira en LOS DOS sitios, y la carpeta primero: si el perfil se encontro
+    # en la copia local puede que no haya lista del repositorio -sin conexion
+    # no la hay-, y mirando solo la lista diriamos que no trae teclas teniendolas
+    # al lado en el disco.
+    local base="${1%.conf}"
+    [ -s "$COMMUNITY_DIR/$base.keys" ] && return 0
+    [ -f "$COMMUNITY_INDEX" ] || return 1
+    grep -qxF "$base.keys" "$COMMUNITY_INDEX"
+}
+
+community_keys_fetch() {
+    # Trae el .keys que acompana a un perfil. $1 = nombre del .conf,
+    # $2 = gid del juego LOCAL. Devuelve 0 si quedo instalado.
+    #
+    # Se guarda con el nombre del juego de AQUI, igual que el .conf: el del
+    # repositorio puede llamarse distinto y entonces no lo encontraria nadie.
+    local name="$1" gid="$2"
+    [ -n "$gid" ] || return 1
+    community_tiene_keys "$name" || return 1
+    local base="${name%.conf}"
+    local dest="$PROFILE_DIR/$gid.keys"
+    local tmp; tmp="$(mktemp)" || return 1
+    # La copia local primero, igual que con el .conf.
+    if [ -s "$COMMUNITY_DIR/$base.keys" ]; then
+        cat "$COMMUNITY_DIR/$base.keys" > "$tmp" 2>/dev/null
+        log "comunidad: $base.keys sale de la copia local (comunidad/)"
+    else
+        local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$(url_escapar "$base.keys")"
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            log "comunidad: no se pudo descargar $base.keys" WARN
+            return 1
+        fi
+    fi
+    # QUE SEA UN .keys DE VERDAD.
+    #
+    # Un .keys es JSON. Si lo descargado no se puede leer, no se guarda: un
+    # fichero roto en profiles/ deja al juego sin mapeo y el motivo no se ve
+    # por ninguna parte.
+    if [ "$(keys_resumen "$tmp" 2>/dev/null)" = "!ROTO" ]; then
+        rm -f "$tmp"
+        log "comunidad: $base.keys no es un JSON valido; descartado" WARN
+        return 1
+    fi
+    if [ -f "$dest" ]; then
+        ui_ask "Este perfil trae tambien las teclas del mando, y ya tienes
+un .keys para este juego:
+
+$(basename "$dest")
+
+Sustituirlo por el de la comunidad?
+(se guardara el tuyo como $(basename "$dest").bak)" || { rm -f "$tmp"; return 1; }
+        cp -f "$dest" "$dest.bak"
+    fi
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    if ! cat "$tmp" > "$dest" 2>/dev/null; then
+        rm -f "$tmp"
+        log "comunidad: no se pudo escribir $dest" WARN
+        return 1
+    fi
+    rm -f "$tmp"
+    # SE MARCA COMO DE ESTE JUEGO, PISANDO LO QUE TRAIGA.
+    #
+    # El del repositorio viene marcado con el nombre de ALLI. Sin remarcarlo,
+    # WProton lo veria como "de otro juego" y lo ignoraria: es exactamente el
+    # fallo que se corrigio al asignar un .keys a mano.
+    keys_remarcar "$dest" "$gid"
+    log "comunidad: teclas instaladas en $dest (desde $base.keys)"
+    return 0
 }
 
 community_fetch() {
@@ -25673,9 +26049,19 @@ community_fetch() {
         dest="$PROFILE_DIR/$name"
     fi
     tmp="$(mktemp)"
-    local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
-    if ! dl "$url" "$tmp"; then
-        rm -f "$tmp"; ui_error "No se pudo descargar $name"; return 1
+    # PRIMERO LA COPIA LOCAL, SI LA HAY.
+    #
+    # Quien se bajo el repositorio entero a comunidad/ no tiene por que volver
+    # a Internet por un fichero que ya esta en su disco: asi instalar un perfil
+    # es instantaneo y funciona sin conexion.
+    if [ -s "$COMMUNITY_DIR/$name" ]; then
+        cat "$COMMUNITY_DIR/$name" > "$tmp" 2>/dev/null
+        log "comunidad: $name sale de la copia local (comunidad/)"
+    else
+        local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
+        if ! dl "$url" "$tmp"; then
+            rm -f "$tmp"; ui_error "No se pudo descargar $name"; return 1
+        fi
     fi
     # seguridad: un perfil es solo CLAVE=valor, nada de ordenes
     if grep -qE '^[[:space:]]*(#|[A-Z_]+=)' "$tmp" && \
@@ -25686,19 +26072,47 @@ community_fetch() {
         ui_error "El perfil descargado tiene contenido raro y se ha descartado."
         return 1
     fi
+    # EN TANDA NO SE PREGUNTA NADA.
+    #
+    # Al traer los perfiles de golpe, el usuario ya decidio UNA vez -antes de
+    # empezar- si quiere sustituir los que ya tiene. Preguntarselo otra vez por
+    # cada juego convertiria la descarga en un interrogatorio de 50 dialogos.
+    # La copia .bak se hace igual, que es lo que protege su trabajo.
     if [ -f "$dest" ]; then
-        ui_ask "Ya tienes un perfil para este juego:
+        if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+            cp -f "$dest" "$dest.bak"
+        else
+            ui_ask "Ya tienes un perfil para este juego:
 $(basename "$dest")
 
 Sustituirlo por el de la comunidad?
 (se guardara el tuyo como $(basename "$dest").bak)" || { rm -f "$tmp"; return 1; }
-        cp -f "$dest" "$dest.bak"
+            cp -f "$dest" "$dest.bak"
+        fi
     fi
     mkdir -p "$PROFILE_DIR"
     cat "$tmp" > "$dest"
     rm -f "$tmp"
     local notas; notas="$(grep -m1 '^NOTAS=' "$dest" | cut -d= -f2- | tr -d '"')"
-    ui_info "Perfil instalado: $name
+    # EL .keys QUE VIENE CON EL PERFIL.
+    #
+    # Si en el repositorio hay un fichero con el MISMO nombre y extension
+    # .keys, es el mapeo de mando de ese juego y hace falta igual que el
+    # perfil. Antes se quedaba sin bajar y el juego arrancaba bien configurado
+    # pero con el mando sin mapear.
+    local _keys=""
+    if [ -n "$gid" ] && community_keys_fetch "$name" "$gid"; then
+        _keys="
+
+Trae tambien las teclas del mando, instaladas en:
+profiles/$gid.keys"
+    fi
+    if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+        # En tanda el resumen va al final, una vez, no un dialogo por juego.
+        log "comunidad: instalado $name -> $(basename "$dest")${_keys:+ (con teclas)}"
+        return 0
+    fi
+    ui_info "Perfil instalado: $name$_keys
 ${notas:+
 Notas del autor: $notas}"
     return 0
@@ -25725,23 +26139,272 @@ Se han quitado tus estadísticas y rutas locales."
 
 COMMUNITY_INDEX="$RUNTIME_DIR/.community_index"
 
-community_index_refresh() {
-    # Lista de perfiles del repositorio, cacheada un dia. Se consulta en
-    # segundo plano y sin ruido: si no hay red, simplemente no hay aviso.
-    [ -n "${WPROTON_REPO:-}" ] || return 1
-    if [ -f "$COMMUNITY_INDEX" ]; then
-        local edad
-        edad=$(( $(date +%s) - $(stat -c %Y "$COMMUNITY_INDEX" 2>/dev/null || echo 0) ))
-        [ "$edad" -lt 86400 ] && return 0
+# COPIA LOCAL COMPLETA DE profiles/ DEL REPOSITORIO.
+#
+# Aqui caben los perfiles con el nombre que tienen ALLA ("Silver Pines.conf"),
+# que es justo por lo que no pueden ir en profiles/: ahi cada fichero tiene
+# que llamarse como el juego de AQUI ("Silver_Pines.conf") para que WProton lo
+# encuentre, y ademas el menu de perfiles pasaria a tener cientos de entradas
+# que no son del usuario.
+#
+# Teniendolos en su propia carpeta se puede hacer algo que antes no: trabajar
+# SIN RED. Si no hay conexion, la lista y los ficheros salen de esta copia.
+COMMUNITY_DIR="$BASE_DIR/comunidad"
+
+# Ultimo codigo HTTP que devolvio la API del repositorio. Solo para el
+# registro: declarado aqui porque con "set -u" una variable sin declarar
+# mata el script.
+REPO_ULTIMO_HTTP=""
+
+# ¿Ya se ha pedido una lista NUEVA en esta sesion? Las dos listas -perfiles y
+# carátulas- se guardan un dia, y eso tiene un efecto que costo encontrar:
+# un juego subido al repositorio HOY no aparece hasta mañana. Cuando un juego
+# no esta en la copia guardada se pide la lista otra vez, UNA sola vez por
+# sesion y por lista, y se vuelve a buscar.
+COMUNIDAD_REFRESCADO=0
+COVERS43_REFRESCADO=0
+
+repo_indice_edad() {
+    # Segundos desde que se trajo esa lista. -1 si no hay ninguna copia.
+    local f="${1:-}" t
+    [ -f "$f" ] || { printf '%s' '-1'; return 0; }
+    t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    printf '%s' "$(( $(date +%s) - t ))"
+}
+
+repo_edad_humana() {
+    # La edad en palabras, para el registro.
+    local s="${1:-0}"
+    if   [ "$s" -lt 0 ];    then printf 'no habia copia'
+    elif [ "$s" -lt 60 ];   then printf 'traida hace %s s' "$s"
+    elif [ "$s" -lt 3600 ]; then printf 'traida hace %s min' "$((s/60))"
+    else printf 'traida hace %s h %s min' "$((s/3600))" "$(( (s%3600)/60 ))"
     fi
+}
+
+community_index_refresh() {
+    # Lista de perfiles del repositorio, guardada un dia. Nunca interrumpe:
+    # si no hay red no se avisa por pantalla, pero SI queda escrito en el
+    # registro por que no hubo lista. Antes esto fallaba en absoluto silencio
+    # y el unico sintoma era que el perfil "no se descargaba", sin mas pistas.
+    #
+    # $1 = "forzar" -> ignora la copia guardada y pide la lista otra vez.
+    local forzar="${1:-}" edad n_conf n_keys
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        log "comunidad: no hay repositorio configurado (WPROTON_REPO vacio)" AVISO
+        return 1
+    fi
+    edad="$(repo_indice_edad "$COMMUNITY_INDEX")"
+    if [ "$forzar" != forzar ] && [ "$edad" -ge 0 ] && [ "$edad" -lt 86400 ]; then
+        log "comunidad: se usa la lista guardada ($(repo_edad_humana "$edad"), $(wc -l < "$COMMUNITY_INDEX" 2>/dev/null || echo 0) entradas)"
+        return 0
+    fi
+    [ "$forzar" = forzar ] \
+        && log "comunidad: se pide la lista OTRA VEZ (la guardada fue $(repo_edad_humana "$edad"))" \
+        || log "comunidad: pidiendo la lista de profiles/ a $WPROTON_REPO ($(repo_edad_humana "$edad"))"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     community_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null
     if [ -s "$COMMUNITY_INDEX.tmp" ]; then
         mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        log "comunidad: lista al dia -> $n_conf perfil(es) y $n_keys fichero(s) de teclas"
+        # LA API DEVUELVE COMO MUCHO 1000 FICHEROS POR CARPETA.
+        #
+        # Con los .keys al lado de los .conf, cada juego ocupa dos sitios: el
+        # tope llega a la mitad de juegos de lo que parece. Si se roza, hay
+        # que avisarlo AQUI, porque el sintoma -los ultimos juegos por orden
+        # alfabetico no se descargan nunca- no se parece en nada a la causa.
+        if [ "$(wc -l < "$COMMUNITY_INDEX" 2>/dev/null || echo 0)" -ge 1000 ]; then
+            log "comunidad: la carpeta profiles/ llega al tope de 1000 ficheros de la API de GitHub: los que pasen de ahi NO se ven. Hay que pasar a la API de arboles." AVISO
+        fi
     else
+        rm -f "$COMMUNITY_INDEX.tmp"
+        log "comunidad: el repositorio no devolvio ninguna entrada (codigo HTTP ${REPO_ULTIMO_HTTP:-?}); se sigue con la copia guardada si la hay" AVISO
+        # Si habia copia, no se pierde: mejor una lista de ayer que ninguna.
+        [ -f "$COMMUNITY_INDEX" ] && return 0
+        # SIN RED Y SIN LISTA: LA COPIA LOCAL.
+        #
+        # Quien se bajo el repositorio entero con "Traer TODOS los perfiles"
+        # tiene los ficheros en comunidad/. Haciendo la lista con ellos,
+        # TODO lo de abajo -buscar el perfil de un juego, saber si trae teclas,
+        # el menu de perfiles- funciona igual sin conexion, porque community_fetch
+        # tambien mira ahi antes de descargar.
+        if community_local_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null \
+           && [ -s "$COMMUNITY_INDEX.tmp" ]; then
+            mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
+            log "comunidad: sin conexion; la lista se hace con la copia local de comunidad/ ($(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0) perfiles)"
+            return 0
+        fi
         rm -f "$COMMUNITY_INDEX.tmp"
         return 1
     fi
+    return 0
+}
+
+community_local_list() {
+    # Lo que haya en la copia local del repositorio, en el mismo formato que
+    # community_list: un nombre de fichero por linea, .conf y .keys.
+    [ -d "$COMMUNITY_DIR" ] || return 1
+    find "$COMMUNITY_DIR" -maxdepth 1 -type f \
+         \( -iname '*.conf' -o -iname '*.keys' \) -printf '%f\n' 2>/dev/null | sort
+}
+
+community_match_local() {
+    # LO MISMO QUE community_match, PERO MIRANDO LA CARPETA comunidad/.
+    #
+    # $1 = gid -> el nombre del .conf de la copia local que le corresponde.
+    #
+    # Es la PRIMERA parada al buscar el perfil de un juego: si el fichero ya
+    # esta en el disco, ir a GitHub a preguntar si existe es gastar una espera
+    # -y una peticion de la API- para enterarse de algo que ya sabemos. Solo
+    # si no esta aqui se sale a la red.
+    #
+    # Reutiliza community_match apuntandolo a una lista hecha con la carpeta:
+    # asi la regla para decidir si dos nombres son el mismo juego -mayusculas,
+    # separadores, coletilla de version- es LA MISMA en los dos sitios. Tenerla
+    # escrita dos veces seria tener dos reglas que se separan con el tiempo.
+    local gid="${1:-}" lista r
+    [ -n "$gid" ] || return 1
+    [ -d "$COMMUNITY_DIR" ] || return 1
+    lista="$(mktemp)" || return 1
+    if ! community_local_list > "$lista" 2>/dev/null || [ ! -s "$lista" ]; then
+        rm -f "$lista"; return 1
+    fi
+    # "local" aqui tapa la global solo mientras dure esta funcion: bash da a
+    # las funciones que se llamen desde aqui la version local, y al volver la
+    # global vuelve a su sitio sola. Con un prefijo "VAR=x funcion" el
+    # resultado depende del shell, y esto tiene que ser exacto.
+    local COMMUNITY_INDEX="$lista"
+    r="$(community_match "$gid")" || r=""
+    rm -f "$lista"
+    [ -n "$r" ] || return 1
+    printf '%s' "$r"
+}
+
+community_traer_todo() {
+    # SE BAJA EL REPOSITORIO DE PERFILES ENTERO A comunidad/.
+    #
+    # Distinto de "los perfiles para tus juegos": eso instala los que te tocan
+    # y ya. Esto trae los 250, tengas sus juegos o no, con el nombre que tienen
+    # en el repositorio. No se usa todos los dias, pero hay dos momentos en que
+    # vale oro: cuando vas a estar sin conexion, y cuando quieres mirar o
+    # comparar los perfiles de otros sin ir juego por juego.
+    #
+    # Y SIRVE PARA ALGO MAS QUE MIRARLOS: con la copia hecha, buscar el perfil
+    # de un juego, saber si trae teclas e instalarlo funcionan SIN RED, porque
+    # community_fetch mira en esta carpeta antes de salir a Internet.
+    local _ok
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez.
+En 'Comprobar el repositorio' sale el detalle."
+        return 1
+    fi
+
+    mkdir -p "$COMMUNITY_DIR" 2>/dev/null || {
+        ui_error "No se pudo crear la carpeta comunidad/"; return 1; }
+
+    # Cuantos hay y cuantos faltan. Un perfil son uno o dos KB, asi que no se
+    # avisa del peso como con las carátulas: el aviso seria "vas a descargar
+    # 400 KB", que no le importa a nadie.
+    local total=0 faltan=0 nom
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        total=$((total+1))
+        [ -f "$COMMUNITY_DIR/$nom" ] || faltan=$((faltan+1))
+    done < "$COMMUNITY_INDEX"
+
+    if [ "$total" = 0 ]; then
+        ui_error "El repositorio no tiene ningun perfil."
+        return 1
+    fi
+    if [ "$faltan" = 0 ]; then
+        ui_info "Ya tienes los $total fichero(s) del repositorio en:
+
+comunidad/
+
+No hay nada nuevo que traer."
+        return 0
+    fi
+    ui_ask "El repositorio tiene $total fichero(s) de perfil
+y te faltan $faltan.
+
+Se guardaran en comunidad/, con el nombre que tienen en el
+repositorio. Desde ahi WProton los usa aunque no haya
+conexión, y los puedes mirar como ficheros de texto.
+
+Descargarlos ahora?" || return 0
+
+    local hechos=0 fallos=0 malos=0 idx=0 url tmp
+    progress_start "Descargando los perfiles del repositorio"
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        [ -f "$COMMUNITY_DIR/$nom" ] && continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / faltan ))" "($idx/$faltan) $nom"
+        url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$(url_escapar "$nom")"
+        tmp="$(mktemp)" || { fallos=$((fallos+1)); continue; }
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"; fallos=$((fallos+1))
+            log "comunidad: no se pudo traer $nom" AVISO
+            continue
+        fi
+        # LO DESCARGADO SE REVISA ANTES DE GUARDARLO.
+        #
+        # Un .conf es solo CLAVE=valor y un .keys es un JSON: cualquier otra
+        # cosa (una pagina de error de GitHub, por ejemplo) se descarta en vez
+        # de dejar basura en la carpeta que luego alguien intente instalar.
+        local bueno=1
+        case "$nom" in
+            *.conf|*.CONF)
+                grep -qE '^[[:space:]]*(#|[A-Z_]+=)' "$tmp" || bueno=0 ;;
+            *) [ "$(keys_resumen "$tmp" 2>/dev/null)" = "!ROTO" ] && bueno=0 ;;
+        esac
+        if [ "$bueno" = 0 ]; then
+            rm -f "$tmp"; malos=$((malos+1))
+            log "comunidad: $nom tiene contenido raro; descartado" AVISO
+            continue
+        fi
+        if cat "$tmp" > "$COMMUNITY_DIR/$nom" 2>/dev/null; then
+            hechos=$((hechos+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo escribir comunidad/$nom" AVISO
+        fi
+        rm -f "$tmp"
+    done < "$COMMUNITY_INDEX"
+    progress_stop
+
+    local resumen="Perfiles traidos: $hechos de $faltan
+Total en comunidad/: $(community_local_list 2>/dev/null | grep -c . || echo 0)"
+    [ "$fallos" -gt 0 ] && resumen="$resumen
+
+No se pudieron traer: $fallos (mira el registro)"
+    # LOS FICHEROS CON CONTENIDO RARO SE NOMBRAN, Y SE DICE QUE VOLVERAN A SALIR.
+    #
+    # Un .conf que no es un .conf es un fallo DEL REPOSITORIO, no del usuario:
+    # alguien subio mal un fichero. Al no guardarse, cuenta como "que falta"
+    # cada vez, asi que sin este aviso la pantalla diria eternamente "te falta
+    # 1" sin explicar cual ni por que. Nombrarlo es lo que hace que se arregle.
+    if [ "$malos" -gt 0 ]; then
+        resumen="$resumen
+
+Descartados por contenido raro: $malos
+Son ficheros mal subidos al repositorio; cuales son, en el
+registro. Saldran otra vez la proxima vez hasta que se
+arreglen alla."
+    fi
+    log "comunidad: copia completa -> $hechos traidos, $fallos fallos, $malos descartados"
+    ui_info "$resumen
+
+A partir de ahora, instalar el perfil de un juego no necesita
+conexión: sale de esta carpeta."
     return 0
 }
 
@@ -26231,14 +26894,21 @@ community_match() {
     [ -f "$COMMUNITY_INDEX" ] || return 1
     clave="$(printf '%s' "$gid" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
     [ -n "$clave" ] || return 1
+    # SOLO LOS .conf.
+    #
+    # El indice lleva ahora tambien los .keys que acompanan a los perfiles.
+    # Sin este filtro, un "Juego.keys" podria devolverse como si fuera el
+    # perfil y se intentaria instalar un JSON como .conf.
     # 1) coincidencia exacta
     while IFS= read -r linea; do
+        case "$linea" in *.conf) ;; *) continue ;; esac
         [ -n "$linea" ] || continue
         lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
         [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
     done < "$COMMUNITY_INDEX"
     # 2) el juego lleva version/grupo detras del nombre del perfil
     while IFS= read -r linea; do
+        case "$linea" in *.conf) ;; *) continue ;; esac
         [ -n "$linea" ] || continue
         lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
         [ ${#lclave} -ge 6 ] || continue          # nombres muy cortos: no arriesgar
@@ -26254,24 +26924,112 @@ community_match() {
     return 1
 }
 
+community_ya_preguntado() {
+    # ¿Se le pregunto YA por este juego? El "ya preguntado" es un campo del
+    # perfil del juego (COMUNIDAD_VISTO), asi que se lee de SU .conf.
+    #
+    # Antes se miraba la variable $COMUNIDAD_VISTO que hay en memoria, y eso
+    # estaba mal de una forma dificil de ver: community_offer_for se llama al
+    # principio de launch_game, ANTES de cargar el perfil del juego, asi que
+    # la variable conservaba el valor del juego ANTERIOR. Resultado: bastaba
+    # arrancar un juego sin perfil en la comunidad -que pone la variable a 1-
+    # para que a partir de ahi, en toda la sesion, NINGUN otro juego volviera
+    # a preguntar. Incluido uno que si tenia perfil.
+    local gid="${1:-}" f
+    [ -n "$gid" ] || return 1
+    # El fichero al lado del perfil: sirve tambien para los juegos que todavia
+    # NO tienen perfil, que son justo los que se preguntan.
+    [ -f "$PROFILE_DIR/.$gid.nocomm" ] && return 0
+    f="$PROFILE_DIR/$gid.conf"
+    [ -f "$f" ] || return 1          # juego nuevo: nunca se le pregunto
+    grep -qE '^COMUNIDAD_VISTO=1[[:space:]]*$' "$f" 2>/dev/null
+}
+
+community_marcar_preguntado() {
+    # Deja el "ya preguntado" de ESTE juego en disco.
+    #
+    # Va a un fichero al lado del perfil y no al campo del .conf, porque este
+    # momento es antes de que el juego tenga perfil: el campo se escribiria en
+    # un perfil que aun no existe. load_profile ya traduce este fichero al
+    # campo COMUNIDAD_VISTO en cuanto el perfil exista.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 0
+    COMUNIDAD_VISTO=1
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    : > "$PROFILE_DIR/.$gid.nocomm" 2>/dev/null || true
+    return 0
+}
+
 community_offer_for() {
     # Al configurar o lanzar un juego por primera vez: si la comunidad tiene
     # un perfil con ese nombre, ofrecerlo. Solo se pregunta UNA vez por juego.
     local gid="$1" cand
-    [ "${COMUNIDAD_VISTO:-0}" = 1 ] && return 1
+    if community_ya_preguntado "$gid"; then
+        log "comunidad: a '$gid' ya se le pregunto antes; no se repite"
+        return 1
+    fi
     [ -n "${WPROTON_REPO:-}" ] || return 1
+    # PRIMERO LA CARPETA, DESPUES GITHUB.
+    #
+    # Si el perfil de este juego ya esta en comunidad/ -porque se trajo el
+    # repositorio entero- no hay nada que preguntarle a GitHub: ni la lista ni
+    # el fichero. Se ahorra la espera de la red en el arranque del juego y una
+    # peticion de la API, y funciona igual sin conexion.
+    if cand="$(community_match_local "$gid")" && [ -n "$cand" ]; then
+        log "comunidad: '$gid' sale de la copia local: $cand (no se consulta GitHub)"
+        say "[comunidad] hay perfil para $gid: $cand (copia local)"
+        local _conkl=""
+        community_tiene_keys "$cand" && _conkl="
+Este trae ademas las teclas del mando (.keys)."
+        if ui_ask "La comunidad tiene una configuracion ya probada para:
+
+$gid
+
+Suele traer el runner y los ajustes que hacen falta para que
+funcione bien.$_conkl Quieres instalarla?"; then
+            community_fetch "$cand" "$gid" && return 0
+        fi
+        log "comunidad: el usuario no quiso el perfil de '$gid'"
+        community_marcar_preguntado "$gid"
+        return 1
+    fi
     community_index_refresh || return 1
-    cand="$(community_match "$gid")" || { COMUNIDAD_VISTO=1; return 1; }
+    if ! cand="$(community_match "$gid")"; then
+        # NO ESTA EN LA LISTA. Antes se daba por perdido aqui mismo, y con una
+        # lista que se guarda un dia eso significaba que un juego subido al
+        # repositorio hoy no aparecia hasta mañana. Es el fallo que conto
+        # Dani con Silver Pines: estaba en el repositorio y WProton no lo veia.
+        #
+        # Asi que si la lista era de antes, se pide una nueva y se vuelve a
+        # buscar. Una sola vez por sesion: no se va a GitHub una vez por juego.
+        local edad; edad="$(repo_indice_edad "$COMMUNITY_INDEX")"
+        if [ "$COMUNIDAD_REFRESCADO" = 0 ] && [ "$edad" -gt 60 ]; then
+            log "comunidad: '$gid' (clave '$(nombre_clave "$gid")') no esta en la lista guardada; se pide una nueva por si se acaba de subir"
+            COMUNIDAD_REFRESCADO=1
+            community_index_refresh forzar || true
+            cand="$(community_match "$gid")" || cand=""
+        fi
+        if [ -z "$cand" ]; then
+            log "comunidad: no hay perfil para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0) perfiles en la lista)"
+            community_marcar_preguntado "$gid"
+            return 1
+        fi
+    fi
     say "[comunidad] hay perfil para $gid: $cand"
+    local _conk=""
+    community_tiene_keys "$cand" && _conk="
+Este trae ademas las teclas del mando (.keys)."
     if ui_ask "La comunidad tiene una configuracion ya probada para:
 
 $gid
 
 Suele traer el runner y los ajustes que hacen falta para que
-funcione bien. Quieres descargarla?"; then
+funcione bien.$_conk Quieres descargarla?"; then
         community_fetch "$cand" "$gid" && return 0
     fi
-    COMUNIDAD_VISTO=1             # no volver a preguntar por este juego
+    # Dijo que no: no volver a preguntar por ESTE juego (los demas, si).
+    log "comunidad: el usuario no quiso el perfil de '$gid'"
+    community_marcar_preguntado "$gid"
     return 1
 }
 
@@ -26369,11 +27127,24 @@ community_menu() {
         return 1
     fi
     say "Consultando perfiles de la comunidad..."
-    list="$(community_list)"
+    # LA LISTA GUARDADA, NO UNA CONSULTA NUEVA.
+    #
+    # Antes esto llamaba a community_list, o sea a GitHub, cada vez que se
+    # abria el menu: una espera por cada vez, y sin conexion un "no se pudieron
+    # leer" aunque hubiera una copia local entera en comunidad/. Ahora pasa por
+    # community_index_refresh, que usa la lista guardada -que el arranque deja
+    # al dia- y, si no hay red ni lista, la hace con la copia local.
+    community_index_refresh || true
+    # Solo los perfiles: los .keys van con el suyo y no se eligen aparte.
+    list=""
+    [ -f "$COMMUNITY_INDEX" ] && list="$(community_solo_conf < "$COMMUNITY_INDEX")"
     if [ -z "$list" ]; then
         ui_info "No se pudieron leer los perfiles del repositorio.
 Comprueba la conexion o que exista la carpeta profiles/ en:
-$WPROTON_REPO"
+$WPROTON_REPO
+
+Con 'Traer TODOS a comunidad/' se guarda una copia que
+funciona sin conexion."
         return 1
     fi
     while true; do
@@ -40707,6 +41478,129 @@ $dst"
     return 0
 }
 
+dev_video_libre() {
+    # GRABAR UN TUTORIAL ENTERO, SIN RELOJ. L3 empieza, R3 para.
+    #
+    # Las otras dos grabaciones duran lo que se les diga y se paran solas. Para
+    # un videotutorial eso no sirve: no se sabe de antemano cuanto va a durar
+    # lo que se quiere ense\u00f1ar, y cortar a los 60 segundos obliga a repetirlo.
+    #
+    # Aqui se deja la grabacion ARMADA y se maneja con el mando desde los
+    # propios menus. Como los fotogramas los guarda pygame desde dentro, sale
+    # exacto; ffmpeg leyendo la pantalla desde fuera saca video negro con los
+    # menus (ver dev_video_menus).
+    #
+    # Mientras no haya nada armado, L3 sigue haciendo la captura de pantalla de
+    # siempre: los dos usos no coinciden nunca.
+    command -v ffmpeg >/dev/null 2>&1 || {
+        ui_error "Para montar el video hace falta ffmpeg."; return 1; }
+    local dir; dir="$(dev_dir)"
+    mkdir -p "$dir" 2>/dev/null
+    local dst="$dir/tutorial_$(date +%Y%m%d_%H%M%S).mp4"
+    # Si quedo algo de una grabacion anterior a medias, fuera: si no, pygame
+    # creeria que sigue armada o que todavia esta grabando.
+    rm -f "$dir/.rec" "$dir/.rec_fin" "$dir/.rec_armado" 2>/dev/null
+    # LA CARPETA, CON mktemp.
+    #
+    # Con un nombre hecho de la fecha, armar dos veces en el mismo segundo daba
+    # la MISMA carpeta para las dos y los fotogramas se habrian mezclado. El
+    # PID tampoco vale: las dos llamadas salen del mismo WProton.
+    local frames
+    frames="$(mktemp -d "$dir/.frames_$(date +%Y%m%d_%H%M%S)_XXXXXX")" || {
+        ui_error "No se pudo crear la carpeta de fotogramas en $dir"; return 1; }
+    printf '%s\n' "$frames" > "$dir/.rec_armado"
+
+    # EL VIGILANTE.
+    #
+    # Espera a que los menus dejen el .rec_fin (lo escribe R3, o el propio
+    # pygame si el disco se queda sin sitio) y monta el mp4. Tiene un tope de
+    # cuatro horas para no quedarse vivo para siempre si alguien arma la
+    # grabacion y se olvida.
+    ( _limite=$(( $(date +%s) + 14400 ))
+      while [ ! -f "$dir/.rec_fin" ]; do
+          sleep 2
+          [ "$(date +%s)" -gt "$_limite" ] && break
+          # Si alguien borra la marca a mano, no tiene sentido seguir.
+          [ -f "$dir/.rec_armado" ] || [ -f "$dir/.rec" ] || break
+      done
+      rm -f "$dir/.rec" "$dir/.rec_armado" 2>/dev/null
+      if [ -f "$dir/.rec_fin" ]; then
+          rm -f "$dir/.rec_fin"
+          if [ -n "$(ls -A "$frames" 2>/dev/null)" ]; then
+              _n="$(ls -1 "$frames" 2>/dev/null | wc -l)"
+              log "[dev] Montando el tutorial: $_n fotogramas -> $dst"
+              ffmpeg -y -framerate 10 -i "$frames/f%05d.png" \
+                  -c:v libx264 -preset veryfast -pix_fmt yuv420p -r 30 "$dst"
+              if [ -s "$dst" ]; then
+                  log "[dev] Tutorial guardado: $dst ($(human_size "$(stat -c%s "$dst" 2>/dev/null || echo 0)"))"
+              else
+                  log "[dev] ffmpeg no pudo montar el tutorial" WARN
+              fi
+          else
+              log "[dev] No se capturo ningun fotograma" WARN
+          fi
+      else
+          log "[dev] La grabacion se armo y nadie la arranco (o se paso de 4 h)" WARN
+      fi
+      rm -rf "$frames"
+    ) < /dev/null >> "$LOG_FILE" 2>&1 &
+
+    ui_info "Grabacion ARMADA. No empieza todavia.
+
+  L3  (pulsar el stick izquierdo)  empezar a grabar
+  R3  (pulsar el stick derecho)    parar y montar el video
+
+Sal de este menu y ponte donde quieras empezar. Mientras grabe
+veras 'REC' y el tiempo arriba a la derecha; eso NO sale en el
+video.
+
+Graba los MENUS, no los juegos: dentro de un juego no hay menus
+que dibujar. Para la partida esta 'Grabar la pantalla entera'.
+
+Se para sola si el disco se queda sin sitio.
+
+El video ira a:
+$dst"
+    return 0
+}
+
+dev_rec_estado() {
+    # Que hay ahora mismo: armada, grabando, montando o nada.
+    local dir; dir="$(dev_dir)"
+    if [ -f "$dir/.rec_fin" ]; then
+        printf 'montando el video'
+    elif [ -f "$dir/.rec" ]; then
+        local _n _f
+        _f="$(sed -n 2p "$dir/.rec" 2>/dev/null)"
+        _n="$(ls -1 "$_f" 2>/dev/null | wc -l)"
+        printf 'GRABANDO (%s fotogramas)' "${_n:-0}"
+    elif [ -f "$dir/.rec_armado" ]; then
+        printf 'armada, esperando a L3'
+    else
+        printf 'parada'
+    fi
+}
+
+dev_rec_cancelar() {
+    # Desarmar sin montar nada: para cuando se arma por error.
+    # OJO CON EL "local" DE DOS VARIABLES.
+    #
+    # Esto estaba escrito como: local dir; dir="$(dev_dir)" f
+    # Bash no lee eso como "declara dir y f": lee una asignacion y luego la
+    # ORDEN f. Resultado: "f: command not found", dir sin definir y, con
+    # set -u, WProton muerto. Las dos se declaran juntas y se asignan despues.
+    local dir f
+    dir="$(dev_dir)"
+    f="$(sed -n 1p "$dir/.rec_armado" 2>/dev/null)"
+    [ -n "$f" ] || f="$(sed -n 2p "$dir/.rec" 2>/dev/null)"
+    rm -f "$dir/.rec" "$dir/.rec_armado" "$dir/.rec_fin" 2>/dev/null
+    case "$f" in
+        "$dir"/.frames_*) rm -rf "$f" 2>/dev/null ;;
+    esac
+    ui_info "Grabacion cancelada. No se ha montado ningun video."
+    return 0
+}
+
 dev_probar_tema() {
     # VER LOS FONDOS DE TEMPORADA SIN ESPERAR A LA FECHA.
     #
@@ -40749,9 +41643,11 @@ dev_menu() {
     local sel
     while :; do
         sel="$(menu "Modo desarrollo" \
+            "Grabar sin limite - L3 empieza, R3 para  [$(dev_rec_estado)]" \
+            "Cancelar la grabacion armada" \
             "Captura de pantalla (5 s de margen)" \
             "Captura de pantalla (15 s de margen)" \
-            "Grabar los menus - 30 s (recomendado)" \
+            "Grabar los menus - 30 s" \
             "Grabar los menus - 60 s" \
             "Grabar la pantalla entera - 30 s (puede salir en negro)" \
             "Ver la carpeta de capturas" \
@@ -40759,6 +41655,8 @@ dev_menu() {
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
+            "Grabar sin limite"*)        dev_video_libre || true ;;
+            "Cancelar la grabacion"*)    dev_rec_cancelar || true ;;
             "Captura de pantalla (5"*)   dev_captura_pantalla 5  || true ;;
             "Captura de pantalla (15"*)  dev_captura_pantalla 15 || true ;;
             "Grabar los menus - 30"*)    dev_video_menus 30 5  || true ;;
@@ -41305,20 +42203,36 @@ covers43_list() {
 
 
 covers43_index_refresh() {
-    # Lista cacheada un dia, como la de los perfiles. Sin red no se avisa de
-    # nada: simplemente no hay carátulas nuevas esta vez.
-    [ -n "${WPROTON_REPO:-}" ] || return 1
-    if [ -f "$COVERS43_INDEX" ]; then
-        local edad
-        edad=$(( $(date +%s) - $(stat -c %Y "$COVERS43_INDEX" 2>/dev/null || echo 0) ))
-        [ "$edad" -lt 86400 ] && return 0
+    # Lista guardada un dia, como la de los perfiles. Sin red no se avisa por
+    # pantalla -no hay carátulas nuevas esta vez y punto- pero SI queda en el
+    # registro por que no las hubo.
+    #
+    # $1 = "forzar" -> ignora la copia guardada y pide la lista otra vez.
+    local forzar="${1:-}" edad
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        log "covers_43: no hay repositorio configurado (WPROTON_REPO vacio)" AVISO
+        return 1
     fi
+    edad="$(repo_indice_edad "$COVERS43_INDEX")"
+    if [ "$forzar" != forzar ] && [ "$edad" -ge 0 ] && [ "$edad" -lt 86400 ]; then
+        log "covers_43: se usa la lista guardada ($(repo_edad_humana "$edad"), $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátulas)"
+        return 0
+    fi
+    [ "$forzar" = forzar ] \
+        && log "covers_43: se pide la lista OTRA VEZ (la guardada fue $(repo_edad_humana "$edad"))" \
+        || log "covers_43: pidiendo la lista de covers_43/ a $WPROTON_REPO ($(repo_edad_humana "$edad"))"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     covers43_list > "$COVERS43_INDEX.tmp" 2>/dev/null
     if [ -s "$COVERS43_INDEX.tmp" ]; then
         mv -f "$COVERS43_INDEX.tmp" "$COVERS43_INDEX"
+        log "covers_43: lista al dia -> $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátula(s) en el repositorio"
+        if [ "$(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0)" -ge 1000 ]; then
+            log "covers_43: la carpeta covers_43/ llega al tope de 1000 ficheros de la API de GitHub: las que pasen de ahi NO se ven. Hay que pasar a la API de arboles." AVISO
+        fi
     else
         rm -f "$COVERS43_INDEX.tmp"
+        log "covers_43: el repositorio no devolvio ninguna carátula; se sigue con la copia guardada si la hay" AVISO
+        [ -f "$COVERS43_INDEX" ] && return 0
         return 1
     fi
     return 0
@@ -41445,9 +42359,27 @@ covers43_offer_for() {
     local gid="${1:-}" cand
     [ -n "$gid" ] || return 1
     [ -n "${WPROTON_REPO:-}" ] || return 1
-    cover_tipo_real "$gid" 43 >/dev/null 2>&1 && return 1   # ya la tiene
+    if cover_tipo_real "$gid" 43 >/dev/null 2>&1; then
+        log "covers_43: '$gid' ya tiene carátula 4:3; no se toca"
+        return 1
+    fi
     covers43_index_refresh || return 1
-    cand="$(covers43_match "$gid")" || return 1
+    if ! cand="$(covers43_match "$gid")"; then
+        # Lo mismo que con los perfiles: una carátula subida hoy no puede
+        # esperar a mañana. Si la lista era de antes, se pide una nueva y se
+        # vuelve a buscar, una sola vez por sesion.
+        local edad; edad="$(repo_indice_edad "$COVERS43_INDEX")"
+        if [ "$COVERS43_REFRESCADO" = 0 ] && [ "$edad" -gt 60 ]; then
+            log "covers_43: '$gid' (clave '$(nombre_clave "$gid")') no esta en la lista guardada; se pide una nueva por si se acaba de subir"
+            COVERS43_REFRESCADO=1
+            covers43_index_refresh forzar || true
+            cand="$(covers43_match "$gid")" || cand=""
+        fi
+        if [ -z "$cand" ]; then
+            log "covers_43: no hay carátula para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátulas en la lista)"
+            return 1
+        fi
+    fi
     say "[covers_43] el repositorio tiene carátula 4:3 para $gid: $cand"
     covers43_fetch "$cand" "$gid" || return 1
     say "[+] Carátula 4:3 descargada del repositorio"
@@ -41466,8 +42398,12 @@ covers43_traer_todas() {
     loading_say "Consultando las carátulas del repositorio..."
     # Lista RECIEN TRAIDA: quien pulsa esto quiere las que se subieron hoy, no
     # las de la copia de ayer.
-    rm -f "$COVERS43_INDEX" 2>/dev/null
-    covers43_index_refresh
+    #
+    # Se pide con "forzar" en vez de borrar la copia antes: si GitHub falla
+    # justo ahora, la lista de ayer sigue ahi y las carátulas que ya conoce se
+    # pueden seguir bajando. Borrandola, un fallo de red dejaba a WProton sin
+    # ninguna lista.
+    covers43_index_refresh forzar
     _ok=$?
     loading_clear
     if [ "$_ok" != 0 ]; then
@@ -41602,9 +42538,8 @@ caratula43_repo_manual() {
     [ -n "$gid" ] || return 1
     loading_say "Buscando una carátula 4:3 para '$gid' en el repositorio..."
     # El usuario la pide AHORA: lista fresca, sin esperar a que caduque la
-    # cacheada de un dia (puede que la carátula se subiera esta mañana).
-    rm -f "$COVERS43_INDEX" 2>/dev/null
-    covers43_index_refresh
+    # guardada de un dia (puede que la carátula se subiera esta mañana).
+    covers43_index_refresh forzar
     _ok=$?
     loading_clear
     if [ "$_ok" != 0 ]; then
@@ -41740,6 +42675,139 @@ EOFC3
 
 urlencode_py() {
     ficha_py urlencode "$1" 2>/dev/null
+}
+
+sgdb_key_pedir() {
+    # La clave de SteamGridDB, pidiendosela al usuario si aun no la hay.
+    # Deja la clave en $SGDB_KEY y devuelve 0 si al final hay clave.
+    #
+    # $1 = "silencioso" -> si no hay clave, NO se pregunta: se devuelve 1.
+    #      Sirve para los sitios donde la descarga es un extra y no puede
+    #      interrumpir lo que el usuario estaba haciendo.
+    local modo="${1:-}" k
+    SGDB_KEY="$(sgdb_key_leer)"
+    [ -n "$SGDB_KEY" ] && return 0
+    [ "$modo" = silencioso ] && return 1
+    k="$(ask_text "Pega tu API key de SteamGridDB
+(gratis en steamgriddb.com -> Profile -> Preferences -> API)
+
+Se guardara en sgdb.key, solo legible por ti, y NO en
+settings.conf (que se comparte al pedir ayuda)." "")"
+    [ -z "$k" ] && return 1
+    SGDB_KEY="$k"
+    # en su propio fichero y sin permisos para nadie mas
+    if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+        chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+        say "[+] Clave guardada en sgdb.key (solo legible por ti)"
+    else
+        save_settings           # si no se pudo escribir, como antes
+    fi
+    return 0
+}
+
+sgdb_id_de_juego() {
+    # $1 = titulo -> el id de SteamGridDB, o nada.
+    local titulo="${1:-}" q gjson
+    [ -n "$titulo" ] && [ -n "${SGDB_KEY:-}" ] || return 1
+    q="$(urlencode_py "$titulo")"
+    gjson="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")" || return 1
+    if printf '%s' "$gjson" | grep -q '"success": *false'; then
+        log "SGDB: la peticion fue rechazada (API key invalida?)" AVISO
+        printf '!CLAVE'
+        return 1
+    fi
+    printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*'
+}
+
+sgdb_url_de() {
+    # La URL de una imagen de SteamGridDB. Nada si no hay ninguna.
+    # $1 = id del juego en SGDB, $2 = familia (grids|heroes|logos),
+    # $3 = dimensiones pedidas (opcional; en heroes y logos no aplica)
+    local id="${1:-}" fam="${2:-grids}" dims="${3:-}" ujson url
+    [ -n "$id" ] && [ -n "${SGDB_KEY:-}" ] || return 1
+    url="https://www.steamgriddb.com/api/v2/$fam/game/$id?types=static"
+    [ -n "$dims" ] && url="$url&dimensions=$dims"
+    ujson="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $SGDB_KEY" \
+        "$url" 2>>"$LOG_FILE")" || return 1
+    printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 \
+        | cut -d'"' -f4 | sed 's|\\/|/|g'
+}
+
+sgdb_bajar_a() {
+    # Baja una imagen de SteamGridDB a un fichero EXACTO.
+    # $1 = id del juego en SGDB, $2 = familia, $3 = dimensiones (o vacio),
+    # $4 = ruta destino (con su extension ya puesta)
+    #
+    # Se usa para el arte de Steam, donde el nombre del fichero no lo
+    # elegimos nosotros: Steam exige "<appid>p.png", "<appid>_hero.png"...
+    local id="$1" fam="$2" dims="$3" destino="$4" url tmp
+    url="$(sgdb_url_de "$id" "$fam" "$dims")" || return 1
+    [ -n "$url" ] || return 1
+    tmp="$(mktemp)" || return 1
+    if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"; return 1
+    fi
+    if ! es_imagen "$tmp"; then
+        rm -f "$tmp"
+        log "SGDB: lo descargado para $fam no es una imagen; descartado" AVISO
+        return 1
+    fi
+    mkdir -p "$(dirname "$destino")" 2>/dev/null
+    cat "$tmp" > "$destino" || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+    return 0
+}
+
+sgdb_un_juego() {
+    # LAS CARATULAS DE UN SOLO JUEGO, A LAS CARPETAS DE WProton.
+    #
+    # $1 = gid, $2 = titulo para buscar, $3 = formas ("vertical wide")
+    # Devuelve 0 si bajo alguna.
+    #
+    # Es el mismo trabajo que hace la descarga en tanda, sacado aparte para
+    # que lo puedan usar los dos sitios que lo necesitan -la tanda y el "añadir
+    # a Steam"- sin tener dos copias del protocolo de la API que se vayan
+    # separando con el tiempo.
+    local gid="${1:-}" titulo="${2:-}" tipos="${3:-vertical wide}"
+    local id tipo destino dims url ext bajadas=0
+    # SE BORRA EL ID ANTERIOR LO PRIMERO.
+    #
+    # Si no, un juego que SteamGridDB no conozca deja en pie el id del juego
+    # ANTERIOR, y quien lea SGDB_ULTIMO_ID despues -el arte de Steam, que pide
+    # con ese id el fondo y el logotipo- se trae las imagenes DE OTRO JUEGO.
+    # Salio en una prueba: al añadir a Steam un juego desconocido aparecia con
+    # el fondo del que se habia añadido antes.
+    SGDB_ULTIMO_ID=""
+    [ -n "$gid" ] && [ -n "$titulo" ] || return 1
+    [ -n "${SGDB_KEY:-}" ] || return 1
+    id="$(sgdb_id_de_juego "$titulo")" || {
+        [ "$id" = '!CLAVE' ] && return 2        # clave mala: quien llama avisa
+        log "SGDB: sin resultados para '$titulo'"
+        return 1; }
+    [ -n "$id" ] || { log "SGDB: sin resultados para '$titulo'"; return 1; }
+    for tipo in $tipos; do
+        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+        destino="$(covers_dir_de "$tipo")"
+        case "$tipo" in
+            vertical) dims="600x900" ;;
+            wide)     dims="920x430,460x215" ;;
+            *) continue ;;
+        esac
+        url="$(sgdb_url_de "$id" grids "$dims")" || url=""
+        if [ -z "$url" ]; then
+            log "SGDB: sin carátula $tipo ($dims) para '$titulo'"
+            continue
+        fi
+        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+        mkdir -p "$destino" 2>/dev/null
+        if sgdb_bajar_a "$id" grids "$dims" "$destino/$gid.$ext"; then
+            bajadas=$((bajadas+1))
+            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+        fi
+    done
+    SGDB_ULTIMO_ID="$id"
+    [ "$bajadas" -gt 0 ]
 }
 
 caratula_manual() {
@@ -42045,8 +43113,7 @@ sgdb_download_covers() {
     case " $tipos " in
         *" 43 "*)
             loading_say "Consultando las carátulas 4:3 del repositorio..."
-            rm -f "$COVERS43_INDEX" 2>/dev/null
-            covers43_index_refresh || say "AVISO: no se pudo consultar covers_43/ del repositorio"
+            covers43_index_refresh forzar || say "AVISO: no se pudo consultar covers_43/ del repositorio"
             loading_clear ;;
     esac
     # LA CLAVE DE STEAMGRIDDB, SOLO SI SE VA A USAR.
@@ -42054,30 +43121,13 @@ sgdb_download_covers() {
     # Antes se pedia siempre. Quien solo quiera las 4:3 -que salen de nuestro
     # repositorio- no tiene por que darse de alta en ningun sitio.
     if [ -n "$tipos_sgdb" ]; then
-        SGDB_KEY="$(sgdb_key_leer)"
-        if [ -z "$SGDB_KEY" ]; then
-            local k
-            k="$(ask_text "Pega tu API key de SteamGridDB
-(gratis en steamgriddb.com -> Profile -> Preferences -> API)
-
-Se guardara en sgdb.key, solo legible por ti, y NO en
-settings.conf (que se comparte al pedir ayuda)." "")"
-            [ -z "$k" ] && return 1
-            SGDB_KEY="$k"
-            # en su propio fichero y sin permisos para nadie mas
-            if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
-                chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
-                say "[+] Clave guardada en sgdb.key (solo legible por ti)"
-            else
-                save_settings           # si no se pudo escribir, como antes
-            fi
-        fi
+        sgdb_key_pedir || return 1
     fi
     mkdir -p "$COVERS_DIR"
     local list total=0 got=0 pend=0 idx=0
     list="$(find_paquetes "$GAMES_PATH" 3 | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
-    local f gid title q gjson gameid ujson url ext _falta _t
+    local f gid title _falta _t _rc_sgdb=0
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         # Pendiente si le falta alguna de las que se han pedido
@@ -42137,45 +43187,18 @@ EOF0
             done
             if [ "$_falta_sgdb" = 1 ]; then
                 say "[SGDB] Buscando carátula: $title"
-                q="$(urlencode_py "$title")"
-                gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                    "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
-                if printf '%s' "$gjson" | grep -q '"success": *false'; then
+                # EL PROTOCOLO DE LA API, EN UN SOLO SITIO.
+                #
+                # Esto era una copia del mismo codigo que usa "añadir a
+                # Steam". Dos copias del mismo protocolo se separan en cuanto
+                # una se arregla y la otra no, asi que ahora las dos llaman a
+                # sgdb_un_juego.
+                sgdb_un_juego "$gid" "$title" "$tipos_sgdb"
+                _rc_sgdb=$?
+                [ "$_rc_sgdb" = 0 ] && bajada=1
+                if [ "$_rc_sgdb" = 2 ]; then
                     progress_stop
                     ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
-                fi
-                gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
-                if [ -z "$gameid" ]; then
-                    say "[SGDB]   sin resultados para: $title"
-                else
-                    # Se piden las DOS: la vertical para la rejilla clasica y la
-                    # horizontal para la vista de carátulas anchas. Cada una se
-                    # guarda con su nombre, asi que no se pisan.
-                    local destino dims
-                    for tipo in $tipos_sgdb; do
-                        destino="$(covers_dir_de "$tipo")"
-                        case "$tipo" in
-                            vertical) dims="600x900" ;;
-                            wide)     dims="920x430,460x215" ;;
-                        esac
-                        mkdir -p "$destino" 2>/dev/null
-                        # No se vuelve a descargar lo que ya hay: la vertical
-                        # podria ser una que el usuario eligio a mano.
-                        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
-                        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
-                            2>>"$LOG_FILE")"
-                        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-                        if [ -z "$url" ]; then
-                            say "[SGDB]   sin carátula $tipo ($dims) para: $title"
-                            continue
-                        fi
-                        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-                        if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
-                            bajada=1
-                            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
-                        fi
-                    done
                 fi
             fi
         fi
@@ -46298,6 +47321,390 @@ vista_forma() {
     esac
 }
 
+REPO_REFRESCO_MINIMO=600     # segundos entre dos refrescos de arranque
+
+repo_refrescar_al_arrancar() {
+    # LAS DOS LISTAS DEL REPOSITORIO, AL DIA EN CADA ARRANQUE.
+    #
+    # Lo pidio Dani para no volver a tener el problema de Silver Pines: un
+    # juego subido al repositorio y WProton mirando una lista de ayer.
+    #
+    # EN SEGUNDO PLANO, SIEMPRE.
+    #
+    # Son dos consultas a GitHub. Hacerlas aqui y esperarlas significaria que
+    # arrancar WProton tarda lo que tarde la red -o lo que tarde en FALLAR,
+    # que es peor, y en una Deck sin conexion son doce segundos de pantalla
+    # muerta-. Van a un subproceso y nadie las espera: las listas se escriben
+    # con un temporal y un "mv", asi que quien las lea mientras tanto lee la
+    # anterior entera, nunca una a medias.
+    #
+    # Y NO MAS DE UNA VEZ CADA DIEZ MINUTOS.
+    #
+    # La API de GitHub sin credenciales da 60 peticiones por hora y por IP.
+    # Dos por arranque parecen pocas hasta que se cuenta como se usa esto de
+    # verdad: en DeckStation cada juego lanza su propio wproton.sh, asi que
+    # una tarde de pruebas lanzando juegos son dos peticiones por juego. Al
+    # pasar de 60 GitHub contesta 403 a TODO durante el resto de la hora, y
+    # entonces no funciona ni la lista, ni las caratulas, ni los perfiles. El
+    # suelo de diez minutos deja el "cada vez que arranque" intacto en el uso
+    # normal y evita el unico caso en que se rompia.
+    [ -n "${WPROTON_REPO:-}" ] || return 0
+    local marca="$CACHE_DIR/.repo_refresco" edad
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+    edad="$(repo_indice_edad "$marca")"
+    if [ "$edad" -ge 0 ] && [ "$edad" -lt "$REPO_REFRESCO_MINIMO" ]; then
+        log "repositorio: las listas se refrescaron hace $edad s; este arranque no vuelve a preguntar"
+        return 0
+    fi
+    : > "$marca" 2>/dev/null
+    (
+        # Las caratulas se siguen trayendo del repositorio siempre: aqui solo
+        # se actualiza la LISTA de las que hay, que es lo que decide si una
+        # caratula nueva se ve o no.
+        community_index_refresh forzar || true
+        covers43_index_refresh  forzar || true
+        log "repositorio: listas actualizadas en segundo plano al arrancar"
+    ) >/dev/null 2>&1 &
+    # SE APUNTA EL PID PARA PODER PARARLO AL CERRAR.
+    #
+    # Si alguien cierra WProton en los dos segundos que tarda, este subproceso
+    # seguiria vivo con un curl colgado y el cierre avisaria de "trabajos en
+    # segundo plano". Con el PID apuntado, el cierre lo remata como a los demas.
+    REPO_REFRESCO_PID=$!
+    log "repositorio: refrescando las listas en segundo plano (pid $REPO_REFRESCO_PID)"
+    return 0
+}
+
+repo_refresco_stop() {
+    # Para el refresco de arranque si todavia estuviera en marcha.
+    [ -n "${REPO_REFRESCO_PID:-}" ] || return 0
+    if kill -0 "$REPO_REFRESCO_PID" 2>/dev/null; then
+        kill "$REPO_REFRESCO_PID" 2>/dev/null
+        log "Cierre: refresco del repositorio detenido (pid $REPO_REFRESCO_PID)"
+    fi
+    REPO_REFRESCO_PID=""
+    return 0
+}
+
+repo_cruzar_biblioteca() {
+    # CRUZA TU BIBLIOTECA CON LAS DOS LISTAS DEL REPOSITORIO, DE UNA PASADA.
+    #
+    # $1 = 1 si hay que mirar los perfiles, $2 = 1 si hay que mirar las 4:3.
+    # Sale una linea por juego:
+    #
+    #   gid <TAB> perfil.conf del repositorio (o vacio) <TAB> carátula (o vacio)
+    #
+    # POR QUE NO SE LLAMA A community_match/covers43_match POR CADA JUEGO:
+    # esas recorren la lista entera llamando a nombre_clave, que es un proceso
+    # aparte. Con 300 juegos y 300 carátulas salen decenas de miles de
+    # procesos y el cruce tardaba CINCO MINUTOS. Medido. Aqui las claves se
+    # normalizan de una vez con tr -el mismo juego de caracteres que
+    # nombre_clave, para que el resultado sea identico- y la comparacion la
+    # hace awk en memoria, con la misma regla de coletilla de version que
+    # nombre_coletilla. Baja a un segundo, y da las mismas respuestas:
+    # comprobado juego a juego contra las funciones de verdad.
+    local con_p="${1:-0}" con_c="${2:-0}"
+    local juego gid gids claves pares nom_p nom_c tab_p tab_c
+    gids="$(mktemp)"; claves="$(mktemp)"; pares="$(mktemp)"
+    nom_p="$(mktemp)"; nom_c="$(mktemp)"
+    tab_p="$(mktemp)"; tab_c="$(mktemp)"
+    while IFS= read -r juego; do
+        [ -n "$juego" ] || continue
+        gid="$(game_id "$juego")"
+        [ -n "$gid" ] && printf '%s\n' "$gid"
+    done > "$gids" <<EOFJ
+$(lista_juegos 2>/dev/null)
+EOFJ
+    tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' < "$gids" | tr -d ' ._-' > "$claves"
+    paste "$gids" "$claves" > "$pares"
+    : > "$tab_p"; : > "$tab_c"
+    if [ "$con_p" = 1 ] && [ -f "$COMMUNITY_INDEX" ]; then
+        grep -i '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null > "$nom_p"
+        sed 's/\.[Cc][Oo][Nn][Ff]$//' "$nom_p" \
+            | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-' \
+            | paste - "$nom_p" > "$tab_p"
+    fi
+    if [ "$con_c" = 1 ] && [ -f "$COVERS43_INDEX" ]; then
+        cut -f1 "$COVERS43_INDEX" 2>/dev/null > "$nom_c"
+        sed 's/\.[^.]*$//' "$nom_c" \
+            | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-' \
+            | paste - "$nom_c" > "$tab_c"
+    fi
+    awk -F'\t' -v fp="$tab_p" -v fc="$tab_c" '
+        function coletilla(r) {
+            return r ~ /^(v[0-9]|[0-9]|gog|repack|p2p|fitgirl|dodi|elamigos|multi[0-9]|rip|proper|update|build|remastered0)/
+        }
+        function cual(clave, mapa, claves_, n,   i, lc, resto) {
+            if (clave in mapa) return mapa[clave]
+            for (i = 1; i <= n; i++) {
+                lc = claves_[i]
+                if (length(lc) < 6) continue
+                if (index(clave, lc) == 1) {
+                    resto = substr(clave, length(lc) + 1)
+                    if (coletilla(resto)) return mapa[lc]
+                }
+            }
+            return ""
+        }
+        BEGIN {
+            FS = "\t"; np = 0; nc = 0
+            while ((getline l < fp) > 0) {
+                split(l, c, "\t")
+                if (c[1] != "" && !(c[1] in mp)) { mp[c[1]] = c[2]; np++; kp[np] = c[1] }
+            }
+            while ((getline l < fc) > 0) {
+                split(l, c, "\t")
+                if (c[1] != "" && !(c[1] in mc)) { mc[c[1]] = c[2]; nc++; kc[nc] = c[1] }
+            }
+        }
+        $1 != "" {
+            printf "%s\t%s\t%s\n", $1, cual($2, mp, kp, np), cual($2, mc, kc, nc)
+        }' "$pares"
+    rm -f "$gids" "$claves" "$pares" "$nom_p" "$nom_c" "$tab_p" "$tab_c"
+    return 0
+}
+
+community_traer_todas() {
+    # TRAE DE GOLPE LOS PERFILES QUE EL REPOSITORIO TIENE PARA TUS JUEGOS.
+    #
+    # Lo pidio un tester: "igual que las carátulas, poder bajar todas las
+    # configuraciones de una vez".
+    #
+    # POR QUE NO SE BAJAN LOS 250 PERFILES DEL REPOSITORIO, SOLO LOS TUYOS:
+    # un perfil tiene que guardarse como "<tu juego>.conf" para que WProton lo
+    # encuentre, y en el repositorio se llama como el juego de QUIEN LO SUBIO
+    # ("Silver Pines.conf" frente a "Silver_Pines"). Bajarlos todos tal cual
+    # llenaria profiles/ de ficheros que ningun juego tuyo encuentra, y el
+    # menu de perfiles pasaria a tener cientos de entradas que no son del
+    # usuario. Las carátulas si se pueden bajar todas porque una carátula
+    # sobrante no estorba a nada; un perfil, si.
+    local _ok informe
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez.
+En 'Comprobar el repositorio' sale el detalle."
+        return 1
+    fi
+
+    loading_say "Cruzando tu biblioteca con el repositorio..."
+    informe="$(mktemp)"
+    repo_cruzar_biblioteca 1 0 > "$informe"
+    loading_clear
+
+    # Tres cuentas distintas, porque llevan a tres mensajes distintos:
+    #   nuevos   -> juegos tuyos con perfil en el repositorio y SIN perfil aqui
+    #   ya_tengo -> juegos tuyos con perfil en el repositorio y CON perfil aqui
+    #   sin_nada -> juegos tuyos que el repositorio no conoce
+    local gid m_conf nuevos=0 ya_tengo=0 sin_nada=0 total=0
+    while IFS="$(printf '\t')" read -r gid m_conf _; do
+        [ -n "$gid" ] || continue
+        total=$((total+1))
+        if [ -z "$m_conf" ]; then sin_nada=$((sin_nada+1))
+        elif profile_exists "$gid"; then ya_tengo=$((ya_tengo+1))
+        else nuevos=$((nuevos+1)); fi
+    done < "$informe"
+
+    if [ "$nuevos" = 0 ] && [ "$ya_tengo" = 0 ]; then
+        rm -f "$informe"
+        ui_info "El repositorio no tiene perfil para ninguno de tus
+$total juego(s).
+
+Si crees que alguno si deberia estar, mira
+'Comprobar el repositorio': dice con que nombre se busca."
+        return 0
+    fi
+
+    # LA UNICA PREGUNTA, Y ANTES DE EMPEZAR.
+    #
+    # Sustituir un perfil que el usuario ha ajustado a mano es destructivo, asi
+    # que no puede ser lo que pase por defecto. Se decide aqui una vez y luego
+    # la descarga va del tirón.
+    local tocar_existentes=0 sel
+    if [ "$ya_tengo" -gt 0 ]; then
+        sel="$(menu "Perfiles de la comunidad para tus juegos" \
+            "Solo los $nuevos juego(s) que aun no tienen perfil" \
+            "Tambien sustituir los $ya_tengo que ya tienen (copia .bak)" \
+            "<< Volver")" || { rm -f "$informe"; return 0; }
+        case "$sel" in
+            "Solo los"*)    tocar_existentes=0 ;;
+            "Tambien sus"*) tocar_existentes=1 ;;
+            *) rm -f "$informe"; return 0 ;;
+        esac
+    else
+        ui_ask "El repositorio tiene perfil para $nuevos de tus juegos
+y ninguno de ellos tiene perfil todavia.
+
+Descargarlos ahora?" || { rm -f "$informe"; return 0; }
+    fi
+
+    local cuantos=$nuevos
+    [ "$tocar_existentes" = 1 ] && cuantos=$((nuevos+ya_tengo))
+    local hechos=0 fallos=0 con_teclas=0 idx=0
+    progress_start "Descargando perfiles de la comunidad"
+    # WP_COMUNIDAD_TANDA: que community_fetch no abra un dialogo por juego.
+    WP_COMUNIDAD_TANDA=1
+    while IFS="$(printf '\t')" read -r gid m_conf _; do
+        [ -n "$gid" ] && [ -n "$m_conf" ] || continue
+        if profile_exists "$gid" && [ "$tocar_existentes" = 0 ]; then continue; fi
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / (cuantos > 0 ? cuantos : 1) ))" "($idx/$cuantos) $gid"
+        if community_fetch "$m_conf" "$gid"; then
+            hechos=$((hechos+1))
+            [ -f "$PROFILE_DIR/$gid.keys" ] && con_teclas=$((con_teclas+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo instalar $m_conf para $gid" AVISO
+        fi
+    done < "$informe"
+    WP_COMUNIDAD_TANDA=0
+    progress_stop
+    rm -f "$informe"
+
+    local resumen="Perfiles instalados: $hechos de $cuantos"
+    [ "$con_teclas" -gt 0 ] && resumen="$resumen
+Con teclas del mando: $con_teclas"
+    [ "$fallos" -gt 0 ] && resumen="$resumen
+No se pudieron traer: $fallos (mira el registro)"
+    [ "$ya_tengo" -gt 0 ] && [ "$tocar_existentes" = 1 ] && resumen="$resumen
+
+Los perfiles que tenias se han guardado como .conf.bak"
+    [ "$sin_nada" -gt 0 ] && resumen="$resumen
+
+El repositorio no conoce $sin_nada de tus juegos. Cuales son,
+en 'Comprobar el repositorio'."
+    log "comunidad: tanda terminada -> $hechos instalados, $fallos fallos, $con_teclas con teclas"
+    ui_info "$resumen"
+    return 0
+}
+
+repo_comprobar() {
+    # COMPROBACION DEL REPOSITORIO, DESDE DENTRO DE WPROTON.
+    #
+    # Cuando algo "no se descarga" hay cinco motivos posibles y desde fuera
+    # son indistinguibles: sin red, repositorio mal escrito, GitHub limitando
+    # peticiones, el fichero no esta subido, o el nombre no coincide. Esto los
+    # separa y lo dice en pantalla, sin que nadie tenga que abrir una terminal
+    # ni leerse el registro.
+    #
+    # Pide las dos listas RECIEN TRAIDAS a proposito: la gracia es saber que
+    # hay en el repositorio AHORA, no que habia en la copia de ayer.
+    local t_ok c_ok n_conf=0 n_keys=0 n_cov=0 texto sin_perfil=0 sin_cov=0
+    loading_say "Comprobando el repositorio $WPROTON_REPO..."
+    community_index_refresh forzar; t_ok=$?
+    covers43_index_refresh  forzar; c_ok=$?
+    loading_clear
+
+    texto="Repositorio: $WPROTON_REPO
+
+--- Perfiles de la comunidad (profiles/) ---"
+    if [ "$t_ok" = 0 ] && [ -f "$COMMUNITY_INDEX" ]; then
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        texto="$texto
+$n_conf perfil(es) .conf
+$n_keys fichero(s) .keys de teclas
+Lista $(repo_edad_humana "$(repo_indice_edad "$COMMUNITY_INDEX")")"
+    else
+        texto="$texto
+NO se pudo consultar (codigo HTTP ${REPO_ULTIMO_HTTP:-sin respuesta}).
+Comprueba la conexión; el detalle esta en el registro."
+    fi
+
+    texto="$texto
+
+--- Carátulas 4:3 (covers_43/) ---"
+    if [ "$c_ok" = 0 ] && [ -f "$COVERS43_INDEX" ]; then
+        n_cov="$(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0)"
+        texto="$texto
+$n_cov carátula(s)
+Lista $(repo_edad_humana "$(repo_indice_edad "$COVERS43_INDEX")")"
+    else
+        texto="$texto
+NO se pudo consultar. El detalle esta en el registro."
+    fi
+
+    # LO QUE DE VERDAD IMPORTA: de TUS juegos, cuales no encuentran nada.
+    #
+    # El numero de ficheros del repositorio no dice si el juego que uno tiene
+    # delante va a encontrar el suyo: el nombre puede no coincidir. Asi que se
+    # cruza la biblioteca entera contra las dos listas y se nombran los que se
+    # quedan fuera, que son los que hay que subir o renombrar.
+    local gid faltan_p="" faltan_c="" informe m_conf m_cov
+    if [ "$t_ok" = 0 ] || [ "$c_ok" = 0 ]; then
+        loading_say "Cruzando tu biblioteca con el repositorio..."
+        informe="$(mktemp)"
+        repo_cruzar_biblioteca "$([ "$t_ok" = 0 ] && echo 1 || echo 0)" \
+                               "$([ "$c_ok" = 0 ] && echo 1 || echo 0)" > "$informe"
+        while IFS="$(printf '\t')" read -r gid m_conf m_cov; do
+            [ -n "$gid" ] || continue
+            if [ "$t_ok" = 0 ] && [ -z "$m_conf" ]; then
+                sin_perfil=$((sin_perfil+1))
+                log "repositorio: sin perfil -> $gid"
+                [ "$sin_perfil" -le 12 ] && faltan_p="$faltan_p
+  $gid"
+            fi
+            if [ "$c_ok" = 0 ] && [ -z "$m_cov" ]; then
+                sin_cov=$((sin_cov+1))
+                log "repositorio: sin carátula 4:3 -> $gid"
+                [ "$sin_cov" -le 12 ] && faltan_c="$faltan_c
+  $gid"
+            fi
+        done < "$informe"
+        rm -f "$informe"
+        loading_clear
+    fi
+
+    if [ "$t_ok" = 0 ]; then
+        texto="$texto
+
+--- Tus juegos SIN perfil en el repositorio ($sin_perfil) ---$faltan_p"
+        [ "$sin_perfil" -gt 12 ] && texto="$texto
+  ... y $((sin_perfil-12)) mas (la lista entera esta en el registro)"
+        [ "$sin_perfil" = 0 ] && texto="$texto
+  ninguno: todos tienen perfil"
+    fi
+    if [ "$c_ok" = 0 ]; then
+        texto="$texto
+
+--- Tus juegos SIN carátula 4:3 en el repositorio ($sin_cov) ---$faltan_c"
+        [ "$sin_cov" -gt 12 ] && texto="$texto
+  ... y $((sin_cov-12)) mas (la lista entera esta en el registro)"
+        [ "$sin_cov" = 0 ] && texto="$texto
+  ninguna: todos tienen carátula"
+    fi
+
+    log "repositorio: comprobacion -> $n_conf perfiles, $n_keys teclas, $n_cov carátulas | de tu biblioteca: $sin_perfil sin perfil, $sin_cov sin carátula"
+    ui_info "$texto"
+    return 0
+}
+
+community_descargas_menu() {
+    # Las dos formas de traer perfiles, que no son lo mismo y conviene que no
+    # se confundan en una sola fila del menu:
+    #
+    #   "para tus juegos" -> instala los que te tocan, listos para jugar
+    #   "todos"           -> copia del repositorio entero en comunidad/, para
+    #                        tenerlos sin red o para mirarlos
+    local sel n_local
+    while :; do
+        n_local="$(community_local_list 2>/dev/null | grep -c . || true)"
+        sel="$(menu "Perfiles del repositorio" \
+            "Traer los de tus juegos (los instala)" \
+            "Traer TODOS a comunidad/ (ahora hay ${n_local:-0})" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Traer los de tus juegos"*) community_traer_todas || true ;;
+            "Traer TODOS"*)             community_traer_todo  || true ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 library_menu() {
     # Todo lo que afecta a como se ve y se ordena la biblioteca
     local sel
@@ -46310,6 +47717,8 @@ library_menu() {
             "Carátula en la vista de lista: $(list_cover_label)" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Traer todas las carátulas del repositorio" \
+            "Perfiles del repositorio (traer para tus juegos o todos)" \
+            "Comprobar el repositorio (perfiles y carátulas)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Tema de los menus: $THEME" \
@@ -46324,6 +47733,8 @@ library_menu() {
         case "$sel" in
             "<< Volver"|"") return ;;
             "Traer todas las carátulas"*) covers43_traer_todas || true ;;
+            "Perfiles del repositorio"*) community_descargas_menu || true ;;
+            "Comprobar el repositorio"*) repo_comprobar || true ;;
             "Base de datos de arcades"*) arcade_consultar ;;
             "Generar fotogramas (MAKO):"*)
                 # Aqui se instala o se quita; el encendido es POR JUEGO, en
@@ -47020,6 +48431,7 @@ datos_preparar          # crea metadata/ y trae lo que hubiera de antes
 rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
 perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
 update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
+repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
 # Una marca de "volver al inicio" que sobreviviera a un cierre brusco
 # cerraria todos los menus nada mas abrirlos. Se limpia al arrancar.
 rm -f "${WP_MARCA_INICIO:-/nonexistent}" 2>/dev/null
