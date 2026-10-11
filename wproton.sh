@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.01"
+WPROTON_VERSION="2.02"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -172,7 +172,7 @@ DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de j
 GRID_COLS=0                              # columnas de la rejilla (0 = automático)
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
-PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
+PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion) | carpeta (sin empaquetar)
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
@@ -1110,6 +1110,143 @@ try_static_tool() {
         esac
     done
     rm -rf "$tmp"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# 7-ZIP PORTABLE
+#
+# Hace falta para IMPORTAR juegos: los comprimidos con los que llega un juego
+# son .zip, .7z y .rar, muchas veces multiparte, y de esos solo el zip se
+# puede abrir sin herramientas externas.
+#
+# POR QUE ESTO NO PODIA SEGUIR SIENDO "INSTALA p7zip"
+#
+# Lo que habia era: si no esta el 7z del sistema, un mensaje diciendo
+# "sudo pacman -S p7zip". Eso falla en los dos sitios donde mas se usa WProton:
+#
+#   - En una Steam Deck el sistema es de SOLO LECTURA. No es que sea incomodo:
+#     es que NO SE PUEDE. Un usuario en modo Juego no tenia ninguna forma de
+#     importar un .rar, y el mensaje le mandaba a hacer algo imposible.
+#   - Y va contra la regla de la casa: WProton no pide sudo ni instala nada en
+#     el sistema. Trae lo que necesita a runtime/, como squashfuse,
+#     fuse-overlayfs, DwarFS o el propio Python.
+#
+# 7-Zip publica desde la version 21 un binario de Linux ESTATICO y oficial
+# (7zz), sin dependencias, que abre zip, 7z, rar, iso y los multiparte. Es
+# exactamente el mismo caso que el binario universal de DwarFS: nada que
+# compilar, un fichero y listo.
+# ---------------------------------------------------------------------------
+SEVENZIP_BIN=""
+
+find_sevenzip() {
+    # El nuestro primero, despues cualquiera de los del sistema.
+    #
+    # Los nombres cambian segun quien lo empaquete: "7zz" es el oficial de
+    # 7-Zip, "7z" y "7za" vienen de p7zip, y "7zr" es la version reducida (que
+    # NO abre rar, asi que va al final y solo como ultimo recurso).
+    SEVENZIP_BIN=""
+    local c d="$RUNTIME_DIR/tools"
+    for c in 7zz 7z 7za; do
+        [ -x "$d/$c" ] && { SEVENZIP_BIN="$d/$c"; return 0; }
+    done
+    for c in 7zz 7z 7za 7zr; do
+        SEVENZIP_BIN="$(command -v "$c" 2>/dev/null)" && [ -n "$SEVENZIP_BIN" ] && return 0
+    done
+    SEVENZIP_BIN=""
+    return 1
+}
+
+setup_sevenzip() {
+    # Deja un 7z utilizable en $SEVENZIP_BIN. Devuelve 1 si no se pudo.
+    #
+    # No descarga nada si ya hay uno: ni el nuestro ni el del sistema. Quien
+    # tenga p7zip instalado no necesita que le bajemos otro.
+    find_sevenzip && return 0
+    say "[7zip] no hay ningun 7z; se trae el binario oficial portable..."
+    local a; a="$(arch_tag)"
+    # El nombre del fichero de 7-Zip no sigue el "arch_tag" de siempre.
+    local a7
+    case "$a" in
+        x86_64)  a7=x64 ;;
+        aarch64) a7=arm64 ;;
+        armv7l)  a7=arm ;;
+        *)       a7="" ;;
+    esac
+    # 1) EL REPOSITORIO DE WProton, lo primero.
+    #
+    # Es la via que controlamos: basta con subir el binario a tools/ y deja de
+    # depender de que una URL de terceros siga viva. Igual que con las demas
+    # herramientas.
+    try_wproton_repo_tool 7zz && { find_sevenzip && return 0; }
+    # 2) El paquete de Arch (sirve en Arch, CachyOS y SteamOS, que es Arch).
+    try_arch_package 7zip && { find_sevenzip && return 0; }
+    # 3) El tarball oficial de 7-Zip. No es un binario suelto, asi que no vale
+    #    try_static_tool: hay que desempaquetarlo y sacar el 7zz de dentro.
+    if [ -n "$a7" ] && sevenzip_del_tarball "$a7"; then
+        find_sevenzip && return 0
+    fi
+    say "[7zip] no se pudo conseguir ningun 7z" AVISO
+    return 1
+}
+
+sevenzip_del_tarball() {
+    # Saca el 7zz del tarball oficial de 7-Zip. $1 = x64 | arm64 | arm
+    #
+    # Las versiones van sin puntos en el nombre del fichero (2409 = 24.09), y
+    # no hay una URL "latest", asi que se prueban de la mas nueva conocida
+    # hacia atras. Si el dia de mañana sale una mas nueva, esto sigue
+    # funcionando con la ultima que conozca: es un extractor, no hace falta
+    # que sea el ultimo.
+    local a7="$1" v url tmp bin
+    tmp="$(mktemp -d)" || return 1
+    for v in 2501 2408 2409 2301 2201; do
+        url="https://www.7-zip.org/a/7z${v}-linux-${a7}.tar.xz"
+        say "[7zip] probando 7z${v}-linux-${a7}.tar.xz..."
+        dl "$url" "$tmp/7z.tar.xz" >/dev/null 2>&1 || continue
+        [ -s "$tmp/7z.tar.xz" ] || continue
+        if ! tar -xJf "$tmp/7z.tar.xz" -C "$tmp" 7zz >>"$LOG_FILE" 2>&1; then
+            # Algunas versiones lo traen en una subcarpeta.
+            tar -xJf "$tmp/7z.tar.xz" -C "$tmp" >>"$LOG_FILE" 2>&1 || continue
+        fi
+        bin="$(find "$tmp" -type f -name 7zz -print -quit 2>/dev/null)"
+        [ -n "$bin" ] || continue
+        chmod 755 "$bin" 2>/dev/null
+        # Que ARRANQUE aqui. Mismo criterio que try_static_tool: solo 126 y
+        # 127 significan "no se puede ejecutar".
+        "$bin" i >/dev/null 2>&1
+        local rc=$?
+        if [ "$rc" != 126 ] && [ "$rc" != 127 ]; then
+            mkdir -p "$RUNTIME_DIR/tools"
+            cp -f "$bin" "$RUNTIME_DIR/tools/7zz"
+            chmod 755 "$RUNTIME_DIR/tools/7zz"
+            rm -rf "$tmp"
+            say "[7zip] listo (7z $v portable, en runtime/tools)"
+            return 0
+        fi
+        say "[7zip] el binario de 7z$v no arranca en este sistema (rc=$rc)"
+    done
+    rm -rf "$tmp"
+    return 1
+}
+
+sevenzip_falta_aviso() {
+    # El mensaje de "no hay 7z", con lo que se puede hacer de verdad.
+    #
+    # Ya NO dice "sudo pacman -S p7zip" a secas: en una Deck eso es imposible
+    # y mandar al usuario a hacer algo que no puede hacer es peor que no decir
+    # nada. Primero lo que si funciona en todas partes.
+    ui_error "No se pudo conseguir 7-Zip, que hace falta para abrir
+.zip, .7z y .rar.
+
+WProton lo descarga solo (un unico fichero en
+runtime/tools, sin instalar nada en el sistema), asi que
+lo normal es que esto sea un problema de conexion:
+compruebala y vuelve a intentarlo.
+
+Si prefieres ponerlo a mano, vale cualquier 7z que ya
+tengas: deja el binario en runtime/tools con el nombre
+7zz. El detalle de lo que se intento esta en el registro."
     return 1
 }
 
@@ -15475,7 +15612,10 @@ extract_archive() {
             # El .exe va aqui a proposito: el instalador de ReShade es un
             # autoextraible y 7z le saca las DLL sin ejecutarlo. Nada de
             # correr un .exe descargado.
-            if command -v 7z >/dev/null 2>&1; then 7z x -y -o"$2" "$1" >> "$LOG_FILE" 2>&1
+            # El 7z portable primero; bsdtar (libarchive) como respaldo,
+            # que tambien abre 7z y suele estar en el sistema.
+            if setup_sevenzip; then
+                "$SEVENZIP_BIN" x -y -o"$2" "$1" >> "$LOG_FILE" 2>&1
             elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf "$1" -C "$2"
             else return 1; fi ;;
         *) return 1 ;;
@@ -24943,7 +25083,15 @@ launch_game() {
 
     # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
     # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
-    profile_exists "$gid" || community_offer_for "$gid" || true
+    #
+    # Y si YA tiene perfil de la comunidad, mirar si lo han mejorado desde
+    # entonces. Son los dos lados de lo mismo, por eso van juntos: uno salta
+    # cuando no hay perfil y el otro cuando hay uno viejo.
+    if profile_exists "$gid"; then
+        community_update_offer_for "$gid" || true
+    else
+        community_offer_for "$gid" || true
+    fi
 
     # Y la carátula 4:3 del repositorio, si este juego aun no tiene ninguna.
     # Esto SI se mira siempre, no solo en los juegos nuevos: quien lleva meses
@@ -25800,36 +25948,43 @@ Que cumplas muchos mas.
     # La 2.0 es la primera que sale para todo el mundo, y no habria llegado
     # aqui sin la gente que lleva meses probandola y mandando registros. Eso va
     # delante de las novedades, no en una nota al pie.
+    # EL AGRADECIMIENTO SE QUEDA, EL "PRIMERA VERSION" NO.
+    #
+    # Esa cabecera era verdad en la 2.0 y deja de serlo en cuanto hay una 2.01.
+    # Las dos lineas de gracias a los testers van tal cual, que es lo que
+    # importa; lo que cambia es el titulo de encima, para que no diga algo que
+    # ya no es cierto.
+    #
+    # Y LA LISTA VUELVE A SER CORTA.
+    #
+    # Habia crecido a dieciocho puntos, uno por cada tanda de trabajo, con
+    # novedades de la 2.0 que a estas alturas ya ha leido todo el mundo. Eso va
+    # justo contra lo que dice el aviso de arriba: en una pantalla de mano, una
+    # lista que no cabe de un vistazo no se lee. Se queda lo de ESTA version.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
-PRIMERA VERSION LISTA PARA EL PUBLICO GENERAL
+GRACIAS A LOS TESTERS
 
   Muchas gracias a Michel, Fransis y MRDeu por todas las horas de testeo.
   Sin vosotros este proyecto no habria sido posible.
 
-NOVEDADES
+NOVEDADES DE LA $WPROTON_VERSION
 
-  Los perfiles de la comunidad traen tambien las teclas del mando.
+  Un juego se puede borrar del disco desde sus ajustes.
 
-  Un juego recien subido al repositorio ya se encuentra el mismo dia.
+  Los perfiles del repositorio se pueden traer todos de una vez.
 
-  Los perfiles del repositorio se pueden traer de una vez, o todos.
+  Si el perfil de la comunidad mejora, WProton te avisa.
 
-  Al arrancar, WProton pone al dia lo que hay en el repositorio.
+  Y puedes pedir el de la comunidad cuando quieras.
+
+  7-Zip ya no hay que instalarlo: lo descarga WProton.
+
+  Los juegos se pueden importar sin empaquetar, en una carpeta.
 
   Al añadir un juego a Steam, sus caratulas se descargan solas.
 
-  Las caratulas 4:3 las trae WProton de su repositorio.
-
-  Arranca ya configurado con menu moderno, lista y caratulas 4:3.
-
-  Mejoras en la carga y compresion de juegos Linux.
-
-  Mejoras en el movimiento del raton.
-
-  Las teclas del mando ya no se aplican a otro juego.
-
-  El paquete se guarda en la carpeta de juegos de la que salio."
+  Lo demas, en las novedades del repositorio."
     return 0
 }
 
@@ -25948,9 +26103,41 @@ community_list() {
         log "comunidad: curl fallo al pedir la lista de profiles/ (codigo HTTP ${cod:-?})" AVISO
         rm -f "$tmp"; return 1; }
     REPO_ULTIMO_HTTP="${cod:-}"
-    grep -oE '"name": *"[^"]*\.(conf|keys)"' < "$tmp" | cut -d'"' -f4 | sort
+    community_json_a_lista < "$tmp"
     rm -f "$tmp"
     return 0
+}
+
+community_json_a_lista() {
+    # La respuesta de la API, por la entrada estandar -> "nombre<TAB>sha".
+    #
+    # EL sha ES LO QUE PERMITE SABER SI UN PERFIL SE HA ACTUALIZADO.
+    #
+    # La API ya devuelve, por cada fichero, el sha del contenido (el "blob
+    # sha" de git). O sea: la lista que WProton pide una vez al arrancar YA
+    # TRAE dentro la informacion de si cada perfil ha cambiado. No hace falta
+    # ninguna peticion mas, y eso importa: la alternativa evidente -preguntar
+    # por la fecha del ultimo commit de cada fichero- es UNA peticion POR
+    # JUEGO, y con 60 peticiones por hora que da la API sin credenciales eso
+    # se agota con treinta juegos.
+    #
+    # Y es mejor que una fecha: la fecha dice "esto se subio despues", que no
+    # es lo mismo que "esto es distinto". Un commit que toca otro fichero, o
+    # volver a subir el mismo contenido, cambian la fecha y no el sha.
+    #
+    # Se parte el JSON por objetos ("{") en vez de buscar los campos sueltos,
+    # como en covers43_list: asi "name" y "sha" se leen del MISMO fichero pase
+    # lo que pase con el orden en que GitHub los devuelva.
+    tr -d '\n' | tr '{' '\n' \
+        | awk -F'"' '
+            {
+                nom = ""; sha = ""
+                for (i = 1; i < NF; i++) if ($i == "name") { nom = $(i+2); break }
+                if (nom == "") next
+                for (i = 1; i < NF; i++) if ($i == "sha")  { sha = $(i+2); break }
+                if (tolower(nom) ~ /\.(conf|keys)$/) printf "%s\t%s\n", nom, sha
+            }' \
+        | sort
 }
 
 community_solo_conf() {
@@ -26007,14 +26194,25 @@ community_keys_fetch() {
         return 1
     fi
     if [ -f "$dest" ]; then
-        ui_ask "Este perfil trae tambien las teclas del mando, y ya tienes
+        # EN TANDA, O ACTUALIZANDO, NO SE PREGUNTA OTRA VEZ.
+        #
+        # Le faltaba el caso que ya tenia community_fetch, y se veia: al
+        # actualizar un perfil que traia teclas salian DOS dialogos seguidos
+        # -"¿quieres la version nueva?" y "¿sustituyo tambien el .keys?"-
+        # cuando el usuario ya habia dicho que si una linea antes. Lo mismo al
+        # traer perfiles en tanda: un dialogo por juego con teclas.
+        if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+            cp -f "$dest" "$dest.bak"
+        else
+            ui_ask "Este perfil trae tambien las teclas del mando, y ya tienes
 un .keys para este juego:
 
 $(basename "$dest")
 
 Sustituirlo por el de la comunidad?
 (se guardara el tuyo como $(basename "$dest").bak)" || { rm -f "$tmp"; return 1; }
-        cp -f "$dest" "$dest.bak"
+            cp -f "$dest" "$dest.bak"
+        fi
     fi
     mkdir -p "$PROFILE_DIR" 2>/dev/null
     if ! cat "$tmp" > "$dest" 2>/dev/null; then
@@ -26107,6 +26305,26 @@ Sustituirlo por el de la comunidad?
 Trae tambien las teclas del mando, instaladas en:
 profiles/$gid.keys"
     fi
+    # SE APUNTA QUE VERSION SE HA INSTALADO.
+    #
+    # Sin esto no hay forma de saber luego si el perfil del repositorio ha
+    # cambiado: el .conf de aqui puede estar ademas tocado a mano, asi que
+    # compararlo con el de alla no diria nada. Lo que se guarda es el sha que
+    # tenia el fichero EN EL REPOSITORIO el dia que se instalo.
+    #
+    # Si no hay sha -la lista venia de la copia local, o es un repositorio que
+    # no lo da- se calcula del propio fichero instalado, que es lo mismo
+    # mientras nadie lo toque.
+    if [ -n "$gid" ]; then
+        local _sc _sk
+        _sc="$(community_sha_repo "$name")" || _sc="$(git_blob_sha "$dest")" || _sc=""
+        _sk=""
+        if [ -f "$PROFILE_DIR/$gid.keys" ]; then
+            _sk="$(community_sha_repo "${name%.conf}.keys")" \
+                || _sk="$(git_blob_sha "$PROFILE_DIR/$gid.keys")" || _sk=""
+        fi
+        community_marca_escribir "$gid" "$name" "$_sc" "$_sk" "" || true
+    fi
     if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
         # En tanda el resumen va al final, una vez, no un dialogo por juego.
         log "comunidad: instalado $name -> $(basename "$dest")${_keys:+ (con teclas)}"
@@ -26138,6 +26356,20 @@ Se han quitado tus estadísticas y rutas locales."
 }
 
 COMMUNITY_INDEX="$RUNTIME_DIR/.community_index"
+
+# EL sha DE CADA PERFIL DEL REPOSITORIO: "nombre<TAB>sha", una linea por fichero.
+#
+# Va en un fichero APARTE y no dentro de .community_index a proposito. El indice
+# lo leen media docena de funciones -el emparejamiento por nombre, el "¿trae
+# teclas?", el menu, el cruce con la biblioteca- con "grep '\.conf$'" y
+# "grep -qxF". Meterle una segunda columna obligaba a tocar todas esas, que son
+# justo las que mas cuesta probar y las que acabamos de dejar finas.
+#
+# Los dos ficheros se escriben en la MISMA funcion y de la MISMA respuesta, asi
+# que no pueden contarse cosas distintas. Y si este falta -una instalacion
+# vieja, o la lista hecha con la copia local- lo unico que pasa es que no se
+# avisa de actualizaciones: se degrada por el lado bueno.
+COMMUNITY_SHAS="$RUNTIME_DIR/.community_shas"
 
 # COPIA LOCAL COMPLETA DE profiles/ DEL REPOSITORIO.
 #
@@ -26203,11 +26435,18 @@ community_index_refresh() {
         && log "comunidad: se pide la lista OTRA VEZ (la guardada fue $(repo_edad_humana "$edad"))" \
         || log "comunidad: pidiendo la lista de profiles/ a $WPROTON_REPO ($(repo_edad_humana "$edad"))"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
-    community_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null
+    # UNA SOLA PETICION, DOS FICHEROS.
+    #
+    # community_list devuelve "nombre<TAB>sha". El indice se queda solo con los
+    # nombres -que es lo que esperan todos los que lo leen- y los shas van a su
+    # fichero. De la misma respuesta, asi que siempre cuentan lo mismo.
+    community_list > "$COMMUNITY_SHAS.tmp" 2>/dev/null
+    cut -f1 "$COMMUNITY_SHAS.tmp" 2>/dev/null > "$COMMUNITY_INDEX.tmp"
     if [ -s "$COMMUNITY_INDEX.tmp" ]; then
         mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
-        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
-        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        mv -f "$COMMUNITY_SHAS.tmp" "$COMMUNITY_SHAS" 2>/dev/null
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null)"
         log "comunidad: lista al dia -> $n_conf perfil(es) y $n_keys fichero(s) de teclas"
         # LA API DEVUELVE COMO MUCHO 1000 FICHEROS POR CARPETA.
         #
@@ -26219,7 +26458,7 @@ community_index_refresh() {
             log "comunidad: la carpeta profiles/ llega al tope de 1000 ficheros de la API de GitHub: los que pasen de ahi NO se ven. Hay que pasar a la API de arboles." AVISO
         fi
     else
-        rm -f "$COMMUNITY_INDEX.tmp"
+        rm -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_SHAS.tmp"
         log "comunidad: el repositorio no devolvio ninguna entrada (codigo HTTP ${REPO_ULTIMO_HTTP:-?}); se sigue con la copia guardada si la hay" AVISO
         # Si habia copia, no se pierde: mejor una lista de ayer que ninguna.
         [ -f "$COMMUNITY_INDEX" ] && return 0
@@ -26233,12 +26472,108 @@ community_index_refresh() {
         if community_local_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null \
            && [ -s "$COMMUNITY_INDEX.tmp" ]; then
             mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
-            log "comunidad: sin conexion; la lista se hace con la copia local de comunidad/ ($(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0) perfiles)"
+            log "comunidad: sin conexion; la lista se hace con la copia local de comunidad/ ($(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null) perfiles)"
             return 0
         fi
         rm -f "$COMMUNITY_INDEX.tmp"
         return 1
     fi
+    return 0
+}
+
+git_blob_sha() {
+    # El sha de git del contenido de un fichero. $1 = ruta.
+    #
+    # Es lo que devuelve "git hash-object": sha1 de "blob <bytes>\\0" + contenido.
+    # Se calcula a mano y no con git, que no tiene por que estar instalado y
+    # ademas aqui no hay ningun repositorio: solo hace falta la cuenta.
+    #
+    # Sirve para lo mismo que el sha que da la API, asi que los dos se pueden
+    # comparar directamente: uno dice que hay en el repositorio y el otro que
+    # hay en el disco de esta persona.
+    local f="${1:-}" n
+    [ -f "$f" ] || return 1
+    n="$(stat -c %s "$f" 2>/dev/null)" || return 1
+    { printf 'blob %d\0' "$n"; cat "$f"; } | sha1sum 2>/dev/null | cut -d' ' -f1
+}
+
+community_sha_repo() {
+    # El sha que tiene AHORA en el repositorio el fichero $1.
+    local nom="${1:-}" linea
+    [ -n "$nom" ] || return 1
+    [ -f "$COMMUNITY_SHAS" ] || return 1
+    linea="$(grep -m1 -F "$(printf '%s\t' "$nom")" "$COMMUNITY_SHAS" 2>/dev/null)" || return 1
+    [ -n "$linea" ] || return 1
+    # Solo si el nombre es EXACTO: con "grep -F Doom" tambien casaria
+    # "Doom Eternal", y entonces se compararia el sha del juego equivocado.
+    [ "${linea%%	*}" = "$nom" ] || return 1
+    printf '%s' "${linea#*	}"
+}
+
+# Marca de "este perfil vino de la comunidad, y con esta version".
+#   linea 1: nombre del .conf en el repositorio
+#   linea 2: sha del .conf cuando se instalo
+#   linea 3: sha del .keys cuando se instalo (vacio si no traia)
+#   linea 4: sha que el usuario dijo que NO queria actualizar (si dijo que no)
+community_marca_fich() { printf '%s' "$PROFILE_DIR/.${1:-x}.comunidad"; }
+
+community_marca_escribir() {
+    # $1 = gid, $2 = nombre en el repositorio, $3 = sha del .conf,
+    # $4 = sha del .keys (opcional), $5 = sha rechazado (opcional)
+    local gid="${1:-}" nom="${2:-}" sc="${3:-}" sk="${4:-}" no="${5:-}" f
+    [ -n "$gid" ] && [ -n "$nom" ] || return 1
+    f="$(community_marca_fich "$gid")"
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    printf '%s\n%s\n%s\n%s\n' "$nom" "$sc" "$sk" "$no" > "$f" 2>/dev/null || return 1
+    log "comunidad: marca de '$gid' -> $nom (sha ${sc:0:8}${sk:+ + teclas ${sk:0:8}})"
+    return 0
+}
+
+WP_CM_NOMBRE=""; WP_CM_SHA=""; WP_CM_SHAK=""; WP_CM_NO=""
+
+community_marca_leer() {
+    # Lee la marca de $1 a las variables WP_CM_*. 1 si no hay marca.
+    local gid="${1:-}" f
+    WP_CM_NOMBRE=""; WP_CM_SHA=""; WP_CM_SHAK=""; WP_CM_NO=""
+    [ -n "$gid" ] || return 1
+    f="$(community_marca_fich "$gid")"
+    [ -f "$f" ] || return 1
+    { IFS= read -r WP_CM_NOMBRE
+      IFS= read -r WP_CM_SHA
+      IFS= read -r WP_CM_SHAK
+      IFS= read -r WP_CM_NO
+    } < "$f" 2>/dev/null || true
+    [ -n "$WP_CM_NOMBRE" ] || return 1
+    return 0
+}
+
+WP_CM_SHA_NUEVO=""      # el sha que hay ahora en el repositorio
+WP_CM_TOCADO=0          # 1 = el usuario ha modificado su copia
+
+community_hay_actualizacion() {
+    # ¿Hay en el repositorio una version MAS NUEVA del perfil de este juego?
+    #
+    # $1 = gid. Devuelve 0 si la hay, y deja en WP_CM_SHA_NUEVO el sha de
+    # ahora y en WP_CM_TOCADO si el usuario habia tocado su copia.
+    #
+    # El caso que lo pidio: alguien se baja el perfil de un juego, Dani lo
+    # mejora en el repositorio, y esa persona no se entera nunca porque el
+    # aviso de "la comunidad tiene un perfil" solo sale cuando NO tienes
+    # ninguno. Con la marca del sha, se puede saber.
+    local gid="${1:-}" sha_local
+    WP_CM_SHA_NUEVO=""; WP_CM_TOCADO=0
+    community_marca_leer "$gid" || return 1
+    [ -f "$PROFILE_DIR/$gid.conf" ] || return 1     # ya no tiene perfil
+    WP_CM_SHA_NUEVO="$(community_sha_repo "$WP_CM_NOMBRE")" || return 1
+    [ -n "$WP_CM_SHA_NUEVO" ] || return 1
+    [ -n "$WP_CM_SHA" ] || return 1
+    [ "$WP_CM_SHA_NUEVO" = "$WP_CM_SHA" ] && return 1       # el mismo de siempre
+    # ¿HA TOCADO EL USUARIO SU COPIA?
+    #
+    # Si la ha ajustado a mano, actualizar le pisa su trabajo. No se decide
+    # por el: se le dice, y el .bak se hace igual.
+    sha_local="$(git_blob_sha "$PROFILE_DIR/$gid.conf")" || sha_local=""
+    [ -n "$sha_local" ] && [ "$sha_local" != "$WP_CM_SHA" ] && WP_CM_TOCADO=1
     return 0
 }
 
@@ -26280,6 +26615,108 @@ community_match_local() {
     rm -f "$lista"
     [ -n "$r" ] || return 1
     printf '%s' "$r"
+}
+
+community_buscar_actualizaciones() {
+    # REVISA DE GOLPE SI ALGUNO DE TUS PERFILES DE LA COMUNIDAD HA MEJORADO.
+    #
+    # El aviso al lanzar un juego solo llega cuando lo lanzas, y a los juegos
+    # que uno no toca en meses no llega nunca. Esto lo mira para todos de una
+    # vez, sin preguntar juego por juego.
+    local _ok informe gid nom
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+    if [ ! -s "$COMMUNITY_SHAS" ]; then
+        ui_error "El repositorio no dio las versiones de los perfiles, asi que
+no se puede saber cuales han cambiado.
+
+Inténtalo otra vez más tarde."
+        return 1
+    fi
+
+    # LOS PERFILES QUE VINIERON DE LA COMUNIDAD, QUE SON LOS UNICOS QUE SE
+    # PUEDEN COMPARAR. Un perfil hecho a mano no tiene con que compararse.
+    loading_say "Comparando tus perfiles con el repositorio..."
+    informe="$(mktemp)" || return 1
+    local f n_mirados=0
+    for f in "$PROFILE_DIR"/.*.comunidad; do
+        [ -f "$f" ] || continue
+        gid="$(basename "$f")"; gid="${gid#.}"; gid="${gid%.comunidad}"
+        [ -n "$gid" ] || continue
+        n_mirados=$((n_mirados+1))
+        if community_hay_actualizacion "$gid"; then
+            printf '%s\t%s\t%s\n' "$gid" "$WP_CM_NOMBRE" "$WP_CM_TOCADO" >> "$informe"
+        fi
+    done
+    loading_clear
+
+    local n; n="$(grep -c . "$informe" 2>/dev/null)"
+    if [ "$n" = 0 ]; then
+        rm -f "$informe"
+        ui_info "Tus perfiles de la comunidad estan al dia.
+
+Mirados: $n_mirados"
+        log "comunidad: $n_mirados perfil(es) revisados, ninguno con version nueva"
+        return 0
+    fi
+
+    # QUE JUEGOS SON, CON NOMBRE, Y CUALES HAS TOCADO TU.
+    local listado="" tocados=0 tcd
+    while IFS="$(printf '\t')" read -r gid nom tcd; do
+        [ -n "$gid" ] || continue
+        if [ "$tcd" = 1 ]; then
+            tocados=$((tocados+1))
+            listado="$listado
+  $gid  (tu copia esta modificada)"
+        else
+            listado="$listado
+  $gid"
+        fi
+        log "comunidad: version nueva para '$gid' (desde '$nom')"
+    done < "$informe"
+
+    local aviso=""
+    [ "$tocados" -gt 0 ] && aviso="
+
+De esos, $tocados los has modificado tu: el tuyo se guardara
+como .conf.bak antes de sustituirlo."
+    if ! ui_ask "Hay version nueva del perfil de $n juego(s):$listado$aviso
+
+Actualizarlos todos?"; then
+        rm -f "$informe"
+        say "[comunidad] el usuario no quiso actualizar ahora"
+        return 0
+    fi
+
+    local hechos=0 fallos=0 idx=0
+    progress_start "Actualizando perfiles de la comunidad"
+    WP_COMUNIDAD_TANDA=1
+    while IFS="$(printf '\t')" read -r gid nom tcd; do
+        [ -n "$gid" ] && [ -n "$nom" ] || continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / n ))" "($idx/$n) $gid"
+        if community_fetch "$nom" "$gid"; then
+            hechos=$((hechos+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo actualizar el perfil de '$gid'" AVISO
+        fi
+    done < "$informe"
+    WP_COMUNIDAD_TANDA=0
+    progress_stop
+    rm -f "$informe"
+
+    log "comunidad: actualizacion en tanda -> $hechos actualizados, $fallos fallos"
+    ui_info "Perfiles actualizados: $hechos de $n$([ "$fallos" -gt 0 ] && printf '\n\nNo se pudieron actualizar: %s (mira el registro)' "$fallos")$([ "$tocados" -gt 0 ] && printf '\n\nLos que tenias modificados estan como .conf.bak')"
+    return 0
 }
 
 community_traer_todo() {
@@ -26382,7 +26819,7 @@ Descargarlos ahora?" || return 0
     progress_stop
 
     local resumen="Perfiles traidos: $hechos de $faltan
-Total en comunidad/: $(community_local_list 2>/dev/null | grep -c . || echo 0)"
+Total en comunidad/: $(community_local_list 2>/dev/null | grep -c .)"
     [ "$fallos" -gt 0 ] && resumen="$resumen
 
 No se pudieron traer: $fallos (mira el registro)"
@@ -26960,6 +27397,196 @@ community_marcar_preguntado() {
     return 0
 }
 
+community_traer_ahora() {
+    # TRAER EL PERFIL DE LA COMUNIDAD AHORA, PORQUE EL USUARIO LO PIDE.
+    #
+    # $1 = gid, $2 = ruta del juego (opcional, solo para el registro)
+    #
+    # Es distinta de las otras dos a proposito:
+    #
+    #   community_offer_for        salta sola, y solo si NO tienes perfil
+    #   community_update_offer_for salta sola, y solo si hay version MAS NUEVA
+    #   community_traer_ahora      la pide el usuario, y funciona SIEMPRE
+    #
+    # Ese "siempre" es el motivo de que exista. El caso que la pidio es el de
+    # alguien que va a jugar, ve que su configuracion no le va bien y quiere la
+    # de la comunidad ya, sin esperar a que haya una version nueva ni tener que
+    # borrar su perfil para que salte el aviso del juego nuevo. Tambien sirve
+    # para volver atras: si uno ha estado toqueteando ajustes y lo ha dejado
+    # peor, esto le devuelve el que funcionaba.
+    local gid="${1:-}" ruta="${2:-}" cand=""
+    [ -n "$gid" ] || return 1
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        ui_error "No hay repositorio configurado (WPROTON_REPO)."
+        return 1
+    fi
+    say "[comunidad] el usuario pide el perfil de '$gid'${ruta:+ ($ruta)}"
+
+    # LA COPIA LOCAL PRIMERO, COMO EN TODO LO DEMAS; SI NO, AL REPOSITORIO.
+    #
+    # Y pidiendo lista nueva: quien pulsa esto lo hace AHORA y espera lo de
+    # ahora, no lo de la copia de esta mañana.
+    if cand="$(community_match_local "$gid")" && [ -n "$cand" ]; then
+        log "comunidad: '$cand' sale de la copia local"
+    else
+        loading_say "Buscando una configuración de la comunidad para '$gid'..."
+        community_index_refresh forzar || true
+        loading_clear
+        cand="$(community_match "$gid")" || cand=""
+    fi
+    if [ -z "$cand" ]; then
+        ui_info "La comunidad no tiene una configuración para:
+
+$gid
+
+Se busca por el nombre del juego, asi que puede estar subida
+con otro nombre. En Biblioteca y preferencias -> Comprobar el
+repositorio sale con qué nombre se busca este juego.
+
+Si consigues que te funcione, tu perfil esta en
+profiles/$gid.conf: subirlo al repositorio ayuda al
+siguiente que llegue con este juego."
+        return 1
+    fi
+
+    # QUE SE VA A HACER, ANTES DE HACERLO.
+    #
+    # Aqui el usuario ya tiene un perfil casi seguro -viene de la pantalla de
+    # ajustes-, asi que lo importante no es "¿quieres el de la comunidad?" sino
+    # "esto va a sustituir el tuyo". Se dice con esas palabras.
+    local _tengo="" _conk="" _misma=""
+    if [ -f "$PROFILE_DIR/$gid.conf" ]; then
+        _tengo="
+
+Sustituira la configuración que tienes ahora, que se
+guardara como $gid.conf.bak"
+    fi
+    community_tiene_keys "$cand" && _conk="
+Trae tambien las teclas del mando (.keys)."
+    # SI YA TIENES ESA MISMA VERSION, SE DICE.
+    #
+    # Sin esto, alguien puede estar descargando una y otra vez el fichero que
+    # ya tiene, convencido de que le falta algo. Y no se le impide: puede
+    # querer justo eso, deshacer sus cambios y volver al original.
+    if community_marca_leer "$gid" && [ -n "$WP_CM_SHA" ]; then
+        local _sha_repo; _sha_repo="$(community_sha_repo "$cand")" || _sha_repo=""
+        if [ -n "$_sha_repo" ] && [ "$_sha_repo" = "$WP_CM_SHA" ]; then
+            local _sha_mio; _sha_mio="$(git_blob_sha "$PROFILE_DIR/$gid.conf")" || _sha_mio=""
+            if [ -n "$_sha_mio" ] && [ "$_sha_mio" != "$WP_CM_SHA" ]; then
+                _misma="
+
+Ya tienes esta misma version, pero la has modificado: esto
+la devuelve a como la subio la comunidad."
+            else
+                _misma="
+
+Ya tienes esta misma version, sin cambios: volver a traerla
+no cambiara nada."
+            fi
+        fi
+    fi
+
+    ui_ask "Configuración de la comunidad para:
+
+$gid
+
+Perfil: $cand$_conk$_tengo$_misma
+
+¿Traerla ahora?" || { say "[comunidad] cancelado por el usuario"; return 1; }
+
+    # SIN UNA SEGUNDA PREGUNTA: el usuario ya ha dicho que si a sustituirla.
+    local _tanda_antes="${WP_COMUNIDAD_TANDA:-0}"
+    WP_COMUNIDAD_TANDA=1
+    if ! community_fetch "$cand" "$gid"; then
+        WP_COMUNIDAD_TANDA="$_tanda_antes"
+        ui_error "No se pudo traer la configuración. El detalle esta en el
+registro; tu configuración no se ha tocado."
+        return 1
+    fi
+    WP_COMUNIDAD_TANDA="$_tanda_antes"
+
+    # Y AHORA LO IMPORTANTE, QUE NO SE VE: RECARGAR EL PERFIL EN MEMORIA.
+    #
+    # game_config_menu guarda el perfil al salir con write_full_profile, con
+    # los valores que haya EN MEMORIA. Si no se recargan, salir de los ajustes
+    # reescribe el .conf con los valores de antes y la descarga parece no
+    # haber hecho nada: el fichero se baja bien y acto seguido se pisa. Es el
+    # mismo fallo que ya se habia visto al borrar los datos de un juego.
+    load_profile "$gid"
+    log "comunidad: perfil de '$gid' sustituido por '$cand' y recargado en memoria"
+    local notas; notas="$(grep -m1 '^NOTAS=' "$PROFILE_DIR/$gid.conf" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+    ui_info "Configuración de la comunidad puesta.
+
+Runner: ${RUNNER:-el de siempre}
+Prefijo: ${PREFIX_MODE:-shared}${notas:+
+
+Notas del autor: $notas}${_tengo:+
+
+La tuya esta en $gid.conf.bak}"
+    return 0
+}
+
+community_update_offer_for() {
+    # AVISA DE QUE HAY UNA VERSION MAS NUEVA DEL PERFIL DE ESTE JUEGO.
+    #
+    # $1 = gid. Es el hermano de community_offer_for: ese salta cuando NO
+    # tienes perfil, y este cuando SI lo tienes y el del repositorio ha
+    # cambiado. Sin este, quien se bajo el perfil el primer dia no se enteraba
+    # nunca de las mejoras: el aviso de la comunidad no volvia a salir.
+    #
+    # NO SE PREGUNTA DOS VECES POR LA MISMA VERSION.
+    #
+    # Si dice que no, se apunta ESE sha como rechazado. Asi no vuelve a
+    # preguntar por esa version -que seria un dialogo antes de cada partida,
+    # que es la forma mas rapida de que alguien deje de leer los dialogos- pero
+    # SI preguntara cuando salga la siguiente.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 1
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    community_hay_actualizacion "$gid" || return 1
+    if [ -n "$WP_CM_NO" ] && [ "$WP_CM_NO" = "$WP_CM_SHA_NUEVO" ]; then
+        log "comunidad: hay version nueva de '$gid' pero ya se dijo que no a esta (${WP_CM_SHA_NUEVO:0:8})"
+        return 1
+    fi
+    say "[comunidad] hay una version mas nueva del perfil de $gid"
+    log "comunidad: '$gid' -> instalado ${WP_CM_SHA:0:8}, en el repositorio ${WP_CM_SHA_NUEVO:0:8}${WP_CM_TOCADO:+ (copia local modificada)}"
+    local _tocado=""
+    [ "$WP_CM_TOCADO" = 1 ] && _tocado="
+
+OJO: tu copia esta modificada. Si actualizas se guardara
+como .conf.bak antes de sustituirla."
+    if ui_ask "La comunidad ha MEJORADO la configuracion de:
+
+$gid
+
+Tienes una version anterior, de cuando la descargaste.$_tocado
+
+Quieres la nueva?"; then
+        # SIN UNA SEGUNDA PREGUNTA.
+        #
+        # community_fetch, cuando ve que ya hay un perfil, pregunta "ya tienes
+        # uno, ¿lo sustituyo?". Encadenada a la de arriba es una pregunta
+        # redundante -acaba de decir que si- y es exactamente la forma de que
+        # la gente deje de leer los dialogos. Con esta marca puesta,
+        # community_fetch hace la copia .bak y sigue sin preguntar, que es lo
+        # que ya hace cuando se traen perfiles en tanda.
+        local _tanda_antes="${WP_COMUNIDAD_TANDA:-0}"
+        WP_COMUNIDAD_TANDA=1
+        if community_fetch "$WP_CM_NOMBRE" "$gid"; then
+            WP_COMUNIDAD_TANDA="$_tanda_antes"
+            say "[+] Perfil de la comunidad actualizado: $gid (el anterior, en .conf.bak)"
+            return 0
+        fi
+        WP_COMUNIDAD_TANDA="$_tanda_antes"
+        return 1
+    fi
+    # El "no" se apunta junto a la version concreta que se ha rechazado.
+    community_marca_escribir "$gid" "$WP_CM_NOMBRE" "$WP_CM_SHA" "$WP_CM_SHAK" \
+        "$WP_CM_SHA_NUEVO" || true
+    log "comunidad: el usuario no quiso actualizar el perfil de '$gid'"
+    return 1
+}
+
 community_offer_for() {
     # Al configurar o lanzar un juego por primera vez: si la comunidad tiene
     # un perfil con ese nombre, ofrecerlo. Solo se pregunta UNA vez por juego.
@@ -27010,7 +27637,7 @@ funcione bien.$_conkl Quieres instalarla?"; then
             cand="$(community_match "$gid")" || cand=""
         fi
         if [ -z "$cand" ]; then
-            log "comunidad: no hay perfil para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0) perfiles en la lista)"
+            log "comunidad: no hay perfil para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null) perfiles en la lista)"
             community_marcar_preguntado "$gid"
             return 1
         fi
@@ -34389,9 +35016,9 @@ descarga de reshade.me, y ahora mismo no responde."
     # El instalador es un autoextraible: 7z le saca las DLL SIN ejecutarlo.
     if ! extract_archive "$pkg" "$tmp"; then
         ui_error "No se ha podido extraer ReShade.
-Hace falta 7z (paquete p7zip).
 
-  CachyOS / Arch: sudo pacman -S p7zip"
+Hace falta 7-Zip, que WProton descarga solo. Comprueba la
+conexión y vuelve a intentarlo; el detalle esta en el registro."
         rm -rf "$tmp"; rm -f "$pkg"; release_game_root; return 1
     fi
 
@@ -34753,7 +35380,7 @@ que el prefijo se cree del todo, y vuelve a intentarlo."
     say "[+] El prefijo incluye: $(ls "$tmp" | tr '\n' ' ')"
 
     loading_clear
-    if build_wsquashfs "$tmp" "$gid"; then
+    if build_wsquashfs "$tmp" "$gid" "$(pack_formato_archivo)"; then
         rm -rf "$tmp"
         ui_info "'$gid' empaquetado con su prefijo.
 
@@ -34843,12 +35470,97 @@ EOFD
     return 0
 }
 
+pack_formato_archivo() {
+    # El formato de ARCHIVO elegido. Nunca "carpeta": quien llama a esto
+    # quiere un paquete, y si el ajuste dice "carpeta" se empaqueta en
+    # wsquashfs, que es el formato de siempre.
+    case "${PACK_FORMAT:-wsquashfs}" in
+        dwarfs) printf 'dwarfs' ;;
+        *)      printf 'wsquashfs' ;;
+    esac
+}
+
+paquete_valido() {
+    # ¿Lo que devolvio build_wsquashfs esta ahi de verdad?
+    #
+    # Vale para las dos formas: un archivo (que tiene que tener contenido) y
+    # una carpeta (donde "-s" no sirve: una carpeta llena da falso).
+    local p="${1:-}"
+    [ -n "$p" ] || return 1
+    [ -d "$p" ] && return 0
+    [ -s "$p" ]
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
     #   dwarfs    -> mkdwarfs   (comprime bastante mas, monta igual de rapido)
+    #   carpeta   -> NO se empaqueta: la carpeta se mueve tal cual
+    # $3 = formato FORZADO (opcional). Lo usan los caminos cuyo trabajo es
+    #      precisamente empaquetar -"convertir carpeta a wsquashfs", "empaquetar
+    #      con su prefijo"-: ahi "carpeta" no significa nada, porque el usuario
+    #      ha pedido un archivo. Sin esto, con PACK_FORMAT=carpeta esas dos
+    #      opciones se habrian quedado moviendo carpetas de sitio en vez de
+    #      empaquetar, que es justo lo contrario de lo que dicen hacer.
     local src="$1" name="$2"
-    local fmt="${PACK_FORMAT:-wsquashfs}" out
+    local fmt="${3:-${PACK_FORMAT:-wsquashfs}}" out
+    # SIN EMPAQUETAR: LA CARPETA SE QUEDA COMO ESTA.
+    #
+    # Lo pidieron desde el canal: hay gente que no quiere el .wsquashfs, solo
+    # jugar. WProton ya sabe lanzar un juego que es una carpeta -desde
+    # siempre: es_juego_carpeta, el autorun.cmd, el prefijo- asi que no hace
+    # falta nada nuevo para que funcione; basta con no empaquetar.
+    #
+    # Lo que se pierde conviene tenerlo claro, y esta en el manual: un fichero
+    # por juego en vez de miles, la compresion (mucho espacio en una SD), el
+    # overlay que separa las partidas del juego, y poder llevarte un juego a
+    # otro equipo copiando un solo archivo.
+    if [ "$fmt" = "carpeta" ]; then
+        local _destc; _destc="$(destino_del_paquete "$src")"
+        [ -n "$_destc" ] || _destc="$GAMES_PATH"
+        mkdir -p "$_destc" 2>/dev/null
+        out="$_destc/$name"
+        # Si ya hay una carpeta con ese nombre no se pisa: se busca un nombre
+        # libre. Machacar un juego que ya estaba instalado seria irreparable.
+        if [ -e "$out" ]; then
+            local _n=2
+            while [ -e "$_destc/$name ($_n)" ] && [ "$_n" -lt 50 ]; do _n=$((_n+1)); done
+            out="$_destc/$name ($_n)"
+            say "[i] Ya habia una carpeta '$name'; esta se guarda como '$(basename "$out")'"
+        fi
+        # mv primero: si origen y destino estan en el mismo disco es
+        # instantaneo y no hace falta el doble de espacio. Si estan en discos
+        # distintos, mv copia, y entonces SI hay que comprobar el sitio antes.
+        # AQUI NO SE TOCA EL OVERLAY, A DIFERENCIA DEL CAMINO QUE EMPAQUETA.
+        #
+        # Al empaquetar se borra overlays/<nombre>, porque ese overlay era de
+        # la version anterior del paquete y habria quedado descolgado. Un juego
+        # en carpeta no usa overlay -se ejecuta directamente-, asi que ese
+        # borrado no haria falta... y SI haria daño: si antes tuviste el mismo
+        # juego empaquetado, en ese overlay estan TUS PARTIDAS. Se quedan donde
+        # estan.
+        if mv -f "$src" "$out" 2>/dev/null; then
+            say "[OK] Juego guardado como carpeta: $out"
+            printf '%s' "$out"; return 0
+        fi
+        local needc; needc="$(dir_bytes "$src")"
+        if [ -n "$needc" ] && ! check_space "$needc" "$_destc" "mover '$name'"; then
+            return 1
+        fi
+        if run_with_progress "Moviendo '$name' a la carpeta de juegos..." \
+               cp -a "$src" "$out"; then
+            rm -rf "$src"
+            say "[OK] Juego guardado como carpeta: $out"
+            printf '%s' "$out"; return 0
+        fi
+        rm -rf "$out" 2>/dev/null
+        fallo "No se pudo mover '$name' a:
+$_destc
+
+NO se ha borrado nada: lo extraido sigue en
+$src"
+        return 1
+    fi
     if [ "$fmt" = "dwarfs" ]; then
         find_dwarfs_tools
         if [ -z "$MKDWARFS_BIN" ]; then
@@ -34980,8 +35692,8 @@ do_pack_dir() {
     # asistente-. Ponerlo en uno solo seria repetir el fallo de siempre: algo
     # que se arregla en un camino y no en los otros.
     libs_antes_de_empaquetar "$dir" "$name"
-    out="$(build_wsquashfs "$dir" "$name")"
-    if [ -n "$out" ] && [ -s "$out" ]; then
+    out="$(build_wsquashfs "$dir" "$name" "$(pack_formato_archivo)")"
+    if paquete_valido "$out"; then
         say "[OK] Empaquetado: $out"
         if ui_ask "Borrar la carpeta original?
 $(basename "$dir")
@@ -35492,18 +36204,16 @@ directamente el ejecutable."
     fi
 }
 
-purgar_comprimidos() {
-    # Borra los comprimidos de los que salio el juego. SOLO se llama cuando
-    # el .wsquashfs ya esta en disco.
+comprimidos_originales() {
+    # Los comprimidos de los que salio el juego, uno por linea.
     #
-    # Antes esto empezaba con "rm -f ${prefijo}*", un comodin sobre la ruta
+    # Antes la purga empezaba con "rm -f ${prefijo}*", un comodin sobre la ruta
     # sin extension: con un juego llamado "Halo" se llevaba por delante
     # Halo.txt, Halo.jpg, Halo-partidas.zip... cualquier cosa que empezara
-    # igual. Ahora se mira SIEMPRE la extension, una por una.
+    # igual. Aqui se mira SIEMPRE la extension, una por una.
     local in_dir="$1" base_prefix="$2" game_name="$3"
-    local pat f n borrados=0
+    local pat f n
     pat="$(basename "$base_prefix")"
-    say "[+] Purgando archivos comprimidos originales..."
     while IFS= read -r f; do
         [ -f "$f" ] || continue
         n="$(basename "$f")"
@@ -35514,11 +36224,66 @@ purgar_comprimidos() {
             *.r[0-9][0-9]|*.R[0-9][0-9]) ;;   # .r00 ...     rar antiguo
             *) continue ;;                    # cualquier otra cosa NO se toca
         esac
-        rm -f "$f" && borrados=$((borrados+1))
+        printf '%s\n' "$f"
     done <<EOFPURGA
 $(find "$in_dir" -maxdepth 1 -type f \( -name "$pat.*" -o -name "$game_name.*" \) 2>/dev/null)
 EOFPURGA
+    return 0
+}
+
+purgar_comprimidos() {
+    # Los comprimidos de los que salio el juego: se PREGUNTA si se borran.
+    # SOLO se llama cuando el juego ya esta en disco.
+    #
+    # ANTES SE BORRABAN SIN PREGUNTAR.
+    #
+    # Y hay dos motivos de peso para conservarlos que WProton no puede
+    # adivinar: que el comprimido sea la unica copia que tiene esa persona del
+    # juego, y que quiera volver a importarlo en otro equipo. Un borrado de
+    # 40 GB que nadie pidio no se deshace.
+    #
+    # Se dice CUANTOS son y CUANTO ocupan, que es lo que de verdad decide la
+    # respuesta: tres ficheros de 200 MB y veinte de 60 GB no son lo mismo.
+    local in_dir="$1" base_prefix="$2" game_name="$3"
+    local lista f n=0 bytes=0 tam borrados=0
+    lista="$(mktemp)" || return 0
+    comprimidos_originales "$in_dir" "$base_prefix" "$game_name" > "$lista"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        n=$((n+1))
+        tam="$(du -b "$f" 2>/dev/null | awk '{print $1}')"
+        bytes=$(( bytes + ${tam:-0} ))
+    done < "$lista"
+    if [ "$n" = 0 ]; then
+        rm -f "$lista"
+        log "importar: no habia comprimidos originales que borrar"
+        return 0
+    fi
+    if ! ui_ask "El juego ya esta instalado. ¿Borrar los archivos
+comprimidos de los que salio?
+
+  $n fichero(s), $(human_size "$bytes")
+
+Si es la unica copia que tienes del juego, o piensas
+importarlo en otro equipo, conservalos."; then
+        rm -f "$lista"
+        say "[+] Comprimidos originales conservados ($n fichero(s), $(human_size "$bytes"))"
+        return 0
+    fi
+    say "[+] Borrando los $n comprimido(s) originales..."
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        # SE COMPRUEBA OTRA VEZ QUE ES UN FICHERO.
+        #
+        # Entre hacer la lista y borrar ha pasado un dialogo, y el usuario ha
+        # podido mover o borrar cosas mientras estaba abierto.
+        [ -f "$f" ] || continue
+        rm -f "$f" && borrados=$((borrados+1))
+    done < "$lista"
+    rm -f "$lista"
     say "[+] Borrados $borrados fichero(s) comprimido(s)."
+    [ "$borrados" = "$n" ] || log "importar: se pidieron $n y se borraron $borrados" AVISO
+    return 0
 }
 
 es_instalador_gog() {
@@ -35559,8 +36324,15 @@ es_instalador_gog() {
 
 import_archive() {
     # zip/7z/rar (multiparte) -> extraer, PURGAR originales, empaquetar/mover, lanzar
-    command -v 7z >/dev/null 2>&1 || { fallo "Falta 7z (paquete p7zip):
-CachyOS: sudo pacman -S p7zip"; return 1; }
+    # 7-Zip, traido por WProton si no lo hay. Antes aqui habia un
+    # "sudo pacman -S p7zip" que en una Deck es imposible de cumplir.
+    loading_say "Preparando 7-Zip..."
+    if ! setup_sevenzip; then
+        loading_clear
+        sevenzip_falta_aviso
+        return 1
+    fi
+    loading_clear
 
     local input="$1"
     local in_dir name_raw prefix game_name extract_dir
@@ -35614,7 +36386,7 @@ CachyOS: sudo pacman -S p7zip"; return 1; }
             # quedaba como orden aparte en la linea siguiente. Que es, ademas,
             # la que hay que usar: 7z sabe decir el porcentaje de verdad.
             run_con_porcentaje "Extrayendo $name_raw..." \
-                7z x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
+                "$SEVENZIP_BIN" x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
     esac
     if [ "$ext_ok" = 1 ]; then
         say "[+] Extraccion completada."
@@ -35694,7 +36466,7 @@ Para jugarlo: Añadir un juego -> elige esa carpeta."
         # build_wsquashfs devuelve 1 y no escribe nada si falta espacio, si
         # falla mksquashfs o si se cancela. Antes no se miraba: se borraba lo
         # extraido igualmente y se intentaba lanzar una ruta vacia.
-        if [ -z "$out" ] || [ ! -s "$out" ]; then
+        if ! paquete_valido "$out"; then
             fallo "No se pudo empaquetar '$game_name'.\n\nNO se ha borrado nada: tienes el comprimido original donde estaba, y lo ya extraido en:\n$extract_dir"
             return 1
         fi
@@ -35703,7 +36475,11 @@ Para jugarlo: Añadir un juego -> elige esa carpeta."
     fi
     # El juego ya esta en disco: ahora si se puede tirar el comprimido.
     purgar_comprimidos "$in_dir" "$prefix" "$game_name"
-    launch_game "$out" "auto"
+    # play_any Y NO launch_game: con PACK_FORMAT=carpeta lo que hay en $out es
+    # una CARPETA, y launch_game espera una imagen que montar. play_any ya
+    # distingue las tres formas -imagen, carpeta y .exe suelto- y manda cada
+    # una a su camino.
+    play_any "$out"
 }
 
 raiz_paquete_detectar() {
@@ -35909,7 +36685,14 @@ launch_loose_exe() {
     # con los ajustes desde cero. Misma condicion: solo si no tiene perfil,
     # y ANTES del asistente, que es lo que la configuracion descargada
     # evita tener que rellenar.
-    profile_exists "$gid" || community_offer_for "$gid" || true
+    #
+    # Y lo mismo con la actualizacion: este camino es el de los juegos en
+    # carpeta, y tambien tienen que enterarse de que su perfil ha mejorado.
+    if profile_exists "$gid"; then
+        community_update_offer_for "$gid" || true
+    else
+        community_offer_for "$gid" || true
+    fi
     if ! profile_exists "$gid"; then
         # LA MISMA RAIZ QUE SE USARA AL LANZAR.
         #
@@ -38470,7 +39253,7 @@ $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
 Rellenar: juego de teclado y raton   (WASD, flechas, clics)
 "
-        n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
+        n="$(grep -c . "$tmp" 2>/dev/null)"
         local titulo="Teclas de $gid  ($n asignadas"
         [ "$nc" -gt 0 ] && titulo="$titulo + $nc combinaciones"
         titulo="$titulo)"
@@ -41733,8 +42516,8 @@ Despues se te enseñara lo que ha llegado."
     ( PYGAME_HIDE_SUPPORT_PROMPT=1 timeout 15 "$PY_BIN" "$MENU_PYGAME_PY" \
         guardia "$RUNTIME_DIR/.prueba_mando" 2 select ) >"$salida" 2>&1
     rm -f "$RUNTIME_DIR/.prueba_mando" 2>/dev/null
-    local visto; visto="$(grep -c 'guardia: boton' "$salida" 2>/dev/null || echo 0)"
-    local disp;  disp="$(grep -c 'guardia vigilando' "$salida" 2>/dev/null || echo 0)"
+    local visto; visto="$(grep -c 'guardia: boton' "$salida" 2>/dev/null)"
+    local disp;  disp="$(grep -c 'guardia vigilando' "$salida" 2>/dev/null)"
     cat "$salida" >> "$LOG_FILE" 2>/dev/null
     if [ "$disp" = 0 ]; then
         ui_error "No se ha encontrado ningun mando.
@@ -44937,6 +45720,7 @@ cfg_prefijo_menu() {
             "Instalar ReShade (Windows: D3D8-12 y OpenGL)" \
             "Borrar prefijo (reinstala DLLs)" \
             "Borrar TODOS los datos de este juego" \
+            "Borrar este juego DEL DISCO (no se puede deshacer)" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
@@ -44949,47 +45733,42 @@ cfg_prefijo_menu() {
     done
 }
 
-borrar_datos_juego() {
-    # Borra TODO lo que WProton guarda de un juego, dejandolo como si nunca se
-    # hubiera lanzado: perfil, mapeo del mando, prefijo propio, overlay,
-    # caratulas y fichas.
-    #
-    # LO QUE NO BORRA, Y HAY QUE DECIRLO CLARO
-    #
-    # El juego. "Borrar los datos del juego" se puede entender como "borrar el
-    # juego", y no es eso: el .wsquashfs o la carpeta se quedan donde estan.
-    # Por eso el aviso lo dice con todas las letras antes de preguntar.
-    #
-    # TRES COSAS QUE NO SE PUEDEN EQUIVOCAR AQUI:
-    #
-    #   1. El prefijo COMPARTIDO no se toca nunca. Es de todos los juegos, y
-    #      un rm -rf ahi se lleva las partidas de la biblioteca entera. Solo
-    #      se borra prefixes/<gid>, y solo si el juego lo usa de verdad.
-    #   2. El identificador vacio seria "rm -rf $PREFIX_DIR/", o sea todos los
-    #      prefijos. Se comprueba antes de nada.
-    #   3. Las partidas se copian ANTES de borrar, como en "Borrar prefijo".
-    #      Aqui hay mas en juego: se borran el prefijo Y el overlay, que es
-    #      donde viven las de los juegos empaquetados.
-    local gid="$1"
-    # TRAZA DESDE LA PRIMERA LINEA.
-    #
-    # Un tester eligio esta opcion y WProton se cerro sin borrar nada y sin
-    # escribir NADA en el registro: entre la linea del menu y el cierre no
-    # habia ni un mensaje. Con eso no se puede saber ni si la funcion llego a
-    # entrar. Estas trazas lo contestan en el proximo registro.
-    say "[borrado] entrando, juego='$gid'"
-    # (1 de 3) SIN IDENTIFICADOR NO SE BORRA NADA.
-    case "$gid" in
-        ""|.|..|*/*)
-            ui_error "Identificador de juego no valido: no se borra nada."
-            return 1 ;;
-    esac
+# ---------------------------------------------------------------------------
+# BORRAR: INVENTARIO, DATOS Y JUEGO
+#
+# Las tres piezas estaban dentro de borrar_datos_juego, que preguntaba y
+# borraba de una vez. Al añadir "borrar el juego del disco" habia que
+# reutilizar el inventario y el borrado SIN volver a preguntar -una segunda
+# pregunta encadenada a la primera es como la gente acaba dandole a "si" sin
+# leer-, asi que se han separado:
+#
+#   juego_datos_inventario  -> QUE hay guardado de este juego (no borra nada)
+#   juego_datos_borrar      -> lo borra, copiando antes las partidas (no pregunta)
+#   borrar_datos_juego      -> las dos anteriores, con su dialogo (como siempre)
+#   borrar_juego_entero     -> el JUEGO y, con el, sus datos. Un solo dialogo.
+#
+# Los resultados del inventario van por variables globales y no por la salida
+# estandar: son cinco datos -texto y cuatro numeros- y devolverlos por stdout
+# obligaria a partir una cadena, que con nombres de juego que llevan de todo
+# es justo donde salen los fallos raros.
+# ---------------------------------------------------------------------------
+WP_BD_LISTA=""      # texto con lo que hay, una linea por cosa
+WP_BD_PFX=""        # ruta del prefijo propio, si lo tiene
+WP_BD_NSAVES=0      # ficheros dentro de users/ del prefijo
+WP_BD_NOV=0         # ficheros dentro del overlay
+WP_BD_FALLOS=0      # cuantos borrados han fallado
 
-    # QUE HAY, ANTES DE PREGUNTAR.
+juego_datos_inventario() {
+    # QUE HAY GUARDADO DE ESTE JUEGO. No borra nada.
     #
     # Un "¿seguro?" a secas no deja decidir: no es lo mismo tirar un perfil
     # recien hecho que uno con 40 horas y las partidas dentro. Se cuenta y se
     # enseña.
+    local gid="${1:-}"
+    case "$gid" in
+        ""|.|..|*/*) return 1 ;;
+    esac
+    WP_BD_LISTA=""; WP_BD_PFX=""; WP_BD_NSAVES=0; WP_BD_NOV=0
     local lista="" pfx="" n_saves=0 ov="$OVERLAY_BASE/$gid/upper"
     local n_ov=0 f
 
@@ -45047,30 +45826,25 @@ EOF
     [ "$n_meta" -gt 0 ] && lista="$lista
   - ficha y datos descargados"
 
-    if [ -z "$lista" ]; then
-        ui_info "De '$gid' no hay nada guardado: no se ha jugado todavia
-o ya se borro. No hay nada que hacer."
-        return 0
-    fi
+    WP_BD_LISTA="$lista"; WP_BD_PFX="$pfx"
+    WP_BD_NSAVES="$n_saves"; WP_BD_NOV="$n_ov"
+    return 0
+}
 
+juego_datos_borrar() {
+    # BORRA lo que WProton guarda de un juego. NO pregunta: quien llama ya lo
+    # ha hecho. Las partidas se copian a backups/ antes de tocar nada.
+    local gid="${1:-}"
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+    WP_BD_FALLOS=0
+    local pfx="$WP_BD_PFX" n_saves="$WP_BD_NSAVES" n_ov="$WP_BD_NOV"
+    local ov="$OVERLAY_BASE/$gid/upper"
     local total_saves=$((n_saves + n_ov))
-    # EL DETALLE VA AL REGISTRO, EL DIALOGO CORTO.
-    #
-    # El aviso tenia quince lineas. En una pantalla de mano no se lee, y ademas
-    # el titulo viaja por el protocolo del servidor de menus: cuanto mas corto,
-    # menos cosas pueden salir mal. Lo que se borra queda escrito en el
-    # registro, que es donde hace falta para diagnosticar despues.
-    say "[borrado] se borrara de '$gid':$lista"
-    say "[borrado] ficheros que pueden ser partidas: $total_saves"
-
-    ui_ask "Borrar TODOS los datos de '$gid'?
-
-El JUEGO NO se borra, solo lo que WProton guarda de el:
-ajustes, prefijo, partidas, caratulas y ficha.
-$([ "$total_saves" -gt 0 ] && printf 'Las partidas se copian a backups/ antes de borrar.' || printf 'Arrancara como la primera vez.')" || {
-        say "[borrado] cancelado por el usuario"
-        return 0; }
-
+    local nom e f
     # (3 de 3) LAS PARTIDAS, PRIMERO.
     #
     # Si la copia falla NO se borra nada. Es preferible dejarlo todo como
@@ -45131,6 +45905,267 @@ EOF
     # Una marca global, no un valor de retorno: entre el borrado y esa
     # escritura hay dos menus por medio, y cada uno tendria que ir pasandose el
     # dato hacia arriba. La marca la lee quien va a escribir.
+    WP_BD_FALLOS="$fallos"
+    return 0
+}
+
+juego_dentro_de_biblioteca() {
+    # ¿Esta ruta esta DENTRO de una de las carpetas de juegos configuradas?
+    #
+    # ESTE ES EL SEGURO MAS IMPORTANTE DE TODO EL BORRADO.
+    #
+    # Lo que va a pasar despues es un "rm -rf" sobre una ruta que viene de un
+    # menu. Si esa ruta se puede quedar fuera de las carpetas de juegos -por un
+    # enlace simbolico, por una ruta relativa, por un ".." colado en un
+    # nombre-, entonces el borrado puede caer en cualquier sitio del disco del
+    # usuario. Asi que no se borra NADA que no este debajo de una carpeta que
+    # el propio usuario haya configurado como carpeta de juegos.
+    #
+    # Se compara con las rutas YA RESUELTAS (realpath): sin eso,
+    # "/juegos/../../home" pasaria la comparacion de texto tal cual.
+    # $2 = "incluir_raiz" -> la carpeta de juegos MISMA tambien vale. Solo lo
+    #      usa la comprobacion del enlace simbolico, que mira la carpeta DONDE
+    #      ESTA el enlace, y esa puede ser la raiz.
+    local ruta="${1:-}" modo="${2:-}" real raiz rreal
+    [ -n "$ruta" ] || return 1
+    real="$(realpath -- "$ruta" 2>/dev/null)" || return 1
+    [ -n "$real" ] || return 1
+    while IFS= read -r raiz; do
+        [ -n "$raiz" ] || continue
+        rreal="$(realpath -- "$raiz" 2>/dev/null)" || continue
+        [ -n "$rreal" ] || continue
+        # La raiz MISMA no vale: borrar la carpeta de juegos entera no es
+        # borrar un juego. Tiene que ser algo DEBAJO de ella.
+        if [ "$real" = "$rreal" ]; then
+            [ "$modo" = incluir_raiz ] && return 0
+            continue
+        fi
+        case "$real/" in
+            "$rreal"/*) return 0 ;;
+        esac
+    done <<EOFRAIZ
+$(games_paths)
+EOFRAIZ
+    return 1
+}
+
+borrar_juego_entero() {
+    # BORRA EL JUEGO DEL DISCO, y con el lo que WProton guarda de el.
+    #
+    # $1 = ruta del juego (archivo .wsquashfs/.dwarfs o carpeta), $2 = gid
+    #
+    # Lo pidieron los testers: hasta ahora se podian borrar los DATOS de un
+    # juego, pero el juego habia que ir a borrarlo al explorador de archivos.
+    #
+    # UN SOLO DIALOGO, CON EL NOMBRE Y EL TAMAÑO.
+    #
+    # Y con los datos incluidos a proposito: borrar el juego y dejarse un
+    # prefijo de 12 GB colgando no es lo que nadie quiere, y encadenar un
+    # segundo "¿y los datos tambien?" es como la gente acaba dandole a "si"
+    # sin leer. Las partidas se copian a backups/ antes de borrar, igual que
+    # en "Borrar los datos", asi que lo irreversible es el juego, no la
+    # partida.
+    local ruta="${1:-}" gid="${2:-}"
+    say "[borrado] borrar el juego: ruta='$ruta' gid='$gid'"
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+    if [ -z "$ruta" ] || [ ! -e "$ruta" ]; then
+        ui_error "Ya no existe:
+$ruta"
+        return 1
+    fi
+    # NO SE BORRA UN JUEGO QUE SE ESTA JUGANDO.
+    #
+    # Con el archivo montado, borrarlo deja al juego leyendo de un montaje sin
+    # fichero debajo: se cuelga o se cae, y el desmontaje posterior falla.
+    if [ "${WP_JUGANDO:-0}" = 1 ]; then
+        ui_error "Hay una partida en marcha. Sal del juego y vuelve a
+intentarlo."
+        return 1
+    fi
+    # EL ENLACE SE MIRA ANTES DEL SEGURO, Y NO AL REVES.
+    #
+    # Lo tenia al reves y una prueba lo cazo: un enlace en la carpeta de juegos
+    # apunta FUERA de ella a proposito -ahi esta la gracia-, asi que el seguro,
+    # que resuelve la ruta, lo rechazaba antes de llegar a tratarlo como
+    # enlace. Quien tiene sus juegos en un disco externo no podia quitar sus
+    # accesos directos.
+    #
+    # Lo que se comprueba aqui es que el ENLACE este en la biblioteca, no su
+    # destino: se va a borrar el enlace, no lo que hay al otro lado.
+    if [ -L "$ruta" ]; then
+        if ! juego_dentro_de_biblioteca "$(dirname -- "$ruta")" incluir_raiz; then
+            ui_error "Por seguridad, WProton solo borra accesos directos que esten
+DENTRO de tus carpetas de juegos. Este no lo esta:
+$ruta"
+            say "[borrado] RECHAZADO: el enlace '$ruta' no esta en la biblioteca" AVISO
+            return 1
+        fi
+        if ui_ask "'$gid' es un acceso directo (enlace), no el juego.
+
+Se quitara el enlace y el juego seguira donde esta de
+verdad:
+$(readlink -f -- "$ruta" 2>/dev/null)
+
+¿Quitar el enlace?"; then
+            rm -f -- "$ruta" && say "[+] Enlace quitado: $ruta"
+            ui_info "Enlace quitado. El juego sigue en su sitio."
+            return 0
+        fi
+        return 0
+    fi
+    if ! juego_dentro_de_biblioteca "$ruta"; then
+        ui_error "Por seguridad, WProton solo borra juegos que esten DENTRO de
+tus carpetas de juegos.
+
+Esto no lo esta:
+$ruta
+
+Si de verdad quieres borrarlo, hazlo desde el explorador de
+archivos, o añade su carpeta en Biblioteca y preferencias."
+        say "[borrado] RECHAZADO: '$ruta' no esta en ninguna carpeta de juegos" AVISO
+        return 1
+    fi
+
+    # QUE SE VA A BORRAR Y CUANTO OCUPA.
+    local tam_juego que
+    tam_juego="$(du -sh -- "$ruta" 2>/dev/null | cut -f1)"
+    [ -n "$tam_juego" ] || tam_juego="?"
+    if [ -d "$ruta" ]; then que="la carpeta"; else que="el archivo"; fi
+    # Y lo que WProton guarda de el, con el mismo inventario que usa
+    # "Borrar los datos del juego": una sola lista, no dos criterios.
+    local lista="" saves=0
+    if juego_datos_inventario "$gid"; then
+        lista="$WP_BD_LISTA"
+        saves=$(( WP_BD_NSAVES + WP_BD_NOV ))
+    fi
+    say "[borrado] $que '$(basename -- "$ruta")' ($tam_juego)${lista:+ + datos:$lista}"
+    say "[borrado] ficheros que pueden ser partidas: $saves"
+
+    local aviso_saves
+    if [ "$saves" -gt 0 ]; then
+        aviso_saves="Tus partidas se copian a backups/ antes de borrar."
+    else
+        aviso_saves="No se han encontrado partidas guardadas."
+    fi
+    ui_ask "¿BORRAR DEL DISCO este juego?
+
+  $gid
+  $que, $tam_juego
+
+Se borra tambien lo que WProton guarda de el (ajustes,
+prefijo, caratulas y ficha). $aviso_saves
+
+Esto NO se puede deshacer." || {
+        say "[borrado] cancelado por el usuario"
+        return 0; }
+
+    # LAS PARTIDAS Y LOS DATOS, PRIMERO.
+    #
+    # Si la copia de las partidas falla, juego_datos_borrar no borra nada y
+    # devuelve 1: entonces el JUEGO TAMPOCO se borra. Al reves -borrar el
+    # juego y luego descubrir que no se pudo guardar la partida- deja a la
+    # persona sin las dos cosas.
+    if [ -n "$lista" ] && ! juego_datos_borrar "$gid"; then
+        say "[borrado] los datos no se pudieron borrar; el juego NO se toca" AVISO
+        return 1
+    fi
+
+    # Y AHORA EL JUEGO.
+    local real; real="$(realpath -- "$ruta" 2>/dev/null)"
+    if [ -z "$real" ] || ! juego_dentro_de_biblioteca "$real"; then
+        ui_error "La ruta del juego cambio mientras se preguntaba.
+No se ha borrado el juego."
+        return 1
+    fi
+    if ! rm -rf -- "${real:?}"; then
+        ui_error "No se pudo borrar:
+$real
+
+Comprueba los permisos o si el disco esta de solo lectura.
+Los datos del juego si se han borrado."
+        return 1
+    fi
+    log "Juego borrado del disco: $real"
+    # Que no vuelva a salir como "ultimo juego jugado" apuntando a la nada.
+    if [ "${LAST_GAME:-}" = "$real" ] || [ "${LAST_GAME:-}" = "$ruta" ]; then
+        LAST_GAME=""; save_settings
+        log "borrado: era el ultimo juego jugado; se olvida"
+    fi
+    # La marca que evita que game_config_menu reescriba el perfil al salir.
+    WP_BORRADO_TOTAL=1
+    ui_info "'$gid' borrado.$([ "$saves" -gt 0 ] && printf '\n\nTus partidas estan en backups/.')"
+    return 0
+}
+
+borrar_datos_juego() {
+    # Borra TODO lo que WProton guarda de un juego, dejandolo como si nunca se
+    # hubiera lanzado: perfil, mapeo del mando, prefijo propio, overlay,
+    # caratulas y fichas.
+    #
+    # LO QUE NO BORRA, Y HAY QUE DECIRLO CLARO
+    #
+    # El juego. "Borrar los datos del juego" se puede entender como "borrar el
+    # juego", y no es eso: el .wsquashfs o la carpeta se quedan donde estan.
+    # Por eso el aviso lo dice con todas las letras antes de preguntar.
+    #
+    # TRES COSAS QUE NO SE PUEDEN EQUIVOCAR AQUI:
+    #
+    #   1. El prefijo COMPARTIDO no se toca nunca. Es de todos los juegos, y
+    #      un rm -rf ahi se lleva las partidas de la biblioteca entera. Solo
+    #      se borra prefixes/<gid>, y solo si el juego lo usa de verdad.
+    #   2. El identificador vacio seria "rm -rf $PREFIX_DIR/", o sea todos los
+    #      prefijos. Se comprueba antes de nada.
+    #   3. Las partidas se copian ANTES de borrar, como en "Borrar prefijo".
+    #      Aqui hay mas en juego: se borran el prefijo Y el overlay, que es
+    #      donde viven las de los juegos empaquetados.
+    local gid="$1"
+    # TRAZA DESDE LA PRIMERA LINEA.
+    #
+    # Un tester eligio esta opcion y WProton se cerro sin borrar nada y sin
+    # escribir NADA en el registro: entre la linea del menu y el cierre no
+    # habia ni un mensaje. Con eso no se puede saber ni si la funcion llego a
+    # entrar. Estas trazas lo contestan en el proximo registro.
+    say "[borrado] entrando, juego='$gid'"
+    # (1 de 3) SIN IDENTIFICADOR NO SE BORRA NADA.
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+
+    juego_datos_inventario "$gid" || return 1
+    local lista="$WP_BD_LISTA" pfx="$WP_BD_PFX"
+    local n_saves="$WP_BD_NSAVES" n_ov="$WP_BD_NOV"
+    if [ -z "$lista" ]; then
+        ui_info "De '$gid' no hay nada guardado: no se ha jugado todavia
+o ya se borro. No hay nada que hacer."
+        return 0
+    fi
+
+    local total_saves=$((n_saves + n_ov))
+    # EL DETALLE VA AL REGISTRO, EL DIALOGO CORTO.
+    #
+    # El aviso tenia quince lineas. En una pantalla de mano no se lee, y ademas
+    # el titulo viaja por el protocolo del servidor de menus: cuanto mas corto,
+    # menos cosas pueden salir mal. Lo que se borra queda escrito en el
+    # registro, que es donde hace falta para diagnosticar despues.
+    say "[borrado] se borrara de '$gid':$lista"
+    say "[borrado] ficheros que pueden ser partidas: $total_saves"
+
+    ui_ask "Borrar TODOS los datos de '$gid'?
+
+El JUEGO NO se borra, solo lo que WProton guarda de el:
+ajustes, prefijo, partidas, caratulas y ficha.
+$([ "$total_saves" -gt 0 ] && printf 'Las partidas se copian a backups/ antes de borrar.' || printf 'Arrancara como la primera vez.')" || {
+        say "[borrado] cancelado por el usuario"
+        return 0; }
+
+    juego_datos_borrar "$gid" || return 1
+    local fallos="$WP_BD_FALLOS"
     WP_BORRADO_TOTAL=1
     if [ "$fallos" -gt 0 ]; then
         ui_error "Se ha borrado casi todo, pero $fallos cosa(s) han fallado.
@@ -46576,6 +47611,16 @@ y lo veran todos los juegos en modo compartido. Seguir?" || return 0
             redist_menu "$squash" "$gid" ;;
         "Importar un fichero .reg"*) reg_importar "$squash" "$gid" ;;
         "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
+        "Borrar este juego DEL DISCO"*)
+            # ANTES QUE LAS OTRAS DOS "Borrar...", por lo mismo que dice el
+            # comentario de abajo: el case coge la primera rama que casa, y
+            # estas tres etiquetas empiezan igual.
+            borrar_juego_entero "$squash" "$gid"
+            # Si se ha borrado, el perfil ya no existe: a los valores de
+            # fabrica, para que el menu no siga enseñando los del juego que
+            # acaba de desaparecer.
+            [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && profile_defaults
+            return 0 ;;
         "Borrar TODOS los datos"*)
             # VA ANTES QUE "Borrar prefijo" a proposito: las dos empiezan por
             # "Borrar", y el case coge la PRIMERA rama que casa. Si "Borrar
@@ -46600,7 +47645,7 @@ usa 'Borrar saves del overlay (upper/)' para dejarlo de fabrica."
             # COMPARTIDO son las de todos los juegos que lo usan. Borrarlo sin
             # mas se las llevaba por delante sin avisar siquiera.
             local _n_saves=0 _pfxu="$pfx/drive_c/users"
-            [ -d "$_pfxu" ] && _n_saves="$(find "$_pfxu" -type f 2>/dev/null | grep -c . || echo 0)"
+            [ -d "$_pfxu" ] && _n_saves="$(find "$_pfxu" -type f 2>/dev/null | grep -c .)"
             if ui_ask "Borrar el prefijo $(basename "$pfx")?$([ "$PREFIX_MODE" = shared ] && printf '\nOJO: es el COMPARTIDO, afecta a todos los juegos que lo usan.')$([ "${_n_saves:-0}" -gt 0 ] && printf '\n\nDentro hay %s fichero(s) en users/ (partidas y configuracion).\nSe guardara una copia antes de borrar.' "$_n_saves")"; then
                 if [ "${_n_saves:-0}" -gt 0 ]; then
                     local _dest="$BACKUP_DIR/prefijo_$(basename "$pfx")_$(date +%Y%m%d_%H%M%S)"
@@ -46835,6 +47880,18 @@ game_config_menu() {
                 *) r_deps="Dependencias del juego: SIN INSTALAR" ;;
             esac
         fi
+        # LA FILA DE LA COMUNIDAD DICE EN QUE SITUACION ESTAS.
+        #
+        # Son cuatro estados distintos y cada uno quiere una palabra distinta:
+        # no tengo nada, tengo el de la comunidad y esta al dia, tengo el de la
+        # comunidad y hay uno mejor, o el perfil es mio. Una etiqueta fija
+        # -"Perfil de la comunidad"- obligaria a entrar para saber cual es.
+        local r_comunidad="Traer la configuración de la comunidad"
+        if community_hay_actualizacion "$gid" 2>/dev/null; then
+            r_comunidad="Traer la configuración de la comunidad: HAY UNA NUEVA"
+        elif community_marca_leer "$gid" 2>/dev/null; then
+            r_comunidad="Traer la configuración de la comunidad: ya la tienes"
+        fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
         [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
@@ -46850,6 +47907,7 @@ game_config_menu() {
             "$r_redist" \
             "$r_rarezas" \
             "Protonfixes / UMU >>" \
+            "$r_comunidad" \
             "Carátula y ficha >>" \
             "$pack_row" \
             "$r_packpfx" \
@@ -46889,6 +47947,14 @@ que ya esta- pero tarda." || continue
             "Casos especiales >>"*)
                 cfg_rarezas_menu "$gid" "$squash"
                 [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0
+                continue ;;
+            "Traer la configuración de la comunidad"*)
+                # NO se guarda el perfil al volver de aqui: community_traer_ahora
+                # ya ha escrito el .conf y lo ha recargado en memoria. Un
+                # write_full_profile detras pisaria lo descargado con lo que
+                # hubiera antes, que es el fallo que mas veces ha aparecido en
+                # esta pantalla.
+                community_traer_ahora "$gid" "$squash" || true
                 continue ;;
             "Herramientas del prefijo >>")
                 cfg_prefijo_menu "$gid" "$squash"
@@ -47131,14 +48197,38 @@ Cambia el motor en Biblioteca y preferencias."
         "Carátulas y perfiles"*) media_menu ;;
         "Formato al empaquetar:"*)
             local pf
-            pf="$(menu "Formato para los juegos que empaquetes" \
+            pf="$(menu "Formato para los juegos que importes" \
                 "wsquashfs - compatible con Batocera y PortProton" \
                 "dwarfs - comprime bastante mas, monta igual de rapido" \
+                "carpeta - sin empaquetar, el juego queda en una carpeta" \
                 "<< Volver")" || pf=""
             case "$pf" in
                 wsquashfs*)
                     PACK_FORMAT=wsquashfs; save_settings
                     ui_info "Los juegos nuevos se empaquetaran en wsquashfs." ;;
+                carpeta*)
+                    # SE DICE QUE SE PIERDE ANTES DE ACTIVARLO.
+                    #
+                    # Es un ajuste que suena a "mas sencillo" y tiene cuatro
+                    # consecuencias que no se ven hasta mucho despues: la SD
+                    # llena, el juego imposible de llevar a otro equipo, las
+                    # partidas mezcladas con el juego y la carpeta lenta de
+                    # leer. Mejor leerlo una vez aqui que descubrirlo luego.
+                    if ui_ask "Los juegos que importes quedaran como una CARPETA, sin
+empaquetar. Es mas sencillo, pero se pierde esto:
+
+  - Un fichero por juego. Pasas a tener miles de ficheros
+    sueltos, y en una microSD eso va bastante mas lento.
+  - La compresion. Un juego ocupa lo que ocupa.
+  - El overlay que separa tus partidas del juego.
+  - Llevarte un juego a otro equipo copiando un archivo.
+
+Los juegos que ya tengas empaquetados se siguen usando
+igual. ¿Activarlo?"; then
+                        PACK_FORMAT=carpeta; save_settings
+                        ui_info "Los juegos nuevos quedaran sin empaquetar, en una
+carpeta dentro de tu carpeta de juegos."
+                    fi ;;
                 dwarfs*)
                     find_dwarfs_tools || setup_dwarfs_tools || true
                     find_dwarfs_tools
@@ -47603,8 +48693,8 @@ repo_comprobar() {
 
 --- Perfiles de la comunidad (profiles/) ---"
     if [ "$t_ok" = 0 ] && [ -f "$COMMUNITY_INDEX" ]; then
-        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
-        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null || echo 0)"
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null)"
         texto="$texto
 $n_conf perfil(es) .conf
 $n_keys fichero(s) .keys de teclas
@@ -47695,10 +48785,12 @@ community_descargas_menu() {
         n_local="$(community_local_list 2>/dev/null | grep -c . || true)"
         sel="$(menu "Perfiles del repositorio" \
             "Traer los de tus juegos (los instala)" \
+            "Buscar perfiles actualizados" \
             "Traer TODOS a comunidad/ (ahora hay ${n_local:-0})" \
             "<< Volver")" || return 0
         case "$sel" in
             "Traer los de tus juegos"*) community_traer_todas || true ;;
+            "Buscar perfiles actualizados"*) community_buscar_actualizaciones || true ;;
             "Traer TODOS"*)             community_traer_todo  || true ;;
             *) return 0 ;;
         esac
