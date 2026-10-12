@@ -1,0 +1,1 @@
+{"actions_player1": [{"trigger": ["hotkey", "start"], "type": "key", "target": ["KEY_LEFTALT", "KEY_F4"]}, {"trigger": ["hotkey", "a"], "type": "key", "target": "ESCRIBIR_TEXTO"}], "wproton_para": "Dark_Souls_Remastered"}
