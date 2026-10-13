@@ -1,0 +1,1 @@
+{"actions_player1": [{"trigger": ["hotkey", "start"], "type": "key", "target": ["KEY_LEFTALT", "KEY_F4"]}, {"trigger": "start", "type": "key", "target": "KEY_1"}], "mouse": {"axis": "joystick1", "click_left": "r2", "speed": 900, "click_right": "l2", "click_middle": "a"}, "wproton_para": "The_Swarm"}
