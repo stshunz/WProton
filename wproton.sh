@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.02"
+WPROTON_VERSION="2.03"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -145,6 +145,18 @@ CACHE_DIR="$BASE_DIR/cache"              # shaders dxvk/vkd3d/mesa/nvidia
 LOG_DIR="$BASE_DIR/logs"
 SETTINGS_FILE="$BASE_DIR/settings.conf"  # ajustes globales (carpeta de juegos)
 LOG_FILE="$LOG_DIR/wproton_$(date +%Y%m%d_%H%M%S).log"
+# LA MARCA DE "EN ESTA SESION PASO ALGO".
+#
+# Va en un FICHERO al lado del registro, y no en una variable, por la misma
+# razon de siempre en este programa: medio WProton se ejecuta dentro de
+# subshells -los menus son sel="$(menu ...)"- y una variable puesta ahi dentro
+# no llega al padre. Un error dentro de un menu tiene que contar igual.
+#
+# Se llama como el registro con ".err" detras, asi que cada sesion tiene la
+# suya aunque haya varios wproton.sh a la vez (en DeckStation cada juego lanza
+# el suyo).
+LOG_MARCA_ERR="$LOG_DIR/.$(basename "$LOG_FILE").err"
+LOG_MARCA_OK="$LOG_DIR/.$(basename "$LOG_FILE").ok"
 
 mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
          "$BUILD_BASE" "$PREFIX_DIR" "$PROFILE_DIR" "$CACHE_DIR" "$LOG_DIR"
@@ -173,6 +185,23 @@ GRID_COLS=0                              # columnas de la rejilla (0 = automáti
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
 PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion) | carpeta (sin empaquetar)
+# JUEGOS CON MUCHISIMOS FICHEROS: se avisa ANTES de empaquetar.
+#
+# Un juego empaquetado se lee a traves de DOS capas FUSE (la imagen y la
+# superposicion de partidas); una carpeta la sirve el kernel. Mientras el
+# juego abre unos cientos de ficheros no se nota, pero Wine resuelve cada
+# ruta sin distinguir mayusculas, y para eso LEE LA CARPETA ENTERA cada vez
+# que abre un fichero. Con decenas de miles de ficheros eso se multiplica, y
+# el juego puede quedarse cargando varios minutos o no entrar nunca.
+# 0 = no avisar nunca.
+PACK_AVISO_FICHEROS=20000
+# Montaje DwarFS: cache de bloques descomprimidos e hilos que descomprimen.
+# De serie dwarfs usa 512m y 2 hilos, pensados para gastar poco; con un juego
+# grande en una microSD, subirlos hace que arranque antes. 0 hilos = tantos
+# como nucleos tenga el equipo (hasta 4). Solo se pasan si este binario de
+# dwarfs las entiende: ver dwarfs_opciones_monta().
+DWARFS_CACHE="1g"
+DWARFS_WORKERS=0
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
@@ -182,6 +211,31 @@ OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
 # 2.36 cubre SteamOS 3.x (Steam Deck). Subela si solo usas equipos modernos.
 GLIBC_OBJETIVO="2.36"
 RATON_MENUS=1                            # 1 = manejar los menus con el raton
+# SENSIBILIDAD DEL RATON FISICO EN LOS MENUS.
+#
+# Con el raton en la mano la seleccion seguia al puntero SIN NINGUN UMBRAL:
+# un pixel de movimiento -o un golpe en la mesa- te cambiaba de fila, incluso
+# si estabas navegando con el mando. Y la rueda saltaba un tercio de pantalla
+# por muesca, que en un raton de sobremesa es muchisimo.
+#   RATON_UMBRAL  pixeles que hay que mover ANTES de que la seleccion siga al
+#                 puntero, contados desde la ultima tecla o boton del mando.
+#                 0 = como antes, sigue al puntero al instante.
+#   RATON_RUEDA   filas por muesca de la rueda. 0 = un tercio de pantalla.
+RATON_UMBRAL=12
+RATON_RUEDA=3
+# LOS REGISTROS DE LAS SESIONES QUE FUERON BIEN, SE BORRAN AL CERRAR.
+#   BORRAR_LOGS_OK   1 = al cerrar, si no hubo ningun aviso ni error, el
+#                    registro se borra. 0 = conservarlos todos (como antes).
+#   LOGS_OK_GUARDAR  cuantos registros SIN errores se conservan, contando
+#                    desde el mas reciente. 1 deja siempre el de la ultima
+#                    sesion: hace falta mas veces de lo que parece, porque
+#                    hay fallos que no escriben ni un error -un juego que se
+#                    queda cargando, por ejemplo- y ese registro es justo el
+#                    que hay que mirar. 0 = borrar tambien el ultimo.
+# Los registros CON algo nunca se borran aqui; de esos se encarga rotate_logs
+# por antiguedad (2 dias, 40 como maximo).
+BORRAR_LOGS_OK=1
+LOGS_OK_GUARDAR=1
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
@@ -237,6 +291,23 @@ WP_COMUNIDAD_TANDA=0
 # poder pararlo al cerrar. Declarado aqui porque con "set -u" una variable sin
 # declarar mata el script.
 REPO_REFRESCO_PID=""
+# Y el de la busqueda de squashfuse_ll, por lo mismo.
+SQFUSE_LL_PID=""
+
+# TOMAR EL CONTROL DEL MANDO O SOLO LEERLO.
+#   1 = WProton le apaga al mando su emulacion de raton -los trackpads pasan a
+#       ser suyos- y se la devuelve al terminar. Es lo que hace que la opcion
+#       funcione cuando uno quiera, sin el gesto de mantener OPCIONES.
+#   0 = no se le escribe nada al mando. Entonces solo hay pads que leer si el
+#       mando ya esta en modo gamepad (manteniendo OPCIONES medio segundo).
+TRACKPAD_CONTROL=1
+
+# Trackpads de la Deck como raton: cual (no | izquierdo | derecho) y cuanto
+# corre el puntero. Van en settings.conf como el resto de ajustes.
+TRACKPAD_RATON="no"
+TRACKPAD_SENS="1.0"
+# 1 = la partida en curso cambio el trackpad y hay que devolverlo al salir.
+WP_TRACKPAD_CAMBIADO=0
 
 save_settings() {
     # RED DE SEGURIDAD para las carpetas de juegos.
@@ -279,6 +350,19 @@ LAST_BROWSE="$LAST_BROWSE"
 THEME="$THEME"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
+TRACKPAD_RATON="$TRACKPAD_RATON"
+TRACKPAD_SENS="$TRACKPAD_SENS"
+# --------------------------------------------------------------------------
+# LOS TRACKPADS: ¿DE WProton O DEL MANDO?
+#   TRACKPAD_CONTROL=1  WProton le apaga al mando su emulacion de raton y se
+#                       la devuelve al salir. Asi el trackpad como raton
+#                       funciona cuando lo enciendas, sin tener que mantener
+#                       pulsado OPCIONES. Es lo normal.
+#   TRACKPAD_CONTROL=0  no se le escribe NADA al mando. Mas prudente, pero
+#                       entonces los pads solo se pueden leer si antes has
+#                       puesto el mando en modo gamepad a mano.
+# --------------------------------------------------------------------------
+TRACKPAD_CONTROL=$TRACKPAD_CONTROL
 # --------------------------------------------------------------------------
 # MODO "SOLO JUGAR" (no aparece en los menus: se activa aquí a mano)
 #   1 = al abrir WProton se va DIRECTO a la lista de juegos, y al salir de
@@ -298,6 +382,39 @@ GAMES_SORT="$GAMES_SORT"
 # Formato al empaquetar juegos: wsquashfs (compatible con Batocera) o
 # dwarfs (comprime bastante más y monta igual de rapido)
 PACK_FORMAT="$PACK_FORMAT"
+# --------------------------------------------------------------------------
+# JUEGOS CON MUCHISIMOS FICHEROS
+#   Al empaquetar, si el juego pasa de estos ficheros, WProton avisa y
+#   ofrece dejarlo en carpeta: empaquetado funciona, pero puede tardar
+#   muchisimo en cargar (ver el comentario de arriba en el programa).
+#   0 = no avisar nunca.
+# --------------------------------------------------------------------------
+PACK_AVISO_FICHEROS=$PACK_AVISO_FICHEROS
+# --------------------------------------------------------------------------
+# EL RATON FISICO EN LOS MENUS
+#   RATON_UMBRAL: pixeles a mover antes de que la seleccion siga al puntero,
+#                 contados desde la ultima tecla o boton del mando. Sube el
+#                 numero si se te cambia de fila al rozar el raton; ponlo a 0
+#                 para que siga al puntero al instante, como hacia antes.
+#   RATON_RUEDA:  filas que mueve cada muesca de la rueda (0 = un tercio de
+#                 pantalla, como hacia antes).
+# --------------------------------------------------------------------------
+RATON_UMBRAL=$RATON_UMBRAL
+RATON_RUEDA=$RATON_RUEDA
+# --------------------------------------------------------------------------
+# LIMPIEZA DE REGISTROS
+#   Al cerrar, los registros de las sesiones que fueron bien se borran y los
+#   que tienen algun aviso o error se quedan. LOGS_OK_GUARDAR dice cuantos de
+#   los "buenos" se conservan empezando por el mas reciente: 1 deja siempre
+#   el de la ultima sesion, que hace falta cuando algo va mal SIN dar error.
+#   BORRAR_LOGS_OK=0 los conserva todos, como se hacia antes.
+# --------------------------------------------------------------------------
+BORRAR_LOGS_OK=$BORRAR_LOGS_OK
+LOGS_OK_GUARDAR=$LOGS_OK_GUARDAR
+# Montaje DwarFS: cache de bloques y numero de hilos que descomprimen.
+# 0 hilos = automatico (tantos como nucleos, hasta 4).
+DWARFS_CACHE="$DWARFS_CACHE"
+DWARFS_WORKERS=$DWARFS_WORKERS
 # --------------------------------------------------------------------------
 # FONDO ENTRE MENUS
 #   Ventana de fondo con la marca WProton que se mantiene MIENTRAS SE NAVEGA:
@@ -947,7 +1064,39 @@ py_libs_dir() {
 # ----------------------------------------------------------------------------
 # 2. LOG SOLO A FICHERO (nunca contaminar stdout: leccion del wrapper ES-DE)
 # ----------------------------------------------------------------------------
-log() { printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"; }
+log() {
+    printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"
+    # ¿ESTA LINEA ES MOTIVO PARA CONSERVAR EL REGISTRO?
+    #
+    # Se decide AQUI, en el momento, y no leyendo el registro al cerrar. Un
+    # grep a posteriori es adivinar: hay lineas que llevan la palabra "error"
+    # hablando de otra cosa -las que explican un error ya arreglado, por
+    # ejemplo- y hay salida de Proton que se escribe directa al fichero sin
+    # pasar por aqui, como su "unable to use parent for game drive", que es
+    # inofensivo y aparece en todas las partidas.
+    #
+    # Cuenta por dos caminos: el NIVEL (todo lo que no sea INFO lo pone quien
+    # escribe la linea a proposito) y el PRINCIPIO del texto, que es como se
+    # avisa por pantalla con say "AVISO: ..." o fallo/die, que mandan
+    # "ERROR: ...".
+    case "${2:-INFO}" in
+        INFO) ;;
+        *) log_marcar_error "nivel ${2}"; return 0 ;;
+    esac
+    case "$1" in
+        AVISO:*|AVISO\ *|ERROR:*|ERROR-UI:*|"[!]"*|FALLO:*)
+            log_marcar_error "linea" ;;
+    esac
+    return 0
+}
+
+log_marcar_error() {
+    # Deja constancia de que esta sesion tiene algo que merece conservarse.
+    # No se mira el contenido de la marca: basta con que exista.
+    [ -n "${LOG_MARCA_ERR:-}" ] || return 0
+    printf '%s %s\n' "$(date '+%H:%M:%S')" "${1:-}" >> "$LOG_MARCA_ERR" 2>/dev/null
+    return 0
+}
 say() { printf '%s\n' "$1" >&2; log "$1"; }
 die() { say "ERROR: $1"; ui_error "$1"; cleanup_mount; exit 1; }
 
@@ -1057,6 +1206,33 @@ resolve_tool() {
 SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
 OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
 FUSERMOUNT_BIN="$(command -v fusermount3 2>/dev/null || command -v fusermount 2>/dev/null)"
+
+squashfuse_monta_bin() {
+    # CON QUE SE MONTA UN wsquashfs: squashfuse_ll si esta, squashfuse si no.
+    #
+    # Son los dos drivers que trae el mismo proyecto (y el mismo paquete en
+    # Arch, SteamOS y Debian), y la diferencia importa:
+    #
+    #   squashfuse     usa la interfaz ALTA de FUSE. Le dice al kernel que lo
+    #                  que le contesta caduca en UN SEGUNDO, y las busquedas
+    #                  que no encuentran nada no se guardan en absoluto.
+    #   squashfuse_ll  usa la interfaz BAJA y responde con DBL_MAX, o sea
+    #                  "esto no caduca nunca", TAMBIEN para las busquedas
+    #                  fallidas (contesta inodo 0, que es como se guarda un
+    #                  "aqui no hay nada").
+    #
+    # Y eso es exactamente lo que duele con un juego de muchos ficheros: una
+    # imagen montada NO CAMBIA, asi que cada vez que el kernel vuelve a
+    # preguntar lo mismo es trabajo tirado. Wine resuelve las rutas sin
+    # distinguir mayusculas leyendo la carpeta entera, y encima pregunta por
+    # un monton de ficheros que no existen; con el driver bajo, todo eso lo
+    # contesta el kernel de su cache y no llega a salir a espacio de usuario.
+    #
+    # No se descarga aparte: viene en el mismo paquete que squashfuse, asi que
+    # o esta al lado o no esta, y si no esta se usa el de siempre.
+    local ll; ll="$(resolve_tool squashfuse_ll)"
+    if [ -n "$ll" ]; then printf '%s' "$ll"; else printf '%s' "$SQUASHFUSE_BIN"; fi
+}
 
 arch_tag() {
     case "$(uname -m)" in
@@ -1332,49 +1508,135 @@ $(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases" 2>/dev/null \
     try_static_tool "$name" $(printf '%s\n' "$urls" | awk 'NF')
 }
 
-try_arch_package() {
-    # $1 = nombre del paquete y del binario (p.ej. squashfuse)
-    # Los paquetes de Arch son tarballs comprimidos con zstd: dentro esta
-    # usr/bin/<binario>. Sirve en Arch, CachyOS y SteamOS (que es Arch); en
-    # otras distros puede no arrancar por las librerias, pero eso se
-    # comprueba ejecutandolo antes de darlo por bueno.
-    local name="$1" tmp url
+arch_pkg_bajar() {
+    # Baja el paquete de Arch de $1 y lo deja SIN ABRIR en $2/pkg.tar.zst.
+    # $3 = etiqueta para los mensajes (por defecto, el nombre del paquete).
+    #
+    # Sirve en Arch, CachyOS y SteamOS (que es Arch); en otras distros el
+    # binario puede no arrancar por las librerias, y eso se comprueba
+    # ejecutandolo antes de darlo por bueno.
+    local paquete="$1" tmp="$2" etq="${3:-$1}" url
     command -v tar >/dev/null 2>&1 || return 1
+    url="https://archlinux.org/packages/extra/x86_64/$paquete/download/"
+    say "[$etq] probando el paquete de Arch Linux..."
+    dl "$url" "$tmp/pkg.tar.zst"
+}
+
+arch_pkg_abrir() {
+    # Deja el paquete en un formato que el tar de ESTE equipo sepa abrir.
+    # $1 = carpeta temporal, $2 = etiqueta para los mensajes.
+    #
+    # Los paquetes de Arch van comprimidos con zstd. Si el tar de aqui no
+    # sabe de zstd, se descomprime una vez a pkg.tar y se reutiliza: asi
+    # sacar varios binarios del mismo paquete no lo descomprime varias veces.
+    local tmp="$1" etq="$2"
+    # El listado no extrae nada: solo sirve para ver si este tar puede.
+    ( cd "$tmp" && tar --zstd -tf pkg.tar.zst >/dev/null ) 2>>"$LOG_FILE" && return 0
+    if ! command -v zstd >/dev/null 2>&1; then
+        say "[$etq] el paquete de Arch necesita zstd para abrirse"
+        return 1
+    fi
+    ( cd "$tmp" && zstd -d -q pkg.tar.zst -o pkg.tar ) >>"$LOG_FILE" 2>&1 || {
+        say "[$etq] no se pudo abrir el paquete de Arch"; return 1; }
+    return 0
+}
+
+arch_pkg_sacar() {
+    # Saca usr/bin/<binario> de un paquete ya abierto.
+    # $1 = carpeta temporal, $2 = nombre del binario.
+    #
+    # TOLERANTE A PROPOSITO: que un binario no este dentro es normal -hay
+    # acompañantes opcionales, como squashfuse_ll- y tar se queja por ello.
+    # Quien llama decide si la ausencia es un problema o no.
+    local tmp="$1" bin="$2"
+    if [ -f "$tmp/pkg.tar" ]; then
+        ( cd "$tmp" && tar -xf pkg.tar usr/bin/"$bin" ) >>"$LOG_FILE" 2>&1
+    else
+        ( cd "$tmp" && tar --zstd -xf pkg.tar.zst usr/bin/"$bin" ) >>"$LOG_FILE" 2>&1
+    fi
+    [ -f "$tmp/usr/bin/$bin" ]
+}
+
+arch_pkg_instalar() {
+    # Comprueba que el binario ARRANCA aqui y lo deja en runtime/tools.
+    # $1 = ruta del binario sacado, $2 = nombre con el que se guarda,
+    # $3 = etiqueta para los mensajes.
+    #
+    # Solo 126 y 127 significan "no se puede ejecutar" (arquitectura
+    # equivocada o libreria ausente). Cualquier otro codigo quiere decir que
+    # el programa arranco: squashfuse, por ejemplo, contesta a --help con su
+    # version y sale con 254, y es perfectamente valido.
+    local bin="$1" name="$2" etq="$3" arc
+    [ -f "$bin" ] || return 1
+    chmod +x "$bin" 2>/dev/null
+    "$bin" --help >/dev/null 2>&1
+    arc=$?
+    if [ "$arc" = 126 ] || [ "$arc" = 127 ]; then
+        say "[$etq] el binario de Arch no funciona en este sistema"
+        return 1
+    fi
+    mkdir -p "$RUNTIME_DIR/tools"
+    cp -f "$bin" "$RUNTIME_DIR/tools/$name" || return 1
+    chmod +x "$RUNTIME_DIR/tools/$name"
+    return 0
+}
+
+try_arch_package() {
+    # $1 = nombre del paquete Y del binario (p.ej. squashfuse)
+    # $2... = binarios ACOMPAÑANTES que vienen en el mismo paquete y que
+    #         tambien interesan (p.ej. squashfuse_ll). Son opcionales: si no
+    #         estan dentro no pasa nada, y no se validan uno a uno porque el
+    #         paquete ya se ha dado por bueno con el principal.
+    local name="$1" tmp extra
+    shift
     tmp="$(mktemp -d)"
-    url="https://archlinux.org/packages/extra/x86_64/$name/download/"
-    say "[$name] probando el paquete de Arch Linux..."
-    if ! dl "$url" "$tmp/pkg.tar.zst"; then
+    arch_pkg_bajar "$name" "$tmp"      || { rm -rf "$tmp"; return 1; }
+    arch_pkg_abrir "$tmp" "$name"      || { rm -rf "$tmp"; return 1; }
+    arch_pkg_sacar "$tmp" "$name"      || { rm -rf "$tmp"; return 1; }
+    if ! arch_pkg_instalar "$tmp/usr/bin/$name" "$name" "$name"; then
         rm -rf "$tmp"; return 1
     fi
-    # tar con soporte zstd, o el zstd suelto si el tar no lo trae
-    if ! ( cd "$tmp" && tar --zstd -xf pkg.tar.zst usr/bin/"$name" ) >>"$LOG_FILE" 2>&1; then
-        if command -v zstd >/dev/null 2>&1; then
-            ( cd "$tmp" && zstd -d -q pkg.tar.zst -o pkg.tar \
-              && tar -xf pkg.tar usr/bin/"$name" ) >>"$LOG_FILE" 2>&1 || {
-                say "[$name] no se pudo abrir el paquete de Arch"; rm -rf "$tmp"; return 1; }
+    say "[$name] listo (del paquete de Arch, en runtime/tools)"
+    # LOS ACOMPAÑANTES, DE LA MISMA DESCARGA.
+    #
+    # squashfuse_ll viene en el paquete de squashfuse, asi que sacarlo no
+    # cuesta ni una peticion mas.
+    for extra in "$@"; do
+        [ -n "$extra" ] || continue
+        if arch_pkg_sacar "$tmp" "$extra"; then
+            cp -f "$tmp/usr/bin/$extra" "$RUNTIME_DIR/tools/$extra" 2>/dev/null \
+                && chmod +x "$RUNTIME_DIR/tools/$extra" 2>/dev/null \
+                && say "[$name] incluido tambien $extra"
         else
-            say "[$name] el paquete de Arch necesita zstd para abrirse"
-            rm -rf "$tmp"; return 1
+            log "[$name] el paquete de Arch no trae $extra"
         fi
-    fi
-    local bin="$tmp/usr/bin/$name"
-    [ -f "$bin" ] || { rm -rf "$tmp"; return 1; }
-    chmod +x "$bin" 2>/dev/null
-    # comprobar que ARRANCA aqui: en distros no-Arch puede faltarle alguna
-    # libreria. Solo 126/127 son "no ejecutable"; otros codigos son validos.
-    "$bin" --help >/dev/null 2>&1
-    local arc=$?
-    if [ "$arc" != 126 ] && [ "$arc" != 127 ]; then
-        mkdir -p "$RUNTIME_DIR/tools"
-        cp -f "$bin" "$RUNTIME_DIR/tools/$name"
-        chmod +x "$RUNTIME_DIR/tools/$name"
-        rm -rf "$tmp"
-        say "[$name] listo (del paquete de Arch, en runtime/tools)"
-        return 0
-    fi
-    say "[$name] el binario de Arch no funciona en este sistema"
+    done
     rm -rf "$tmp"
-    return 1
+    return 0
+}
+
+try_arch_package_bin() {
+    # Saca UN SOLO binario de un paquete de Arch cuyo nombre NO coincide con
+    # el del binario. $1 = paquete, $2 = binario.
+    #
+    # Es el caso de squashfuse_ll: viene dentro del paquete "squashfuse", y
+    # aqui interesa SOLO el. Con try_arch_package habria que pedir el paquete
+    # entero, y eso pisaria el squashfuse que ya este funcionando -que puede
+    # ser una copia que vino de otra fuente y va perfectamente-.
+    local paquete="$1" bin="$2" tmp
+    tmp="$(mktemp -d)"
+    arch_pkg_bajar "$paquete" "$tmp" "$bin" || { rm -rf "$tmp"; return 1; }
+    arch_pkg_abrir "$tmp" "$bin"            || { rm -rf "$tmp"; return 1; }
+    if ! arch_pkg_sacar "$tmp" "$bin"; then
+        say "[$bin] el paquete $paquete de Arch no lo trae"
+        rm -rf "$tmp"; return 1
+    fi
+    if ! arch_pkg_instalar "$tmp/usr/bin/$bin" "$bin" "$bin"; then
+        rm -rf "$tmp"; return 1
+    fi
+    rm -rf "$tmp"
+    say "[$bin] listo (del paquete $paquete de Arch, en runtime/tools)"
+    return 0
 }
 
 build_squashfuse_src() {
@@ -1427,6 +1689,14 @@ build_squashfuse_src() {
         mkdir -p "$RUNTIME_DIR/tools"
         cp -f "$src/squashfuse" "$RUNTIME_DIR/tools/squashfuse"
         chmod +x "$RUNTIME_DIR/tools/squashfuse"
+        # El mismo "make" construye squashfuse_ll si encuentra la interfaz baja
+        # de FUSE, que es lo normal. Es el driver que preferimos para montar
+        # (ver squashfuse_monta_bin), asi que si esta se guarda tambien.
+        if [ -x "$src/squashfuse_ll" ]; then
+            cp -f "$src/squashfuse_ll" "$RUNTIME_DIR/tools/squashfuse_ll"
+            chmod +x "$RUNTIME_DIR/tools/squashfuse_ll"
+            say "[squashfuse] compilado tambien squashfuse_ll (driver rapido)"
+        fi
         rm -rf "$tmp"
         say "[squashfuse] compilado e instalado en runtime/tools"
         return 0
@@ -1443,6 +1713,107 @@ tool_is_ours() {
         "$BASE_DIR"/*) case "${1#"$BASE_DIR"/}" in */*) return 1 ;; *) return 0 ;; esac ;;
         *) return 1 ;;
     esac
+}
+
+setup_squashfuse_ll() {
+    # CONSIGUE squashfuse_ll, EL DRIVER RAPIDO PARA MONTAR IMAGENES.
+    #
+    # Por que importa esta en squashfuse_monta_bin(): el driver bajo le dice al
+    # kernel que lo que contesta NO CADUCA -tambien los "aqui no hay nada"-, y
+    # el alto le dice que caduca en un segundo. Como una imagen montada no
+    # puede cambiar, lo primero es lo correcto; y es justo donde se va el
+    # tiempo de carga de un juego con decenas de miles de ficheros.
+    #
+    # Es el mismo programa que squashfuse y el mismo proyecto, solo otra
+    # interfaz: no hay nada que configurar ni ningun riesgo de mezclar
+    # versiones, porque cada uno monta por su cuenta.
+    local a; a="$(arch_tag)"
+    local ll_urls="https://bin.pkgforge.dev/$a/squashfuse_ll"
+    ll_urls="$ll_urls
+$(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+    | grep -i 'squashfuse_ll' | grep -i "$a")"
+    # Por orden: nuestro repositorio -> binarios estaticos -> el paquete de
+    # Arch, del que se saca SOLO squashfuse_ll para no pisar un squashfuse que
+    # ya este funcionando.
+    # shellcheck disable=SC2086
+    if try_wproton_repo_tool squashfuse_ll; then
+        return 0
+    # shellcheck disable=SC2086
+    elif try_static_tool squashfuse_ll $(printf '%s\n' "$ll_urls" | awk 'NF'); then
+        return 0
+    elif try_arch_package_bin squashfuse squashfuse_ll; then
+        return 0
+    fi
+    log "[squashfuse_ll] no se ha encontrado en ninguna fuente"
+    return 1
+}
+
+squashfuse_ll_al_arrancar() {
+    # BUSCA squashfuse_ll AL ARRANCAR, EN SEGUNDO PLANO.
+    #
+    # Lo pidio Dani: el camino de setup_fuse_tools solo entra cuando FALTA
+    # squashfuse, asi que en una instalacion que ya funciona -que son todas
+    # las que vienen de una version anterior- nunca se llegaria a buscar el
+    # driver rapido, y la mejora se quedaria sin estrenar.
+    #
+    # EN SEGUNDO PLANO, por lo mismo que el refresco del repositorio: son una
+    # o dos consultas y una descarga de un mega. Esperarlas aqui seria hacer
+    # que arrancar WProton tarde lo que tarde la red, o lo que tarde en
+    # FALLAR, que es peor: en una Deck sin conexion serian varios segundos de
+    # pantalla muerta cada vez. Nadie la espera, y como el driver se elige en
+    # el momento de montar (squashfuse_monta_bin), si la descarga termina
+    # antes de que elijas juego ESTA partida ya va con el rapido; y si no,
+    # la siguiente.
+    #
+    # UNA VEZ A LA SEMANA COMO MUCHO.
+    #
+    # La marca se escribe ANTES de intentarlo, no despues: si la descarga se
+    # queda colgada y alguien mata WProton, no quedaria marca y volveria a
+    # intentarlo en cada arranque. Si sale bien, la marca sobra -el binario ya
+    # esta y no se vuelve a entrar aqui-, asi que escribirla de mas no cuesta.
+    [ -z "${WP_SIN_FUSE:-}" ] || return 0
+    [ -n "$SQUASHFUSE_BIN" ] || return 0
+    if [ -n "$(resolve_tool squashfuse_ll)" ]; then
+        log "squashfuse_ll: ya esta; no hay que buscarlo"
+        return 0
+    fi
+    local marca="$RUNTIME_DIR/.sqfuse_ll_try" edad
+    if [ -f "$marca" ]; then
+        edad=$(( $(date +%s) - $(stat -c %Y "$marca" 2>/dev/null || echo 0) ))
+        if [ "$edad" -lt 604800 ]; then       # una semana
+            log "squashfuse_ll: ultimo intento hace $((edad/3600))h; se monta con squashfuse"
+            return 0
+        fi
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 0
+    : > "$marca" 2>/dev/null
+    (
+        if setup_squashfuse_ll; then
+            log "squashfuse_ll: listo; las imagenes montaran con el driver rapido"
+        else
+            log "squashfuse_ll: no se consiguio; se reintentara dentro de una semana" AVISO
+        fi
+    ) >/dev/null 2>&1 &
+    # EL PID, PARA PODER PARARLO AL CERRAR.
+    #
+    # Igual que con el refresco del repositorio: si alguien cierra WProton
+    # mientras esto descarga, el subproceso seguiria vivo con un curl colgado
+    # y el cierre avisaria de "trabajos en segundo plano".
+    SQFUSE_LL_PID=$!
+    log "squashfuse_ll: buscandolo en segundo plano (pid $SQFUSE_LL_PID)"
+    return 0
+}
+
+squashfuse_ll_stop() {
+    # Para la busqueda de arranque si todavia estuviera en marcha.
+    [ -n "${SQFUSE_LL_PID:-}" ] || return 0
+    if kill -0 "$SQFUSE_LL_PID" 2>/dev/null; then
+        kill "$SQFUSE_LL_PID" 2>/dev/null
+        log "Cierre: busqueda de squashfuse_ll detenida (pid $SQFUSE_LL_PID)"
+    fi
+    SQFUSE_LL_PID=""
+    return 0
 }
 
 setup_fuse_tools() {
@@ -1487,7 +1858,7 @@ $(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/d
             ok=1
         elif try_static_tool squashfuse $(printf '%s\n' "$sq_urls" | awk 'NF'); then
             ok=1
-        elif try_arch_package squashfuse; then
+        elif try_arch_package squashfuse squashfuse_ll; then
             ok=1
         elif [ -z "$SQUASHFUSE_BIN" ]; then
             # Compilar es el ULTIMO recurso y solo si NO hay ninguna squashfuse
@@ -1499,6 +1870,12 @@ $(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/d
             say "[squashfuse] sin copia portable; se seguira usando la del sistema"
         fi
     fi
+    # squashfuse_ll: EL DRIVER RAPIDO, Y ES OPCIONAL.
+    #
+    # Si el camino de Arch de aqui arriba se uso, ya lo saco de la misma
+    # descarga. Si no, se busca ahora. Que no se encuentre NO ES UN FALLO: se
+    # monta con el squashfuse normal, como siempre, y por eso no toca "ok".
+    [ -z "$(resolve_tool squashfuse_ll)" ] && { setup_squashfuse_ll || true; }
     SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
     OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
     [ "$ok" = 1 ]
@@ -1557,6 +1934,11 @@ Instalalas con el gestor de paquetes de tu distribucion."
     fi
     log "Este equipo tiene glibc $(glibc_de_este_equipo) (GLIBC_OBJETIVO=${GLIBC_OBJETIVO:-2.36} en settings.conf)"
     log "Herramientas: squashfuse=$SQUASHFUSE_BIN$(tool_is_ours "$SQUASHFUSE_BIN" && printf ' [portable]' || printf ' [sistema]') | overlayfs=$OVERLAYFS_BIN$(tool_is_ours "$OVERLAYFS_BIN" && printf ' [portable]' || printf ' [sistema]') | fusermount=$FUSERMOUNT_BIN"
+    # Con que driver se montaran las imagenes, que no es lo mismo que el
+    # squashfuse de arriba: si hay squashfuse_ll se usa ese. Importa tenerlo
+    # en el registro, porque la diferencia de velocidad al cargar un juego con
+    # muchos ficheros es enorme y asi no hay que adivinarlo.
+    log "Montaje de imagenes: driver = $(squashfuse_monta_bin)$([ -n "$(resolve_tool squashfuse_ll)" ] && printf ' [low-level, cache permanente]' || printf ' [high-level, cache de 1 segundo]')"
 }
 
 # ----------------------------------------------------------------------------
@@ -2702,9 +3084,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 1c601469eaf8" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py cfc6563e4e7b" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 1c601469eaf8
+# WPROTON_HELPER mapeador.py cfc6563e4e7b
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -2717,6 +3099,21 @@ write_mapeador() {
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
+# Lo mismo que en menu_pygame: que SDL no apague el modo lagarto de la Deck.
+#
+# El teclado virtual de este mapeador usa pygame, o sea SDL, y SDL manda apagar
+# la emulacion de raton y teclado del mando en cuanto lo abre por HIDAPI. Si se
+# abre el teclado en pantalla una sola vez, los trackpads se quedan muertos a
+# partir de ahi. Este mapeador lee el mando por evdev, asi que no necesita el
+# camino HIDAPI para nada.
+# HIDAPI ENTERA Y CON "=", no solo la de la Deck y con setdefault: lo primero
+# no funciono y en menu_pygame.py esta explicado por que (setdefault respeta lo
+# que exporte Steam, y la variable de la Deck no existe en las SDL antiguas).
+# Aqui tampoco se pierde nada: el mando se lee por evdev, y pygame solo pinta
+# el teclado en pantalla.
+os.environ['SDL_JOYSTICK_HIDAPI'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAMDECK'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAM'] = '0'
 _RT = os.path.dirname(os.path.abspath(__file__))          # runtime/
 _BASE_DIR = os.path.dirname(_RT)                          # raiz de WProton
 sys.path.insert(0, os.path.join(_RT, 'libs_py%d.%d' % sys.version_info[:2]))
@@ -3047,6 +3444,13 @@ def _run_teclado(gamepad_device, ids=None, ui_kb=None):
     _os.environ['SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN'] = '1'
     _os.environ['SDL_VIDEO_FOREIGN_WINDOW_OPENGL'] = '0'
     pygame.init()
+    # EL JOYSTICK DE SDL, CERRADO. Es el que abre el mando de la Deck y le
+    # apaga los trackpads, y aqui no se usa: el mando se lee por evdev. No
+    # depende de que esta SDL conozca las variables de arriba.
+    try:
+        pygame.joystick.quit()
+    except Exception:
+        pass
     info = pygame.display.Info()
     # DONDE SE PONE EL TECLADO.
     #
@@ -4448,12 +4852,1031 @@ if __name__ == "__main__":
 MAPEOF
 }
 
+TRACKPAD_PY="$RUNTIME_DIR/trackpad.py"
+TRACKPAD_PID=""
+
+write_trackpad() {
+    grep -q "WPROTON_HELPER trackpad.py dcb6a88ad91e" "$TRACKPAD_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$TRACKPAD_PY" <<'TPEOF'
+# WPROTON_HELPER trackpad.py dcb6a88ad91e
+# WProton - trackpads de la Steam Deck como raton
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
+#
+# POR QUE ESTO EXISTE, Y COMO FUNCIONA DE VERDAD
+#
+# Esta version esta escrita MIRANDO EL CODIGO DEL DRIVER, drivers/hid/hid-steam.c
+# del kernel, en vez de a base de suposiciones. Las dos primeras no funcionaron
+# justamente por eso, y los dos errores estan contados aqui abajo para que no se
+# repitan.
+#
+# LOS DOS MODOS DEL MANDO DE LA DECK
+#
+# El mando tiene dos estados, y los cambia EL USUARIO manteniendo pulsado el
+# boton de OPCIONES (el de las tres rayas, que el kernel ve como BTN_START)
+# durante 450 ms. Lo hace el propio Steam igual, con su vibracion de aviso:
+#
+#   modo ESCRITORIO (lo normal, "modo lagarto" encendido)
+#       El FIRMWARE del mando emula raton y teclado: el pad derecho mueve el
+#       puntero y el izquierdo hace de rueda. A cambio, el driver NO publica
+#       nada por evdev: el dispositivo "Steam Deck" existe pero no manda ni un
+#       evento. En hid-steam.c:
+#           if (!steam->gamepad_mode && lizard_mode)
+#                   return;
+#
+#   modo GAMEPAD (se entra manteniendo opciones)
+#       Se apaga la emulacion del firmware -los pads dejan de mover el puntero,
+#       que es lo que la gente cuenta como "se han muerto los trackpads"- y el
+#       driver EMPIEZA a publicar todo por evdev, los dos trackpads incluidos.
+#
+# PRIMER ERROR QUE SE COMETIO: creer que lo apagabamos nosotros. El comentario
+# de cabecera del driver dice que apaga el modo lagarto al abrir el dispositivo
+# de entrada... pero eso NO vale para la Deck, y lo dice su propio codigo:
+#
+#   /*
+#    * Disabling lizard mode automatically is only done on the Steam
+#    * Controller. On the Steam Deck, this is toggled manually by holding
+#    * the options button instead, handled by steam_mode_switch_cb.
+#    */
+#   if (!(steam->quirks & (STEAM_QUIRK_DECK | STEAM_QUIRK_IBEX))) {
+#
+# O sea que en una Deck con kernel 6.8 o mas nuevo, ABRIR el mando -por evdev o
+# por SDL- no apaga los trackpads. Si estan apagados, es que el mando esta en
+# modo gamepad, o que lo apago un programa por hidraw (Steam lo hace).
+#
+# SEGUNDO ERROR: decir que los pads "no se pueden leer por evdev". SI se pueden,
+# y desde el kernel 6.3. El driver los publica como ejes del propio mando:
+#
+#   pad IZQUIERDO -> ABS_HAT0X / ABS_HAT0Y      (-32767 .. 32767)
+#   pad DERECHO   -> ABS_HAT1X / ABS_HAT1Y      (-32767 .. 32767)
+#   clic del izquierdo -> BTN_THUMB   clic del derecho -> BTN_THUMB2
+#
+# Y cuando el dedo NO esta sobre el pad, el driver publica 0,0 a proposito:
+#
+#   if (lpad_touched) { input_report_abs(input, ABS_HAT0X, steam_le16(data + 16)); ... }
+#   else              { input_report_abs(input, ABS_HAT0X, 0); ... }
+#
+# Asi que el 0,0 es "dedo levantado" y sale gratis, sin mirar la presion.
+#
+# COMO SE LEE AQUI
+#
+# Por EVDEV primero, que es lo correcto: nada de desplazamientos en bytes que
+# adivinar, y no hace falta tocar hidraw.
+#
+# Y por HIDRAW solo de respaldo, para cuando el evdev del driver no existe. Pasa
+# de verdad: si un programa abre el nodo hidraw del mando -Steam lo hace-, el
+# driver DESREGISTRA su dispositivo de entrada ("it will not send any command to
+# the controller" y "this input device will be removed"). En el modo Juego, con
+# Steam delante, ese es el estado normal.
+#
+# OJO con ese respaldo: abrir hidraw nos convierte a nosotros en ese "cliente",
+# asi que puede hacer desaparecer el mando del resto del sistema. Por eso va
+# SEGUNDO y se avisa en el registro.
+#
+# TOMAR EL CONTROL: LOS TRACKPADS DE WProton, NO LOS DE VALVE
+#
+# Lo de arriba sirve si el mando YA esta en modo gamepad, pero eso obliga a
+# mantener pulsado OPCIONES, que es el gesto de Steam. Dani lo pidio al
+# contrario: que WProton tenga sus propios trackpads y los encienda y apague
+# cuando se quiera.
+#
+# Para eso HAY que escribirle al mando, y aqui esta la unica forma de hacerlo
+# con cabeza: mandando EXACTAMENTE los mismos comandos que manda el driver del
+# kernel en steam_set_lizard_mode(), copiados de su codigo, no deducidos.
+#
+#   APAGAR la emulacion del firmware (los pads pasan a ser nuestros):
+#       0x81                      ID_CLEAR_DIGITAL_MAPPINGS
+#       0x87 06 09 00 00 47 00 00 ID_SET_SETTINGS_VALUES con
+#                                   registro 0x09 (SETTING_LIZARD_MODE)       = 0
+#                                   registro 0x47 (SETTING_STEAM_WATCHDOG_...) = 0
+#
+#   ENCENDERLA otra vez (se devuelve el mando a como estaba):
+#       0x85                      ID_SET_DEFAULT_DIGITAL_MAPPINGS
+#       0x8E                      ID_LOAD_DEFAULT_SETTINGS
+#
+# El watchdog se apaga porque es lo que hace el driver y por lo que dice su
+# propio comentario: "disable watchdog that tests if Steam is active". Sin eso,
+# el firmware vuelve a encender la emulacion al rato por su cuenta.
+#
+# COMO SE MANDAN: son informes de CARACTERISTICA (feature), no escrituras
+# normales. El driver usa hid_hw_raw_request(..., HID_FEATURE_REPORT,
+# HID_REQ_SET_REPORT); desde espacio de usuario eso es el ioctl HIDIOCSFEATURE
+# sobre el fd de /dev/hidrawN. Un write() normal manda un informe de SALIDA, que
+# NO es lo mismo y el mando ignora.
+#
+# Y van SIEMPRE de 65 bytes: 1 de numero de informe (0 en la Deck) + 64 de
+# contenido rellenado a ceros, que es lo que hace el driver
+# (max(size, 64) + 1).
+#
+# LO QUE SE DEVUELVE SIEMPRE
+#
+# Al terminar -tambien si nos matan con una señal, que es como lo para WProton-
+# se manda el par de comandos de encender. Dejar el mando con la emulacion
+# apagada seria dejarle los trackpads muertos a alguien que no sabe por que.
+# Y hay red de seguridad por partida doble: al cerrar nuestro fd de hidraw, el
+# driver del kernel vuelve a registrar el mando y el mismo llama a
+# steam_set_lizard_mode(steam, lizard_mode), o sea que lo restaura otra vez.
+#
+# EL PRECIO, QUE HAY QUE SABERLO
+#
+# Mientras tengamos abierto el hidraw, el driver RETIRA su dispositivo de
+# entrada del mando ("this input device will be removed"). Con Steam en marcha
+# eso da igual, porque Steam ya lo tiene cogido y publica su propio mando
+# virtual. Sin Steam, el mando desaparece para los juegos mientras esto corra,
+# asi que se avisa en el registro.
+import sys, os, time, struct, glob
+
+VENDOR_VALVE = 0x28DE
+# 0x1205 = Steam Deck. Se admite tambien el mando de Valve por USB/BT por si
+# alguien lo usa en un equipo de sobremesa.
+PRODUCTOS = (0x1205, 0x1102, 0x1142)
+
+# --- EL FORMATO DEL INFORME --------------------------------------------------
+#
+# Informe de estado de la Deck: 64 bytes que empiezan por 01 00 09 40
+#   (01 00 = cabecera, 09 = tipo "estado del mando", 40 = 64 bytes de largo)
+#
+# Y estos son los desplazamientos de lo que nos interesa, todo entero con signo
+# de 16 bits y en little endian:
+#
+#   16..17  pad izquierdo X        20..21  pad derecho X
+#   18..19  pad izquierdo Y        22..23  pad derecho Y
+#   56..57  presion del izquierdo  58..59  presion del derecho
+#
+# Los desplazamientos SON LOS DEL DRIVER, copiados de su tabla en hid-steam.c
+# ("The size for this message payload is 56"), no una suposicion:
+#
+#    16-17 | s16   | ABS_HAT0X | left-pad X value
+#    18-19 | s16   | ABS_HAT0Y | left-pad Y value
+#    20-21 | s16   | ABS_HAT1X | right-pad X value
+#    22-23 | s16   | ABS_HAT1Y | right-pad Y value
+#    56-57 | u16   | --        | left pad pressure
+#    58-59 | u16   | --        | right pad pressure
+#
+# AQUI ESTABA EL FALLO QUE DEJABA ESTO MUERTO.
+#
+# La cabecera que se comprobaba era b'\x01\x00\x09\x40': se dio por hecho que el
+# cuarto byte era el largo TOTAL del informe, 64 = 0x40. Y no: es el largo del
+# CONTENIDO, 56 = 0x38. Asi que el filtro no casaba NUNCA, se descartaban todos
+# los informes y el puntero no se movia ni un pixel, sin un solo error en el
+# registro.
+#
+# Ahora se comprueba exactamente lo que comprueba el driver, ni un byte mas:
+#
+#   if (size != 64 || data[0] != 1 || data[1] != 0)
+#           return 0;
+#   switch (data[2]) { ... case ID_CONTROLLER_DECK_STATE: ...
+#
+# O sea: 64 bytes, data[0]=1, data[1]=0 y data[2]=9. El cuarto byte no se mira,
+# que es lo que no habia que haber hecho desde el principio.
+CAB = b'\x01\x00\x09'
+TIPO_DECK = 9
+OFF_IZQ_X, OFF_IZQ_Y = 16, 18
+OFF_DER_X, OFF_DER_Y = 20, 22
+OFF_IZQ_P, OFF_DER_P = 56, 58
+LARGO = 64
+
+
+# --- ESCRIBIRLE AL MANDO ----------------------------------------------------
+#
+# Los numeros son los del driver (hid-steam.c), contando las posiciones de sus
+# enums. No se "parecen" a los del driver: son los mismos.
+ID_CLEAR_DIGITAL_MAPPINGS       = 0x81
+ID_SET_DEFAULT_DIGITAL_MAPPINGS = 0x85
+ID_SET_SETTINGS_VALUES          = 0x87
+ID_LOAD_DEFAULT_SETTINGS        = 0x8E
+SETTING_LIZARD_MODE             = 0x09   # posicion 9 del enum de ajustes
+SETTING_STEAM_WATCHDOG_ENABLE   = 0x47   # posicion 71
+LARGO_FEATURE = 64
+
+
+def _hidiocsfeature(largo):
+    """El numero del ioctl HIDIOCSFEATURE para un informe de "largo" bytes.
+
+    Se calcula en vez de llevarlo escrito a mano, que es como se cuelan los
+    errores de arquitectura. La macro del kernel es:
+
+        #define HIDIOCSFEATURE(len)  _IOC(_IOC_WRITE|_IOC_READ, 'H', 0x06, len)
+
+    y _IOC empaqueta direccion (2 bits), tamaño (14), tipo (8) y numero (8).
+    """
+    _IOC_WRITE, _IOC_READ = 1, 2
+    direccion = _IOC_WRITE | _IOC_READ
+    return (direccion << 30) | (largo << 16) | (ord('H') << 8) | 0x06
+
+
+def _mandar_feature(fd, carga):
+    """Manda un informe de caracteristica al mando. "carga" = el comando.
+
+    Devuelve True si el mando lo acepto.
+    """
+    import fcntl
+    # 1 byte de numero de informe (0 en la Deck) + 64 de contenido a ceros.
+    buf = bytearray(1 + LARGO_FEATURE)
+    buf[1:1 + len(carga)] = carga
+    try:
+        fcntl.ioctl(fd, _hidiocsfeature(len(buf)), bytes(buf))
+        return True
+    except OSError as ex:
+        print('trackpad: el mando rechazo el comando %02X (%s)'
+              % (carga[0] if carga else 0, ex), file=sys.stderr)
+        return False
+
+
+def lagarto_apagar(fd):
+    """Apaga la emulacion de raton/teclado del firmware: los pads son nuestros.
+
+    Son los dos comandos de la rama "else" de steam_set_lizard_mode().
+    """
+    ok = _mandar_feature(fd, bytes([ID_CLEAR_DIGITAL_MAPPINGS]))
+    # 0x87, longitud 6, y tres bytes por pareja: registro, valor bajo, alto.
+    ajustes = bytes([ID_SET_SETTINGS_VALUES, 6,
+                     SETTING_LIZARD_MODE, 0, 0,
+                     SETTING_STEAM_WATCHDOG_ENABLE, 0, 0])
+    ok = _mandar_feature(fd, ajustes) and ok
+    if ok:
+        print('trackpad: emulacion del firmware APAGADA; los pads son de '
+              'WProton', file=sys.stderr)
+    return ok
+
+
+def lagarto_encender(fd):
+    """Devuelve el mando a como estaba: el firmware vuelve a mover el puntero.
+
+    Son los dos comandos de la rama "if (enable)" de steam_set_lizard_mode().
+    """
+    ok = _mandar_feature(fd, bytes([ID_SET_DEFAULT_DIGITAL_MAPPINGS]))
+    ok = _mandar_feature(fd, bytes([ID_LOAD_DEFAULT_SETTINGS])) and ok
+    if ok:
+        print('trackpad: emulacion del firmware devuelta al mando',
+              file=sys.stderr)
+    return ok
+
+
+def _s16(buf, off):
+    """Entero con signo de 16 bits en little endian."""
+    if off + 2 > len(buf):
+        return 0
+    return struct.unpack_from('<h', buf, off)[0]
+
+
+def _u16(buf, off):
+    if off + 2 > len(buf):
+        return 0
+    return struct.unpack_from('<H', buf, off)[0]
+
+
+def buscar_deck():
+    """La ruta del /dev/hidraw* del mando de la Deck, o None.
+
+    Se mira el fabricante y el producto en sysfs -no el nombre, que cambia- y se
+    descartan los nodos que no se puedan abrir para leer: en la Deck hay varios
+    hidraw y solo uno es el del mando.
+    """
+    for nodo in sorted(glob.glob('/dev/hidraw*')):
+        base = '/sys/class/hidraw/%s/device/uevent' % os.path.basename(nodo)
+        try:
+            with open(base) as fh:
+                txt = fh.read()
+        except OSError:
+            continue
+        # HID_ID=0003:000028DE:00001205
+        vid = pid = None
+        for linea in txt.splitlines():
+            if linea.startswith('HID_ID='):
+                trozos = linea.strip().split(':')
+                if len(trozos) == 3:
+                    try:
+                        vid = int(trozos[1], 16)
+                        pid = int(trozos[2], 16)
+                    except ValueError:
+                        pass
+        if vid != VENDOR_VALVE or pid not in PRODUCTOS:
+            continue
+        try:
+            fd = os.open(nodo, os.O_RDONLY | os.O_NONBLOCK)
+            os.close(fd)
+        except OSError:
+            # Existe pero no se puede leer: casi siempre permisos.
+            print('trackpad: %s es el mando pero no se puede leer (permisos)'
+                  % nodo, file=sys.stderr)
+            continue
+        return nodo
+    return None
+
+
+def abrir_mando(escribir=False):
+    """Abre el hidraw del mando. escribir=True si hay que mandarle comandos.
+
+    Se abre en SOLO LECTURA cuando no hace falta escribir: asi un diagnostico
+    no puede tocar el mando ni por error.
+    """
+    nodo = buscar_deck()
+    if not nodo:
+        print('trackpad: no se ha encontrado el mando de la Deck en /dev/hidraw*',
+              file=sys.stderr)
+        print('trackpad: si esto ES una Deck, suele ser cosa de permisos:',
+              file=sys.stderr)
+        print('trackpad: hacen falta las reglas udev de Steam para hidraw.',
+              file=sys.stderr)
+        return None, None
+    try:
+        fd = os.open(nodo, os.O_RDWR if escribir else os.O_RDONLY)
+    except OSError as e:
+        print('trackpad: no se pudo abrir %s%s: %s'
+              % (nodo, ' para escribir' if escribir else '', e), file=sys.stderr)
+        return None, None
+    print('trackpad: mando en %s%s' % (nodo, ' (lectura y escritura)'
+                                       if escribir else ''), file=sys.stderr)
+    # SE AVISA DEL PRECIO DE TENER ESTO ABIERTO.
+    #
+    # Mientras un programa tiene el hidraw del mando abierto, el driver retira
+    # su dispositivo de entrada. Con Steam delante da igual -ya lo tenia el- y
+    # sin Steam el mando desaparece para los juegos mientras esto corra. No es
+    # algo que podamos evitar: es como funciona el driver.
+    print('trackpad: (mientras esto lea el mando, el gamepad del kernel no '
+          'esta publicado)', file=sys.stderr)
+    return fd, nodo
+
+
+def leer_informe(fd, espera=1.0):
+    """Un informe de estado del mando, o None si no llega ninguno a tiempo."""
+    import select
+    r, _, _ = select.select([fd], [], [], espera)
+    if not r:
+        return None
+    try:
+        datos = os.read(fd, 128)
+    except OSError:
+        return None
+    # EXACTAMENTE lo que comprueba el driver: 64 bytes y 01 00 09 delante.
+    if len(datos) != LARGO or not datos.startswith(CAB):
+        return None
+    return datos
+
+
+# ---------------------------------------------------------------------------
+# EL CAMINO BUENO: LOS PADS POR EVDEV
+# ---------------------------------------------------------------------------
+# Los codigos los publica el driver (ver la cabecera de este fichero). El pad
+# izquierdo son los ejes del "hat 0" y el derecho los del "hat 1", con sus
+# clics en BTN_THUMB y BTN_THUMB2.
+EJES_PAD = {'izquierdo': ('ABS_HAT0X', 'ABS_HAT0Y'),
+            'derecho':   ('ABS_HAT1X', 'ABS_HAT1Y')}
+
+
+def buscar_pads_evdev():
+    """El dispositivo de entrada del mando que publica los trackpads, o None.
+
+    NO se busca por nombre ("Steam Deck"), que cambia entre modelos y entre
+    versiones del driver: se busca por lo unico que importa, que el aparato
+    declare los ejes de los dos pads. Asi vale igual para el mando nuevo de
+    Valve, que el driver trata con el mismo codigo.
+    """
+    try:
+        import evdev
+        from evdev import ecodes as e
+    except ImportError:
+        return None
+    for ruta in sorted(evdev.list_devices()):
+        try:
+            d = evdev.InputDevice(ruta)
+        except (OSError, IOError):
+            continue
+        try:
+            caps = d.capabilities().get(e.EV_ABS) or []
+            codigos = {c for c, _ in caps}
+            # Los cuatro ejes de los dos pads: es la firma del mando de la Deck.
+            if {e.ABS_HAT0X, e.ABS_HAT0Y, e.ABS_HAT1X, e.ABS_HAT1Y} <= codigos:
+                return d
+        except Exception:
+            pass
+        try:
+            d.close()
+        except Exception:
+            pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# MODO PROBAR: solo mira, no toca nada
+# ---------------------------------------------------------------------------
+def estado(segundos=0):
+    """EL DIAGNOSTICO: en que estado esta el mando y por donde se puede leer.
+
+    Esto existe porque de este asunto se han hecho dos arreglos a ciegas que no
+    funcionaron, y en ninguno de los dos casos habia en el registro con que
+    distinguir las cinco cosas que pueden estar pasando. Aqui se miran todas,
+    de una vez y sin preguntarle nada a nadie.
+    """
+    print('--- trackpads de la Steam Deck: estado ---', file=sys.stderr)
+    # 1) El parametro del modulo: si esta a 0, el driver no activa nunca la
+    #    emulacion del firmware NI deja funcionar el cambio manual.
+    lz = None
+    try:
+        with open('/sys/module/hid_steam/parameters/lizard_mode') as fh:
+            lz = fh.read().strip()
+    except OSError:
+        print('  hid_steam: no esta cargado o no expone lizard_mode', file=sys.stderr)
+    if lz is not None:
+        print('  lizard_mode (parametro del modulo) = %s' % lz, file=sys.stderr)
+        if lz in ('N', '0'):
+            print('    OJO: a 0 el driver no enciende la emulacion de raton del', file=sys.stderr)
+            print('    firmware, y el cambio manteniendo OPCIONES no hace nada.', file=sys.stderr)
+    # 2) El hidraw del mando: si existe pero NO hay evdev, es que alguien lo
+    #    tiene abierto (Steam) y el driver ha retirado su dispositivo.
+    nodo = buscar_deck()
+    print('  hidraw del mando: %s' % (nodo or 'no encontrado'), file=sys.stderr)
+    # 3) El evdev con los pads.
+    dev = buscar_pads_evdev()
+    if dev is None:
+        print('  evdev con los trackpads: NO HAY', file=sys.stderr)
+        if nodo:
+            print('    El mando esta ahi, asi que lo mas probable es que otro', file=sys.stderr)
+            print('    programa tenga abierto su hidraw -Steam lo hace- y el', file=sys.stderr)
+            print('    driver haya retirado su dispositivo de entrada.', file=sys.stderr)
+            print('    En ese caso WProton leera por hidraw, de respaldo.', file=sys.stderr)
+        else:
+            print('    Ni hidraw ni evdev: esto no parece una Steam Deck, o', file=sys.stderr)
+            print('    faltan permisos para leer el mando.', file=sys.stderr)
+        return 1
+    print('  evdev con los trackpads: %s  (%s)' % (dev.path, dev.name), file=sys.stderr)
+    # 4) ¿Manda algo? Es lo que distingue modo escritorio de modo gamepad.
+    seg = segundos or 6
+    print('  escuchando %d s: TOCA LOS DOS TRACKPADS ahora...' % seg, file=sys.stderr)
+    try:
+        import evdev  # noqa: F401
+        from evdev import ecodes as e
+        import select as _sel
+    except ImportError:
+        print('  falta python-evdev', file=sys.stderr)
+        return 1
+    izq = der = 0
+    t0 = time.time()
+    try:
+        while time.time() - t0 < seg:
+            r, _, _ = _sel.select([dev.fd], [], [], 0.3)
+            if not r:
+                continue
+            for ev in dev.read():
+                if ev.type != e.EV_ABS or ev.value == 0:
+                    continue
+                if ev.code in (e.ABS_HAT0X, e.ABS_HAT0Y):
+                    izq += 1
+                elif ev.code in (e.ABS_HAT1X, e.ABS_HAT1Y):
+                    der += 1
+    except (OSError, IOError) as ex:
+        print('  se perdio el mando: %s' % ex, file=sys.stderr)
+    finally:
+        try:
+            dev.close()
+        except Exception:
+            pass
+    print('  eventos: pad izquierdo %d, pad derecho %d' % (izq, der), file=sys.stderr)
+    if izq or der:
+        print('  CONCLUSION: el mando esta en MODO GAMEPAD y los pads se leen', file=sys.stderr)
+        print('  bien por evdev. "Trackpad como raton" de WProton funcionara.', file=sys.stderr)
+        print('  (En este modo el firmware NO mueve el puntero: eso es lo', file=sys.stderr)
+        print('   normal, no un fallo.)', file=sys.stderr)
+        return 0
+    print('  CONCLUSION: el mando esta en MODO ESCRITORIO.', file=sys.stderr)
+    print('  El driver no publica nada a proposito, y es el FIRMWARE el que', file=sys.stderr)
+    print('  mueve el puntero: pad derecho = raton, pad izquierdo = rueda.', file=sys.stderr)
+    print('  Si los trackpads no te responden estando asi, el mando se quedo', file=sys.stderr)
+    print('  en modo gamepad o se lo cambio un programa por hidraw.', file=sys.stderr)
+    print('  SE ARREGLA manteniendo pulsado OPCIONES (las tres rayas) medio', file=sys.stderr)
+    print('  segundo: el mando vibra y cambia de modo. No hace falta WProton', file=sys.stderr)
+    print('  ni sudo ni reiniciar.', file=sys.stderr)
+    return 2
+
+
+def probar(segundos=20):
+    """Enseña los informes EN CRUDO de hidraw mientras tocas los trackpads.
+
+    Es el diagnostico de bajo nivel, para cuando hace falta ver los bytes. Lo
+    normal es usar "estado", que mira el camino bueno y dice que esta pasando.
+    """
+    fd, _ = abrir_mando()
+    if fd is None:
+        return 1
+    print('', file=sys.stderr)
+    print('  Mueve el dedo por el trackpad IZQUIERDO y mira si cambian los dos', file=sys.stderr)
+    print('  primeros numeros. Luego el DERECHO, para los otros dos.', file=sys.stderr)
+    print('  (%s segundos)' % segundos, file=sys.stderr)
+    print('', file=sys.stderr)
+    t0 = time.time()
+    ultimo = None
+    n = 0
+    try:
+        while time.time() - t0 < segundos:
+            d = leer_informe(fd)
+            if d is None:
+                continue
+            izq = (_s16(d, OFF_IZQ_X), _s16(d, OFF_IZQ_Y))
+            der = (_s16(d, OFF_DER_X), _s16(d, OFF_DER_Y))
+            pres = (_u16(d, OFF_IZQ_P), _u16(d, OFF_DER_P))
+            act = (izq, der, pres)
+            if act == ultimo:
+                continue
+            ultimo = act
+            n += 1
+            # Solo cuando hay algo tocado o moviendose: si no, son cientos de
+            # lineas iguales y no se ve nada.
+            if izq == (0, 0) and der == (0, 0) and pres == (0, 0):
+                continue
+            print('izq=%6d,%6d  der=%6d,%6d  presion=%5d,%5d'
+                  % (izq[0], izq[1], der[0], der[1], pres[0], pres[1]),
+                  file=sys.stderr)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(fd)
+    if n == 0:
+        print('trackpad: no llego ningun informe. El mando no es el esperado o',
+              file=sys.stderr)
+        print('trackpad: el formato de sus informes es otro.', file=sys.stderr)
+        return 1
+    print('', file=sys.stderr)
+    print('trackpad: %d informes leidos.' % n, file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# MODO RATON: el pad elegido mueve el puntero
+# ---------------------------------------------------------------------------
+def _mover(ui, e, dx, dy, div, restos):
+    """Convierte un desplazamiento del dedo en movimiento del puntero.
+
+    Los restos de la division se ACUMULAN en vez de perderse: sin eso, mover el
+    dedo despacio se queda en cero y el puntero no sale hasta dar un aceleron.
+    "restos" es una lista de dos para poder cambiarla desde aqui.
+    """
+    # Un salto enorme entre dos lecturas no es un movimiento: es que el dedo se
+    # levanto y volvio a posar sin que nos llegara el 0,0. Se descarta en vez de
+    # pegarle un tiron al puntero.
+    if abs(dx) > 12000 or abs(dy) > 12000:
+        return
+    fx = dx / div + restos[0]
+    fy = dy / div + restos[1]
+    mx, my = int(fx), int(fy)
+    restos[0], restos[1] = fx - mx, fy - my
+    if mx:
+        ui.write(e.EV_REL, e.REL_X, mx)
+    if my:
+        ui.write(e.EV_REL, e.REL_Y, my)
+    if mx or my:
+        ui.syn()
+
+
+def _raton_virtual(evdev, e):
+    """El raton por uinput con el que se mueve el puntero."""
+    return evdev.UInput(
+        {e.EV_REL: [e.REL_X, e.REL_Y],
+         e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE]},
+        name='WProton_Trackpad')
+
+
+def raton_evdev(cual='izquierdo', sensibilidad=1.0, segundos=0):
+    """El pad mueve el puntero, leyendo el mando por EVDEV. Este es el bueno.
+
+    Devuelve 0 si funciono, 2 si no hay por donde leer -y entonces quien llama
+    puede probar el respaldo por hidraw-, 1 si hubo un error de verdad.
+
+    EL DEDO LEVANTADO SALE GRATIS: el driver publica 0,0 cuando el pad no esta
+    tocado, asi que no hay que mirar la presion ni inventar umbrales. Eso si,
+    un toque EXACTAMENTE en el centro tambien da 0,0; es un caso de un pixel y
+    lo unico que pasa es que ese toque empieza a contar un instante despues.
+    """
+    try:
+        import evdev
+        from evdev import ecodes as e
+    except ImportError:
+        print('trackpad: falta python-evdev (va en el runtime de WProton)',
+              file=sys.stderr)
+        return 1
+    dev = buscar_pads_evdev()
+    if dev is None:
+        print('trackpad: el mando no publica los trackpads por evdev',
+              file=sys.stderr)
+        return 2
+    nx, ny = EJES_PAD.get(cual, EJES_PAD['izquierdo'])
+    cx, cy = getattr(e, nx), getattr(e, ny)
+    try:
+        ui = _raton_virtual(evdev, e)
+    except Exception as ex:
+        print('trackpad: no se pudo crear el raton virtual: %s' % ex,
+              file=sys.stderr)
+        return 1
+    print('trackpad: el pad %s mueve el puntero por evdev desde %s '
+          '(sensibilidad %.2f)' % (cual, dev.path, sensibilidad), file=sys.stderr)
+    # El pad va de -32767 a 32767 de lado a lado. Dividir entre 60 deja un
+    # recorrido de pantalla comodo con un barrido del dedo.
+    div = 60.0 / max(0.05, sensibilidad)
+    restos = [0.0, 0.0]
+    prev = None
+    x = y = 0
+    vistos = 0
+    t0 = time.time()
+    try:
+        # SE ESPERA CON select Y NO SE BLOQUEA EN read_loop.
+        #
+        # Con read_loop, un mando que no manda nada -el caso normal en modo
+        # escritorio- deja esto colgado para siempre sin poder ni mirar el
+        # reloj ni avisar de que no llega nada.
+        import select as _sel
+        while True:
+            if segundos and (time.time() - t0) > segundos:
+                break
+            r, _, _ = _sel.select([dev.fd], [], [], 0.5)
+            if not r:
+                continue
+            for ev in dev.read():
+                if ev.type == e.EV_ABS:
+                    if ev.code == cx:
+                        x = ev.value
+                    elif ev.code == cy:
+                        y = ev.value
+                elif ev.type == e.EV_SYN and ev.code == e.SYN_REPORT:
+                    vistos += 1
+                    if x == 0 and y == 0:
+                        prev = None
+                        restos[0] = restos[1] = 0.0
+                        continue
+                    if prev is None:
+                        prev = (x, y)
+                        continue
+                    # La Y del pad crece hacia ARRIBA y la de la pantalla hacia
+                    # abajo, asi que va invertida.
+                    _mover(ui, e, x - prev[0], -(y - prev[1]), div, restos)
+                    prev = (x, y)
+    except KeyboardInterrupt:
+        pass
+    except (OSError, IOError) as ex:
+        print('trackpad: se perdio el mando (%s)' % ex, file=sys.stderr)
+    finally:
+        try:
+            ui.close()
+        except Exception:
+            pass
+        try:
+            dev.close()
+        except Exception:
+            pass
+    if vistos == 0:
+        # Esto NO es un fallo nuestro: es el mando en modo escritorio, donde el
+        # driver no publica nada a proposito. Y ahi el firmware YA mueve el
+        # puntero con el pad derecho, asi que tampoco hace falta.
+        print('trackpad: no llego ni un evento: el mando esta en modo '
+              'escritorio', file=sys.stderr)
+        print('trackpad: (manten pulsado OPCIONES medio segundo para pasar a '
+              'modo gamepad)', file=sys.stderr)
+        return 2
+    return 0
+
+
+def raton(cual='izquierdo', sensibilidad=1.0, segundos=0, control=True):
+    """El pad mueve el puntero.
+
+    control=True (lo normal): WProton TOMA EL CONTROL del mando -le apaga la
+    emulacion del firmware y la devuelve al terminar-, asi que funciona cuando
+    uno quiera, sin depender de mantener pulsado OPCIONES. Es lo que se pidio.
+
+    control=False: no se le escribe nada al mando. Entonces solo hay pads que
+    leer si el mando YA esta en modo gamepad, y se leen por evdev, que es el
+    camino limpio.
+    """
+    if control:
+        rc = raton_hidraw(cual, sensibilidad, segundos, control=True)
+        if rc != 2:
+            return rc
+        # No se pudo ni abrir el mando para escribir: casi siempre permisos.
+        # Queda el camino de solo lectura, que al menos funciona si el usuario
+        # ha hecho el gesto de OPCIONES.
+        print('trackpad: sin control del mando; se prueba a leerlo por evdev',
+              file=sys.stderr)
+        return raton_evdev(cual, sensibilidad, segundos)
+    rc = raton_evdev(cual, sensibilidad, segundos)
+    if rc != 2:
+        return rc
+    print('trackpad: se prueba el respaldo por hidraw, sin tocar el mando',
+          file=sys.stderr)
+    return raton_hidraw(cual, sensibilidad, segundos, control=False)
+
+
+def raton_hidraw(cual='izquierdo', sensibilidad=1.0, segundos=0, control=False):
+    """Mueve el puntero con un trackpad leyendo hidraw. RESPALDO.
+
+    Solo se usa cuando el driver no publica los pads por evdev, que pasa cuando
+    otro programa tiene abierto el hidraw del mando: entonces el driver retira
+    su dispositivo de entrada. En el modo Juego, con Steam delante, es lo
+    normal.
+
+    OJO: abrir hidraw nos convierte a nosotros en ese "cliente", asi que puede
+    hacer desaparecer el mando para el resto del sistema mientras esto corre.
+    Por eso es el segundo camino y no el primero.
+
+    COMO SE CONVIERTE UNA POSICION EN UN MOVIMIENTO
+    ===============================================
+    El trackpad da la posicion ABSOLUTA del dedo, no cuanto se ha movido. Un
+    puntero necesita lo segundo, asi que se guarda la posicion anterior y se
+    manda la DIFERENCIA, igual que el touchpad de un portatil.
+
+    Y hay que soltar bien el dedo: al levantarlo y volver a posarlo en otro
+    sitio, la diferencia seria un salto de media pantalla. Por eso, cuando el
+    pad deja de estar tocado, se olvida la posicion anterior y el siguiente
+    toque empieza de cero.
+    """
+    try:
+        import evdev
+        from evdev import ecodes as e
+    except ImportError:
+        print('trackpad: falta python-evdev (va en el runtime de WProton)',
+              file=sys.stderr)
+        return 1
+    fd, _ = abrir_mando(escribir=control)
+    if fd is None:
+        # 2 = "no he podido", para que quien llama pruebe otro camino.
+        return 2
+    # SE TOMA EL CONTROL ANTES DE LEER, Y SE DEVUELVE SIEMPRE.
+    #
+    # El "siempre" es lo importante y hay que montarlo ANTES de entrar al
+    # bucle: WProton para esto con una señal (SIGTERM), y sin atenderla el
+    # proceso muere sin devolver nada y los trackpads se quedan muertos.
+    tomado = False
+    if control:
+        tomado = lagarto_apagar(fd)
+        if not tomado:
+            print('trackpad: no se pudo apagar la emulacion del firmware',
+                  file=sys.stderr)
+    # DESDE AQUI, TODO VA DENTRO DE UN SOLO try/finally.
+    #
+    # LA PRUEBA QUE LO DESTAPO: antes el camino era "tomar el control, poner
+    # los manejadores de señal, crear el raton virtual, y despues un try con el
+    # bucle". Los dos pasos del medio pueden fallar -signal.signal() no
+    # funciona fuera del hilo principal, y el raton virtual necesita
+    # /dev/uinput-, y si fallaban se salia por un return SIN DEVOLVER el mando:
+    # trackpads muertos y ni una pista de por que.
+    #
+    # Ahora el "finally" que devuelve el mando envuelve TODO lo que viene
+    # despues de tomarlo. No hay ningun camino de salida que se lo salte.
+    try:
+        return _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos,
+                                   control)
+    finally:
+        if tomado:
+            try:
+                lagarto_encender(fd)
+            except Exception:
+                pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos, control):
+    """El bucle de lectura. Quien llama se encarga de devolver el mando."""
+
+    def _devolver(*_):
+        # Al recibir la señal se sale ORDENADAMENTE: el SystemExit sube hasta
+        # el try/finally de arriba, que es el que devuelve el mando. Asi no hay
+        # dos sitios haciendo lo mismo.
+        raise SystemExit(0)
+
+    if control:
+        try:
+            import signal as _sig
+            _sig.signal(_sig.SIGTERM, _devolver)
+            _sig.signal(_sig.SIGINT, _devolver)
+            _sig.signal(_sig.SIGHUP, _devolver)
+        except (ValueError, OSError) as ex:
+            # No es motivo para abandonar: se sigue, y el mando se devolvera
+            # igual por el camino normal o al cerrarse el fd.
+            print('trackpad: no se pudieron atender las señales (%s)' % ex,
+                  file=sys.stderr)
+    ox, oy = (OFF_IZQ_X, OFF_IZQ_Y) if cual == 'izquierdo' else (OFF_DER_X, OFF_DER_Y)
+    op = OFF_IZQ_P if cual == 'izquierdo' else OFF_DER_P
+    try:
+        ui = _raton_virtual(evdev, e)
+    except Exception as ex:
+        print('trackpad: no se pudo crear el raton virtual: %s' % ex,
+              file=sys.stderr)
+        return 1
+    print('trackpad: el pad %s mueve el puntero por hidraw (sensibilidad %.2f)'
+          % (cual, sensibilidad), file=sys.stderr)
+    prev = None
+    t0 = time.time()
+    # El pad va de -32767 a 32767 de lado a lado. Dividir entre 60 deja un
+    # recorrido de pantalla comodo con un barrido del dedo.
+    div = 60.0 / max(0.05, sensibilidad)
+    # LAS CUENTAS SON LAS MISMAS QUE EN EL CAMINO DE EVDEV, y se hacen en el
+    # mismo sitio (_mover) a proposito: dos copias de esto acabarian
+    # comportandose distinto, y entonces "el puntero va raro" dependeria de por
+    # donde se este leyendo el mando, que es lo peor para diagnosticar.
+    restos = [0.0, 0.0]
+    try:
+        while True:
+            if segundos and (time.time() - t0) > segundos:
+                break
+            d = leer_informe(fd)
+            if d is None:
+                continue
+            x, y = _s16(d, ox), _s16(d, oy)
+            p = _u16(d, op)
+            tocado = (p > 0) or (x != 0) or (y != 0)
+            if not tocado:
+                prev = None
+                restos[0] = restos[1] = 0.0
+                continue
+            if prev is None:
+                prev = (x, y)
+                continue
+            # La Y del pad crece hacia ARRIBA y la de la pantalla hacia abajo.
+            _mover(ui, e, x - prev[0], -(y - prev[1]), div, restos)
+            prev = (x, y)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            ui.close()
+        except Exception:
+            pass
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    modo = args[0] if args else 'estado'
+    if modo == 'estado':
+        seg = int(args[1]) if len(args) > 1 else 0
+        return estado(seg)
+    if modo == 'probar':
+        seg = int(args[1]) if len(args) > 1 else 20
+        return probar(seg)
+    if modo == 'raton':
+        cual = args[1] if len(args) > 1 else 'izquierdo'
+        sens = float(args[2]) if len(args) > 2 else 1.0
+        seg = int(args[3]) if len(args) > 3 else 0
+        # El cuarto argumento apaga el tomar el control, para quien NO quiera
+        # que WProton le escriba al mando.
+        ctl = (args[4] if len(args) > 4 else '1') not in ('0', 'no')
+        return raton(cual, sens, seg, ctl)
+    if modo == 'lagarto':
+        # Encender y apagar la emulacion del firmware A MANO, sin mover el
+        # puntero: es el "activarlos y desactivarlos cuando queramos" en su
+        # forma mas simple.
+        #
+        # OJO: esto deja el mando como se le diga y sale. Nadie lo devuelve
+        # despues, que es justo lo que se pide aqui; el camino de "raton" si
+        # lo devuelve al terminar.
+        que = args[1] if len(args) > 1 else 'estado'
+        if que not in ('on', 'off'):
+            print('uso: trackpad.py lagarto on|off', file=sys.stderr)
+            return 2
+        fd, _ = abrir_mando(escribir=True)
+        if fd is None:
+            return 1
+        try:
+            ok = lagarto_encender(fd) if que == 'on' else lagarto_apagar(fd)
+        finally:
+            os.close(fd)
+        return 0 if ok else 1
+    if modo == 'buscar':
+        n = buscar_deck()
+        if n:
+            print(n)
+            return 0
+        return 1
+    print('uso: trackpad.py [estado [seg] | probar [seg] | lagarto on|off '
+          '| raton [izquierdo|derecho] [sens] [seg] [control] | buscar]',
+          file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+TPEOF
+}
+
+trackpad_py() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 127
+    write_trackpad || return 127
+    "$PY_BIN" "$TRACKPAD_PY" "$@"
+}
+
+trackpad_hay_mando() {
+    # ¿Se ve el mando de la Deck por hidraw y se puede leer?
+    trackpad_py buscar >/dev/null 2>>"$LOG_FILE"
+}
+
+trackpad_raton_start() {
+    # Arranca el pad elegido como raton, en segundo plano.
+    # $1 = izquierdo | derecho (por defecto, lo que diga el ajuste)
+    local cual="${1:-${TRACKPAD_RATON:-no}}"
+    case "$cual" in izquierdo|derecho) ;; *) return 1 ;; esac
+    trackpad_raton_stop
+    if ! trackpad_hay_mando; then
+        log "trackpad: no hay mando de la Deck legible; no se activa el raton" AVISO
+        return 1
+    fi
+    # El 0 de los segundos es "sin limite"; detras va si tomamos el control.
+    trackpad_py raton "$cual" "${TRACKPAD_SENS:-1.0}" 0 \
+        "${TRACKPAD_CONTROL:-1}" >>"$LOG_FILE" 2>&1 &
+    TRACKPAD_PID=$!
+    log "trackpad: el pad $cual mueve el puntero (pid $TRACKPAD_PID, sensibilidad ${TRACKPAD_SENS:-1.0}, control=${TRACKPAD_CONTROL:-1})"
+    return 0
+}
+
+trackpad_efectivo() {
+    # QUE PAD MUEVE EL PUNTERO PARA ESTE JUEGO.
+    #
+    # El campo del perfil manda sobre el ajuste general, y "auto" significa
+    # "lo que diga el general". Asi, el ajuste de Runners y herramientas sigue
+    # valiendo para los menus y para todos los juegos que no digan otra cosa,
+    # y un juego concreto puede pedir lo suyo sin tocarle la configuracion a
+    # los demas.
+    case "${TRACKPAD:-auto}" in
+        no|izquierdo|derecho) printf '%s' "$TRACKPAD" ;;
+        *)                    printf '%s' "${TRACKPAD_RATON:-no}" ;;
+    esac
+}
+
+trackpad_para_el_juego() {
+    # Deja el trackpad como lo quiera ESTE juego, antes de lanzarlo.
+    #
+    # Devuelve 0 si ha cambiado algo, para que quien llame sepa que al terminar
+    # tiene que devolverlo a su sitio.
+    local quiere; quiere="$(trackpad_efectivo)"
+    local ahora="${TRACKPAD_RATON:-no}"
+    [ "$quiere" = "$ahora" ] && return 1
+    log "trackpad: este juego pide '$quiere' (el ajuste general es '$ahora')"
+    WP_TRACKPAD_CAMBIADO=1
+    if [ "$quiere" = no ]; then
+        trackpad_raton_stop
+    else
+        trackpad_raton_start "$quiere" || true
+    fi
+    return 0
+}
+
+trackpad_restaurar() {
+    # Devuelve el trackpad a lo que diga el ajuste general. Se llama al salir
+    # del juego: si no, el pad se quedaria como lo dejo la ultima partida y en
+    # los menus no se entenderia por que.
+    log "trackpad: se vuelve al ajuste general ('${TRACKPAD_RATON:-no}')"
+    if [ "${TRACKPAD_RATON:-no}" = no ]; then
+        trackpad_raton_stop
+    else
+        trackpad_raton_start "$TRACKPAD_RATON" || true
+    fi
+    return 0
+}
+
+trackpad_raton_stop() {
+    [ -n "${TRACKPAD_PID:-}" ] || return 0
+    if kill -0 "$TRACKPAD_PID" 2>/dev/null; then
+        # UN TERM, Y SE LE DA TIEMPO. NUNCA UN -9 DE ENTRADA.
+        #
+        # Cuando WProton tiene tomados los trackpads, ese proceso es el unico
+        # que sabe devolverselos al mando, y lo hace al recibir el TERM. Un
+        # "kill -9" lo mataria antes de que pudiera, y el usuario se quedaria
+        # con los trackpads muertos.
+        #
+        # (Hay red de seguridad: al cerrarse su fd de hidraw, el driver del
+        # kernel vuelve a registrar el mando y restaura la emulacion por su
+        # cuenta. Pero eso NO pasa si Steam tambien tiene el mando abierto,
+        # que en el modo Juego es lo normal.)
+        kill "$TRACKPAD_PID" 2>/dev/null
+        local _i=0
+        while [ "$_i" -lt 10 ] && kill -0 "$TRACKPAD_PID" 2>/dev/null; do
+            sleep 0.1; _i=$((_i+1))
+        done
+        if kill -0 "$TRACKPAD_PID" 2>/dev/null; then
+            kill -9 "$TRACKPAD_PID" 2>/dev/null
+            log "trackpad: no solto el mando a tiempo; se mato (pid $TRACKPAD_PID)" AVISO
+            log "trackpad: si los pads se quedan muertos, usalos desde Runners y" AVISO
+            log "          herramientas -> Trackpads -> Devolver los pads al mando" AVISO
+        else
+            log "Cierre: trackpad como raton detenido (pid $TRACKPAD_PID)"
+        fi
+    fi
+    TRACKPAD_PID=""
+    return 0
+}
+
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py f0b3f306ac79" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py 3da23459644b" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py f0b3f306ac79
+# WPROTON_HELPER mando_virtual.py 3da23459644b
 # -*- coding: utf-8 -*-
 # WProton - mando virtual (presenta al juego un mando distinto del tuyo)
 #
@@ -4494,6 +5917,7 @@ USO
 
         modo         cruceta_stick | copia
         dispositivo  /dev/input/eventN (si no, se busca solo)
+        sticks       1 = intercambia el stick izquierdo con el derecho
 
 Se para con SIGTERM, y al hacerlo suelta el mando fisico.
 """
@@ -4850,6 +6274,18 @@ def main():
     tipo = "ds4" if "ds4" in modo else "xbox"
     nombre, vendor, product, version = MANDOS[tipo]
     ruta = sys.argv[2] if len(sys.argv) > 2 else ""
+    # INTERCAMBIAR LOS STICKS.
+    #
+    # Lo pidieron para un juego que apunta con el stick derecho y se maneja
+    # mucho mejor apuntando con el izquierdo. Esto NO se puede hacer desde el
+    # mapeador de teclas: aquel convierte el mando en teclas, y para que el
+    # juego vea los sticks al reves hay que presentarle OTRO MANDO, que es
+    # justo lo que hace este modulo.
+    #
+    # Va como tercer argumento y no como sufijo del modo porque se combina con
+    # TODOS los modos: xbox, ds4, clasico y la cruceta al stick.
+    cambiar_sticks = str(sys.argv[3] if len(sys.argv) > 3 else "").strip() in (
+        "1", "si", "true", "on")
 
     # MODO ESCRITORIO: se leen los teclados virtuales de Steam, no un mando.
     if modo.startswith("escritorio"):
@@ -4938,8 +6374,49 @@ def main():
     except (OSError, IOError) as e:
         sys.stderr.write("mando_virtual: no se pudo capturar el mando (%s);"
                          " el juego puede ver los dos\n" % e)
+        # CON LOS STICKS AL REVES, NO CAPTURAR NO ES UN AVISO: ES UN FALLO.
+        #
+        # Si el mando fisico sigue a la vista, el juego lee los DOS: el virtual
+        # con los sticks cambiados y el fisico con los de siempre. Y como el
+        # fisico sigue mandando, desde fuera el intercambio "no funciona" sin
+        # que nada lo explique. Se dice con todas las letras y se apunta el
+        # motivo mas probable, que es el otro que captura: el mapeador .keys
+        # cuando ese .keys mapea el movimiento.
+        if cambiar_sticks:
+            sys.stderr.write(
+                "mando_virtual: LOS STICKS INTERCAMBIADOS NO VAN A FUNCIONAR.\n"
+                "mando_virtual: el juego seguira viendo tambien el mando fisico,\n"
+                "mando_virtual: con los sticks en su sitio, y ese manda.\n"
+                "mando_virtual: suele ser que ya lo tiene cogido el mapeador\n"
+                "mando_virtual: .keys (pasa cuando ese .keys mapea el movimiento).\n")
 
-    print('[mando] "%s" -> %s (%s)' % (fisico.name, nombre, modo), flush=True)
+    print('[mando] "%s" -> %s (%s)%s'
+          % (fisico.name, nombre, modo,
+             "  [sticks intercambiados]" if cambiar_sticks else ""), flush=True)
+
+    # LA TRADUCCION DEL INTERCAMBIO.
+    #
+    # Se aplica UNA SOLA VEZ y arriba del bucle: el codigo del eje FISICO se
+    # convierte en el que vera el juego, y de ahi para abajo todo el bucle
+    # trabaja ya con el eje virtual. Asi lo demas -la cruceta al stick, el
+    # volver al centro, el modo clasico- sigue valiendo sin tocar nada: cada
+    # cosa pregunta por el eje que el juego va a ver, que es lo que importa.
+    #
+    # Si se hiciera al escribir, en vez de al leer, habria que acordarse del
+    # cambio en los cinco sitios donde se escribe un eje, y el primero que se
+    # olvidara dejaria el intercambio a medias.
+    CAMBIO_EJES = {}
+    CAMBIO_BOTONES = {}
+    if cambiar_sticks:
+        CAMBIO_EJES = {ecodes.ABS_X:  ecodes.ABS_RX, ecodes.ABS_RX: ecodes.ABS_X,
+                       ecodes.ABS_Y:  ecodes.ABS_RY, ecodes.ABS_RY: ecodes.ABS_Y}
+        # Y EL CLIC DEL STICK CON EL STICK.
+        #
+        # Si apuntas con el izquierdo, el boton de "apuntar pulsando el stick"
+        # -melee, correr, centrar la camara- tiene que irse con el: dejarlo en
+        # su sitio es dejar la mitad del cambio hecha.
+        CAMBIO_BOTONES = {ecodes.BTN_THUMBL: ecodes.BTN_THUMBR,
+                          ecodes.BTN_THUMBR: ecodes.BTN_THUMBL}
 
     def soltar(*_):
         try:
@@ -4965,7 +6442,8 @@ def main():
     try:
         for ev in fisico.read_loop():
             if ev.type == ecodes.EV_KEY:
-                virtual.write(ecodes.EV_KEY, ev.code, ev.value)
+                virtual.write(ecodes.EV_KEY,
+                              CAMBIO_BOTONES.get(ev.code, ev.code), ev.value)
                 # LA CRUCETA QUE LLEGA COMO BOTON.
                 #
                 # En la Steam Deck y las Anbernic la cruceta no es un eje: son
@@ -4999,24 +6477,27 @@ def main():
             if ev.type != ecodes.EV_ABS:
                 continue
 
-            if ev.code in (ecodes.ABS_X, ecodes.ABS_Y):
-                ejes[ev.code] = ev.value
+            # De aqui para abajo, "code" es el eje QUE VERA EL JUEGO.
+            code = CAMBIO_EJES.get(ev.code, ev.code)
 
-            if ev.code in hat:
-                hat[ev.code] = ev.value
-                virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+            if code in (ecodes.ABS_X, ecodes.ABS_Y):
+                ejes[code] = ev.value
+
+            if code in hat:
+                hat[code] = ev.value
+                virtual.write(ecodes.EV_ABS, code, ev.value)
                 # Y TAMBIEN COMO BOTONES, que es la otra forma de leerla.
                 #
                 # Un mando manda la cruceta de una forma u otra, pero el juego
                 # puede esperar cualquiera de las dos. Emular el mando bien es
                 # ofrecer las dos y que el juego coja la que entienda.
                 for _btn, (_eje, _dir) in DPAD_BOTON.items():
-                    if _eje != ev.code:
+                    if _eje != code:
                         continue
                     virtual.write(ecodes.EV_KEY, _btn,
                                   1 if ev.value == _dir else 0)
                 if cruceta_al_stick:
-                    destino = (ecodes.ABS_X if ev.code == ecodes.ABS_HAT0X
+                    destino = (ecodes.ABS_X if code == ecodes.ABS_HAT0X
                                else ecodes.ABS_Y)
                     virtual.write(ecodes.EV_ABS, destino,
                                   cruceta_a_stick(ev.value,
@@ -5029,8 +6510,8 @@ def main():
             # En un mando de aquella epoca los gatillos eran botones. Si se
             # mandan como eje, el juego ve uno que en reposo esta en un
             # extremo y cree que lo estas empujando: se acelera solo.
-            if clasico and ev.code in (ecodes.ABS_Z, ecodes.ABS_RZ):
-                boton = (ecodes.BTN_TL2 if ev.code == ecodes.ABS_Z
+            if clasico and code in (ecodes.ABS_Z, ecodes.ABS_RZ):
+                boton = (ecodes.BTN_TL2 if code == ecodes.ABS_Z
                          else ecodes.BTN_TR2)
                 virtual.write(ecodes.EV_KEY, boton,
                               1 if ev.value > GATILLO_UMBRAL else 0)
@@ -5038,21 +6519,22 @@ def main():
                 continue
             # Y un eje que este mando no declara no se manda: el kernel lo
             # descartaria igualmente, pero asi queda dicho.
-            if clasico and ev.code not in [c for c, _ in EJES_CLASICO]:
+            if clasico and code not in [c for c, _ in EJES_CLASICO]:
                 continue
 
-            # Cualquier otro eje se copia tal cual.
-            virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+            # Cualquier otro eje se copia tal cual (ya traducido si se han
+            # pedido los sticks al reves).
+            virtual.write(ecodes.EV_ABS, code, ev.value)
             # Si el stick vuelve al centro pero la cruceta sigue pulsada, se
             # mantiene la direccion de la cruceta: si no, soltar el stick
             # anularia la cruceta.
             if (cruceta_al_stick
-                    and ev.code in (ecodes.ABS_X, ecodes.ABS_Y)
+                    and code in (ecodes.ABS_X, ecodes.ABS_Y)
                     and abs(ev.value) <= 8000):
-                origen = (ecodes.ABS_HAT0X if ev.code == ecodes.ABS_X
+                origen = (ecodes.ABS_HAT0X if code == ecodes.ABS_X
                           else ecodes.ABS_HAT0Y)
                 if hat.get(origen):
-                    virtual.write(ecodes.EV_ABS, ev.code,
+                    virtual.write(ecodes.EV_ABS, code,
                                   cruceta_a_stick(hat[origen], 0))
             virtual.syn()
     except (OSError, IOError) as e:
@@ -5251,8 +6733,16 @@ find_keys_file() {
     fi
     # 2) EL QUE SE LLAMA COMO EL JUEGO, A SU LADO: explicito por su nombre.
     #
-    # "<juego>.keys" junto al .wsquashfs es una decision deliberada sobre ESTE
+    # "<juego>.keys" junto al paquete es una decision deliberada sobre ESTE
     # juego. Se acepta, se marca y se copia a profiles/, porque ya era suyo.
+    #
+    # VALE PARA CUALQUIER FORMATO, y conviene decirlo porque lo preguntan: aqui
+    # se recorta la extension con "${p%.*}", sea la que sea. Con un juego
+    # llamado "Mi_Juego.dwarfs" se buscan "Mi_Juego.keys" y
+    # "Mi_Juego.dwarfs.keys" exactamente igual que con un .wsquashfs, y el
+    # identificador que usa profiles/ sale de game_id, que tambien quita la
+    # extension. En todo el camino de las teclas no hay ni un formato escrito
+    # a mano.
     for k in "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] || continue
         keys_es_de "$k" "$gid"; _r=$?
@@ -5312,14 +6802,25 @@ find_keys_file() {
 }
 
 mando_virtual_start() {
-    # Arranca el mando virtual si el juego lo tiene activado. $1 = modo.
+    # Arranca el mando virtual si el juego lo tiene activado.
+    # $1 = modo, $2 = 1 para intercambiar los sticks (del .keys del juego).
     #
     # Es una via APARTE del mapeador de teclas: aquel convierte el mando en
     # teclas y este convierte un mando en OTRO MANDO. Pueden usarse a la vez.
     #
     # Apagado por defecto: solo se enciende en los juegos que lo necesiten.
     WP_MANDO_VIRTUAL_PID=""
-    local modo="${1:-0}"
+    local modo="${1:-0}" sticks="${2:-0}"
+    # LOS STICKS AL REVES ENCIENDEN EL MANDO VIRTUAL POR SU CUENTA.
+    #
+    # El intercambio lo hace este modulo, asi que pedirlo en el .keys y tener
+    # el mando virtual apagado -que es como esta de serie- no haria nada, y
+    # desde fuera seria "he puesto la opcion y no pasa nada". Con "copia" el
+    # juego ve un Xbox normal con los sticks cambiados y nada mas.
+    if [ "$sticks" = 1 ] && { [ -z "$modo" ] || [ "$modo" = 0 ]; }; then
+        modo="copia"
+        log "Mando virtual: encendido en modo copia porque el .keys pide los sticks al reves"
+    fi
     # SE DICE SIEMPRE, tambien cuando esta apagado.
     #
     # En la prueba del 16/09 el usuario eligio "Mando Xbox" en el menu y en el
@@ -5385,7 +6886,9 @@ mando_virtual_start() {
         fi
         say "[+] evdev instalado; el mando virtual ya puede funcionar"
     fi
-    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo")" \
+    # El dispositivo va VACIO a proposito: que lo busque el modulo. Esta ahi
+    # para poder pasarle el tercer argumento, el de los sticks.
+    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo" "" "$sticks")" \
         || WP_MANDO_VIRTUAL_PID=""
     # SE COMPRUEBA QUE SIGUE VIVO, no solo que arrancara.
     #
@@ -5586,6 +7089,8 @@ fi
 # que un dia falta en alguno y el raton deja de ir en una pantalla suelta sin
 # que nadie sepa por que. Exportada, la heredan todos.
 export WP_RATON="${RATON_MENUS:-1}"
+export WP_RATON_UMBRAL="${RATON_UMBRAL:-12}"
+export WP_RATON_RUEDA="${RATON_RUEDA:-3}"
 
 pygame_available() {
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
@@ -5621,9 +7126,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py ab4cdbc8e833" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 75fdc6ad9216" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py ab4cdbc8e833
+# WPROTON_HELPER menu_pygame.py 75fdc6ad9216
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -5658,6 +7163,48 @@ if os.path.isdir(LIBS):
     sys.path.insert(0, LIBS)
 
 os.environ.setdefault('SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS', '1')
+# LOS TRACKPADS DE LA STEAM DECK: QUE NO LOS APAGUEMOS NOSOTROS.
+#
+# En la Deck, los trackpads NO son un raton para el kernel. Lo que los hace
+# mover el puntero es el "modo lagarto" (lizard mode), una emulacion de raton y
+# teclado que hace el propio mando mientras nadie le diga lo contrario.
+#
+# Y SDL se lo dice. En cuanto SDL abre el mando de la Deck por HIDAPI, manda un
+# ID_CLEAR_DIGITAL_MAPPINGS para apagar el modo lagarto -y lo reenvia cada pocos
+# ciclos, para que no vuelva solo-. Eso lo hace cualquier programa de SDL... y
+# estos menus son pygame, o sea SDL. Resultado: abrir WProton dejaba los
+# trackpads muertos, que es justo lo que contaban los testers.
+#
+# Con esta variable, SDL deja en paz el mando de la Deck por HIDAPI y lo lee por
+# evdev, que es de donde lo lee este menu de todas formas: el mando se maneja en
+# un hilo evdev aparte (ver evdev_thread) precisamente para que funcione sin
+# foco de ventana. O sea que no perdemos nada y el trackpad derecho vuelve a
+# mover el puntero, que estos menus ya soportan.
+#
+# POR QUE AHORA SE APAGA HIDAPI ENTERA, Y CON "=" EN VEZ DE setdefault.
+#
+# El primer intento fue solo la del mando de la Deck y con setdefault, y los
+# testers dijeron que NO FUNCIONABA. Tenia dos agujeros, y con cualquiera de
+# los dos no sirve de nada:
+#
+#   1. setdefault RESPETA lo que ya venga puesto. En el modo Juego de la Deck
+#      estos menus se lanzan desde Steam, que exporta variables SDL_* a lo que
+#      arranca: si esa venia puesta, nuestro "0" no se escribia y SDL seguia
+#      apagando el modo lagarto. Con "=" manda WProton, que es quien sabe que
+#      aqui el mando no se lee por SDL.
+#   2. SDL_JOYSTICK_HIDAPI_STEAMDECK nacio en SDL 3 y se porto despues. Con una
+#      SDL mas antigua esa variable NO EXISTE -no es que valga 0: es que nadie
+#      la mira- y el mando de la Deck lo abre otro driver, que tambien apaga el
+#      modo lagarto. Apagando HIDAPI entera da igual la version y da igual el
+#      driver.
+#
+# Y apagarla entera no cuesta nada AQUI: este menu lee el mando por evdev en un
+# hilo aparte (ver evdev_thread), precisamente para funcionar sin foco de
+# ventana. El subsistema de joystick de SDL no se usa para nada en estos menus,
+# asi que lo unico que hacia era abrir el mando y apagarle los trackpads.
+os.environ['SDL_JOYSTICK_HIDAPI'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAMDECK'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAM'] = '0'
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 os.environ.setdefault('SDL_VIDEO_CENTERED', '1')
 os.environ.setdefault('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS', '0')
@@ -5885,6 +7432,34 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
 RATON = os.environ.get('WP_RATON', '1') != '0'
 
 
+def _entero_env(nombre, defecto):
+    """Un entero de una variable de entorno, sin dejar que un valor raro mate
+    el menu: si no se puede leer, se usa el de siempre."""
+    try:
+        v = int(str(os.environ.get(nombre, '')).strip())
+        return v if v >= 0 else defecto
+    except (TypeError, ValueError):
+        return defecto
+
+
+# UMBRAL DEL PUNTERO: CUANTO HAY QUE MOVER PARA QUE LA SELECCION SIGA AL RATON.
+#
+# Antes la seguia SIN NINGUN UMBRAL: un pixel -o un golpe en la mesa, o el
+# puntero que ya estaba encima de otra fila cuando la lista se redibujaba- y
+# te cambiaba la seleccion, incluso navegando con el mando. En un sobremesa con
+# el raton quieto al lado del teclado eso es un sobresalto constante.
+#
+# Se cuenta desde la ULTIMA TECLA O BOTON DEL MANDO, no desde el ultimo
+# movimiento: asi un roce no hace nada, pero en cuanto de verdad estas usando
+# el raton la seleccion le sigue como siempre, sin retraso.
+RATON_UMBRAL = _entero_env('WP_RATON_UMBRAL', 12)
+# Filas por muesca de la rueda. 0 = un tercio de pantalla, como hacia antes.
+RATON_RUEDA = _entero_env('WP_RATON_RUEDA', 3)
+# Pixeles movidos desde la ultima tecla. Lista para poder tocarla desde
+# dentro de las funciones, igual que RATON_T0.
+RATON_MOV = [0.0]
+
+
 def fondo_cristal(W, H):
     """El fondo del tema cristal: dos focos de color y una vineta.
 
@@ -5998,6 +7573,19 @@ def fila_bajo_raton(mx, my, scroll, nvis, nitems):
     if i < scroll or i >= min(scroll + nvis, nitems):
         return None
     return i
+
+
+def paso_rueda():
+    """Cuantas filas mueve una muesca de la rueda.
+
+    De serie eran UN TERCIO DE PANTALLA. Se eligio asi pensando en recorrer
+    listas largas sin raton, y con la rueda de un raton de sobremesa resulta
+    brutal: una muesca y te has ido media biblioteca. Ahora son unas pocas
+    filas, y quien quiera el salto grande pone RATON_RUEDA=0.
+    """
+    if RATON_RUEDA > 0:
+        return RATON_RUEDA
+    return max(1, vis() // 3)
 
 
 def raton_tecla(key):
@@ -6176,6 +7764,29 @@ def init_video():
     return False
 
 pygame.init()          # el resto de subsistemas (no falla aunque el video si)
+# Y EL CINTURON, ADEMAS DEL TIRANTE: SE CIERRA EL JOYSTICK DE SDL.
+#
+# pygame.init() enciende TODOS los subsistemas, el de joystick incluido, y ese
+# es el que abre el mando. Las variables de arriba deberian evitar que lo abra
+# por HIDAPI, pero dependen de que esta SDL las conozca, y de eso ya nos hemos
+# llevado un chasco. Cerrarlo no depende de ninguna version: si SDL habia
+# abierto el mando, al cerrar el subsistema lo suelta, y el kernel vuelve a
+# encender el modo lagarto por su cuenta.
+#
+# No se pierde nada: el mando se lee por evdev en un hilo aparte.
+try:
+    pygame.joystick.quit()
+except Exception:
+    pass
+# Y SE DEJA DICHO QUE SDL HAY, que es el dato que faltaba para saber si las
+# variables de arriba las entiende alguien.
+try:
+    _sdlv = pygame.version.SDL
+    sys.stderr.write('menu_pygame: pygame %s con SDL %d.%d.%d, '
+                     'joystick de SDL cerrado (el mando se lee por evdev)\n'
+                     % (pygame.version.ver, _sdlv[0], _sdlv[1], _sdlv[2]))
+except Exception:
+    pass
 if not init_video():
     sys.stderr.write('menu_pygame: sin video utilizable; se usaran menus de texto\n')
     sys.exit(2)
@@ -6483,8 +8094,14 @@ def eventos():
         except Exception:
             pass
         try:
+            # SE CIERRA Y NO SE VUELVE A ABRIR.
+            #
+            # Antes se reiniciaba el subsistema, y eso era resucitar justo lo
+            # que apagamos al arrancar: SDL volvia a abrir el mando de la Deck
+            # y a dejar los trackpads muertos, sin que nada lo explicara. Este
+            # menu no usa el joystick de SDL -el mando entra por evdev-, asi
+            # que cerrarlo basta para que event.get() deje de reventar.
             pygame.joystick.quit()
-            pygame.joystick.init()
         except Exception:
             pass
         return []
@@ -9153,6 +10770,13 @@ def run_session():
                         cursor_morado()
                 except Exception:
                     pass
+                # EL UMBRAL: se suma lo movido y hasta llegar no se toca la
+                # seleccion. El cursor SI se enseña desde el primer pixel, que
+                # es lo que quiere quien acaba de coger el raton.
+                _rel = getattr(ev, 'rel', (0, 0))
+                RATON_MOV[0] += abs(_rel[0]) + abs(_rel[1])
+                if RATON_MOV[0] < RATON_UMBRAL:
+                    continue
                 if MODE != 'grid':
                     _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
                                          vis(), len(view))
@@ -9232,7 +10856,7 @@ def run_session():
                 elif ev.button in (4, 5):
                     # Rueda en pygame antiguo: se mueve igual, sin teclas.
                     if MODE != 'grid':
-                        _paso = max(1, vis() // 3)
+                        _paso = paso_rueda()
                         mover_vista(-_paso if ev.button == 4 else _paso)
                     else:
                         grid_move(0, -1 if ev.button == 4 else 1)
@@ -9263,7 +10887,7 @@ def run_session():
                     # otro extremo de un golpe y se perdia el sitio. Un tercio
                     # deja siempre varias filas en comun entre antes y despues,
                     # que es lo que hace que la vista se siga con la mirada.
-                    _paso = max(1, vis() // 3) * min(abs(_y), 3)
+                    _paso = paso_rueda() * min(abs(_y), 3)
                     mover_vista(-_paso if _y > 0 else _paso)
                 elif _y:
                     grid_move(0, -1 if _y > 0 else 1)
@@ -9271,6 +10895,12 @@ def run_session():
                 if DEV and ev.key == pygame.K_F12:
                     captura()
                     continue
+                # CADA TECLA REINICIA EL CONTADOR DEL RATON.
+                #
+                # Asi el umbral se mide desde la ultima vez que usaste el mando
+                # o el teclado: en cuanto navegas con ellos, el raton tiene que
+                # moverse de verdad para volver a mandar.
+                RATON_MOV[0] = 0.0
                 t_now = time.time()
                 if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
                     continue
@@ -16588,6 +18218,100 @@ montar_suelto() {
     fi
 }
 
+SQUASHFUSE_OPTS=""   # se calcula una vez por sesion
+squashfuse_opciones_monta() {
+    # Las opciones con las que se monta un wsquashfs. $1 = binario elegido.
+    #
+    # Deja el resultado en SQUASHFUSE_OPTS (no lo imprime: asi la cache de
+    # una vez por sesion no se pierde dentro de un subshell).
+    #
+    # CON squashfuse_ll NO SE PIDE NADA MAS QUE "ro".
+    #
+    # El driver bajo ya contesta "esto no caduca" por su cuenta, asi que no
+    # hay nada que afinar. Y SOBRE TODO: su "-o timeout=N" NO ES la caducidad
+    # de los atributos, es "desmontate solo tras N segundos sin uso". Pasarle
+    # ahi un numero grande pensando en la cache seria programar un desmontaje
+    # en medio de la partida.
+    #
+    # CON squashfuse (el alto) SI, y son las de la propia libreria FUSE:
+    #
+    #   kernel_cache        no tirar el contenido ya leido al abrir otra vez
+    #   attr_timeout        cuanto vale un "este fichero es asi"
+    #   entry_timeout       cuanto vale un "este nombre es este fichero"
+    #   negative_timeout    cuanto vale un "este nombre no existe"
+    #
+    # Una hora para las tres. No es una apuesta: una imagen montada no se
+    # puede modificar, asi que la respuesta de hace una hora sigue siendo
+    # verdad. De serie son 1 segundo, 1 segundo y CERO, que para un sistema
+    # de ficheros que puede cambiar esta bien, y para uno de solo lectura es
+    # tirar el trabajo.
+    #
+    # Estas NO salen en su --help -ahi solo pone "se admiten las opciones de
+    # la libreria fuse"-, asi que aqui no sirve el truco de leer la ayuda que
+    # se usa con dwarfs: se intenta montar y, si no las acepta, mount_image_ro
+    # reintenta sin ellas.
+    [ -n "$SQUASHFUSE_OPTS" ] && return 0
+    case "${1##*/}" in
+        *_ll) SQUASHFUSE_OPTS="ro" ;;
+        *)    SQUASHFUSE_OPTS="ro,kernel_cache,attr_timeout=3600,entry_timeout=3600,negative_timeout=3600" ;;
+    esac
+    log "squashfuse: driver = ${1:-?} | opciones de montaje = $SQUASHFUSE_OPTS"
+}
+
+squashfuse_montar() {
+    # Monta con las opciones que haya ahora en SQUASHFUSE_OPTS.
+    # $1 = binario, $2 = imagen, $3 = punto de montaje.
+    if [ "$SQUASHFUSE_OPTS" = "ninguna" ]; then
+        montar_suelto "$1" "$2" "$3"
+    else
+        montar_suelto "$1" "$2" "$3" -o "$SQUASHFUSE_OPTS"
+    fi
+}
+
+DWARFS_OPTS=""   # se calcula una vez por sesion en dwarfs_opciones_monta()
+dwarfs_opciones_monta() {
+    # Las opciones de montaje de dwarfs QUE ESTE BINARIO ENTIENDA.
+    #
+    # De serie dwarfs monta con cachesize=512m y 2 hilos de descompresion:
+    # valores prudentes, pensados para no comerse la memoria. Un juego de
+    # 30 GB en una microSD agradece bastante mas cache y mas hilos, y eso se
+    # nota justo donde duele, en el rato de carga.
+    #
+    # NO SE PASAN A CIEGAS. Una opcion -o que dwarfs no conozca no da un
+    # error suyo: se la pasa al kernel, y el kernel rechaza el montaje
+    # entero. Asi que primero se mira su propia ayuda y solo se pide lo que
+    # aparece ahi. Y aun asi, si el montaje afinado falla, mount_image_ro
+    # reintenta con las opciones de siempre: mas vale cargar lento que no
+    # cargar.
+    #
+    # DEJA EL RESULTADO EN DWARFS_OPTS Y NO LO IMPRIME.
+    #
+    # Lo imprimia, y quien la llamaba hacia opts="$(dwarfs_opciones_monta)".
+    # Eso es un subshell: la cache se escribia dentro y se perdia al salir,
+    # asi que preguntaba a dwarfs --help en cada montaje y el comentario de
+    # "una vez por sesion" era mentira. Escribiendo el global se cumple, y
+    # ademas el "me quedo con ro" del reintento usa el mismo sitio.
+    [ -n "$DWARFS_OPTS" ] && return 0
+    local ayuda opts="ro" hilos
+    ayuda="$("$DWARFS_BIN" --help 2>&1)"
+    case "$ayuda" in
+        *cachesize*) [ -n "${DWARFS_CACHE:-}" ] && opts="$opts,cachesize=$DWARFS_CACHE" ;;
+    esac
+    case "$ayuda" in
+        *workers*)
+            hilos="${DWARFS_WORKERS:-0}"
+            if [ "$hilos" = 0 ]; then
+                hilos="$(nproc 2>/dev/null || echo 2)"
+                [ "$hilos" -gt 4 ] 2>/dev/null && hilos=4
+                [ "$hilos" -ge 1 ] 2>/dev/null || hilos=2
+            fi
+            opts="$opts,workers=$hilos"
+            ;;
+    esac
+    DWARFS_OPTS="$opts"
+    log "dwarfs: opciones de montaje = $opts"
+}
+
 mount_image_ro() {
     # $1 = imagen, $2 = punto de montaje. Elige squashfuse o el driver dwarfs.
     local img="$1" mp="$2" fmt
@@ -16600,9 +18324,57 @@ mount_image_ro() {
 $(basename "$img")"; return 1; }
         fi
         say "[+] Montando imagen DwarFS con $(basename "$DWARFS_BIN")"
-        montar_suelto "$DWARFS_BIN" "$img" "$mp" -o ro || return 1
+        dwarfs_opciones_monta
+        if ! montar_suelto "$DWARFS_BIN" "$img" "$mp" -o "$DWARFS_OPTS"; then
+            # Si ya iba con las opciones de siempre, no hay nada que
+            # reintentar: el fallo es otro.
+            [ "$DWARFS_OPTS" = "ro" ] && return 1
+            say "AVISO: dwarfs no acepto '$DWARFS_OPTS'; se monta con las opciones de serie"
+            log "dwarfs: montaje con '$DWARFS_OPTS' fallo; reintento con -o ro" AVISO
+            # Para el resto de la sesion, las de siempre: si este binario no
+            # las entiende, no las va a entender en el juego siguiente.
+            DWARFS_OPTS="ro"
+            # Un montaje a medias deja el punto ocupado y haria fallar el
+            # reintento con "Device or resource busy".
+            umount_dir "$mp"
+            montar_suelto "$DWARFS_BIN" "$img" "$mp" -o ro || return 1
+        fi
     else
-        montar_suelto "$SQUASHFUSE_BIN" "$img" "$mp" || return 1
+        local sqbin; sqbin="$(squashfuse_monta_bin)"
+        [ -n "$sqbin" ] || { ui_error "Falta squashfuse para montar:
+$(basename "$img")"; return 1; }
+        squashfuse_opciones_monta "$sqbin"
+        case "${sqbin##*/}" in
+            *_ll) say "[+] Montando imagen con squashfuse_ll (driver rapido)" ;;
+        esac
+        # Tres intentos de menos a mas conservador, y el que funcione se queda
+        # para el resto de la sesion: si este driver no entiende algo, no lo
+        # va a entender en el juego siguiente.
+        #
+        # El valor "ninguna" significa montar SIN "-o" ninguno, que es como se
+        # montaba hasta ahora. Hace falta un centinela y no la cadena vacia:
+        # vacia es "todavia no se ha calculado", y guardar ahi el ultimo
+        # recurso haria que la siguiente imagen volviera a probar las opciones
+        # que ya sabemos que no valen.
+        if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
+            [ "$SQUASHFUSE_OPTS" = "ninguna" ] && return 1
+            say "AVISO: squashfuse no acepto '$SQUASHFUSE_OPTS'; se monta con menos opciones"
+            log "squashfuse: montaje con '$SQUASHFUSE_OPTS' fallo" AVISO
+            # Un montaje a medias deja el punto ocupado.
+            umount_dir "$mp"
+            if [ "$SQUASHFUSE_OPTS" = "ro" ]; then
+                SQUASHFUSE_OPTS="ninguna"
+            else
+                SQUASHFUSE_OPTS="ro"
+            fi
+            if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
+                [ "$SQUASHFUSE_OPTS" = "ninguna" ] && return 1
+                log "squashfuse: tampoco con -o ro; se monta sin opciones" AVISO
+                SQUASHFUSE_OPTS="ninguna"
+                umount_dir "$mp"
+                squashfuse_montar "$sqbin" "$img" "$mp" || return 1
+            fi
+        fi
     fi
     return 0
 }
@@ -16932,6 +18704,7 @@ cleanup_mount() {
 }
 
 WP_SALIENDO=0     # 1 = WProton se esta cerrando: no arrancar nada mas
+WP_LOGS_CERRADOS=0  # 1 = ya se decidio si el registro se queda (ver logs_cerrar)
 WP_HAY_MENU=0     # 1 = hay un menu detras al que volver tras jugar
 
 vigilante_cierre() {
@@ -17375,6 +19148,20 @@ partida_fin() {
     # Lo vigila auditoria_final.py, apartado 11.
     WP_JUGANDO=0
     trap cleanup_all INT TERM
+    # EL TRACKPAD VUELVE A SU SITIO.
+    #
+    # Va aqui y no al final de launch_game a proposito: por partida_fin pasan
+    # TODAS las salidas de una partida -la buena y las seis o siete de error-,
+    # y eso es justo lo que hace falta. Si se quedara en el camino bueno, un
+    # juego que no llega a arrancar dejaria el trackpad como lo pidio EL y los
+    # menus se comportarian raro sin que nada lo explicara.
+    #
+    # Solo si de verdad se cambio algo: si no, cada salida reiniciaria el
+    # proceso del trackpad sin motivo.
+    if [ "${WP_TRACKPAD_CAMBIADO:-0}" = 1 ]; then
+        WP_TRACKPAD_CAMBIADO=0
+        trackpad_restaurar
+    fi
     return 0
 }
 
@@ -17436,6 +19223,8 @@ cleanup_all() {
     log "Cierre: parando el vigilante"
     guardia_salida_stop
     repo_refresco_stop
+    squashfuse_ll_stop
+    trackpad_raton_stop
     # Estos dos existian pero el cierre no los llamaba: la barra de progreso
     # y el aviso de la primera instalacion podian quedarse en marcha. El aviso
     # ademas usa zenity, que no es ninguno de los procesos que vigilamos por
@@ -17616,6 +19405,11 @@ cleanup_all() {
     # ordenes). Si WProton sigue con sus menus, cerrar sus canales no aporta
     # nada y es un riesgo innecesario.
     [ "${WP_HAY_MENU:-0}" != 1 ] && exec 1>/dev/null 2>/dev/null
+    # Y LO ULTIMO DE TODO: el registro se borra si la sesion fue limpia.
+    #
+    # Aqui abajo porque despues de esto NO se escribe nada mas: una linea
+    # escrita tras el borrado resucitaria el fichero vacio.
+    logs_cerrar
 }
 # SE APUNTA QUIEN PIDIO EL CIERRE, no solo que se cierra.
 #
@@ -19125,7 +20919,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY KEYS_ESTILO TECLADO_POS KEYS_EXCLUSIVO MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY KEYS_ESTILO TECLADO_POS KEYS_EXCLUSIVO MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -19185,15 +20979,16 @@ profile_defaults() {
     RESHADE_LX=0
     STEAM_OVERLAY="auto"
     PAD_SIFALLBACK="auto"
+    TRACKPAD="auto"
 }
 
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py ec33111453d6" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py 50ec48e15509" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py ec33111453d6
+# WPROTON_HELPER perfil.py 50ec48e15509
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -19371,6 +21166,16 @@ ESQUEMA = [
     #
     # "auto" = se enciende cuando el UNICO mando que hay es el virtual de Steam.
     ("PAD_SIFALLBACK",    "opcion", "auto",           ("auto", "1", "0")),
+    # TRACKPAD DE LA DECK COMO RATON, POR JUEGO. Al final, por lo mismo.
+    #
+    # El ajuste general vale para los menus de WProton, pero un juego concreto
+    # puede querer otra cosa: un point-and-click agradece el puntero en un pad
+    # aunque el resto de la biblioteca no lo use, y al reves, en un juego de
+    # accion un pad moviendo el raton estorba.
+    #
+    # "auto" = lo que diga TRACKPAD_RATON en settings.conf. Es el valor de
+    # partida, asi que un perfil que ya existiera se comporta igual que antes.
+    ("TRACKPAD",          "opcion", "auto",           ("auto", "no", "izquierdo", "derecho")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
@@ -25154,6 +26959,9 @@ Configurar juego -> Comprobar integridad"
             || { cleanup_mount; partida_fin; return 1; }
     fi
     load_profile "$gid"
+    # El trackpad, como lo quiera ESTE juego. Va justo tras cargar el perfil,
+    # que es donde ya se sabe lo que pide, y partida_fin lo devuelve al salir.
+    trackpad_para_el_juego || true
     if [ "${RUNNER:-}" = "bundled" ] && [ -z "$BUNDLED_RUNNER_DIR" ]; then
         say "AVISO: el perfil pide el Wine incluido pero este wsquashfs no lo trae - runner automático"
         RUNNER=""
@@ -25521,7 +27329,16 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # guardaron mientras existio el automatico.
     local _mv="${MANDO_VIRTUAL:-0}"
     [ "$_mv" = nunca ] && _mv=0
-    mando_virtual_start "$_mv"
+    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
+    #
+    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
+    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
+    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
+    # como lo quiere el juego.
+    local _sticks=0
+    keys_sticks_cambiados "$keys_file" && _sticks=1
+    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
+    mando_virtual_start "$_mv" "$_sticks"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -25982,7 +27799,15 @@ NOVEDADES DE LA $WPROTON_VERSION
 
   Los juegos se pueden importar sin empaquetar, en una carpeta.
 
+  Un juego con decenas de miles de ficheros avisa antes de empaquetarse.
+
+  Un juego puede intercambiar el stick izquierdo con el derecho.
+
+  Los registros de las sesiones que van bien se borran al cerrar.
+
   Al añadir un juego a Steam, sus caratulas se descargan solas.
+
+  Arreglada la carga de los juegos que traen su prefijo dentro.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -29380,26 +31205,133 @@ proton_marcar_prefijo() {
     #
     # Se prefiere el de la carga util, y los tres quedan en el registro: es el
     # dato que hace falta para entender un cuelgue de estos.
+    # LO QUE PROTON COMPARA DE VERDAD: SU PROPIA CONSTANTE.
+    #
+    # ESTE ERA EL FALLO, Y LLEVABA AQUI DESDE SIEMPRE.
+    #
+    # Todo lo de abajo -elegir entre version, dist/version y files/version-
+    # parte de una idea equivocada: que Proton compara el prefijo con la
+    # VERSION DEL RUNNER. No lo hace. En su codigo (proton, de ValveSoftware):
+    #
+    #   CURRENT_PREFIX_VERSION="11.0-100"
+    #   ...
+    #   old_ver = f.readline().strip()      # <compatdata>/version
+    #   self.upgrade_pfx(old_ver)
+    #   ...
+    #   def upgrade_pfx(self, old_ver):
+    #           if old_ver == CURRENT_PREFIX_VERSION:
+    #                   return
+    #
+    # O sea que lo que va en <compatdata>/version NO es "GE-Proton11-6": es la
+    # version del FORMATO de prefijo, "11.0-100", que Proton lleva escrita
+    # dentro y que cambia cuando cambia el formato, no cuando cambias de runner.
+    #
+    # Escribiendole el nombre del runner pasaban dos cosas, las dos malas:
+    # nunca coincidia -asi que Proton entraba siempre al camino de
+    # actualizacion- y encima "GE-Proton11-6".split('-') le da TRES trozos
+    # donde espera dos.
+    #
+    # Se lee del propio runner, que es donde esta, y asi vale para cualquier
+    # version de Proton sin tener que tocar esto nunca mas.
+    local pver=""
+    if [ -f "$rdir/proton" ]; then
+        pver="$(sed -n 's/^CURRENT_PREFIX_VERSION="\([^"]*\)".*/\1/p' \
+                "$rdir/proton" 2>/dev/null | head -n1)"
+    fi
     local vsrc="" _vc
     for _vc in "$rdir/dist/version" "$rdir/files/version" "$rdir/version"; do
         [ -f "$_vc" ] && { vsrc="$_vc"; break; }
     done
-    [ -n "$vsrc" ] || { say "[i] El runner no trae fichero 'version'; Proton"
-                        say "    preparara el prefijo a su manera."; return 0; }
+    # SOLO SE ABANDONA SI NO HAY NI LO UNO NI LO OTRO.
+    #
+    # Antes se volvia aqui en cuanto faltaba el fichero "version" del runner...
+    # y de paso se saltaba el centinela de creacion, que es lo que de verdad
+    # hace falta. Con la constante del propio Proton, ese fichero ya no es
+    # necesario para nada.
+    if [ -z "$pver" ] && [ -z "$vsrc" ]; then
+        say "[i] El runner no dice ni su CURRENT_PREFIX_VERSION ni su 'version';"
+        say "    Proton preparara el prefijo a su manera."
+        return 0
+    fi
     for _vc in "$rdir/version" "$rdir/dist/version" "$rdir/files/version"; do
         [ -f "$_vc" ] || continue
         log "version en ${_vc#"$rdir"/}: $(tr -d '\r\n' < "$_vc" 2>/dev/null)"
     done
-    log "proton_marcar_prefijo usa ${vsrc#"$rdir"/}"
+    [ -n "$vsrc" ] && log "proton_marcar_prefijo: fichero de version del runner = ${vsrc#"$rdir"/}"
     # compatdata es la carpeta que contiene pfx/. Con el enlace pfx -> . que
     # ponemos, las dos son la misma.
     local pfx="$WINEPREFIX"
     [ -d "$WINEPREFIX/pfx" ] && pfx="$WINEPREFIX/pfx"
+    # EL CENTINELA DE CREACION: SIN EL, PROTON REHACE EL PREFIJO SIEMPRE.
+    #
+    # Es la otra mitad del fallo, y es la que de verdad tumbaba el juego. En
+    # setup_prefix():
+    #
+    #   if not file_exists(self.creation_sync_guard, follow_symlinks=False):
+    #           makedirs(self.prefix_dir + "/drive_c")
+    #           ...
+    #           self.copy_pfx()
+    #
+    # con self.creation_sync_guard = self.path("pfx/creation_sync_guard").
+    #
+    # Un prefijo que viene dentro de un archivo -hecho con Wine a secas, estilo
+    # Batocera- NO tiene ese fichero. Asi que Proton creia que tenia que crear
+    # el prefijo desde cero ENCIMA del que ya estaba, y copy_pfx reventaba al
+    # primer fichero que ya existia:
+    #
+    #   os.symlink(contents, dst)
+    #   FileExistsError: [Errno 17] File exists: '.../i386-windows/wmplayer.exe'
+    #       -> '.../pfx/drive_c/Program Files (x86)/Windows Media Player/wmplayer.exe'
+    #
+    # El juego moria en 3 segundos, en CADA intento, y el registro solo decia
+    # "murio en RUN_CMD".
+    #
+    # Poner el centinela es decirle la verdad: este prefijo ya esta creado. El
+    # resto de setup_prefix SI es seguro sobre un prefijo lleno, porque usa
+    # try_copy, que borra el destino antes de copiar:
+    #
+    #   if file_exists(dst, follow_symlinks=False):
+    #           os.remove(dst)
+    #
+    # Lo unico que no lo era es copy_pfx, que es justo lo que el centinela
+    # salta.
+    if [ ! -e "$pfx/creation_sync_guard" ]; then
+        if : > "$pfx/creation_sync_guard" 2>/dev/null; then
+            say "[+] Prefijo: puesto el centinela de creacion (Proton ya no"
+            say "    intentara crearlo encima del que trae el archivo)"
+        else
+            say "AVISO: no se pudo escribir el centinela de creacion en el prefijo;"
+            say "       Proton puede intentar rehacerlo y fallar al copiar."
+        fi
+    fi
     local _vname_actual _vname_nuevo
-    _vname_nuevo="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
-    _vname_actual="$(tr -d '\r' < "$WINEPREFIX/version" 2>/dev/null | head -n1 | awk '{print $NF}')"
+    if [ -n "$pver" ]; then
+        _vname_nuevo="$pver"
+        log "proton_marcar_prefijo: CURRENT_PREFIX_VERSION del runner = $pver"
+    else
+        # Proton MUY antiguo que no lleva la constante: se cae al comportamiento
+        # de siempre, que para aquellas versiones era lo correcto -su
+        # CURRENT_PREFIX_VERSION se parecia a la version del runner-.
+        _vname_nuevo="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
+        log "proton_marcar_prefijo: el runner no lleva CURRENT_PREFIX_VERSION;" AVISO
+        log "                       se marca con el nombre del runner ($_vname_nuevo)" AVISO
+    fi
+    # SE COMPRUEBA QUE EL FICHERO ESTA ANTES DE LEERLO.
+    #
+    # Con "tr < fichero 2>/dev/null" el 2>/dev/null tapa los errores DE tr,
+    # pero el "no existe" lo imprime el shell al hacer la redireccion, antes
+    # de que tr llegue a correr. Resultado: cada prefijo nuevo dejaba un
+    # "version: No such file or directory" en el registro, que parece un fallo
+    # y no lo es.
+    _vname_actual=""
+    [ -f "$WINEPREFIX/version" ] \
+        && _vname_actual="$(tr -d '\r' < "$WINEPREFIX/version" | head -n1)"
     if [ -n "$_vname_actual" ] && [ "$_vname_actual" = "$_vname_nuevo" ]; then
-        say "[+] Prefijo: ya marcado para $(basename "$rdir")"
+        say "[+] Prefijo: ya marcado como '$_vname_actual' (al dia)"
+        # OJO: NO se vuelve antes de poner el centinela. Eso ya esta hecho
+        # arriba a proposito: la version puede estar bien y faltar el
+        # centinela, que es exactamente el caso del prefijo que viene en un
+        # archivo, y entonces el juego seguia sin arrancar.
         return 0
     fi
     # MANDA EL RUNNER QUE HAYAS ELEGIDO.
@@ -29435,8 +31367,12 @@ proton_marcar_prefijo() {
     #   Proton: Prefix has an invalid version?!
     #
     # O sea que mi marca provocaba justo la actualizacion que pretendia evitar.
-    local vname
-    vname="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
+    # SE ESCRIBE EL MISMO VALOR CON EL QUE SE HA COMPARADO.
+    #
+    # Antes se recalculaba aqui abajo por otro camino, y comparar una cosa y
+    # escribir otra es como se llega a un registro que dice "ya marcado para
+    # GE-Proton11-6-x86_64" justo despues de haber escrito "GE-Proton11-6".
+    local vname="$_vname_nuevo"
     [ -n "$vname" ] || vname="$(basename "$rdir")"
     if printf '%s\n' "$vname" > "$WINEPREFIX/version" 2>/dev/null; then
         say "[+] Prefijo marcado como preparado para $vname"
@@ -29459,6 +31395,43 @@ overlay_opacos_listar() {
     # Las carpetas del upper marcadas como opacas. $1 = carpeta upper.
     [ -d "$1" ] || return 0
     find "$1" -name '.wh..wh..opq' -printf '%h\n' 2>/dev/null | sort -u
+}
+
+overlay_hay_partidas() {
+    # ¿El overlay de este juego tiene algo dentro? $1 = carpeta upper.
+    #
+    # Se descartan las marcas internas de la superposicion: un upper que solo
+    # tiene ".wh..wh..opq" o un ".wh.algo" no son partidas, es contabilidad de
+    # overlayfs.
+    #
+    # Y SE PIDE UN FICHERO, NO UNA CARPETA ("! -type d").
+    #
+    # Las marcas viven dentro del arbol de carpetas que overlayfs crea para
+    # llegar a ellas: drive_c/users/steamuser/.wh..wh..opq. Mirando solo el
+    # nombre, esas carpetas intermedias contaban como partidas, y un upper
+    # que solo tenia marcas de wineboot decia "tienes partidas guardadas"
+    # cuando no habia ninguna.
+    [ -d "${1:-}" ] || return 1
+    [ -n "$(find "$1" -mindepth 1 -name '.wh.*' -prune -o ! -type d -print -quit 2>/dev/null)" ]
+}
+
+overlay_copiar_encima() {
+    # Pone las partidas del overlay ENCIMA de una carpeta ya extraida, que es
+    # justo lo que el juego veria al jugar con el paquete montado.
+    # $1 = carpeta upper, $2 = destino.
+    #
+    # POR QUE HACE FALTA: un juego empaquetado guarda sus partidas en
+    # overlays/<juego>/upper, NO dentro del archivo. Al convertirlo a carpeta
+    # se extrae el archivo... y las partidas se quedaban fuera. Quien convierte
+    # su juego a carpeta precisamente para que cargue rapido se encontraba el
+    # juego entero y la partida a cero.
+    #
+    # Se usa tar y no "cp -a" para poder dejar fuera las marcas ".wh.*" de la
+    # superposicion, que no son ficheros del juego.
+    local upper="$1" dst="$2"
+    [ -d "$upper" ] || return 0
+    tar -C "$upper" --exclude='.wh.*' -cf - . 2>>"$LOG_FILE" \
+        | tar -C "$dst" -xf - 2>>"$LOG_FILE"
 }
 
 overlay_opacos_prevenir() {
@@ -32407,10 +34380,10 @@ run_exe_in_game() {
 TECLAS_PY="$RUNTIME_DIR/teclas.py"
 
 write_teclas() {
-    grep -q "WPROTON_HELPER teclas.py 1ae9a083c241" "$TECLAS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teclas.py ee758b3093ec" "$TECLAS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TECLAS_PY" <<'TECEOF'
-# WPROTON_HELPER teclas.py 1ae9a083c241
+# WPROTON_HELPER teclas.py ee758b3093ec
 # -*- coding: utf-8 -*-
 # WProton - formato de los ficheros .keys (mapeo de mando a teclado)
 #
@@ -32712,23 +34685,54 @@ def raton_leer(ruta, campo):
     return "" if v is None else str(v)
 
 
-def raton_poner(ruta, campo, valor):
-    """Cambia UN campo del raton, dejando los demas.
+def sticks_cambiados(ruta):
+    """¿Este .keys pide intercambiar los sticks? $1 = el .keys FINAL.
+
+    Lo lee el lanzador para decirselo al mando virtual, que es quien de verdad
+    puede hacerlo: el mapeador convierte el mando en TECLAS, y para que el
+    juego vea los sticks al reves hay que presentarle OTRO MANDO.
+
+    Se admite 1, true, si y yes, porque esto lo va a escribir gente a mano en
+    un .keys compartido y no tiene por que acertar con la forma exacta.
+    """
+    d = leer(ruta)
+    if not isinstance(d, dict):
+        return False
+    bloque = d.get("sticks") or {}
+    if not isinstance(bloque, dict):
+        return False
+    v = bloque.get("swap", bloque.get("cambiar", 0))
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "si", "sí", "yes", "on")
+
+
+def campo_poner(ruta, campo, valor, defecto=None):
+    """Cambia UN campo de un bloque JSON, dejando los demas.
 
     Los numeros se guardan como numero. SE ADMITE EL SIGNO MENOS: antes se
     usaba v.isdigit(), que dice que no a "-5", asi que un valor negativo se
     guardaba como texto y el mapeador se encontraba una cadena donde esperaba
     un numero.
+
+    "defecto" es con que se arranca el bloque si el fichero esta vacio. Lo usa
+    el raton, que tiene valores de partida; el resto de bloques empiezan en
+    blanco, y meterles los del raton seria escribirles basura.
     """
     d = leer(ruta)
     if not d:
-        d = dict(RATON_DEFECTO)
+        d = dict(defecto) if defecto else {}
     texto = str(valor)
     try:
         d[campo] = int(texto)
     except ValueError:
         d[campo] = texto
     return guardar(ruta, d)
+
+
+def raton_poner(ruta, campo, valor):
+    """Cambia UN campo del raton, dejando los demas."""
+    return campo_poner(ruta, campo, valor, RATON_DEFECTO)
 
 
 # ----------------------------------------------------------------------------
@@ -32769,13 +34773,18 @@ def sustituye_al_mando(ruta):
 # COMPOSICION DEL .keys FINAL (lo que hacia el heredoc PYESC)
 # ----------------------------------------------------------------------------
 
-def componer(destino, fichero_teclas, fichero_combos="", fichero_raton=""):
-    """Arma el .keys final a partir de los tres temporales del editor.
+def componer(destino, fichero_teclas, fichero_combos="", fichero_raton="",
+             fichero_sticks=""):
+    """Arma el .keys final a partir de los temporales del editor.
 
     - fichero_teclas: lineas "disparo|tecla", una por asignacion simple
     - fichero_combos: un .keys con las combinaciones y teclas compuestas, que
       el editor no toca y devuelve tal cual
     - fichero_raton:  el JSON de la seccion "mouse", si se pidio
+    - fichero_sticks: el JSON de la seccion "sticks" (cosa de WProton, no de
+      Batocera). Ahora mismo solo lleva {"swap": 1}, que intercambia el stick
+      izquierdo con el derecho. Batocera ignora las claves que no conoce, asi
+      que un .keys con esto sigue valiendo alli.
 
     La salida de emergencia (hotkey+start -> Alt+F4) va siempre la primera y
     no se duplica.
@@ -32802,12 +34811,19 @@ def componer(destino, fichero_teclas, fichero_combos="", fichero_raton=""):
 
     salida = {"actions_player1": lista}
 
-    if fichero_raton:
+    for _campo, _fich in (("mouse", fichero_raton), ("sticks", fichero_sticks)):
+        if not _fich:
+            continue
         try:
-            with open(fichero_raton, encoding="utf-8") as fh:
+            with open(_fich, encoding="utf-8") as fh:
                 texto = fh.read().strip()
             if texto:
-                salida["mouse"] = json.loads(texto)
+                _bloque = json.loads(texto)
+                # Un bloque vacio NO se escribe: dejaria "sticks": {} en el
+                # fichero, que no significa nada y encima hace creer que la
+                # opcion esta puesta.
+                if _bloque:
+                    salida[_campo] = _bloque
         except (OSError, ValueError):
             pass
 
@@ -32971,12 +34987,14 @@ def resumen(ruta):
     return filas, False
 
 
-def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton):
-    """Parte un .keys en los tres temporales que edita keys_editor.
+def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton,
+                fichero_sticks=""):
+    """Parte un .keys en los temporales que edita keys_editor.
 
     - fichero_teclas: lineas "disparo|tecla" de las asignaciones simples
     - fichero_combos: las combinaciones y teclas compuestas, TAL CUAL
     - fichero_raton:  la seccion "mouse", si la hay
+    - fichero_sticks: la seccion "sticks", si la hay
 
     Lo que no se puede editar en la lista SE CONSERVA: antes se perdia sin
     avisar en cuanto se tocaba cualquier otra asignacion.
@@ -32995,6 +35013,9 @@ def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton):
     raton = datos.get("mouse") or {}
     if isinstance(raton, dict) and raton and fichero_raton:
         guardar(fichero_raton, raton)
+    sticks = datos.get("sticks") or {}
+    if isinstance(sticks, dict) and sticks and fichero_sticks:
+        guardar(fichero_sticks, sticks)
 
     editables, conservar = [], []
     for a in acciones(datos):
@@ -33073,6 +35094,44 @@ def comprobar():
     esperar("poner", buscar_accion(p, "TECLADO_VIRTUAL"), "hotkey+x")
     esperar("conserva las demas", len(acciones(leer(p))), 2)
     esperar("conserva mouse", leer(p).get("mouse"), {"speed": 1})
+
+    # LOS STICKS INTERCAMBIADOS: un bloque propio de WProton en el .keys.
+    #
+    # Lo que se comprueba aqui es que sobrevive al viaje completo del editor
+    # -descomponer, editar, componer-, que es donde se perdian antes las cosas
+    # que el editor no sabia tocar.
+    s_tmp = os.path.join(raiz, "sticks.json")
+    s_keys = os.path.join(raiz, "sticks.keys")
+    esperar("sin bloque: no pide nada", sticks_cambiados(
+        escribir("nosticks.keys", '{"actions_player1":[]}')), False)
+    # campo_poner NO debe meter los valores del raton en un bloque vacio: era
+    # el fallo de usar raton_poner para esto.
+    campo_poner(s_tmp, "swap", 1)
+    esperar("campo-poner no mete el raton", leer(s_tmp), {"swap": 1})
+    componer(s_keys, "", "", "", s_tmp)
+    esperar("componer escribe sticks", leer(s_keys).get("sticks"), {"swap": 1})
+    esperar("el lanzador lo ve", sticks_cambiados(s_keys), True)
+    # Y de vuelta: el editor lo recupera tal cual.
+    r_t = os.path.join(raiz, "v_t"); r_c = os.path.join(raiz, "v_c")
+    r_r = os.path.join(raiz, "v_r"); r_s = os.path.join(raiz, "v_s")
+    descomponer(s_keys, r_t, r_c, r_r, r_s)
+    esperar("descomponer recupera sticks", leer(r_s), {"swap": 1})
+    # Apagarlo = temporal vacio, y entonces NO debe quedar seccion "sticks".
+    with open(s_tmp, "w", encoding="utf-8") as fh:
+        fh.write("")
+    componer(s_keys, "", "", "", s_tmp)
+    esperar("apagado no deja seccion", "sticks" in leer(s_keys), False)
+    esperar("apagado: no pide nada", sticks_cambiados(s_keys), False)
+    # Las formas que puede escribir una persona a mano en un .keys compartido.
+    for _t, _v, _esp in (("uno", '{"sticks":{"swap":1}}', True),
+                         ("true", '{"sticks":{"swap":true}}', True),
+                         ("si", '{"sticks":{"swap":"si"}}', True),
+                         ("cero", '{"sticks":{"swap":0}}', False),
+                         ("false", '{"sticks":{"swap":false}}', False),
+                         ("vacio", '{"sticks":{}}', False),
+                         ("basura", '{"sticks":"no es un bloque"}', False)):
+        esperar("swap " + _t, sticks_cambiados(
+            escribir("sw_%s.keys" % _t, _v)), _esp)
     poner_accion(p, "TECLADO_VIRTUAL", "")
     esperar("quitar", buscar_accion(p, "TECLADO_VIRTUAL"), "")
     esperar("sigue la otra", len(acciones(leer(p))), 1)
@@ -33211,11 +35270,13 @@ def main(argv):
             "  poner    <fichero> <destino> [trigger]  pone o quita (vacio quita)\n"
             "  raton-leer  <fichero> <campo>\n"
             "  raton-poner <fichero> <campo> <valor>\n"
+            "  campo-poner <fichero> <campo> <valor>   igual, sin defectos\n"
             "  sustituye <fichero>                     rc 0 si mapea el movimiento\n"
             "  resumen  <fichero>                      las asignaciones, legibles\n"
             "  cara     <fichero>                      rc 0 si usa A/B/X/Y\n"
-            "  descomponer <fichero> <teclas> <combos> <raton>\n"
-            "  componer <destino> <teclas> [combos] [raton]\n"
+            "  descomponer <fichero> <teclas> <combos> <raton> [sticks]\n"
+            "  componer <destino> <teclas> [combos] [raton] [sticks]\n"
+            "  sticks   <fichero>                      rc 0 si pide cambiarlos\n"
             "  combos   <fichero>                      cuantas combinaciones lleva\n"
             "  ejemplo  <fichero>                      escribe el .keys de ejemplo\n"
             "  dueno    <fichero>                      de que juego dice ser\n"
@@ -33286,6 +35347,14 @@ def main(argv):
             return 2
         return 0 if raton_poner(fichero, argv[3], argv[4]) else 1
 
+    # Lo mismo que raton-poner pero SIN los valores de partida del raton: para
+    # los demas bloques, que empiezan en blanco. Con raton-poner, encender una
+    # opcion en un bloque vacio le metia dentro el axis y el speed del raton.
+    if orden == "campo-poner":
+        if len(argv) < 5:
+            return 2
+        return 0 if campo_poner(fichero, argv[3], argv[4]) else 1
+
     if orden == "resumen":
         filas, roto = resumen(fichero)
         if roto:
@@ -33303,7 +35372,11 @@ def main(argv):
         if len(argv) < 6:
             sys.stderr.write("teclas.py descomponer: faltan los tres temporales\n")
             return 2
-        return 0 if descomponer(fichero, argv[3], argv[4], argv[5]) else 1
+        return 0 if descomponer(fichero, argv[3], argv[4], argv[5],
+                                argv[6] if len(argv) > 6 else "") else 1
+
+    if orden == "sticks":
+        return 0 if sticks_cambiados(fichero) else 1
 
     if orden == "sustituye":
         return 0 if sustituye_al_mando(fichero) else 1
@@ -33321,7 +35394,8 @@ def main(argv):
             return 2
         return 0 if componer(fichero, argv[3],
                              argv[4] if len(argv) > 4 else "",
-                             argv[5] if len(argv) > 5 else "") else 1
+                             argv[5] if len(argv) > 5 else "",
+                             argv[6] if len(argv) > 6 else "") else 1
 
     sys.stderr.write("teclas.py: orden desconocida %r\n" % orden)
     return 2
@@ -33367,6 +35441,256 @@ keys_raton_leer() {
     return 0
 }
 
+logs_label() {
+    # Como se resume la limpieza de registros en el menu.
+    if [ "${BORRAR_LOGS_OK:-1}" != 1 ]; then
+        printf 'se conservan todos'
+        return 0
+    fi
+    local g="${LOGS_OK_GUARDAR:-1}"
+    case "$g" in
+        0) printf 'los limpios se borran al cerrar' ;;
+        1) printf 'se borran los limpios, menos el ultimo' ;;
+        *) printf 'se borran los limpios, menos los %s ultimos' "$g" ;;
+    esac
+}
+
+logs_cuantos() {
+    # Cuantos registros hay y cuantos de ellos estan marcados como limpios.
+    # Sale "total limpios".
+    local t l
+    t="$(find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' 2>/dev/null | wc -l | tr -d ' ')"
+    l="$(find "$LOG_DIR" -maxdepth 1 -type f -name '.wproton_*.log.ok' 2>/dev/null | wc -l | tr -d ' ')"
+    printf '%s %s' "${t:-0}" "${l:-0}"
+}
+
+logs_menu() {
+    # LIMPIEZA AUTOMATICA DE REGISTROS.
+    #
+    # Lo pidio Dani: si la sesion fue bien, el registro no le sirve a nadie y
+    # la carpeta se llena. En DeckStation cada juego lanza su propio
+    # wproton.sh, asi que una tarde de pruebas deja decenas de ficheros.
+    #
+    # Se queda configurable porque el equilibrio depende de para que uses
+    # WProton: quien esta probando cosas quiere los registros, y quien solo
+    # juega no quiere ni saber que existen.
+    local sel tot lim
+    while :; do
+        set -- $(logs_cuantos); tot="$1"; lim="$2"
+        sel="$(menu "Registros  ($tot en la carpeta, $lim sin errores)" \
+            "Borrar los que fueron bien: $([ "${BORRAR_LOGS_OK:-1}" = 1 ] && printf 'si' || printf 'no')" \
+            "Conservar siempre: $(case "${LOGS_OK_GUARDAR:-1}" in 0) printf 'ninguno' ;; 1) printf 'el ultimo' ;; *) printf 'los %s ultimos' "${LOGS_OK_GUARDAR:-1}" ;; esac)" \
+            "Ver el registro de la última sesión" \
+            "Borrar ahora los registros sin errores" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Borrar los que fueron bien:"*)
+                if [ "${BORRAR_LOGS_OK:-1}" = 1 ]; then BORRAR_LOGS_OK=0; else BORRAR_LOGS_OK=1; fi
+                save_settings
+                if [ "$BORRAR_LOGS_OK" = 1 ]; then
+                    ui_info "Al cerrar WProton, si la sesion no dio ningun
+aviso ni error, su registro se borra.
+
+Los que tengan algo se quedan siempre."
+                else
+                    ui_info "Se conservan todos los registros, como antes.
+
+Los antiguos se siguen borrando por fecha:
+2 dias, y 40 como maximo."
+                fi ;;
+            "Conservar siempre:"*)
+                local g
+                g="$(menu "Cuantos registros SIN errores se conservan" \
+                    "1 - el de la ultima sesion (recomendado)" \
+                    "3 - los tres ultimos" \
+                    "10 - los diez ultimos" \
+                    "0 - ninguno, borrarlos todos al cerrar" \
+                    "<< Volver")" || continue
+                case "$g" in
+                    "<< Volver"|"") continue ;;
+                esac
+                LOGS_OK_GUARDAR="${g%% *}"
+                save_settings
+                # POR QUE SE RECOMIENDA DEJAR UNO.
+                #
+                # Hay fallos que NO escriben ni un error: el caso que nos lo
+                # enseño fue un juego que se quedaba cargando y no entraba, y
+                # su registro no tenia una sola linea de error -el juego hasta
+                # abria su ventana-. Ese registro fue justo el que hizo falta.
+                if [ "$LOGS_OK_GUARDAR" = 0 ]; then
+                    ui_info "No se conservara ningun registro limpio.
+
+Ten en cuenta que hay fallos que no escriben ningun
+error -un juego que se queda cargando, por ejemplo- y
+entonces no quedara nada que mirar."
+                else
+                    ui_info "Se conservaran los $LOGS_OK_GUARDAR registro(s) mas
+recientes sin errores, ademas de todos los que
+tengan algun aviso o error."
+                fi ;;
+            "Ver el registro"*)
+                ver_fichero "$LOG_FILE" "Registro de la última sesión" ;;
+            "Borrar ahora los registros sin errores"*)
+                # Solo los MARCADOS como limpios: los de versiones anteriores
+                # y los de sesiones que murieron de golpe no llevan marca, y a
+                # esos no se les toca aqui.
+                local n=0 marca base
+                for marca in "$LOG_DIR"/.wproton_*.log.ok; do
+                    [ -f "$marca" ] || continue
+                    base="$(basename "$marca")"; base="${base#.}"; base="${base%.ok}"
+                    # El de la sesion EN MARCHA no, que es este.
+                    [ "$LOG_DIR/$base" = "$LOG_FILE" ] && continue
+                    rm -f "$LOG_DIR/$base" "$marca" 2>/dev/null && n=$((n+1))
+                done
+                ui_info "Borrados $n registro(s) sin errores.
+
+Los que tienen avisos o errores se han quedado." ;;
+        esac
+    done
+}
+
+raton_menus_label() {
+    # Como se resume el ajuste del raton en el menu de preferencias.
+    if [ "${RATON_MENUS:-1}" = 0 ]; then
+        printf 'apagado'
+        return 0
+    fi
+    local u="${RATON_UMBRAL:-12}" r="${RATON_RUEDA:-3}"
+    case "$u" in
+        0) printf 'al instante' ;;
+        *) printf 'umbral %s px' "$u" ;;
+    esac
+    case "$r" in
+        0) printf ', rueda 1/3 de pantalla' ;;
+        *) printf ', rueda %s filas' "$r" ;;
+    esac
+}
+
+raton_menus_menu() {
+    # EL RATON FISICO EN LOS MENUS.
+    #
+    # Lo pidieron desde un sobremesa: con el raton en la mano, la seleccion
+    # seguia al puntero sin ningun margen -un roce y te cambiaba de fila,
+    # incluso navegando con el mando- y cada muesca de la rueda saltaba un
+    # tercio de pantalla.
+    #
+    # Se queda configurable y no solo mas suave, porque esto es cuestion de
+    # gusto y de que raton tengas: hay quien quiere que siga al puntero al
+    # instante, que es como estaba.
+    local sel
+    while :; do
+        sel="$(menu "Raton en los menus" \
+            "Usar el raton: $([ "${RATON_MENUS:-1}" = 0 ] && printf 'no' || printf 'si')" \
+            "Umbral del puntero: $([ "${RATON_UMBRAL:-12}" = 0 ] && printf 'sin umbral' || printf '%s px' "${RATON_UMBRAL:-12}")" \
+            "Rueda: $([ "${RATON_RUEDA:-3}" = 0 ] && printf 'un tercio de pantalla' || printf '%s filas por muesca' "${RATON_RUEDA:-3}")" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Usar el raton:"*)
+                if [ "${RATON_MENUS:-1}" = 0 ]; then RATON_MENUS=1; else RATON_MENUS=0; fi
+                save_settings
+                ui_info "El raton en los menus: $([ "$RATON_MENUS" = 0 ] && printf 'apagado' || printf 'encendido')
+
+Hace efecto en el proximo menu que se abra." ;;
+            "Umbral del puntero:"*)
+                local u
+                u="$(menu "Cuanto hay que mover el raton para cambiar de fila" \
+                    "0 - sin umbral, sigue al puntero al instante" \
+                    "6 - poco" \
+                    "12 - normal" \
+                    "24 - mucho (el raton casi no manda)" \
+                    "<< Volver")" || continue
+                case "$u" in
+                    "<< Volver"|"") continue ;;
+                esac
+                RATON_UMBRAL="${u%% *}"
+                save_settings
+                ui_info "Umbral del puntero: $RATON_UMBRAL px
+
+Se cuenta desde la ultima tecla o boton del mando: un roce
+ya no te cambia de fila, pero si mueves el raton de verdad
+la seleccion le sigue igual que antes." ;;
+            "Rueda:"*)
+                local r
+                r="$(menu "Cuanto mueve una muesca de la rueda" \
+                    "1 - una fila" \
+                    "3 - tres filas" \
+                    "5 - cinco filas" \
+                    "0 - un tercio de pantalla (como antes)" \
+                    "<< Volver")" || continue
+                case "$r" in
+                    "<< Volver"|"") continue ;;
+                esac
+                RATON_RUEDA="${r%% *}"
+                save_settings
+                ui_info "Rueda: $([ "$RATON_RUEDA" = 0 ] && printf 'un tercio de pantalla' || printf '%s fila(s) por muesca' "$RATON_RUEDA")" ;;
+        esac
+        # Los menus se dibujan en un proceso aparte que ya tiene las variables
+        # heredadas: se reinicia para que coja las nuevas. Si no, el cambio no
+        # se notaria hasta cerrar WProton y quedaria como "no funciona".
+        export WP_RATON="${RATON_MENUS:-1}"
+        export WP_RATON_UMBRAL="${RATON_UMBRAL:-12}"
+        export WP_RATON_RUEDA="${RATON_RUEDA:-3}"
+        menu_server_stop
+    done
+}
+
+keys_campo_poner() {
+    # Cambia UN campo de un bloque del .keys, sin meter valores de partida.
+    # $1 = fichero, $2 = campo, $3 = valor
+    teclas_py campo-poner "$1" "$2" "$3" 2>>"$LOG_FILE"
+}
+
+keys_sticks_swap_etq() {
+    # Como se enseña la opcion en el editor. $1 = temporal de "sticks".
+    if [ -s "${1:-}" ] && [ "$(keys_raton_leer "$1" swap)" = 1 ]; then
+        printf 'SI (apuntas con el izquierdo)'
+    else
+        printf 'no'
+    fi
+}
+
+keys_sticks_swap_cambiar() {
+    # Enciende y apaga el intercambio. $1 = temporal de "sticks".
+    #
+    # Al apagarlo se BORRA el temporal en vez de poner swap=0: asi el .keys
+    # final no se queda con una seccion "sticks" que no pide nada, que es ruido
+    # para quien abra el fichero y para quien lo comparta.
+    local f="$1"
+    if [ -s "$f" ] && [ "$(keys_raton_leer "$f" swap)" = 1 ]; then
+        : > "$f"
+        ui_info "Sticks intercambiados: NO
+
+El juego vuelve a ver cada stick en su sitio."
+        return 0
+    fi
+    # keys_campo_poner Y NO keys_raton_poner: aquel, en un fichero vacio,
+    # arranca el bloque con los valores de partida DEL RATON, y aqui dejaria
+    # un "sticks" con axis y speed dentro.
+    keys_campo_poner "$f" swap 1
+    ui_info "Sticks intercambiados: SI
+
+El juego vera el stick izquierdo donde estaba el derecho
+y al contrario, y el clic de cada stick se va con el suyo.
+
+Lo hace el mando virtual: si lo tenias apagado, se
+encendera solo (modo copia) al lanzar este juego. Eso
+captura el mando fisico, asi que se pierden la vibracion
+y el remapeado de Steam Input mientras juegas."
+    return 0
+}
+
+keys_sticks_cambiados() {
+    # ¿Este .keys pide intercambiar los sticks? rc 0 = si. $1 = el .keys FINAL.
+    #
+    # Lo lee el lanzador para decirselo al MANDO VIRTUAL, que es el unico que
+    # puede hacerlo: el mapeador convierte el mando en teclas, y para que el
+    # juego vea los sticks al reves hay que presentarle otro mando.
+    [ -n "${1:-}" ] && [ -s "$1" ] || return 1
+    teclas_py sticks "$1" >/dev/null 2>>"$LOG_FILE"
+}
+
 keys_raton_poner() {
     # Cambia UN campo del temporal del raton. $1 = fichero, $2 = campo, $3 = valor
     teclas_py raton-poner "$1" "$2" "$3" 2>>"$LOG_FILE"
@@ -33382,8 +35706,9 @@ keys_combos_cuantos() {
 }
 
 keys_componer() {
-    # Arma el .keys final. $1 = destino, $2 = teclas, $3 = combos, $4 = raton.
-    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" 2>>"$LOG_FILE"
+    # Arma el .keys final.
+    # $1 = destino, $2 = teclas, $3 = combos, $4 = raton, $5 = sticks.
+    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" "${5:-}" 2>>"$LOG_FILE"
 }
 
 keys_sustituye_al_mando() {
@@ -35491,6 +37816,69 @@ paquete_valido() {
     [ -s "$p" ]
 }
 
+contar_ficheros() {
+    # Cuantos ficheros hay dentro de una carpeta, con tope.
+    #
+    # El numero exacto no importa: solo si pasa de la raya. Con el tope, un
+    # juego de 300.000 ficheros no deja la cuenta corriendo un minuto para
+    # decir lo mismo que ya se sabia a los 50.000.
+    local d="$1" tope="${2:-60000}" n
+    n="$(find "$d" -type f 2>/dev/null | head -n "$tope" | wc -l | tr -d ' ')"
+    printf '%s' "${n:-0}"
+}
+
+aviso_muchos_ficheros() {
+    # ¿Merece la pena empaquetar este juego?
+    #
+    # Devuelve 0 = sigue empaquetando, 1 = el usuario prefiere dejarlo en
+    # carpeta.
+    #
+    # DE DONDE SALE ESTO: un tester empaqueto un juego de 48 GB con 32.164
+    # ficheros. En carpeta arrancaba bien; empaquetado se quedaba cargando y
+    # no entraba nunca. No estaba roto -el registro no tenia ni un error, la
+    # ventana del juego llegaba a abrirse-, simplemente tardaba una barbaridad.
+    #
+    # El motivo esta en el comentario de PACK_AVISO_FICHEROS: dos capas FUSE
+    # mas la resolucion de rutas de Wine, que lee la carpeta entera cada vez
+    # que abre un fichero. Son cosas que por separado no se notan y juntas,
+    # con decenas de miles de ficheros, se hacen eternas.
+    #
+    # No se puede impedir empaquetarlo -hay quien quiere el fichero unico
+    # cueste lo que cueste-, pero si se puede decir antes, que es cuando
+    # todavia se puede elegir sin repetir una hora de empaquetado.
+    local src="$1" name="$2" ofrecer="${3:-1}" n tope
+    [ "${PACK_AVISO_FICHEROS:-0}" -gt 0 ] 2>/dev/null || return 0
+    # Se cuenta un poco por encima del aviso: asi se puede decir "mas de X"
+    # cuando se llega al tope, sin mentir con un numero redondo.
+    tope=$(( PACK_AVISO_FICHEROS * 3 ))
+    n="$(contar_ficheros "$src" "$tope")"
+    log "empaquetado: '$name' tiene $n fichero(s) (aviso a partir de $PACK_AVISO_FICHEROS)"
+    [ "$n" -ge "$PACK_AVISO_FICHEROS" ] 2>/dev/null || return 0
+    local cuantos="$n"
+    [ "$n" -ge "$tope" ] && cuantos="mas de $tope"
+    say "AVISO: '$name' tiene $cuantos ficheros: empaquetado puede cargar muy lento"
+    # Donde el formato viene FORZADO (convertir carpeta a wsquashfs,
+    # empaquetar con su prefijo) el usuario ha pedido un archivo a proposito;
+    # ahi se avisa y se sigue, no se le ofrece justo lo contrario de lo que
+    # acaba de pulsar.
+    [ "$ofrecer" = 1 ] || return 0
+    if ui_ask "'$name' tiene $cuantos ficheros.
+
+Empaquetado funciona, pero un juego con tantos ficheros
+puede tardar MUCHISIMO en cargar, o quedarse cargando sin
+entrar: cada fichero que abre pasa por las dos capas del
+paquete. En carpeta carga a velocidad normal.
+
+¿Lo dejamos en carpeta?
+
+  Si = se queda como carpeta, sin empaquetar (recomendado)
+  No = se empaqueta igualmente"; then
+        return 1
+    fi
+    log "empaquetado: avisado de $n ficheros y el usuario empaqueta igualmente"
+    return 0
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
@@ -35504,6 +37892,18 @@ build_wsquashfs() {
     #      empaquetar, que es justo lo contrario de lo que dicen hacer.
     local src="$1" name="$2"
     local fmt="${3:-${PACK_FORMAT:-wsquashfs}}" out
+    # ANTES DE EMPAQUETAR: ¿CUANTOS FICHEROS TIENE?
+    #
+    # Se pregunta aqui y no despues porque despues ya no sirve de nada: el
+    # empaquetado de un juego grande son horas, y rehacerlo en el otro
+    # formato son otras tantas.
+    if [ "$fmt" != "carpeta" ] && [ -d "$src" ]; then
+        if ! aviso_muchos_ficheros "$src" "$name" "$([ -n "${3:-}" ] && printf 0 || printf 1)"; then
+            say "[i] '$name' se queda en carpeta, sin empaquetar"
+            log "empaquetado: carpeta elegida por el numero de ficheros"
+            fmt="carpeta"
+        fi
+    fi
     # SIN EMPAQUETAR: LA CARPETA SE QUEDA COMO ESTA.
     #
     # Lo pidieron desde el canal: hay gente que no quiere el .wsquashfs, solo
@@ -36712,6 +39112,10 @@ launch_loose_exe() {
             || { partida_fin; return 1; }
     fi
     load_profile "$gid"
+    # El trackpad, como lo quiera este juego. Por aqui pasan los .exe sueltos y
+    # los juegos en carpeta -play_folder acaba llamando aqui-, asi que con esto
+    # y lo de launch_game quedan cubiertas las tres formas de lanzar.
+    trackpad_para_el_juego || true
     # EL EJECUTABLE ELEGIDO MANDA SOBRE EL QUE LLEGO.
     #
     # Este camino se lanzaba SIEMPRE con el "$exe" que recibio -el que
@@ -37045,7 +39449,16 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # guardaron mientras existio el automatico.
     local _mv="${MANDO_VIRTUAL:-0}"
     [ "$_mv" = nunca ] && _mv=0
-    mando_virtual_start "$_mv"
+    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
+    #
+    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
+    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
+    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
+    # como lo quiere el juego.
+    local _sticks=0
+    keys_sticks_cambiados "$keys_file" && _sticks=1
+    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
+    mando_virtual_start "$_mv" "$_sticks"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -38179,11 +40592,107 @@ play_any() {
     esac
 }
 
+LIZARD_SYSFS="/sys/module/hid_steam/parameters/lizard_mode"
+
+es_steam_deck() {
+    # ¿Esto es una Steam Deck (o el mando de Valve)? Por el nombre del equipo,
+    # que es lo que no cambia; el modelo exacto no importa aqui.
+    grep -qi 'valve' /sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null && return 0
+    [ -e "$LIZARD_SYSFS" ] && return 0
+    return 1
+}
+
+deck_lizard_estado() {
+    # EL PARAMETRO lizard_mode DEL MODULO, EN UNA LINEA.
+    #
+    # CUIDADO CON LO QUE ESTO SIGNIFICA, que es lo que nos tuvo dos arreglos
+    # dando palos de ciego. Esto NO dice si los trackpads mueven el puntero
+    # ahora mismo: dice si el DRIVER tiene permiso para encender la emulacion
+    # del firmware. Son cosas distintas.
+    #
+    # Lo que de verdad decide si los pads mueven el puntero son los dos modos
+    # del mando, y los cambia EL USUARIO manteniendo pulsado OPCIONES medio
+    # segundo (450 ms en el driver, con vibracion de aviso, igual que hace
+    # Steam):
+    #
+    #   modo ESCRITORIO  el firmware mueve el puntero (derecho = raton,
+    #                    izquierdo = rueda) y el driver no publica nada.
+    #   modo GAMEPAD     el firmware NO mueve el puntero -esto es lo que la
+    #                    gente cuenta como "se han muerto los trackpads"- y el
+    #                    driver publica los dos pads por evdev.
+    #
+    # Y lo que NO es verdad, aunque lo dijera el comentario de antes: que
+    # WProton los apague al abrir el mando. En hid-steam.c el apagado
+    # automatico al abrir el dispositivo de entrada esta excluido para la Deck
+    # desde el kernel 6.8:
+    #
+    #   if (!(steam->quirks & (STEAM_QUIRK_DECK | STEAM_QUIRK_IBEX))) {
+    #
+    # El diagnostico de verdad lo hace "trackpad.py estado", que mira los dos
+    # caminos y dice en que modo esta el mando.
+    [ -r "$LIZARD_SYSFS" ] || return 1
+    local v; v="$(cat "$LIZARD_SYSFS" 2>/dev/null)" || return 1
+    case "$v" in
+        [Yy]|1) printf 'encendido' ;;
+        [Nn]|0) printf 'APAGADO' ;;
+        *)      printf '%s' "$v" ;;
+    esac
+    return 0
+}
+
+trackpad_lagarto_log() {
+    # Deja en el registro como esta el modo lagarto, con una etiqueta de donde
+    # se ha mirado. $1 = etiqueta ("arranque", "tras abrir los menus"...).
+    #
+    # SOLO AL REGISTRO Y SIN AVISAR DE NADA.
+    #
+    # Esto existe porque el primer arreglo de los trackpads se dio por bueno y
+    # los testers dijeron "no funciona", y no habia NADA en el registro con lo
+    # que distinguir las tres posibilidades: que ya llegaran apagados, que los
+    # apagaran nuestros menus, o que los apagara el juego. Dos lineas -antes y
+    # despues de abrir los menus- lo resuelven sin preguntarle nada a nadie.
+    es_steam_deck || return 0
+    local est; est="$(deck_lizard_estado)" || {
+        log "trackpads ($1): no se puede leer $LIZARD_SYSFS"
+        return 0; }
+    log "trackpads ($1): modo lagarto $est"
+    return 0
+}
+
+diag_trackpads() {
+    # Lo de arriba, contado para el registro y para quien lo lea.
+    es_steam_deck || return 0
+    local est; est="$(deck_lizard_estado)" || {
+        log "trackpads: no se puede leer $LIZARD_SYSFS (kernel sin hid_steam?)"
+        return 0; }
+    say "Trackpads de la Deck: parametro lizard_mode = $est"
+    if [ "$est" = "APAGADO" ]; then
+        say "  Con el parametro a 0 el driver NO enciende la emulacion de raton"
+        say "  del firmware, y ademas el cambio de modo manteniendo OPCIONES"
+        say "  deja de funcionar. Se enciende con:"
+        say "    echo 1 | sudo tee $LIZARD_SYSFS"
+    else
+        # EL CONSEJO QUE DE VERDAD ARREGLA EL PROBLEMA.
+        #
+        # Con el parametro a 1, si los trackpads no mueven el puntero es que el
+        # mando esta en modo gamepad. Eso NO se arregla con sudo ni reiniciando:
+        # se arregla manteniendo pulsado opciones, que es el mismo gesto que usa
+        # Steam. Es la primera cosa que hay que decirle a quien lo reporta.
+        say "  Si los trackpads no mueven el puntero, el mando esta en modo"
+        say "  gamepad: manten pulsado OPCIONES (las tres rayas) medio segundo"
+        say "  y vibrara al volver al modo escritorio."
+    fi
+    # Y el estado de verdad, mirando los dos caminos de lectura. Va al registro.
+    trackpad_py estado 4 >>"$LOG_FILE" 2>&1 || true
+    return 0
+}
+
 diag_mando_antes() {
     # Todo lo que hace falta para diagnosticar un problema de mando, ANTES de
     # lanzar. Sin esto habia que adivinar: el registro decia que se exportaban
     # las variables, pero no si el juego las recibia ni si veia el mando.
     say "--- diagnostico de mando -------------------------------------"
+    diag_trackpads
     # 1) Que variables de mando van a llegar al juego
     local v vistas=0
     for v in PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW \
@@ -39182,12 +41691,14 @@ keys_editor() {
     # no vale nada y el fichero saldria con el nombre equivocado.
     local gid="$1" squash="${2:-}" destino
     destino="$PROFILE_DIR/$gid.keys"
-    local tmp tmpc tmpr origen=""
+    local tmp tmpc tmpr tmps origen=""
     tmp="$(mktemp)" || return 1
     tmpc="$(mktemp)" || { rm -f "$tmp"; return 1; }
-    tmpr="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
+    tmpr="$(mktemp)" || { rm -f "$tmp" "$tmpc"; return 1; }
+    tmps="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
     printf '{"actions_player1": []}' > "$tmpc"
     : > "$tmpr"                      # vacio = este .keys no lleva raton
+    : > "$tmps"                      # vacio = los sticks, como vienen
 
     # De donde se parte. OJO: NO vale mirar solo profiles/<gid>.keys. El .keys
     # puede estar junto al juego (<juego>.wsquashfs.keys), que es como lo pone
@@ -39197,7 +41708,7 @@ keys_editor() {
     [ -n "$origen" ] || { [ -f "$destino" ] && origen="$destino"; }
 
     if [ -n "$origen" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
-        teclas_py descomponer "$origen" "$tmp" "$tmpc" "$tmpr" 2>/dev/null
+        teclas_py descomponer "$origen" "$tmp" "$tmpc" "$tmpr" "$tmps" 2>/dev/null
         say "[keys] Partiendo de $(basename "$origen")"
     fi
 
@@ -39248,6 +41759,19 @@ $KEYS_STICKS
 EOFSN
         opciones="${opciones}Sticks (izquierdo y derecho) >>   $([ "$_nst" -gt 0 ] && printf '%s asignadas' "$_nst" || printf 'ninguna')
 "
+        # INTERCAMBIAR LOS STICKS.
+        #
+        # Lo pidieron para un juego que apunta con el derecho y se maneja mucho
+        # mejor apuntando con el izquierdo. Va aqui, en el .keys, por dos
+        # razones: es cosa de ESE juego, y asi viaja con el -un .keys de la
+        # comunidad puede traerlo ya puesto-.
+        #
+        # No lo hace el mapeador, que convierte el mando en TECLAS: lo hace el
+        # mando virtual, presentandole al juego otro mando con los sticks al
+        # reves. Si el mando virtual estaba apagado, se enciende solo en modo
+        # copia al lanzar.
+        opciones="${opciones}Intercambiar los sticks: $(keys_sticks_swap_etq "$tmps")
+"
         opciones="$opciones$(keys_raton_fila "$tmpr")
 $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
@@ -39259,16 +41783,19 @@ Rellenar: juego de teclado y raton   (WASD, flechas, clics)
         titulo="$titulo)"
         # shellcheck disable=SC2046
         sel="$(IFS=$'\n'; set -f; menu "$titulo" \
-               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1; }
 
         case "$sel" in
-            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr"; return 1 ;;
+            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1 ;;
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
                 continue ;;
             "Sticks (izquierdo y derecho)"*)
                 keys_sticks_editar "$tmp"
+                continue ;;
+            "Intercambiar los sticks:"*)
+                keys_sticks_swap_cambiar "$tmps"
                 continue ;;
             "Rellenar: juego de teclado y raton"*)
                 keys_plantilla_teclado "$tmp" "$tmpr"
@@ -39327,9 +41854,25 @@ Asignar la tecla de todas formas?" || continue
     # vacio como fichero. Hay que contar lo que lleva dentro.
     local n_combos
     n_combos="$(keys_combos_cuantos "$tmpc")"
-    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ]; then
-        ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton."
-        rm -f "$tmp" "$tmpc" "$tmpr"; return 1
+    # Y LOS STICKS INTERCAMBIADOS TAMBIEN CUENTAN.
+    #
+    # ESTE FUE EL FALLO QUE DEJO LA OPCION SIN FUNCIONAR.
+    #
+    # Se añadio "Intercambiar los sticks" y no se toco esta comprobacion, asi
+    # que quien activaba SOLO eso -que es justo el caso normal: el juego se
+    # maneja bien, lo unico que molesta es que apunta con el derecho- se
+    # encontraba un "No has asignado nada" y el .keys NO SE ESCRIBIA. Sin
+    # fichero no hay nada que leer al lanzar, asi que la opcion parecia no
+    # existir: ni funcionaba ni daba un error que lo explicara.
+    #
+    # Es el mismo error que ya se cometio con el raton, y esta arriba contado:
+    # cada vez que se añade algo que se puede guardar solo, hay que sumarlo
+    # aqui. Lo cubren ahora las pruebas.
+    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ] \
+       && [ ! -s "$tmps" ]; then
+        ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton,
+ni los sticks intercambiados."
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
@@ -39338,17 +41881,17 @@ Asignar la tecla de todas formas?" || continue
     # Un .keys hecho aqui es de este juego por definicion: lo acaba de crear el
     # usuario para el. Dejarlo sin marca lo convertiria en un fichero anonimo
     # mas, que es de donde venia todo el problema.
-    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr"; then
+    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr" "$tmps"; then
         keys_marcar "$destino" "$gid"
     else
         ui_error "No se pudo guardar el mapeo en:
 $destino
 
 El fichero anterior sigue intacto."
-        rm -f "$tmp" "$tmpc" "$tmpr"
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
         return 1
     fi
-    rm -f "$tmp" "$tmpc" "$tmpr"
+    rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
@@ -39358,13 +41901,20 @@ El fichero anterior sigue intacto."
         for _k in "${squash%.*}.keys" "${squash}.keys"; do
             [ -f "$_k" ] && { otro="$(basename "$_k")"; break; }
         done
-        ui_info "Teclas guardadas en:
+        # SE DICE QUE SE HA GUARDADO DE VERDAD.
+        #
+        # Decia "Teclas guardadas" siempre, y quien venia de activar solo el
+        # intercambio de sticks no veia su opcion mencionada en ninguna parte:
+        # desde fuera, indistinguible de que se hubiera ignorado.
+        local _quegua="Teclas guardadas en:"
+        [ -s "$tmps" ] && _quegua="Guardado (con los sticks intercambiados) en:"
+        ui_info "$_quegua
 profiles/$gid.keys${otro:+
 
 Este juego traia el suyo ($otro). El tuyo manda a partir
 de ahora; para volver al original, borra profiles/$gid.keys}
 
-Se activan solas al lanzar el juego.
+Se activa solo al lanzar el juego.
 Select + Start cierra el juego (Alt+F4)."
         return 0
     fi
@@ -39666,10 +42216,12 @@ menu_server_start() {
     # La marca es el hash que pone build.sh: si no coincide con la del
     # wproton.sh que estas usando, el modulo esta desfasado.
     log "menus: modulo $(grep -m1 -o 'WPROTON_HELPER menu_pygame.py [0-9a-f]*' \
-        "$MENU_PYGAME_PY" 2>/dev/null | awk '{print $3}' || printf 'desconocido') | raton=${RATON_MENUS:-1}"
+        "$MENU_PYGAME_PY" 2>/dev/null | awk '{print $3}' || printf 'desconocido') | raton=${RATON_MENUS:-1} umbral=${RATON_UMBRAL:-12} rueda=${RATON_RUEDA:-3}"
     MENUSRV_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
         DIAG_TIEMPOS="${DIAG_TIEMPOS:-0}" WP_TEMA="$(tema_temporada)" \
         WP_RATON="${RATON_MENUS:-1}" \
+        WP_RATON_UMBRAL="${RATON_UMBRAL:-12}" \
+        WP_RATON_RUEDA="${RATON_RUEDA:-3}" \
         lanzar_suelto env -u LD_PRELOAD "$PY_BIN" "$(menu_helper server)" server "$dir")"
     disown "$MENUSRV_PID" 2>/dev/null || true
     printf '%s' "$MENUSRV_PID" > "$(menusrv_pidfile)" 2>/dev/null
@@ -39682,6 +42234,14 @@ menu_server_start() {
     done
     if kill -0 "$MENUSRV_PID" 2>/dev/null; then
         say "[+] Servidor de menus activo (pid $MENUSRV_PID)"
+        # Y COMO HAN QUEDADO LOS TRACKPADS.
+        #
+        # Este proceso es el sospechoso natural: es pygame -o sea SDL- y se
+        # queda vivo mientras navegas, asi que si abriera el mando estaria
+        # apagando el modo lagarto cada 800 ms durante toda la sesion. Si la
+        # linea de "arranque" dice ENCENDIDO y esta dice APAGADO, el culpable
+        # es este y no el juego.
+        trackpad_lagarto_log "tras abrir el servidor de menus"
         return 0
     fi
     say "AVISO: el servidor de menus no arranco; un proceso por menu"
@@ -42102,6 +44662,211 @@ stats_line() {
     else
         printf 'sin partidas todavia'
     fi
+}
+
+trackpad_menu() {
+    # LOS TRACKPADS DE LA DECK, LOS DE WProton.
+    #
+    # De fabrica el pad DERECHO mueve el puntero y el IZQUIERDO hace de rueda,
+    # y eso lo hace el FIRMWARE del mando. Lo que no se le puede pedir al
+    # firmware es que el izquierdo mueva el puntero.
+    #
+    # Asi que WProton le apaga al mando esa emulacion -con los mismos comandos
+    # que usa el driver del kernel- y mueve el puntero el mismo leyendo el pad.
+    # Al apagar la opcion, o al cerrar, se la devuelve.
+    local sel
+    while :; do
+        sel="$(menu "Trackpads de la Deck" \
+            "Cual mueve el puntero: $(trackpad_label)" \
+            "Sensibilidad: ${TRACKPAD_SENS:-1.0}" \
+            "Quien manda en los pads: $(trackpad_control_label)" \
+            "Probar los trackpads (ver en que estado estan)" \
+            "Devolver los pads al mando ahora (arreglo)" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Quien manda en los pads:"*)
+                # EL INTERRUPTOR DE "MIS TRACKPADS" / "LOS DE VALVE".
+                #
+                # Con control=1 WProton le escribe al mando para quedarse los
+                # pads; con 0 no le escribe nada y entonces solo funciona si el
+                # usuario ha puesto el mando en modo gamepad a mano.
+                if [ "${TRACKPAD_CONTROL:-1}" = 1 ]; then
+                    TRACKPAD_CONTROL=0
+                else
+                    TRACKPAD_CONTROL=1
+                fi
+                save_settings
+                # Si estaba en marcha, se reinicia para que coja el modo nuevo.
+                [ "${TRACKPAD_RATON:-no}" != no ] && trackpad_raton_start "$TRACKPAD_RATON"
+                if [ "$TRACKPAD_CONTROL" = 1 ]; then
+                    ui_info "Los pads son de WProton.
+
+Al encender el trackpad como raton, WProton le apaga al
+mando su emulacion y mueve el puntero el mismo. Al
+apagarlo, o al cerrar WProton, se la devuelve.
+
+Mientras esta asi, el pad derecho deja de mover el puntero
+por su cuenta: lo mueve el que hayas elegido tu."
+                else
+                    ui_info "Los pads son del mando.
+
+WProton no le escribe nada. El pad derecho mueve el
+puntero y el izquierdo hace de rueda, como de fabrica.
+
+Si quieres que WProton use un pad en este modo, tienes que
+poner el mando en modo gamepad tu: manten pulsado OPCIONES
+medio segundo."
+                fi ;;
+            "Devolver los pads al mando ahora"*)
+                # LA SALIDA DE EMERGENCIA.
+                #
+                # Si una sesion anterior murio de golpe con los pads tomados
+                # -un corte de luz, un kill -9-, nadie se los devolvio y el
+                # usuario se encuentra los trackpads muertos sin saber por que.
+                # Esto los devuelve en un segundo y sin reiniciar.
+                trackpad_raton_stop
+                loading_say "Devolviendo los trackpads al mando..."
+                if trackpad_py lagarto on >>"$LOG_FILE" 2>&1; then
+                    loading_clear
+                    ui_info "Hecho: el mando vuelve a mover el puntero.
+
+El pad derecho hace de raton y el izquierdo de rueda."
+                else
+                    loading_clear
+                    ui_error "No se ha podido escribir al mando.
+
+O esto no es una Steam Deck, o faltan permisos sobre
+/dev/hidraw. El detalle esta en el registro.
+
+Tambien lo arregla manteniendo pulsado OPCIONES medio
+segundo, dos veces."
+                fi ;;
+            "Cual mueve el puntero:"*)
+                local c
+                c="$(menu "¿Que pad mueve el puntero?" \
+                    "Ninguno (como viene de fabrica)" \
+                    "El izquierdo" \
+                    "El derecho" \
+                    "<< Volver")" || continue
+                case "$c" in
+                    "Ninguno"*)      TRACKPAD_RATON=no ;;
+                    "El izquierdo")  TRACKPAD_RATON=izquierdo ;;
+                    "El derecho")    TRACKPAD_RATON=derecho ;;
+                    *) continue ;;
+                esac
+                save_settings
+                if [ "$TRACKPAD_RATON" = no ]; then
+                    trackpad_raton_stop
+                    ui_info "Los trackpads vuelven a hacer lo de siempre: el derecho
+mueve el puntero y el izquierdo hace de rueda."
+                elif trackpad_raton_start "$TRACKPAD_RATON"; then
+                    ui_info "Listo: el pad $TRACKPAD_RATON mueve el puntero.
+
+Si notas que va muy lento o muy rapido, cambialo en
+Sensibilidad."
+                else
+                    ui_error "No se pudo leer el mando por /dev/hidraw.
+
+Hacen falta las reglas udev de Steam para leer ese nodo.
+En 'Arreglar permisos del mando' esta el detalle, y en el
+registro queda lo que se intento."
+                fi ;;
+            "Sensibilidad:"*)
+                local sv
+                sv="$(menu "¿Cuanto corre el puntero?" \
+                    "0.5 - lento y fino" \
+                    "1.0 - normal" \
+                    "1.5 - rapido" \
+                    "2.5 - muy rapido" \
+                    "<< Volver")" || continue
+                case "$sv" in
+                    0.5*|1.0*|1.5*|2.5*) TRACKPAD_SENS="${sv%% *}" ;;
+                    *) continue ;;
+                esac
+                save_settings
+                # Si estaba en marcha, se reinicia para que coja el valor nuevo.
+                [ "${TRACKPAD_RATON:-no}" != no ] && trackpad_raton_start "$TRACKPAD_RATON"
+                ui_info "Sensibilidad: $TRACKPAD_SENS" ;;
+            "Probar los trackpads"*)
+                # SOLO MIRA, NO TOCA NADA.
+                #
+                # Esto ya no es un volcado de bytes: es el diagnostico. Mira el
+                # parametro del modulo, si existe el dispositivo de entrada con
+                # los pads, si alguien tiene abierto el hidraw, y escucha unos
+                # segundos para saber EN QUE MODO esta el mando. Lo que faltaba
+                # las dos veces que se intento arreglar esto a ciegas.
+                ui_info "Se va a comprobar el estado de los trackpads.
+
+Cuando lo diga, mueve el dedo por los DOS pads.
+
+No se le escribe nada al mando: solo se lee."
+                loading_say "Comprobando los trackpads (10 s)..."
+                trackpad_py estado 8 >>"$LOG_FILE" 2>&1
+                local _rc=$?
+                loading_clear
+                case "$_rc" in
+                    0) ui_info "Los trackpads se leen bien.
+
+El mando esta en MODO GAMEPAD, que es el modo en el que
+WProton puede usar un pad como raton. En este modo el
+firmware NO mueve el puntero: eso es lo normal.
+
+El detalle esta en el registro." ;;
+                    2) ui_info "El mando esta en MODO ESCRITORIO.
+
+Aqui el puntero lo mueve el propio mando: el pad DERECHO
+hace de raton y el IZQUIERDO de rueda. El sistema no
+publica los pads, asi que WProton no tiene nada que leer
+-ni le hace falta-.
+
+Si los trackpads NO te responden estando asi, el mando se
+ha quedado en modo gamepad: manten pulsado OPCIONES (las
+tres rayas) medio segundo. Vibrara al cambiar." ;;
+                    *) ui_error "No se ha podido leer el mando.
+
+O esto no es una Steam Deck, o faltan permisos, o hay otro
+programa (Steam) con el mando cogido en exclusiva. El
+detalle esta en el registro." ;;
+                esac ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+trackpad_juego_label() {
+    # Lo que hace ESTE juego. "auto" enseña ademas que sale de ahi, porque
+    # "automatico" a secas no dice si el puntero se va a mover o no.
+    case "${TRACKPAD:-auto}" in
+        no)         printf 'no' ;;
+        izquierdo)  printf 'el pad izquierdo' ;;
+        derecho)    printf 'el pad derecho' ;;
+        *)          printf 'lo general (%s)' "$(trackpad_label_corta)" ;;
+    esac
+}
+
+trackpad_label_corta() {
+    case "${TRACKPAD_RATON:-no}" in
+        izquierdo) printf 'pad izquierdo' ;;
+        derecho)   printf 'pad derecho' ;;
+        *)         printf 'ninguno' ;;
+    esac
+}
+
+trackpad_control_label() {
+    # Quien manda en los trackpads, en dos palabras.
+    if [ "${TRACKPAD_CONTROL:-1}" = 1 ]; then
+        printf 'WProton (se los pide al mando)'
+    else
+        printf 'el mando (WProton no le escribe)'
+    fi
+}
+
+trackpad_label() {
+    case "${TRACKPAD_RATON:-no}" in
+        izquierdo) printf 'el pad izquierdo mueve el puntero' ;;
+        derecho)   printf 'el pad derecho mueve el puntero' ;;
+        *)         printf 'no (solo lo que haga la consola)' ;;
+    esac
 }
 
 grid_cols_label() {
@@ -46719,6 +49484,34 @@ cfg_ap_mando() {
     # usa cfg_aplicar para pasar al siguiente manejador.
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
+        "Trackpad como raton en este juego:"*)
+            # POR JUEGO, PORQUE LA MAYORIA NO LO QUIERE.
+            #
+            # El ajuste general vale para los menus y para todos los juegos; un
+            # point-and-click agradece el puntero en un pad aunque el resto de
+            # la biblioteca no lo use, y en uno de accion estorba. "Lo general"
+            # es el valor de partida, asi que esto no cambia nada hasta que
+            # alguien lo toca.
+            local _t
+            _t="$(menu "Trackpad como raton en '$gid'" \
+                "Lo que diga el ajuste general ($(trackpad_label_corta))" \
+                "No, en este juego no" \
+                "El pad izquierdo" \
+                "El pad derecho" \
+                "<< Volver")" || return 0
+            case "$_t" in
+                "Lo que diga"*)  TRACKPAD=auto ;;
+                "No, en este"*)  TRACKPAD=no ;;
+                "El pad izq"*)   TRACKPAD=izquierdo ;;
+                "El pad der"*)   TRACKPAD=derecho ;;
+                *) return 0 ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Trackpad en '$gid': $(trackpad_juego_label)
+
+Se aplica al lanzar el juego, y al salir el trackpad vuelve
+a lo que diga el ajuste general."
+            return 0 ;;
         "Escribir SDL en el registro del prefijo"*)
             # El arreglo que usa media comunidad para los mandos que Proton no
             # coge bien: winebus deja de leer por hidraw y lee por SDL.
@@ -47688,6 +50481,7 @@ cfg_mandos_menu() {
             "Mando Sony (DualSense/DS4): $(pad_sony_label)" \
             "Mando virtual: $(case "${MANDO_VIRTUAL:-0}" in 0|nunca) printf 'no' ;; *) printf '%s' "$MANDO_VIRTUAL" ;; esac)" \
             "Escribir SDL en el registro del prefijo (avanzado): $(winebus_sdl_puesto "$PREFIX_DIR/$gid" && printf 'SI' || printf 'no')" \
+            "$(es_steam_deck && printf 'Trackpad como raton en este juego: %s' "$(trackpad_juego_label)")" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver"|"") return 0 ;;
@@ -48048,6 +50842,7 @@ mkdwarfs para empaquetar y dwarfs para montar."
         "Añadir WProton a Steam"*) anadir_wproton_a_steam || true ;;
         "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Probar el mando"*) probar_mando ;;
+        "Trackpads de la Deck:"*) trackpad_menu ;;
         "Comprobar lo descargado"*) descargas_revisar ;;
         "Arreglar permisos del mando"*) arreglar_permisos_mando ;;
         "Instalar evdev"*)
@@ -48074,12 +50869,23 @@ evmapy/ con el modulo ya compilado a la raiz de WProton."
         "Convertir wsquashfs a carpeta"*) archivos_extraer ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
+            # Y la del driver rapido: si alguien entra aqui a proposito es
+            # porque quiere que se intente AHORA, no dentro de una semana.
+            rm -f "$RUNTIME_DIR/.sqfuse_ll_try"
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
             setup_fuse_tools
+            # setup_fuse_tools solo busca el driver rapido si entro por el
+            # camino de squashfuse. Pedido a mano, se intenta siempre, y aqui
+            # SI se espera: lo ha pulsado alguien que esta delante.
+            [ -z "$(resolve_tool squashfuse_ll)" ] && { setup_squashfuse_ll || true; }
             SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
             OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
             ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
 $(tool_is_ours "$SQUASHFUSE_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')
+squashfuse_ll:  $(resolve_tool squashfuse_ll || true)
+$([ -n "$(resolve_tool squashfuse_ll)" ] \
+    && printf '  (driver rapido: es el que se usara al montar)' \
+    || printf '  NO disponible: se montara con squashfuse (mas lento\n  en juegos con muchisimos ficheros)')
 fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}
 $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')" ;;
         "Descargar extractores GOG"*)
@@ -48816,6 +51622,8 @@ library_menu() {
             "Tema de los menus: $THEME" \
             "Motor de los menus: $(menu_motor_label)" \
             "Tamaño de la letra: $(font_label)" \
+            "Raton en los menus: $(raton_menus_label)" \
+            "Registros: $(logs_label)" \
             "Idioma: ${LANGUAGE:-es}" \
             "Copia de tu configuración (exportar / importar)" \
             "Base de datos de arcades (TeknoParrot, JConfig...)" \
@@ -48824,6 +51632,8 @@ library_menu() {
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
+            "Raton en los menus:"*) raton_menus_menu || true ;;
+            "Registros:"*) logs_menu || true ;;
             "Traer todas las carátulas"*) covers43_traer_todas || true ;;
             "Perfiles del repositorio"*) community_descargas_menu || true ;;
             "Comprobar el repositorio"*) repo_comprobar || true ;;
@@ -48914,7 +51724,13 @@ archivos_comprimir() {
     [ -w "$dst" ] || { ui_error "No se puede escribir en:\n$dst"; return 1; }
 
     nombre="$(basename "$src")"
-    fmt="${PACK_FORMAT:-wsquashfs}"
+    # pack_formato_archivo Y NO PACK_FORMAT A PELO.
+    #
+    # Aqui se pide un ARCHIVO: si el ajuste dice "carpeta" no hay nada que
+    # convertir -ya es una carpeta-, asi que se usa wsquashfs. Con
+    # PACK_FORMAT a pelo salia un fichero llamado "nombre.carpeta" que por
+    # dentro era un squashfs, y que luego no se reconocia por la extension.
+    fmt="$(pack_formato_archivo)"
     out="$dst/$nombre.$fmt"
     if [ -e "$out" ]; then
         ui_ask "Ya existe:
@@ -48980,7 +51796,7 @@ archivos_extraer() {
     # sobre todo NO hace falta ninguna herramienta mas: squashfuse y el driver
     # de dwarfs ya estan, y son los mismos que usa WProton para jugar. Con
     # unsquashfs habria que descargarlo aparte y solo serviria para squashfs.
-    local img dst destino nombre raiz need
+    local img dst destino nombre raiz need gid upper con_partidas=0
     img="$(browse_for_path "Que wsquashfs quieres convertir a carpeta" "$(browse_start "$GAMES_PATH")" play)" || return 0
     [ -f "$img" ] || { ui_error "Eso no es un fichero."; return 1; }
     if ! imagen_valida "$img"; then
@@ -48999,6 +51815,30 @@ archivos_extraer() {
   $destino
 
 Se borra y se extrae encima?" || return 0
+    fi
+
+    # LAS PARTIDAS DEL OVERLAY.
+    #
+    # Un juego empaquetado guarda las partidas en overlays/<juego>/upper, al
+    # lado del archivo pero fuera de el. Al extraer solo el archivo se iban
+    # perdiendo sin decir nada, y eso le pasa justo a quien convierte el juego
+    # a carpeta para que cargue mejor.
+    #
+    # SE PREGUNTA en vez de hacerlo siempre: esta opcion tambien se usa para
+    # mirar que trae un paquete, y ahi lo que se quiere es el archivo tal cual.
+    gid="$(game_id "$img")"
+    upper="$OVERLAY_BASE/$gid/upper"
+    if overlay_hay_partidas "$upper"; then
+        if ui_ask "'$nombre' tiene partidas guardadas en su superposicion
+($(human_size "$(dir_bytes "$upper")")), que estan fuera del archivo.
+
+¿Incluirlas en la carpeta?
+
+  Si = la carpeta queda como lo veias al jugar (recomendado)
+  No = se extrae solo el contenido del archivo"; then
+            con_partidas=1
+        fi
+        log "extraer: '$nombre' tiene partidas en el overlay; incluirlas = $con_partidas"
     fi
 
     # El montaje lo hace acquire_game_root, el mismo que al jugar: sabe de
@@ -49024,10 +51864,16 @@ Se borra y se extrae encima?" || return 0
         return 1
     fi
     release_game_root
+    if [ "$con_partidas" = 1 ]; then
+        say "[+] Poniendo las partidas guardadas encima..."
+        overlay_copiar_encima "$upper" "$destino"
+    fi
     ui_info "Convertido a carpeta en:
   $destino
 
-  $(human_size "$(dir_bytes "$destino")")"
+  $(human_size "$(dir_bytes "$destino")")$([ "$con_partidas" = 1 ] && printf '\n\n  Incluye tus partidas guardadas.
+  Las originales NO se han tocado: siguen en
+  %s' "$upper")"
     return 0
 }
 
@@ -49118,11 +51964,12 @@ tools_menu() {
             "Borrar un runner" \
             "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
-            "Convertir carpeta a $(printf '%s' "${PACK_FORMAT:-wsquashfs}")" \
+            "Convertir carpeta a $(pack_formato_archivo)" \
             "Convertir wsquashfs a carpeta" \
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
             "Probar el mando (ver que botones llegan)" \
+            "$(es_steam_deck && printf 'Trackpads de la Deck: %s' "$(trackpad_label)")" \
             "Arreglar permisos del mando (hidraw)" \
             "Comprobar lo descargado (huellas SHA-256)" \
             "<< Volver")" || return
@@ -49475,10 +52322,110 @@ case "${1:-}" in
     --version) printf 'WProton v%s\n' "$WPROTON_VERSION"; exit 0 ;;
 esac
 
+logs_conservar_motivo() {
+    # Si hay algun motivo para conservar el registro de ESTA sesion, se
+    # imprime; si no, no se imprime nada.
+    #
+    # Son todos casos en los que el registro es justo lo que alguien va a
+    # querer leer, asi que se decide ANTES de mirar si hubo errores.
+    if [ "${BORRAR_LOGS_OK:-1}" != 1 ]; then
+        printf 'BORRAR_LOGS_OK=0 (conservarlos todos)'; return 0
+    fi
+    # Un cierre que no fue una salida normal: ahi el registro es lo unico que
+    # queda para saber que paso.
+    case "${WP_CIERRE_MOTIVO:-salida normal}" in
+        "salida normal") ;;
+        *) printf 'el cierre fue "%s"' "${WP_CIERRE_MOTIVO}"; return 0 ;;
+    esac
+    # Diagnosticos encendidos: su UNICO producto es el registro. Borrarlo
+    # seria tirar lo que el usuario acaba de pedir expresamente.
+    local d
+    for d in DIAG_MANDO DIAG_CIERRE DIAG_DLL DIAG_VIDEO DIAG_TIEMPOS DIAG_RUTAS; do
+        if [ "$(eval printf '%s' "\${$d:-0}")" = 1 ]; then
+            printf '%s=1' "$d"; return 0
+        fi
+    done
+    [ "${DEV_MODE:-0}" = 1 ] && { printf 'DEV_MODE=1'; return 0; }
+    # La primera puesta en marcha descarga medio mundo: ese registro es el que
+    # se pide siempre cuando algo no cuadra en una instalacion nueva.
+    [ "${WP_PRIMERA_VEZ:-0}" = 1 ] && { printf 'primera puesta en marcha'; return 0; }
+    [ -s "${LOG_MARCA_ERR:-}" ] && { printf 'hubo avisos o errores'; return 0; }
+    return 0
+}
+
+logs_cerrar() {
+    # LO ULTIMO DEL CIERRE: decidir si este registro se queda o se va.
+    #
+    # Lo pidio Dani: si la sesion fue bien, el registro no le interesa a nadie
+    # y la carpeta se llena -en DeckStation cada juego lanza su propio
+    # wproton.sh, asi que una tarde de pruebas son decenas de ficheros-. Si
+    # hubo algo, se queda.
+    #
+    # VA AL FINAL DE cleanup_all Y NO ESCRIBE NADA DESPUES.
+    #
+    # Cualquier cosa que escriba en el registro despues de borrarlo lo
+    # resucitaria vacio -el descriptor sigue abierto-, y en la carpeta
+    # quedarian ficheros de cero bytes que no sirven para nada y encima
+    # parecen un fallo.
+    [ -d "${LOG_DIR:-}" ] || return 0
+    # UNA SOLA VEZ POR SESION.
+    #
+    # cleanup_all cuelga de un trap y puede llegar por mas de un camino. Si
+    # esto corriera dos veces con LOGS_OK_GUARDAR=0, la segunda escribiria su
+    # linea en un fichero ya borrado y lo resucitaria: en la carpeta quedaria
+    # un registro de una linea, que es basura con pinta de fallo.
+    [ "${WP_LOGS_CERRADOS:-0}" = 1 ] && return 0
+    WP_LOGS_CERRADOS=1
+    local motivo; motivo="$(logs_conservar_motivo)"
+    if [ -n "$motivo" ]; then
+        log "Registro: se conserva ($motivo)"
+        rm -f "$LOG_MARCA_OK" 2>/dev/null
+        return 0
+    fi
+    # Este fue limpio: se marca como tal. La marca es lo que permite distinguir
+    # mas adelante un registro "bueno" de uno que nadie reviso -los de
+    # versiones anteriores, o los de una sesion que murio de golpe-, y a esos
+    # NO se les toca aqui: de ellos se encarga rotate_logs por antiguedad.
+    : > "$LOG_MARCA_OK" 2>/dev/null
+    rm -f "$LOG_MARCA_ERR" 2>/dev/null
+    local guardar="${LOGS_OK_GUARDAR:-1}"
+    case "$guardar" in ''|*[!0-9]*) guardar=1 ;; esac
+    log "Registro: la sesion fue limpia; se conservan los $guardar mas recientes"
+    # Se recorren los registros marcados como limpios, del mas nuevo al mas
+    # viejo, y se borran los que pasen de la cuenta. El de esta sesion es el
+    # mas nuevo, asi que con guardar=1 se queda este y se va el anterior.
+    local n=0 marca base lg
+    while IFS= read -r marca; do
+        [ -n "$marca" ] || continue
+        base="$(basename "$marca")"; base="${base#.}"; base="${base%.ok}"
+        lg="$LOG_DIR/$base"
+        n=$((n+1))
+        [ "$n" -le "$guardar" ] && continue
+        rm -f "$lg" "$marca" 2>/dev/null
+    done <<EOFLOGS
+$(find "$LOG_DIR" -maxdepth 1 -type f -name '.wproton_*.log.ok' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | cut -d' ' -f2-)
+EOFLOGS
+    return 0
+}
+
 rotate_logs() {
     # Conservar solo los logs de los últimos 2 dias (y 40 como maximo)
     [ -d "$LOG_DIR" ] || return 0
     find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' -mtime +2 -delete 2>/dev/null
+    # Y LAS MARCAS HUERFANAS.
+    #
+    # Cada registro puede tener su ".err" o su ".ok" al lado. Cuando el
+    # registro se va -por antiguedad, por el tope de 40 o borrado a mano-, su
+    # marca se quedaria ahi para siempre: ficheros ocultos que no sirven para
+    # nada y que, peor, harian creer que existe un registro limpio que ya no
+    # esta.
+    local marca base
+    for marca in "$LOG_DIR"/.wproton_*.log.ok "$LOG_DIR"/.wproton_*.log.err; do
+        [ -f "$marca" ] || continue
+        base="$(basename "$marca")"; base="${base#.}"; base="${base%.*}"
+        [ -f "$LOG_DIR/$base" ] || rm -f "$marca" 2>/dev/null
+    done
     local n old
     n="$(find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' 2>/dev/null | wc -l)"
     if [ "$n" -gt 40 ]; then
@@ -49524,6 +52471,14 @@ rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
 perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
 update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
 repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
+# EL TRACKPAD COMO RATON, SI ESTA PEDIDO.
+#
+# Va aqui y no en los menus para que este listo desde el primer momento, y
+# porque los menus son varios procesos distintos: si lo arrancara cada uno,
+# habria varios leyendo el mando a la vez.
+if [ "${TRACKPAD_RATON:-no}" != no ]; then
+    trackpad_raton_start "$TRACKPAD_RATON" || true
+fi
 # Una marca de "volver al inicio" que sobreviviera a un cierre brusco
 # cerraria todos los menus nada mas abrirlos. Se limpia al arrancar.
 rm -f "${WP_MARCA_INICIO:-/nonexistent}" 2>/dev/null
@@ -49539,6 +52494,13 @@ winebus_reparar_compartido
 # se quedo reescrito y no valdria en Batocera. Se devuelve a su sitio.
 teknoparrot_restaurar_pendientes
 check_deps
+# El driver rapido para montar imagenes, si todavia no esta. Va DESPUES de
+# check_deps porque hasta aqui no se sabe si hay squashfuse ni cual, y en
+# segundo plano para que no retrase el arranque.
+squashfuse_ll_al_arrancar
+# Como llegan los trackpads de la Deck ANTES de que WProton abra un solo menu:
+# es la referencia con la que se compara despues.
+trackpad_lagarto_log arranque
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
 # Restos de una sesion anterior que no se cerrara bien: si quedo un servidor
