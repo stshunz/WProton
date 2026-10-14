@@ -1,5 +1,14 @@
 # -*- coding: utf-8 -*-
 # WPROTON_HELPER sincro.py PENDIENTE
+# WProton - copias de partidas entre equipos de la misma red
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 """Compartir copias de partidas entre equipos de la misma red.
 
 QUE HACE Y QUE NO HACE

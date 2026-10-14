@@ -299,23 +299,54 @@ def raton_leer(ruta, campo):
     return "" if v is None else str(v)
 
 
-def raton_poner(ruta, campo, valor):
-    """Cambia UN campo del raton, dejando los demas.
+def sticks_cambiados(ruta):
+    """¿Este .keys pide intercambiar los sticks? $1 = el .keys FINAL.
+
+    Lo lee el lanzador para decirselo al mando virtual, que es quien de verdad
+    puede hacerlo: el mapeador convierte el mando en TECLAS, y para que el
+    juego vea los sticks al reves hay que presentarle OTRO MANDO.
+
+    Se admite 1, true, si y yes, porque esto lo va a escribir gente a mano en
+    un .keys compartido y no tiene por que acertar con la forma exacta.
+    """
+    d = leer(ruta)
+    if not isinstance(d, dict):
+        return False
+    bloque = d.get("sticks") or {}
+    if not isinstance(bloque, dict):
+        return False
+    v = bloque.get("swap", bloque.get("cambiar", 0))
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "si", "sí", "yes", "on")
+
+
+def campo_poner(ruta, campo, valor, defecto=None):
+    """Cambia UN campo de un bloque JSON, dejando los demas.
 
     Los numeros se guardan como numero. SE ADMITE EL SIGNO MENOS: antes se
     usaba v.isdigit(), que dice que no a "-5", asi que un valor negativo se
     guardaba como texto y el mapeador se encontraba una cadena donde esperaba
     un numero.
+
+    "defecto" es con que se arranca el bloque si el fichero esta vacio. Lo usa
+    el raton, que tiene valores de partida; el resto de bloques empiezan en
+    blanco, y meterles los del raton seria escribirles basura.
     """
     d = leer(ruta)
     if not d:
-        d = dict(RATON_DEFECTO)
+        d = dict(defecto) if defecto else {}
     texto = str(valor)
     try:
         d[campo] = int(texto)
     except ValueError:
         d[campo] = texto
     return guardar(ruta, d)
+
+
+def raton_poner(ruta, campo, valor):
+    """Cambia UN campo del raton, dejando los demas."""
+    return campo_poner(ruta, campo, valor, RATON_DEFECTO)
 
 
 # ----------------------------------------------------------------------------
@@ -356,13 +387,18 @@ def sustituye_al_mando(ruta):
 # COMPOSICION DEL .keys FINAL (lo que hacia el heredoc PYESC)
 # ----------------------------------------------------------------------------
 
-def componer(destino, fichero_teclas, fichero_combos="", fichero_raton=""):
-    """Arma el .keys final a partir de los tres temporales del editor.
+def componer(destino, fichero_teclas, fichero_combos="", fichero_raton="",
+             fichero_sticks=""):
+    """Arma el .keys final a partir de los temporales del editor.
 
     - fichero_teclas: lineas "disparo|tecla", una por asignacion simple
     - fichero_combos: un .keys con las combinaciones y teclas compuestas, que
       el editor no toca y devuelve tal cual
     - fichero_raton:  el JSON de la seccion "mouse", si se pidio
+    - fichero_sticks: el JSON de la seccion "sticks" (cosa de WProton, no de
+      Batocera). Ahora mismo solo lleva {"swap": 1}, que intercambia el stick
+      izquierdo con el derecho. Batocera ignora las claves que no conoce, asi
+      que un .keys con esto sigue valiendo alli.
 
     La salida de emergencia (hotkey+start -> Alt+F4) va siempre la primera y
     no se duplica.
@@ -389,12 +425,19 @@ def componer(destino, fichero_teclas, fichero_combos="", fichero_raton=""):
 
     salida = {"actions_player1": lista}
 
-    if fichero_raton:
+    for _campo, _fich in (("mouse", fichero_raton), ("sticks", fichero_sticks)):
+        if not _fich:
+            continue
         try:
-            with open(fichero_raton, encoding="utf-8") as fh:
+            with open(_fich, encoding="utf-8") as fh:
                 texto = fh.read().strip()
             if texto:
-                salida["mouse"] = json.loads(texto)
+                _bloque = json.loads(texto)
+                # Un bloque vacio NO se escribe: dejaria "sticks": {} en el
+                # fichero, que no significa nada y encima hace creer que la
+                # opcion esta puesta.
+                if _bloque:
+                    salida[_campo] = _bloque
         except (OSError, ValueError):
             pass
 
@@ -521,8 +564,18 @@ def resumen(ruta):
         eje = raton.get("axis", "joystick2")
         filas.append("%-26s ->  %s" % (ejes.get(eje, eje),
                      "mover el raton (velocidad %s)" % raton.get("speed", 900)))
-        filas.append("%-26s ->  %s" % (nombre_boton(raton.get("click_left", "r2")),
-                                       "clic del raton"))
+        # LOS TRES CLICS, NO SOLO EL IZQUIERDO.
+        #
+        # El resumen decia "clic del raton" a secas y se callaba el derecho y
+        # el central, asi que quien los pusiera no podia comprobar desde el
+        # menu que estuvieran de verdad.
+        for _campo, _comoSeLlama, _pordefecto in (
+                ("click_left",   "clic izquierdo", "r2"),
+                ("click_right",  "clic derecho",   None),
+                ("click_middle", "clic central",   None)):
+            _b = raton.get(_campo, _pordefecto)
+            if _b:
+                filas.append("%-26s ->  %s" % (nombre_boton(_b), _comoSeLlama))
 
     # LAS ACCIONES INCOMPLETAS SE ENSEÑAN, no se saltan en silencio.
     #
@@ -548,12 +601,14 @@ def resumen(ruta):
     return filas, False
 
 
-def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton):
-    """Parte un .keys en los tres temporales que edita keys_editor.
+def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton,
+                fichero_sticks=""):
+    """Parte un .keys en los temporales que edita keys_editor.
 
     - fichero_teclas: lineas "disparo|tecla" de las asignaciones simples
     - fichero_combos: las combinaciones y teclas compuestas, TAL CUAL
     - fichero_raton:  la seccion "mouse", si la hay
+    - fichero_sticks: la seccion "sticks", si la hay
 
     Lo que no se puede editar en la lista SE CONSERVA: antes se perdia sin
     avisar en cuanto se tocaba cualquier otra asignacion.
@@ -572,6 +627,9 @@ def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton):
     raton = datos.get("mouse") or {}
     if isinstance(raton, dict) and raton and fichero_raton:
         guardar(fichero_raton, raton)
+    sticks = datos.get("sticks") or {}
+    if isinstance(sticks, dict) and sticks and fichero_sticks:
+        guardar(fichero_sticks, sticks)
 
     editables, conservar = [], []
     for a in acciones(datos):
@@ -650,6 +708,44 @@ def comprobar():
     esperar("poner", buscar_accion(p, "TECLADO_VIRTUAL"), "hotkey+x")
     esperar("conserva las demas", len(acciones(leer(p))), 2)
     esperar("conserva mouse", leer(p).get("mouse"), {"speed": 1})
+
+    # LOS STICKS INTERCAMBIADOS: un bloque propio de WProton en el .keys.
+    #
+    # Lo que se comprueba aqui es que sobrevive al viaje completo del editor
+    # -descomponer, editar, componer-, que es donde se perdian antes las cosas
+    # que el editor no sabia tocar.
+    s_tmp = os.path.join(raiz, "sticks.json")
+    s_keys = os.path.join(raiz, "sticks.keys")
+    esperar("sin bloque: no pide nada", sticks_cambiados(
+        escribir("nosticks.keys", '{"actions_player1":[]}')), False)
+    # campo_poner NO debe meter los valores del raton en un bloque vacio: era
+    # el fallo de usar raton_poner para esto.
+    campo_poner(s_tmp, "swap", 1)
+    esperar("campo-poner no mete el raton", leer(s_tmp), {"swap": 1})
+    componer(s_keys, "", "", "", s_tmp)
+    esperar("componer escribe sticks", leer(s_keys).get("sticks"), {"swap": 1})
+    esperar("el lanzador lo ve", sticks_cambiados(s_keys), True)
+    # Y de vuelta: el editor lo recupera tal cual.
+    r_t = os.path.join(raiz, "v_t"); r_c = os.path.join(raiz, "v_c")
+    r_r = os.path.join(raiz, "v_r"); r_s = os.path.join(raiz, "v_s")
+    descomponer(s_keys, r_t, r_c, r_r, r_s)
+    esperar("descomponer recupera sticks", leer(r_s), {"swap": 1})
+    # Apagarlo = temporal vacio, y entonces NO debe quedar seccion "sticks".
+    with open(s_tmp, "w", encoding="utf-8") as fh:
+        fh.write("")
+    componer(s_keys, "", "", "", s_tmp)
+    esperar("apagado no deja seccion", "sticks" in leer(s_keys), False)
+    esperar("apagado: no pide nada", sticks_cambiados(s_keys), False)
+    # Las formas que puede escribir una persona a mano en un .keys compartido.
+    for _t, _v, _esp in (("uno", '{"sticks":{"swap":1}}', True),
+                         ("true", '{"sticks":{"swap":true}}', True),
+                         ("si", '{"sticks":{"swap":"si"}}', True),
+                         ("cero", '{"sticks":{"swap":0}}', False),
+                         ("false", '{"sticks":{"swap":false}}', False),
+                         ("vacio", '{"sticks":{}}', False),
+                         ("basura", '{"sticks":"no es un bloque"}', False)):
+        esperar("swap " + _t, sticks_cambiados(
+            escribir("sw_%s.keys" % _t, _v)), _esp)
     poner_accion(p, "TECLADO_VIRTUAL", "")
     esperar("quitar", buscar_accion(p, "TECLADO_VIRTUAL"), "")
     esperar("sigue la otra", len(acciones(leer(p))), 1)
@@ -788,11 +884,13 @@ def main(argv):
             "  poner    <fichero> <destino> [trigger]  pone o quita (vacio quita)\n"
             "  raton-leer  <fichero> <campo>\n"
             "  raton-poner <fichero> <campo> <valor>\n"
+            "  campo-poner <fichero> <campo> <valor>   igual, sin defectos\n"
             "  sustituye <fichero>                     rc 0 si mapea el movimiento\n"
             "  resumen  <fichero>                      las asignaciones, legibles\n"
             "  cara     <fichero>                      rc 0 si usa A/B/X/Y\n"
-            "  descomponer <fichero> <teclas> <combos> <raton>\n"
-            "  componer <destino> <teclas> [combos] [raton]\n"
+            "  descomponer <fichero> <teclas> <combos> <raton> [sticks]\n"
+            "  componer <destino> <teclas> [combos] [raton] [sticks]\n"
+            "  sticks   <fichero>                      rc 0 si pide cambiarlos\n"
             "  combos   <fichero>                      cuantas combinaciones lleva\n"
             "  ejemplo  <fichero>                      escribe el .keys de ejemplo\n"
             "  dueno    <fichero>                      de que juego dice ser\n"
@@ -863,6 +961,14 @@ def main(argv):
             return 2
         return 0 if raton_poner(fichero, argv[3], argv[4]) else 1
 
+    # Lo mismo que raton-poner pero SIN los valores de partida del raton: para
+    # los demas bloques, que empiezan en blanco. Con raton-poner, encender una
+    # opcion en un bloque vacio le metia dentro el axis y el speed del raton.
+    if orden == "campo-poner":
+        if len(argv) < 5:
+            return 2
+        return 0 if campo_poner(fichero, argv[3], argv[4]) else 1
+
     if orden == "resumen":
         filas, roto = resumen(fichero)
         if roto:
@@ -880,7 +986,11 @@ def main(argv):
         if len(argv) < 6:
             sys.stderr.write("teclas.py descomponer: faltan los tres temporales\n")
             return 2
-        return 0 if descomponer(fichero, argv[3], argv[4], argv[5]) else 1
+        return 0 if descomponer(fichero, argv[3], argv[4], argv[5],
+                                argv[6] if len(argv) > 6 else "") else 1
+
+    if orden == "sticks":
+        return 0 if sticks_cambiados(fichero) else 1
 
     if orden == "sustituye":
         return 0 if sustituye_al_mando(fichero) else 1
@@ -898,7 +1008,8 @@ def main(argv):
             return 2
         return 0 if componer(fichero, argv[3],
                              argv[4] if len(argv) > 4 else "",
-                             argv[5] if len(argv) > 5 else "") else 1
+                             argv[5] if len(argv) > 5 else "",
+                             argv[6] if len(argv) > 6 else "") else 1
 
     sys.stderr.write("teclas.py: orden desconocida %r\n" % orden)
     return 2

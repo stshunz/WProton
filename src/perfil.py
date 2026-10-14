@@ -175,6 +175,16 @@ ESQUEMA = [
     #
     # "auto" = se enciende cuando el UNICO mando que hay es el virtual de Steam.
     ("PAD_SIFALLBACK",    "opcion", "auto",           ("auto", "1", "0")),
+    # TRACKPAD DE LA DECK COMO RATON, POR JUEGO. Al final, por lo mismo.
+    #
+    # El ajuste general vale para los menus de WProton, pero un juego concreto
+    # puede querer otra cosa: un point-and-click agradece el puntero en un pad
+    # aunque el resto de la biblioteca no lo use, y al reves, en un juego de
+    # accion un pad moviendo el raton estorba.
+    #
+    # "auto" = lo que diga TRACKPAD_RATON en settings.conf. Es el valor de
+    # partida, asi que un perfil que ya existiera se comporta igual que antes.
+    ("TRACKPAD",          "opcion", "auto",           ("auto", "no", "izquierdo", "derecho")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]

@@ -9,6 +9,40 @@ con lo que se comprobó de verdad y —más útil— lo que se probó y NO era.
 
 ---
 
+## 0 ter. Modo desarrollo: grabar vídeo sin límite
+
+`DEV_MODE=1` en `settings.conf` hace salir *Modo desarrollo* en el menú
+principal. Además de las capturas y de las dos grabaciones con reloj, hay
+**Grabar sin límite**, pensada para los videotutoriales:
+
+1. La opción **arma** la grabación: crea la carpeta de fotogramas con
+   `mktemp -d`, escribe `.rec_armado` y lanza un vigilante en segundo plano.
+2. En los menús, **L3 empieza** y **R3 para**. Los fotogramas los guarda
+   `menu_pygame.py` desde dentro (ffmpeg leyendo la pantalla saca negro).
+3. Al parar, pygame escribe `.rec_fin`; el vigilante monta el `.mp4` y limpia.
+
+Las marcas, todas en la carpeta de capturas:
+
+| Fichero | Lo escribe | Significa |
+|---|---|---|
+| `.rec_armado` | bash | esperando a que se pulse L3 |
+| `.rec` | pygame (o bash, con reloj) | grabando; `hasta = 0` es sin límite |
+| `.rec_fin` | pygame | parada; el vigilante ya puede montar |
+
+Detalles que importan:
+
+- **L3 no se pisó con la captura de pantalla.** Solo arranca la grabación si hay
+  algo armado; el resto del tiempo sigue siendo la captura de siempre.
+- **El `REC` de la esquina no sale en el vídeo**: se pinta *después* de guardar
+  el fotograma y se presenta con `display.update()` de esa zona.
+- **Se para sola si quedan menos de 700 MB** de disco: un tutorial largo son
+  miles de PNG.
+- El vigilante tiene un tope de **4 horas** por si se arma y nadie la arranca.
+- *Cancelar la grabación armada* desarma sin montar nada, y solo borra la
+  carpeta si de verdad es una `.frames_*` nuestra.
+
+---
+
 ## 0. Cómo se trabaja en este proyecto
 
 ```

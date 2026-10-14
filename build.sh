@@ -133,7 +133,13 @@ PY
 
     # 12: los 7 de antes, mas perfil.py, su profile_defaults() generado,
     # detectar.py, dlls.py, disco.py, teclas.py, teknoparrot.py, ficha.py y menu_qt.py.
-    [ "$n" -eq 19 ] || { rojo "Se esperaban 19 inserciones y hubo $n"; exit 1; }
+    # 20: y trackpad.py, los trackpads de la Deck como raton.
+    #
+    # ESTE NUMERO SE SUBE A MANO A PROPOSITO. Es el seguro que avisa de que el
+    # script generado lleva una pieza de mas o de menos: si un @@INCLUIR@@ se
+    # cuela o se pierde en una edicion, el build para aqui en vez de generar un
+    # wproton.sh al que le falta medio ayudante.
+    [ "$n" -eq 20 ] || { rojo "Se esperaban 20 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -152,7 +158,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py sincro.py menu_qt.py mako.py reshade.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py sincro.py menu_qt.py mako.py reshade.py trackpad.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'

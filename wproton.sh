@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.03"
+WPROTON_VERSION="2.04"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -206,7 +206,24 @@ GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escri
 TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 MENU_UI=auto                             # motor de menus: auto | pygame | qt
-OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
+# EL PUNTERO MIENTRAS JUEGAS: se esconde POR INACTIVIDAD.
+#
+# Con 1, si pasan CURSOR_SEGUNDOS sin mover el raton -que es lo que pasa
+# jugando con el mando- el puntero se esconde; y en cuanto mueves el raton,
+# vuelve. Es lo que hace unclutter y lo que arregla las dos quejas a la vez:
+# el puntero desaparece de verdad, y el cursor sigue estando para los menus
+# de configuracion del juego. Ponlo a 0 para no tocarlo nunca.
+OCULTAR_CURSOR=1
+# Cuantos segundos sin mover el raton antes de esconder el puntero.
+CURSOR_SEGUNDOS=3
+# CUANTO HAY QUE MOVER EL RATON PARA QUE CUENTE COMO MOVERLO (en pixeles).
+#
+# Hace falta porque en un equipo de juego el puntero casi nunca esta del todo
+# quieto: Steam Input puede estar emulando un raton, un trackpad haciendo de
+# raton manda movimiento con apoyar el dedo y un stick con deriva empuja un
+# pixel cada tanto. Pidiendo el pixel exacto, el puntero no se escondia nunca.
+# Subelo si aun asi se te queda a la vista; bajalo si tarda en reaparecer.
+CURSOR_UMBRAL=8
 # La glibc del equipo MAS ANTIGUO donde quieres que funcionen tus paquetes.
 # 2.36 cubre SteamOS 3.x (Steam Deck). Subela si solo usas equipos modernos.
 GLIBC_OBJETIVO="2.36"
@@ -268,6 +285,17 @@ GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Franken
 # ofrecer algo que no descarga nada.
 RUNNERS_ALOJADOS="Proton-Experimental|https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file|el oficial de Valve, alojado por nosotros"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
+# LA LETRA EN PANTALLAS DE MUCHA RESOLUCION (4K).
+#
+# Con 1, en una pantalla grande la letra sube sola en la misma proporcion que
+# la resolucion: un 1080p se queda igual, un 1440p sube un tercio y un 4K la
+# dobla. Hace falta porque los tamaños estan en pixeles, y un pixel de un 4K
+# mide la cuarta parte que uno de un 1080p: la letra salia diminuta.
+#
+# Solo SUBE, nunca baja, y se multiplica por FONT_SCALE en vez de sustituirlo,
+# asi que "grande" sigue siendo mas grande que "normal" tambien en un 4K.
+# Ponlo a 0 si prefieres mandar tu con FONT_SCALE y nada mas.
+MENU_AUTO_ESCALA=1
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SINCRO_HOST=""                           # ultimo equipo del que se trajeron copias
 SINCRO_EQUIPOS=""                        # equipos guardados: nombre|ip|codigo, separados por ;
@@ -451,7 +479,19 @@ MENU_UI="$MENU_UI"
 #   Con 1, una combinacion del mando cierra el juego. Util en el
 #   donde no hay boton de Steam y algunos juegos no traen opcion de salir.
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# EL PUNTERO MIENTRAS JUEGAS
+#   Con 1, el puntero se esconde tras CURSOR_SEGUNDOS sin mover el raton, y
+#   vuelve en cuanto lo mueves. Ponlo a 0 para que no se toque nunca.
+# --------------------------------------------------------------------------
 OCULTAR_CURSOR="$OCULTAR_CURSOR"
+# Segundos sin mover el raton antes de esconderlo. Subelo si se te esconde
+# mientras lees un menu del juego.
+CURSOR_SEGUNDOS=$CURSOR_SEGUNDOS
+# Pixeles que hay que mover el raton para que cuente como movimiento. Sin
+# margen, un trackpad o un stick que deriva lo mueven solos y nunca se
+# esconde. Subelo si se te queda a la vista.
+CURSOR_UMBRAL=$CURSOR_UMBRAL
 # --------------------------------------------------------------------------
 # DIAGNOSTICO DEL MANDO
 #   Con 1, el registro anota que dispositivos se leen, que variables recibe
@@ -512,6 +552,9 @@ GE_CUSTOM_URL="$GE_CUSTOM_URL"
 RUNNERS_ALOJADOS="$RUNNERS_ALOJADOS"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
+# Con 1, la letra sube sola en pantallas de mucha resolucion (4K). Solo sube,
+# nunca baja, y se multiplica por FONT_SCALE.
+MENU_AUTO_ESCALA=$MENU_AUTO_ESCALA
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
 BACKUP_SYNC_DEST="$BACKUP_SYNC_DEST"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
@@ -4856,10 +4899,10 @@ TRACKPAD_PY="$RUNTIME_DIR/trackpad.py"
 TRACKPAD_PID=""
 
 write_trackpad() {
-    grep -q "WPROTON_HELPER trackpad.py dcb6a88ad91e" "$TRACKPAD_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER trackpad.py 2c85a47a46c6" "$TRACKPAD_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TRACKPAD_PY" <<'TPEOF'
-# WPROTON_HELPER trackpad.py dcb6a88ad91e
+# WPROTON_HELPER trackpad.py 2c85a47a46c6
 # WProton - trackpads de la Steam Deck como raton
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -5133,42 +5176,145 @@ def _u16(buf, off):
     return struct.unpack_from('<H', buf, off)[0]
 
 
-def buscar_deck():
-    """La ruta del /dev/hidraw* del mando de la Deck, o None.
+# --- CUAL DE LOS hidraw ES EL MANDO -----------------------------------------
+#
+# AQUI ESTABA EL FALLO QUE DEJABA ESTO SIN FUNCIONAR EN LA DECK.
+#
+# Se buscaba el primer /dev/hidraw* con el fabricante y el modelo de Valve, y
+# se daba por hecho que solo habia uno. Y no: la Deck crea CINCO interfaces, y
+# las tres que son HID llevan el mismo 28DE:1205. Lo dice el driver:
+#
+#   Steam Deck:
+#     0: raton emulado
+#     1: teclado emulado
+#     2: el mando de verdad
+#     3-4: comunicacion interna (no son HID)
+#
+# O sea que lo que se cogia era EL RATON EMULADO. Los comandos de caracteristica
+# se mandaban ahi -donde no hacen nada- y no llegaba ni un informe de estado,
+# porque esa interfaz no los manda. Sin un solo error en el registro: el bucle
+# se quedaba leyendo para siempre informes que descartaba.
+#
+# COMO SE DISTINGUE, con el criterio del propio driver y no con uno inventado:
+# el mando de verdad es LA UNICA INTERFAZ CON INFORMES DE CARACTERISTICA
+# (steam_is_valve_interface). El raton y el teclado emulados no tienen ninguno.
+# Y se mira en el descriptor de informes, que sysfs publica tal cual.
 
-    Se mira el fabricante y el producto en sysfs -no el nombre, que cambia- y se
-    descartan los nodos que no se puedan abrir para leer: en la Deck hay varios
-    hidraw y solo uno es el del mando.
+
+def _descriptor(nodo):
+    """El descriptor de informes de ese hidraw, en crudo. b'' si no se puede."""
+    ruta = '/sys/class/hidraw/%s/device/report_descriptor' % os.path.basename(nodo)
+    try:
+        with open(ruta, 'rb') as fh:
+            return fh.read()
+    except OSError:
+        return b''
+
+
+def tiene_feature(desc):
+    """True si el descriptor declara algun informe de CARACTERISTICA.
+
+    Se recorre el descriptor como lo que es -una lista de elementos con su
+    cabecera y su tamaño-, no buscando un byte suelto: el 0xB1 de un elemento
+    "Feature" puede aparecer igual dentro de los DATOS de otro elemento, y
+    buscandolo a pelo cualquier interfaz daria positivo.
+
+    La cabecera de un elemento corto trae el tipo y el tamaño:
+        bits 0-1  tamaño de los datos (3 significa 4 bytes)
+        bits 2-3  clase (0 = Main)
+        bits 4-7  etiqueta (0x0B = Feature)
     """
-    for nodo in sorted(glob.glob('/dev/hidraw*')):
-        base = '/sys/class/hidraw/%s/device/uevent' % os.path.basename(nodo)
-        try:
-            with open(base) as fh:
-                txt = fh.read()
-        except OSError:
+    i, n = 0, len(desc)
+    while i < n:
+        pre = desc[i]
+        if pre == 0xFE:          # elemento largo: cabecera de 3 + datos
+            if i + 1 >= n:
+                break
+            i += 3 + desc[i + 1]
             continue
-        # HID_ID=0003:000028DE:00001205
-        vid = pid = None
-        for linea in txt.splitlines():
-            if linea.startswith('HID_ID='):
-                trozos = linea.strip().split(':')
-                if len(trozos) == 3:
-                    try:
-                        vid = int(trozos[1], 16)
-                        pid = int(trozos[2], 16)
-                    except ValueError:
-                        pass
+        tam = pre & 0x03
+        if tam == 3:
+            tam = 4
+        if ((pre >> 2) & 0x03) == 0 and ((pre >> 4) & 0x0F) == 0x0B:
+            return True
+        i += 1 + tam
+    return False
+
+
+def _uevent(nodo):
+    """Lo que sysfs cuenta de ese hidraw: (vid, pid, donde esta enchufado)."""
+    base = '/sys/class/hidraw/%s/device/uevent' % os.path.basename(nodo)
+    vid = pid = None
+    phys = ''
+    try:
+        with open(base) as fh:
+            txt = fh.read()
+    except OSError:
+        return None, None, ''
+    for linea in txt.splitlines():
+        if linea.startswith('HID_ID='):
+            # HID_ID=0003:000028DE:00001205
+            trozos = linea.strip().split(':')
+            if len(trozos) == 3:
+                try:
+                    vid = int(trozos[1], 16)
+                    pid = int(trozos[2], 16)
+                except ValueError:
+                    pass
+        elif linea.startswith('HID_PHYS='):
+            phys = linea.split('=', 1)[1].strip()
+    return vid, pid, phys
+
+
+def buscar_decks():
+    """TODOS los hidraw que son de Valve, el mando de verdad primero.
+
+    Devuelve una lista de diccionarios para poder enseñarla entera en el
+    diagnostico: cuando esto falla, lo primero que hay que ver es cuantos
+    habia y por que se eligio uno.
+    """
+    salida = []
+    for nodo in sorted(glob.glob('/dev/hidraw*'),
+                       key=lambda r: int(''.join(c for c in os.path.basename(r)
+                                                 if c.isdigit()) or 0)):
+        vid, pid, phys = _uevent(nodo)
         if vid != VENDOR_VALVE or pid not in PRODUCTOS:
             continue
+        desc = _descriptor(nodo)
         try:
             fd = os.open(nodo, os.O_RDONLY | os.O_NONBLOCK)
             os.close(fd)
-        except OSError:
-            # Existe pero no se puede leer: casi siempre permisos.
-            print('trackpad: %s es el mando pero no se puede leer (permisos)'
-                  % nodo, file=sys.stderr)
-            continue
-        return nodo
+            legible = True
+        except OSError as ex:
+            legible = False
+            print('trackpad: %s es de Valve pero no se puede leer (%s)'
+                  % (nodo, ex), file=sys.stderr)
+        salida.append({'nodo': nodo, 'vid': vid, 'pid': pid, 'phys': phys,
+                       'descriptor': len(desc), 'feature': tiene_feature(desc),
+                       'legible': legible})
+    # El criterio del driver primero; el descriptor mas largo como desempate,
+    # que es el otro que usa el: "the real controller is the one that has the
+    # longest report descriptor".
+    salida.sort(key=lambda c: (not c['legible'], not c['feature'],
+                               -c['descriptor']))
+    return salida
+
+
+def buscar_deck():
+    """La ruta del /dev/hidraw* DEL MANDO DE VERDAD, o None."""
+    for c in buscar_decks():
+        if c['legible'] and c['feature']:
+            return c['nodo']
+    # Sin ninguno con informes de caracteristica no se elige a ciegas: mandarle
+    # comandos al raton emulado es lo que no funcionaba, y hacerlo en silencio
+    # otra vez seria repetir el mismo error.
+    hay = buscar_decks()
+    if hay:
+        print('trackpad: hay %d interfaz(es) de Valve pero NINGUNA declara '
+              'informes de caracteristica, asi que ninguna es el mando: %s'
+              % (len(hay), ', '.join(c['nodo'] for c in hay)), file=sys.stderr)
+        print('trackpad: (el mando de verdad es la unica que los tiene; el '
+              'raton y el teclado emulados no)', file=sys.stderr)
     return None
 
 
@@ -5178,14 +5324,26 @@ def abrir_mando(escribir=False):
     Se abre en SOLO LECTURA cuando no hace falta escribir: asi un diagnostico
     no puede tocar el mando ni por error.
     """
+    # SE ENSEÑAN TODAS LAS CANDIDATAS, SIEMPRE.
+    #
+    # Es barato y es justo lo que faltaba: con el mando elegido mal, en el
+    # registro no habia nada con que notarlo.
+    candidatas = buscar_decks()
+    for c in candidatas:
+        print('trackpad: %s  %04X:%04X  descriptor %d bytes  %s  %s  [%s]'
+              % (c['nodo'], c['vid'], c['pid'], c['descriptor'],
+                 'CON feature' if c['feature'] else 'sin feature',
+                 'legible' if c['legible'] else 'NO legible',
+                 c['phys'] or '?'), file=sys.stderr)
     nodo = buscar_deck()
     if not nodo:
-        print('trackpad: no se ha encontrado el mando de la Deck en /dev/hidraw*',
-              file=sys.stderr)
-        print('trackpad: si esto ES una Deck, suele ser cosa de permisos:',
-              file=sys.stderr)
-        print('trackpad: hacen falta las reglas udev de Steam para hidraw.',
-              file=sys.stderr)
+        if not candidatas:
+            print('trackpad: no se ha encontrado ningun mando de Valve en '
+                  '/dev/hidraw*', file=sys.stderr)
+            print('trackpad: si esto ES una Deck, suele ser cosa de permisos:',
+                  file=sys.stderr)
+            print('trackpad: hacen falta las reglas udev de Steam para hidraw.',
+                  file=sys.stderr)
         return None, None
     try:
         fd = os.open(nodo, os.O_RDWR if escribir else os.O_RDONLY)
@@ -5193,8 +5351,10 @@ def abrir_mando(escribir=False):
         print('trackpad: no se pudo abrir %s%s: %s'
               % (nodo, ' para escribir' if escribir else '', e), file=sys.stderr)
         return None, None
-    print('trackpad: mando en %s%s' % (nodo, ' (lectura y escritura)'
-                                       if escribir else ''), file=sys.stderr)
+    print('trackpad: mando en %s%s (es la unica interfaz con informes de '
+          'caracteristica, que es como lo distingue el driver)'
+          % (nodo, ' (lectura y escritura)' if escribir else ''),
+          file=sys.stderr)
     # SE AVISA DEL PRECIO DE TENER ESTO ABIERTO.
     #
     # Mientras un programa tiene el hidraw del mando abierto, el driver retira
@@ -5206,8 +5366,21 @@ def abrir_mando(escribir=False):
     return fd, nodo
 
 
+# "Ha llegado algo, pero no es un informe de estado". Es un objeto propio y no
+# None a proposito: distinguir "no llega nada" de "llega otra cosa" es lo que
+# dice si la interfaz elegida es la del mando o la del raton emulado.
+FUERA = object()
+
+# Segundos leyendo sin un solo informe bueno antes de avisar en el registro.
+ESPERA_AVISO = 3.0
+
+
 def leer_informe(fd, espera=1.0):
-    """Un informe de estado del mando, o None si no llega ninguno a tiempo."""
+    """Un informe de estado del mando.
+
+    Devuelve los bytes si es bueno, FUERA si llego algo que no lo es, y None si
+    no llego nada a tiempo.
+    """
     import select
     r, _, _ = select.select([fd], [], [], espera)
     if not r:
@@ -5216,9 +5389,11 @@ def leer_informe(fd, espera=1.0):
         datos = os.read(fd, 128)
     except OSError:
         return None
+    if not datos:
+        return None
     # EXACTAMENTE lo que comprueba el driver: 64 bytes y 01 00 09 delante.
     if len(datos) != LARGO or not datos.startswith(CAB):
-        return None
+        return FUERA
     return datos
 
 
@@ -5292,8 +5467,33 @@ def estado(segundos=0):
             print('    firmware, y el cambio manteniendo OPCIONES no hace nada.', file=sys.stderr)
     # 2) El hidraw del mando: si existe pero NO hay evdev, es que alguien lo
     #    tiene abierto (Steam) y el driver ha retirado su dispositivo.
+    # 2) TODAS las interfaces de Valve, no solo una.
+    #
+    # La Deck crea cinco y tres son HID, las tres con el mismo 28DE:1205: la 0
+    # es el raton emulado, la 1 el teclado emulado y la 2 el mando de verdad.
+    # Coger la primera -que es lo que se hacia- es coger el raton emulado, y
+    # ahi ni los comandos hacen nada ni llegan informes de estado. Esta tabla
+    # es lo que hacia falta para verlo.
+    cands = buscar_decks()
+    if not cands:
+        print('  interfaces de Valve: NINGUNA', file=sys.stderr)
+    else:
+        print('  interfaces de Valve (%d), la del mando va primera:' % len(cands),
+              file=sys.stderr)
+        for c in cands:
+            print('    %-14s %04X:%04X  descriptor %4d B  %-12s %-11s %s'
+                  % (c['nodo'], c['vid'], c['pid'], c['descriptor'],
+                     'CON feature' if c['feature'] else 'sin feature',
+                     'legible' if c['legible'] else 'NO legible',
+                     c['phys'] or '?'), file=sys.stderr)
+        print('    (el mando de verdad es la UNICA con informes de '
+              'caracteristica: asi lo distingue el driver)', file=sys.stderr)
     nodo = buscar_deck()
     print('  hidraw del mando: %s' % (nodo or 'no encontrado'), file=sys.stderr)
+    if cands and not nodo:
+        print('    OJO: hay interfaces de Valve pero ninguna con informes de', file=sys.stderr)
+        print('    caracteristica. O faltan permisos para leer el descriptor,', file=sys.stderr)
+        print('    o este mando no es de los que trae el driver.', file=sys.stderr)
     # 3) El evdev con los pads.
     dev = buscar_pads_evdev()
     if dev is None:
@@ -5377,7 +5577,7 @@ def probar(segundos=20):
     try:
         while time.time() - t0 < segundos:
             d = leer_informe(fd)
-            if d is None:
+            if d is None or d is FUERA:
                 continue
             izq = (_s16(d, OFF_IZQ_X), _s16(d, OFF_IZQ_Y))
             der = (_s16(d, OFF_DER_X), _s16(d, OFF_DER_Y))
@@ -5600,7 +5800,7 @@ def raton_hidraw(cual='izquierdo', sensibilidad=1.0, segundos=0, control=False):
         print('trackpad: falta python-evdev (va en el runtime de WProton)',
               file=sys.stderr)
         return 1
-    fd, _ = abrir_mando(escribir=control)
+    fd, nodo = abrir_mando(escribir=control)
     if fd is None:
         # 2 = "no he podido", para que quien llama pruebe otro camino.
         return 2
@@ -5628,7 +5828,7 @@ def raton_hidraw(cual='izquierdo', sensibilidad=1.0, segundos=0, control=False):
     # despues de tomarlo. No hay ningun camino de salida que se lo salte.
     try:
         return _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos,
-                                   control)
+                                   control, nodo)
     finally:
         if tomado:
             try:
@@ -5641,7 +5841,8 @@ def raton_hidraw(cual='izquierdo', sensibilidad=1.0, segundos=0, control=False):
             pass
 
 
-def _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos, control):
+def _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos, control,
+                        nodo=None):
     """El bucle de lectura. Quien llama se encarga de devolver el mando."""
 
     def _devolver(*_):
@@ -5681,13 +5882,36 @@ def _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos, control):
     # comportandose distinto, y entonces "el puntero va raro" dependeria de por
     # donde se este leyendo el mando, que es lo peor para diagnosticar.
     restos = [0.0, 0.0]
+    # CUANTOS INFORMES BUENOS HAN LLEGADO.
+    #
+    # Sin esto, elegir mal la interfaz del mando era invisible: se leia para
+    # siempre, se descartaba todo por no casar la cabecera y el puntero no se
+    # movia ni un pixel, SIN UN SOLO ERROR EN EL REGISTRO. Eso es justo lo que
+    # pasaba, y lo que hacia falta para notarlo es contar y avisar.
+    buenos = 0
+    sueltos = 0
+    avisado = False
     try:
         while True:
             if segundos and (time.time() - t0) > segundos:
                 break
             d = leer_informe(fd)
             if d is None:
+                if (not avisado and not buenos
+                        and (time.time() - t0) > ESPERA_AVISO):
+                    avisado = True
+                    print('trackpad: AVISO: %.0f s leyendo %s y no ha llegado '
+                          'NI UN informe de estado del mando (se han '
+                          'descartado %d trozos por no tener la cabecera '
+                          '01 00 09). Casi seguro que la interfaz elegida no '
+                          'es la del mando.'
+                          % (ESPERA_AVISO, nodo or '?', sueltos),
+                          file=sys.stderr)
                 continue
+            if d is FUERA:
+                sueltos += 1
+                continue
+            buenos += 1
             x, y = _s16(d, ox), _s16(d, oy)
             p = _u16(d, op)
             tocado = (p > 0) or (x != 0) or (y != 0)
@@ -5708,6 +5932,14 @@ def _raton_hidraw_bucle(fd, evdev, e, cual, sensibilidad, segundos, control):
             ui.close()
         except Exception:
             pass
+    if not buenos:
+        # 2 = "no he podido": quien llama probara el camino de evdev.
+        print('trackpad: no llego ni un informe de estado por hidraw (%d '
+              'trozos descartados); se deja este camino' % sueltos,
+              file=sys.stderr)
+        return 2
+    print('trackpad: %d informes de estado leidos por hidraw' % buenos,
+          file=sys.stderr)
     return 0
 
 
@@ -5874,9 +6106,9 @@ trackpad_raton_stop() {
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py 3da23459644b" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py 878a01f87630" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py 3da23459644b
+# WPROTON_HELPER mando_virtual.py 878a01f87630
 # -*- coding: utf-8 -*-
 # WProton - mando virtual (presenta al juego un mando distinto del tuyo)
 #
@@ -5918,6 +6150,10 @@ USO
         modo         cruceta_stick | copia
         dispositivo  /dev/input/eventN (si no, se busca solo)
         sticks       1 = intercambia el stick izquierdo con el derecho
+
+    mando_virtual.py mandos [segundos]
+
+        No crea ningun mando: lista los que hay y dice cual manda eventos.
 
 Se para con SIGTERM, y al hacerlo suelta el mando fisico.
 """
@@ -6200,6 +6436,166 @@ def buscar_mando():
     return None
 
 
+# ---------------------------------------------------------------------------
+# QUE MANDOS HAY Y CUAL SE ESTA USANDO DE VERDAD
+# ---------------------------------------------------------------------------
+# POR QUE HACE FALTA
+#
+# WProton ya apuntaba en el registro los mandos que ve el sistema, pero eso es
+# una LISTA, no una respuesta. En una Steam Deck, o en un escritorio con Steam
+# abierto, lo normal es ver DOS: el fisico y el "Microsoft X-Box 360 pad 0",
+# que es el virtual que ofrece Steam Input. Y los ajustes del juego -el puente
+# de Steam Input, el arreglo de los mandos Sony- dependen de cual de los dos
+# va a usar el juego, no de cuantos hay.
+#
+# Adivinarlo por el nombre no vale: el virtual de Steam SE HACE PASAR por un
+# Xbox 360, asi que por nombre y por fabricante/modelo son indistinguibles de
+# uno de verdad. Lo que si distingue:
+#
+#   - El sysfs: los virtuales cuelgan de /devices/virtual/.
+#   - La lista de Steam: cuando Steam esconde el fisico, mete su
+#     fabricante:modelo en SDL_GAMECONTROLLER_IGNORE_DEVICES.
+#   - Y sobre todo: CUAL MANDA EVENTOS cuando mueves el stick. Eso no se
+#     deduce, se mide.
+VENDOR_VALVE = 0x28DE
+VENDOR_SONY  = 0x054C
+VENDOR_MS    = 0x045E
+
+
+def _sysfs_de(dev):
+    """La ruta en sysfs del dispositivo, o "" si no se puede saber."""
+    try:
+        base = os.path.basename(dev.path)          # eventN
+        return os.path.realpath('/sys/class/input/%s' % base)
+    except Exception:
+        return ''
+
+
+def _ignorados_por_steam():
+    """Los "fabricante:modelo" que Steam pide ignorar, en minusculas.
+
+    EL FORMATO NO ES UNO, SON VARIOS. Steam escribe estas listas como
+    "0x045e/0x028e,0x054c/0x0ce6" -con 0x y con barra-, pero por ahi se ven
+    tambien escritas con dos puntos y sin prefijo. Un primer intento partia
+    por comas y le quitaba el "0x" con lstrip('0x'), y eso estaba mal dos
+    veces: lstrip quita TODOS los ceros y equis del principio, asi que
+    "045e:028e" se quedaba en "45e:028e", y las barras no se partian.
+    Resultado: la lista nunca casaba con nada.
+
+    Asi que no se parsea un formato concreto: se sacan todos los grupos de
+    cuatro digitos hexadecimales y se emparejan de dos en dos, que es lo que
+    son -fabricante y modelo-, venga escrito como venga.
+    """
+    import re
+    bruto = (os.environ.get('SDL_GAMECONTROLLER_IGNORE_DEVICES', '') + ',' +
+             os.environ.get('SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES', ''))
+    grupos = [t.lower() for t in re.split(r'[^0-9a-fA-F]+', bruto)
+              if len(t) == 4]
+    return {'%s:%s' % (grupos[i], grupos[i + 1])
+            for i in range(0, len(grupos) - 1, 2)}
+
+
+def _clase_de(dev, sysfs, ignorados):
+    """Que clase de mando es: lo que de verdad cambia los ajustes del juego."""
+    try:
+        vid = dev.info.vendor
+        pid = dev.info.product
+    except Exception:
+        vid = pid = 0
+    if dev.name in NOMBRES_VIRTUALES:
+        return 'virtual_wproton'
+    # Los nuestros y los de Steam cuelgan los dos de /devices/virtual, asi que
+    # el orden importa: primero se descarta el nuestro por el nombre.
+    if '/devices/virtual/' in sysfs:
+        return 'virtual_steam'
+    if vid == VENDOR_VALVE:
+        return 'valve'
+    if vid == VENDOR_SONY:
+        return 'sony'
+    if ('%04x:%04x' % (vid, pid)) in ignorados:
+        return 'escondido_por_steam'
+    return 'fisico'
+
+
+def mandos(segundos=6):
+    """Lista los mandos y marca el que manda eventos. Una linea por mando:
+
+        MANDO <TAB> ruta <TAB> vvvv:pppp <TAB> clase <TAB> eventos <TAB> nombre
+
+    y al final, si alguno se movio:
+
+        ACTIVO <TAB> ruta <TAB> vvvv:pppp <TAB> clase <TAB> eventos <TAB> nombre
+
+    Lo lee el lanzador. Si nadie toca nada en esos segundos no hay ACTIVO: es
+    una respuesta valida y quien llama decide que hacer, mejor que inventarse
+    un ganador.
+    """
+    import select as _sel
+    ignorados = _ignorados_por_steam()
+    encontrados = []
+    for ruta in sorted(evdev.list_devices()):
+        try:
+            d = evdev.InputDevice(ruta)
+        except (OSError, IOError):
+            continue
+        if not es_mando(d):
+            d.close()
+            continue
+        sysfs = _sysfs_de(d)
+        encontrados.append({'dev': d, 'ruta': ruta, 'n': 0,
+                            'clase': _clase_de(d, sysfs, ignorados)})
+    if not encontrados:
+        sys.stderr.write('mandos: el sistema no tiene ningun mando\n')
+        return 1
+    sys.stderr.write('mandos: %d mando(s); escuchando %d s, MUEVE EL STICK del '
+                     'que quieras usar\n' % (len(encontrados), segundos))
+    fin = time.time() + segundos
+    fds = {m['dev'].fd: m for m in encontrados}
+    try:
+        while time.time() < fin:
+            r, _, _ = _sel.select(list(fds), [], [], 0.3)
+            for fd in r:
+                m = fds[fd]
+                try:
+                    for ev in m['dev'].read():
+                        # SOLO BOTONES Y MOVIMIENTOS DE VERDAD.
+                        #
+                        # Un mando quieto manda igualmente sincronizaciones y
+                        # ejes en reposo; contarlas daria "activo" al primero
+                        # de la lista, que es justo lo que queremos evitar.
+                        if ev.type == ecodes.EV_KEY and ev.value == 1:
+                            m['n'] += 1
+                        elif ev.type == ecodes.EV_ABS and abs(ev.value) > 8000:
+                            m['n'] += 1
+                except (OSError, IOError):
+                    pass
+    except KeyboardInterrupt:
+        pass
+    activo = None
+    for m in encontrados:
+        d = m['dev']
+        try:
+            ident = '%04x:%04x' % (d.info.vendor, d.info.product)
+        except Exception:
+            ident = '0000:0000'
+        print('MANDO\t%s\t%s\t%s\t%d\t%s'
+              % (m['ruta'], ident, m['clase'], m['n'], d.name), flush=True)
+        if m['n'] > 0 and (activo is None or m['n'] > activo['n']):
+            activo = dict(m, ident=ident, nombre=d.name)
+        try:
+            d.close()
+        except Exception:
+            pass
+    if activo is not None:
+        print('ACTIVO\t%s\t%s\t%s\t%d\t%s'
+              % (activo['ruta'], activo['ident'], activo['clase'],
+                 activo['n'], activo['nombre']), flush=True)
+        return 0
+    sys.stderr.write('mandos: nadie movio nada; no se puede decir cual esta '
+                     'activo\n')
+    return 2
+
+
 def cruceta_a_stick(valor_hat, eje_actual):
     """El valor de stick que corresponde a una cruceta pulsada.
 
@@ -6261,6 +6657,13 @@ def traducir_escritorio(virtual, teclados):
 
 def main():
     modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
+    # MODO "mandos": no crea nada, solo mira y dice cual se esta usando.
+    if modo == "mandos":
+        try:
+            seg = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+        except ValueError:
+            seg = 6
+        return mandos(seg)
     # El modo clasico lleva sufijo, para poder combinarlo:
     #   cruceta_stick            mando moderno, cruceta al stick
     #   clasico                  mando de los de antes, tal cual
@@ -7126,9 +7529,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 75fdc6ad9216" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 86c886eee325" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 75fdc6ad9216
+# WPROTON_HELPER menu_pygame.py 86c886eee325
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -8387,6 +8790,56 @@ try:
 except ValueError:
     FSCALE = 1.0
 FSCALE = max(0.8, min(2.0, FSCALE))
+# LA LETRA EN PANTALLAS DE MUCHA RESOLUCION (4K).
+#
+# El problema, contado por un tester: en una pantalla 4K las letras se ven
+# diminutas. No es cosa de la fuente, es aritmetica: los tamaños estan en
+# PIXELES, y un pixel de un 4K mide la cuarta parte que uno de un 1080p a
+# la misma distancia. Un titulo de 34 px que se lee comodo en 1080p es una
+# hormiga en 3840x2160.
+#
+# Asi que se mide la pantalla y se sube la letra en la misma proporcion. Un
+# 1080p da 1.0 y no cambia nada; un 1440p, 1.33; un 4K, 2.0.
+#
+# SE MIRA LA VENTANA, NO EL ESCRITORIO, y es a proposito:
+#
+#   - a pantalla completa en un 4K, la ventana ES de 3840x2160: se agranda,
+#     que es lo que se pide;
+#   - en una ventana pequeña dentro de un 4K, la letra tiene que ser la de esa
+#     ventana, no la del escritorio, o no cabria nada;
+#   - y con gamescope dibujando a 1280x800 para escupirlo a un televisor 4K,
+#     aqui se ven 1280x800 y NO se toca nada, que es lo correcto: de agrandarlo
+#     ya se encarga el escalado de gamescope, y hacerlo dos veces daria letras
+#     gigantes.
+#
+# Solo se SUBE, nunca se baja: en pantallas pequeñas manda lo que diga la
+# persona. Y multiplica a su ajuste en vez de sustituirlo, para que "grande"
+# siga siendo mas grande que "normal" tambien en un 4K.
+AUTO_ESCALA = 1.0
+# SE GUARDA LO QUE PIDIO LA PERSONA ANTES DE TOCARLO, y se usa ese numero en el
+# registro en vez de volver a leer la variable de entorno. Leerla otra vez
+# significaria convertirla a numero otra vez, y un valor raro en settings.conf
+# -una letra, un hueco- tumbaria el menu ENTERO por una linea de registro. Lo
+# de arriba ya se encarga de que esto sea un numero valido.
+FS_PERSONA = FSCALE
+if os.environ.get('WP_MENU_AUTO_SCALE', '1') != '0' and screen is not None:
+    try:
+        _aw, _ah = screen.get_size()
+        AUTO_ESCALA = max(1.0, min(2.0, min(_aw / 1920.0, _ah / 1080.0)))
+    except Exception as _e:
+        sys.stderr.write('menu_pygame: no se pudo medir la pantalla para la '
+                         'letra (%s)\n' % _e)
+if AUTO_ESCALA > 1.0:
+    FSCALE = max(0.8, min(3.0, FSCALE * AUTO_ESCALA))
+try:
+    _mw, _mh = screen.get_size() if screen is not None else (0, 0)
+except Exception:
+    _mw, _mh = 0, 0
+sys.stderr.write('menu_pygame: letra: ventana %dx%d | ajuste de la persona '
+                 '%.2f | por resolucion x%.2f | final %.2f%s\n'
+                 % (_mw, _mh, FS_PERSONA, AUTO_ESCALA, FSCALE,
+                    '' if AUTO_ESCALA > 1.0 else
+                    ' (sin subir: la pantalla no da para mas)'))
 def FS(px):
     return max(14, int(px * FSCALE))
 f_tit = pygame.font.Font(None, FS(34))
@@ -11638,61 +12091,574 @@ def generar_imagenes(destino):
         print(r)
     return 0 if hechas else 1
 
-def ocultar_cursor():
-    # Esconde el puntero del raton mientras se juega.
-    #
-    # Al arrancar un juego se queda el puntero en medio de la pantalla hasta
-    # que lo mueves. Con la extension XFixes de las X se puede ocultar para
-    # toda la pantalla, y se restaura solo cuando este proceso termina, que es
-    # justo cuando acaba la partida.
-    #
-    # Se usa ctypes: nada que instalar. Si algo falla, se deja como estaba.
+# --- EL PUNTERO MIENTRAS SE JUEGA -------------------------------------------
+# Los tipos de ctypes van aqui arriba porque hay que guardarlos: si el
+# manejador de errores de X se lo lleva el recolector de basura, X llama a una
+# funcion que ya no existe y el proceso se cae.
+import ctypes as _ct_cursor
+
+CB_ERROR_X = _ct_cursor.CFUNCTYPE(_ct_cursor.c_int, _ct_cursor.c_void_p,
+                                  _ct_cursor.c_void_p)
+
+
+class XColor(_ct_cursor.Structure):
+    """El color de un cursor. Para uno transparente da igual lo que lleve."""
+    _fields_ = [('pixel', _ct_cursor.c_ulong),
+                ('red', _ct_cursor.c_ushort),
+                ('green', _ct_cursor.c_ushort),
+                ('blue', _ct_cursor.c_ushort),
+                ('flags', _ct_cursor.c_char),
+                ('pad', _ct_cursor.c_char)]
+
+
+def cursor_pantallas():
+    """Las pantallas X que hay en esta sesion, empezando por la nuestra.
+
+    POR QUE MAS DE UNA, QUE ES EL FALLO QUE ESTO ARREGLA
+    ===================================================
+    El vigilante hereda el DISPLAY del WProton que lo lanza, pero el juego no
+    siempre pinta ahi: con gamescope por medio, gamescope levanta su propio
+    XWayland -otra pantalla, normalmente :1- y es EL JUEGO el que se mueve
+    alli. Escondiendo el puntero solo en nuestro DISPLAY, el de la pantalla
+    donde esta el juego seguia a la vista. Eso es, palabra por palabra, lo que
+    se veia en la captura de Nine Sols.
+
+    Asi que se buscan todas: la de DISPLAY y las que tengan socket en
+    /tmp/.X11-unix, que es donde los servidores X los dejan. Se intenta abrir
+    cada una y nos quedamos con las que contesten.
+    """
+    nombres = []
+    propia = os.environ.get('DISPLAY')
+    if propia:
+        nombres.append(propia)
+    try:
+        for s in sorted(os.listdir('/tmp/.X11-unix')):
+            if s.startswith('X') and s[1:].isdigit():
+                n = ':' + s[1:]
+                if n not in nombres:
+                    nombres.append(n)
+    except OSError:
+        pass
+    return nombres
+
+
+def cursor_abrir():
+    """Prepara el escondido del puntero mientras se juega. Devuelve estado o None.
+
+    LA TERCERA, Y ESTA VEZ MIRANDO LO QUE PASA DE VERDAD
+    ====================================================
+    Van dos intentos fallidos y conviene dejarlos escritos, porque los dos
+    fallaron por dar algo por supuesto:
+
+      1. XFixesHideCursor a secas, para siempre. Ocultaba el puntero de TODA
+         la pantalla mientras la conexion siguiera abierta, asi que tambien
+         el del juego: en los menus de configuracion no habia con que pinchar.
+         Y encima solo tocaba NUESTRA pantalla, asi que con gamescope por
+         medio el puntero seguia viendose igual.
+
+      2. Un movimiento minimo del puntero, un pixel y vuelta, confiando en el
+         comentario antiguo que decia "se queda en medio de la pantalla hasta
+         que lo mueves". Eso no es cierto en un juego de Unity como Nine Sols:
+         el puntero no se esconde porque se mueva. Moverlo, si acaso, es lo
+         que lo hace aparecer.
+
+    LO QUE SI FUNCIONA, Y ES LO QUE HACE TODO EL MUNDO
+    ==================================================
+    Esconderlo POR INACTIVIDAD, como unclutter: si pasan unos segundos sin
+    que el raton se mueva -que es lo que pasa cuando juegas con el mando-, se
+    esconde; y en cuanto lo mueves, vuelve.
+
+    Eso arregla las dos quejas a la vez, y por eso es el buen camino:
+      - el puntero desaparece de verdad, no solo "se aparta";
+      - y el cursor del juego se puede usar: mueves el raton y esta ahi. En
+        los menus de configuracion no se pierde nada.
+
+    Si el juego captura el raton y lo deja clavado -los juegos en primera
+    persona lo hacen-, para nosotros es "no se mueve" y se queda escondido,
+    que es justo lo que se quiere ahi.
+
+    Y se hace en TODAS las pantallas de la sesion a la vez, por lo que cuenta
+    cursor_pantallas: con gamescope el juego vive en una pantalla distinta de
+    la nuestra y no se sabe de antemano cual de las dos se esta mirando.
+    """
     if os.environ.get('WP_OCULTAR_CURSOR') == '0':
         return None
-    if not os.environ.get('DISPLAY'):
+    try:
+        segundos = float(os.environ.get('WP_CURSOR_SEGUNDOS', '3') or 3)
+    except (TypeError, ValueError):
+        segundos = 3.0
+    if segundos < 0.5:
+        segundos = 0.5
+    # EL UMBRAL: cuanto hay que mover el raton para que cuente como que lo
+    # esta moviendo una persona. Sin esto, un equipo de juego nunca tiene el
+    # puntero del todo quieto -Steam Input, un trackpad haciendo de raton, un
+    # stick con deriva- y el puntero no se escondia nunca.
+    try:
+        umbral = int(os.environ.get('WP_CURSOR_UMBRAL', '8') or 8)
+    except (TypeError, ValueError):
+        umbral = 8
+    if umbral < 0:
+        umbral = 0
+    nombres = cursor_pantallas()
+    if not nombres:
         return None
     try:
         import ctypes, ctypes.util
         x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
         fixes = ctypes.CDLL(ctypes.util.find_library('Xfixes') or 'libXfixes.so.3')
         x11.XOpenDisplay.restype = ctypes.c_void_p
-        dpy = x11.XOpenDisplay(None)
-        if not dpy:
-            sys.stderr.write('menu_pygame: no se pudo abrir la pantalla para '
-                             'ocultar el cursor\n')
-            return None
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
         x11.XDefaultRootWindow.restype = ctypes.c_ulong
         x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-        raiz = x11.XDefaultRootWindow(ctypes.c_void_p(dpy))
+        x11.XQueryPointer.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint)]
+        x11.XQueryPointer.restype = ctypes.c_int
         fixes.XFixesHideCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-        fixes.XFixesHideCursor(ctypes.c_void_p(dpy), raiz)
-        # Ademas se aparta el puntero a la esquina inferior derecha. XFixes
-        # solo lo oculta mientras esta conexion siga abierta, y algunos juegos
-        # vuelven a mostrarlo por su cuenta; apartado, al menos no molesta en
-        # medio de la pantalla.
-        try:
-            x11.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
-                                         ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
-                                         ctypes.c_uint, ctypes.c_uint,
-                                         ctypes.c_int, ctypes.c_int]
-            x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            an = x11.XDisplayWidth(ctypes.c_void_p(dpy), 0)
-            al = x11.XDisplayHeight(ctypes.c_void_p(dpy), 0)
-            x11.XWarpPointer(ctypes.c_void_p(dpy), 0, raiz, 0, 0, 0, 0,
-                             int(an) - 1, int(al) - 1)
-        except Exception:
-            pass
-        x11.XFlush(ctypes.c_void_p(dpy))
-        sys.stderr.write('menu_pygame: cursor oculto en %s (si el juego corre en '
-                         'otra pantalla, p.ej. gamescope anidado, no le afecta)\n'
-                         % os.environ.get('DISPLAY'))
-        # se devuelve la conexion: mientras siga abierta, el cursor sigue
-        # oculto. Al morir este proceso, las X lo restauran solas.
-        return (x11, dpy)
+        fixes.XFixesShowCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        fixes.XFixesQueryVersion.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int)]
+        # EL SEGUNDO METODO: un cursor TRANSPARENTE puesto en la ventana.
+        #
+        # Hace falta porque XFixesHideCursor no siempre llega a la pantalla.
+        # En una sesion Wayland -lo normal en CachyOS con KDE- el puntero no
+        # lo dibuja X: lo dibuja el compositor, y el juego corre dentro de
+        # XWayland. Esconderlo "a lo X11" puede quedarse en nada, que es por
+        # lo que unclutter tampoco funciona en Wayland.
+        #
+        # Lo que SI cruza siempre es el cursor normal de una ventana, porque
+        # es como cualquier programa enseña el suyo: XWayland se lo pasa al
+        # compositor y el compositor lo pinta. Si ese cursor es transparente,
+        # no se ve nada. Asi que se hacen las dos cosas a la vez.
+        x11.XCreateBitmapFromData.restype = ctypes.c_ulong
+        x11.XCreateBitmapFromData.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_char_p,
+            ctypes.c_uint, ctypes.c_uint]
+        x11.XCreatePixmapCursor.restype = ctypes.c_ulong
+        x11.XCreatePixmapCursor.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        x11.XFreePixmap.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                      ctypes.c_ulong]
+        x11.XUndefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
     except Exception as e:
-        sys.stderr.write('menu_pygame: no se pudo ocultar el cursor (%s)\n' % e)
+        sys.stderr.write('menu_pygame: no se pudieron cargar las X para el '
+                         'puntero (%s)\n' % e)
         return None
+    # LOS ERRORES DE X NO PUEDEN MATAR AL VIGILANTE.
+    #
+    # Xlib, de serie, ante un error del protocolo IMPRIME Y SALE. Y aqui se
+    # tocan ventanas de otro programa -las del juego-, que pueden
+    # desaparecer entre que se miran y se tocan. Sin esto, un juego cerrando
+    # una ventana en el momento justo se llevaria por delante el vigilante, y
+    # con el, el cierre del juego con el mando. El puntero no vale eso.
+    fallos = [0]
+
+    def _callar(dpy, ev):
+        fallos[0] += 1
+        return 0
+    guardia_err = CB_ERROR_X(_callar)
+    try:
+        x11.XSetErrorHandler.argtypes = [CB_ERROR_X]
+        x11.XSetErrorHandler.restype = ctypes.c_void_p
+        x11.XSetErrorHandler(guardia_err)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: puntero: no se pudo callar los errores '
+                         'de X (%s); se seguira sin tocar ventanas\n' % e)
+        guardia_err = None
+    sesion = (os.environ.get('XDG_SESSION_TYPE') or '').lower()
+    wayland = bool(os.environ.get('WAYLAND_DISPLAY')) or sesion == 'wayland'
+    escritorio = os.environ.get('XDG_CURRENT_DESKTOP') or '?'
+    if wayland:
+        sys.stderr.write(
+            'menu_pygame: puntero: sesion WAYLAND (%s). Aqui el puntero lo '
+            'dibuja el compositor y el juego va por XWayland, asi que '
+            'esconderlo a lo X11 puede no servir de nada: se usara ademas un '
+            'cursor transparente en la ventana, que es lo que si cruza.\n'
+            % escritorio)
+    else:
+        sys.stderr.write('menu_pygame: puntero: sesion %s (%s)\n'
+                         % (sesion or 'x11', escritorio))
+    pantallas = []
+    for nombre in nombres:
+        try:
+            dpy = x11.XOpenDisplay(nombre.encode())
+        except Exception as e:
+            sys.stderr.write('menu_pygame: puntero: la pantalla %s no se pudo '
+                             'abrir (%s)\n' % (nombre, e))
+            continue
+        if not dpy:
+            sys.stderr.write('menu_pygame: puntero: la pantalla %s no '
+                             'contesta\n' % nombre)
+            continue
+        # SE PREGUNTA SI XFIXES ESTA DE VERDAD, y se apunta en el log.
+        #
+        # Esconder el puntero lo hace XFixes, no las X a secas. Si el servidor
+        # no la trae, las llamadas no dan error: simplemente no hacen nada, y
+        # el puntero se queda en pantalla sin que nada lo diga. Mejor que lo
+        # diga el log antes de empezar.
+        try:
+            fmay = ctypes.c_int(); fmen = ctypes.c_int()
+            hay = fixes.XFixesQueryVersion(ctypes.c_void_p(dpy),
+                                           ctypes.byref(fmay),
+                                           ctypes.byref(fmen))
+            version = ('XFixes %d.%d' % (fmay.value, fmen.value)) if hay \
+                else 'SIN XFixes'
+        except Exception as e:
+            hay, version = 0, 'no se pudo preguntar por XFixes (%s)' % e
+        if not hay:
+            sys.stderr.write('menu_pygame: puntero: en %s no hay XFixes (%s), '
+                             'ahi no se podra esconder\n' % (nombre, version))
+            continue
+        raiz = x11.XDefaultRootWindow(ctypes.c_void_p(dpy))
+        pantallas.append({'nombre': nombre, 'dpy': dpy, 'raiz': raiz,
+                          'version': version, 'vacio': 0, 'tapada': 0})
+    if not pantallas:
+        sys.stderr.write('menu_pygame: no hay ninguna pantalla donde esconder '
+                         'el puntero (se probaron: %s)\n' % ', '.join(nombres))
+        return None
+    sys.stderr.write('menu_pygame: el puntero se escondera tras %.1f s sin '
+                     'moverlo mas de %d px, y volvera en cuanto lo muevas; '
+                     'con el mando en la mano, a 1 s. En %d pantalla(s): %s\n'
+                     % (segundos, umbral, len(pantallas),
+                        '; '.join('%s [%s]' % (p['nombre'], p['version'])
+                                  for p in pantallas)))
+    return {'ctypes': ctypes, 'x11': x11, 'fixes': fixes,
+            'pantallas': pantallas, 'segundos': segundos, 'umbral': umbral,
+            'wayland': wayland, 'sesion': sesion or 'x11', 'err': guardia_err,
+            'fallos': fallos,
+            'pos': None, 'quieto_desde': None, 'oculto': False,
+            'mirado': None, 'mando': 0, 'mando_desde': None,
+            'movidas': 0, 'temblores': 0, 't0': 0.0,
+            'informes': 0, 'informado': None}
+
+
+def cursor_donde(estado):
+    """Donde esta el puntero en cada pantalla, o None si no se sabe en ninguna.
+
+    Devuelve una tupla con una posicion -o None- por pantalla, para poder
+    comparar de una vez: si cambia cualquiera de ellas, el raton se ha movido.
+    """
+    ctypes = estado['ctypes']
+    sitios = []
+    alguna = False
+    for p in estado['pantallas']:
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        try:
+            ok = estado['x11'].XQueryPointer(
+                ctypes.c_void_p(p['dpy']), p['raiz'],
+                ctypes.byref(rr), ctypes.byref(cr),
+                ctypes.byref(rx), ctypes.byref(ry),
+                ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mk))
+        except Exception:
+            sitios.append(None)
+            continue
+        if not ok:
+            # El puntero no esta en esta pantalla: ahi no hay nada que mirar.
+            sitios.append(None)
+            continue
+        alguna = True
+        sitios.append((rx.value, ry.value))
+    return tuple(sitios) if alguna else None
+
+
+def cursor_salto(antes, ahora_pos):
+    """Cuantos pixeles se ha movido el puntero, mirando la pantalla que mas.
+
+    Se usa la distancia mas grande de las dos coordenadas (no la diagonal)
+    porque lo unico que se quiere saber es si ha habido movimiento DE VERDAD,
+    y asi un numero sale igual de claro en el registro.
+    """
+    if antes is None or ahora_pos is None:
+        return 0
+    lejos = 0
+    for a, b in zip(antes, ahora_pos):
+        if a is None or b is None:
+            continue
+        lejos = max(lejos, abs(a[0] - b[0]), abs(a[1] - b[1]))
+    return lejos
+
+
+def cursor_vacio(estado, p):
+    """Un cursor totalmente transparente para esa pantalla. Se hace una vez.
+
+    Es la receta de siempre: un mapa de bits de 1x1 apagado sirve de dibujo y
+    de mascara, y con la mascara a cero no se pinta ni un pixel.
+    """
+    if p.get('vacio'):
+        return p['vacio']
+    ctypes = estado['ctypes']
+    x11 = estado['x11']
+    try:
+        pix = x11.XCreateBitmapFromData(ctypes.c_void_p(p['dpy']), p['raiz'],
+                                        b'\x00', 1, 1)
+        if not pix:
+            return 0
+        col = XColor()
+        cur = x11.XCreatePixmapCursor(ctypes.c_void_p(p['dpy']), pix, pix,
+                                      ctypes.byref(col), ctypes.byref(col),
+                                      0, 0)
+        x11.XFreePixmap(ctypes.c_void_p(p['dpy']), pix)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: puntero: no se pudo hacer el cursor '
+                         'transparente en %s (%s)\n' % (p['nombre'], e))
+        return 0
+    p['vacio'] = cur or 0
+    return p['vacio']
+
+
+def cursor_hoja(estado, p):
+    """La ventana mas honda que hay debajo del puntero, o 0.
+
+    Se baja hasta el fondo porque X busca el cursor empezando por la ventana
+    donde esta el puntero y subiendo: poniendolo en la mas honda, es el que
+    manda. Esa suele ser la ventana del juego.
+    """
+    ctypes = estado['ctypes']
+    win = p['raiz']
+    for _ in range(16):          # tope: un arbol de ventanas no es infinito
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        try:
+            ok = estado['x11'].XQueryPointer(
+                ctypes.c_void_p(p['dpy']), win,
+                ctypes.byref(rr), ctypes.byref(cr),
+                ctypes.byref(rx), ctypes.byref(ry),
+                ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mk))
+        except Exception:
+            return 0
+        if not ok or not cr.value:
+            break
+        win = cr.value
+    return win
+
+
+def cursor_tapar(estado, p):
+    """Pone el cursor transparente en la ventana que hay bajo el puntero.
+
+    Se vuelve a llamar en cada vuelta mientras esta escondido, porque el juego
+    pone el suyo cada vez que le apetece -Wine lo hace con cada WM_SETCURSOR-
+    y si no se repite, el puntero vuelve a aparecer solo.
+    """
+    vacio = cursor_vacio(estado, p)
+    if not vacio:
+        return False
+    win = cursor_hoja(estado, p)
+    if not win:
+        return False
+    ctypes = estado['ctypes']
+    try:
+        if p.get('tapada') and p['tapada'] != win:
+            estado['x11'].XUndefineCursor(ctypes.c_void_p(p['dpy']),
+                                          p['tapada'])
+        estado['x11'].XDefineCursor(ctypes.c_void_p(p['dpy']), win, vacio)
+        estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+    except Exception:
+        return False
+    p['tapada'] = win
+    return True
+
+
+def cursor_destapar(estado, p):
+    """Quita el cursor transparente para que el juego vuelva a poner el suyo."""
+    if not p.get('tapada'):
+        return
+    ctypes = estado['ctypes']
+    try:
+        estado['x11'].XUndefineCursor(ctypes.c_void_p(p['dpy']), p['tapada'])
+        estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+    except Exception:
+        pass
+    p['tapada'] = 0
+
+
+def cursor_poner(estado, oculto):
+    """Esconde o ensena el puntero en todas las pantallas. True si hubo cambio."""
+    if estado['oculto'] == oculto:
+        return False
+    ctypes = estado['ctypes']
+    hechas = 0
+    tapadas = 0
+    for p in estado['pantallas']:
+        try:
+            if oculto:
+                estado['fixes'].XFixesHideCursor(ctypes.c_void_p(p['dpy']),
+                                                 p['raiz'])
+            else:
+                estado['fixes'].XFixesShowCursor(ctypes.c_void_p(p['dpy']),
+                                                 p['raiz'])
+            estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+            hechas += 1
+        except Exception as e:
+            sys.stderr.write('menu_pygame: no se pudo %s el puntero en %s '
+                             '(%s)\n' % ('esconder' if oculto else 'ensenar',
+                                         p['nombre'], e))
+        # Y EL SEGUNDO METODO, siempre: en Wayland el de arriba puede no
+        # servir de nada y este es el que llega.
+        if oculto:
+            if cursor_tapar(estado, p):
+                tapadas += 1
+        else:
+            cursor_destapar(estado, p)
+    if not hechas and not tapadas:
+        return False
+    estado['oculto'] = oculto
+    if oculto:
+        estado['tapadas'] = tapadas
+    return True
+
+
+def cursor_informe(estado, ahora, pos):
+    """Cada cierto tiempo, POR QUE el puntero sigue a la vista.
+
+    ESTO ES LO QUE FALTABA EN LOS DOS INTENTOS ANTERIORES: cuando no
+    funcionaba, el registro no decia nada y habia que adivinar. Si el puntero
+    sigue en pantalla, aqui queda escrito cuanto se esta moviendo, cuando fue
+    la ultima vez que se movio de verdad y si el mando esta mandando eventos.
+    Con eso se distingue "no se intenta esconder" de "se esconde y algo lo
+    vuelve a pintar", que son dos averias distintas.
+    """
+    if estado['oculto']:
+        return
+    if ahora - estado['t0'] < 10:
+        return
+    if estado['informes'] >= 20:
+        return
+    if estado['informado'] is not None and ahora - estado['informado'] < 60:
+        return
+    estado['informado'] = ahora
+    estado['informes'] += 1
+    sys.stderr.write(
+        'menu_pygame: puntero: SIGUE A LA VISTA tras %.0f s. '
+        'Sesion %s. Ultimo movimiento de verdad hace %.1f s (hacen falta '
+        '%.1f s quieto); se ha movido %d veces mas del umbral (%d px) y %d '
+        'veces menos; ahora esta en %s; eventos de mando: %d; errores de X: '
+        '%d. Si los movimientos no paran de subir, algo mueve el raton solo '
+        '(Steam Input, un trackpad haciendo de raton o un stick que deriva) y '
+        'por eso no se esconde: sube CURSOR_UMBRAL. Si NO suben, es que se '
+        'manda esconder y algo lo vuelve a pintar.\n'
+        % (ahora - estado['t0'], estado['sesion'],
+           ahora - estado['quieto_desde'],
+           estado['segundos'], estado['movidas'], estado['umbral'],
+           estado['temblores'],
+           ', '.join('%s=%s' % (p['nombre'], q)
+                     for p, q in zip(estado['pantallas'], pos or ())),
+           estado['mando'], estado['fallos'][0]))
+
+
+def cursor_vigilar(estado, ahora, mando=0):
+    """Esconde el puntero si lleva quieto, y lo ensena en cuanto se mueve.
+
+    Se llama desde el bucle del guardia, que ya da vueltas cada 50 ms. Mirar
+    donde esta el puntero es una pregunta al servidor X, asi que se hace cada
+    200 ms y no en cada vuelta: con eso el puntero reaparece al instante para
+    quien lo mueve y no se le da trabajo de mas a nadie.
+
+    - mando: cuantas veces ha llegado algo de un mando. Solo importa que
+      CAMBIE: si cambia, quien juega esta con el mando y no con el raton.
+
+    POR QUE NO VALE COMPARAR LOS PIXELES EXACTOS
+    ============================================
+    La primera version de esto pedia que el puntero estuviera EXACTAMENTE en
+    el mismo pixel. Y resulta que en un equipo de juego el puntero casi nunca
+    esta exactamente quieto: Steam Input puede estar emulando un raton, un
+    trackpad haciendo de raton manda movimiento con solo apoyar el dedo, y un
+    stick con deriva empuja un pixel cada tanto. Con cualquiera de esas tres
+    cosas el puntero nunca llegaba a estar "quieto" y NO SE ESCONDIA NUNCA,
+    que es exactamente lo que se seguia viendo en pantalla.
+
+    Asi que ahora se pide que se mueva MAS DE UN UMBRAL (CURSOR_UMBRAL, 8 px
+    por omision) para contarlo como "el usuario esta usando el raton". Un
+    temblor de uno o dos pixeles ya no cuenta, y mover el raton de verdad
+    sigue devolviendo el puntero al instante.
+
+    Y ADEMAS SE MIRA EL MANDO, que es algo que unclutter no tiene y nosotros
+    si: si estan llegando eventos del mando, quien juega NO esta en el raton,
+    asi que con un segundo quieto basta para esconderlo.
+    """
+    if not estado:
+        return
+    # La primera mirada no se salta nunca: 'mirado' empieza sin valor en vez
+    # de en cero porque el reloj que entra aqui es time.time(), pero el que
+    # entra en las pruebas empieza en cero y ahi un cero inicial se comia la
+    # primera mirada.
+    if estado['mirado'] is not None and ahora - estado['mirado'] < 0.2:
+        return
+    estado['mirado'] = ahora
+    pos = cursor_donde(estado)
+    if pos is None:
+        return
+    if estado['pos'] is None:
+        estado['pos'] = pos
+        estado['quieto_desde'] = ahora
+        estado['mando'] = mando
+        estado['t0'] = ahora
+        return
+    if mando != estado['mando']:
+        # Ha llegado algo de un mando: se esta jugando con el, no con el raton.
+        estado['mando'] = mando
+        estado['mando_desde'] = ahora
+    salto = cursor_salto(estado['pos'], pos)
+    if salto > estado['umbral']:
+        # SE HA MOVIDO DE VERDAD: vuelve, y se empieza a contar otra vez.
+        estado['pos'] = pos
+        estado['quieto_desde'] = ahora
+        estado['movidas'] += 1
+        if cursor_poner(estado, False):
+            sys.stderr.write('menu_pygame: el raton se movio %d px: puntero '
+                             'visible\n' % salto)
+        return
+    if salto:
+        # Tiembla, pero no es el usuario. No se actualiza la posicion de
+        # referencia: asi un temblor lento acaba sumando y contando como
+        # movimiento de verdad, en vez de reiniciar la cuenta cada vez.
+        estado['temblores'] += 1
+    espera = estado['segundos']
+    if estado['mando_desde'] is not None and ahora - estado['mando_desde'] < 5:
+        # Con el mando en la mano no hay que esperar tanto.
+        espera = min(espera, 1.0)
+    if not estado['oculto'] and ahora - estado['quieto_desde'] >= espera:
+        if cursor_poner(estado, True):
+            sys.stderr.write('menu_pygame: %.1f s sin mover el raton%s: '
+                             'puntero escondido (XFixes en %d pantalla(s), '
+                             'cursor transparente en %d)\n'
+                             % (espera, ' (jugando con el mando)'
+                                if espera < estado['segundos'] else '',
+                                len(estado['pantallas']),
+                                estado.get('tapadas', 0)))
+    elif estado['oculto']:
+        # SE VUELVE A PONER EL CURSOR TRANSPARENTE EN CADA VUELTA.
+        #
+        # El juego pone el suyo cuando quiere -Wine lo hace cada vez que la
+        # ventana pide un cursor- y entonces el nuestro se pierde y el puntero
+        # reaparece sin que nadie lo haya movido. Repetirlo cuesta una llamada
+        # cada 200 ms y evita justo eso.
+        for p in estado['pantallas']:
+            cursor_tapar(estado, p)
+    cursor_informe(estado, ahora, pos)
+
+
+def cursor_cerrar(estado):
+    """Deja el puntero visible al acabar la partida. Se llama siempre."""
+    if not estado:
+        return
+    cursor_poner(estado, False)
+    # Y por si acaso: ninguna ventana se queda con nuestro cursor transparente
+    # aunque el estado diga que ya estaba visible.
+    for p in estado.get('pantallas', ()):
+        cursor_destapar(estado, p)
+
 
 def reloj_salida(desde, pulsado, soltado, ahora, segundos):
     """Decide si toca cerrar el juego. Devuelve (nuevo_desde, cerrar).
@@ -11768,14 +12734,14 @@ def guardia(marca, segundos=5.0, combo='select'):
     ultimo_escaneo = 0.0
     sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para cerrar)\n'
                      % (nombre_combo, segundos))
-    # El cursor se oculta aqui y se restaura solo al terminar este proceso,
-    # que es cuando acaba la partida.
+    # EL PUNTERO: un movimiento minimo, repartido en los primeros segundos.
+    #
     # El cursor es lo MENOS importante del guardia: si algo va mal ahi, no
     # puede llevarse por delante el cierre del juego.
     try:
-        _cursor = ocultar_cursor()
+        _cursor = cursor_abrir()
     except Exception as e:
-        sys.stderr.write('menu_pygame: fallo ocultando el cursor (%s)\n' % e)
+        sys.stderr.write('menu_pygame: fallo preparando el puntero (%s)\n' % e)
         _cursor = None
     _t0 = time.time()
     _vistos = [0]
@@ -11905,6 +12871,22 @@ def guardia(marca, segundos=5.0, combo='select'):
                             del _desde[c]
         # Si a los 60 segundos no ha llegado NI UN evento, es que no se puede
         # leer el mando (permisos), no que el usuario no pulse nada.
+        # EL PUNTERO, DESDE EL BUCLE.
+        #
+        # Aqui y no en un hilo: este bucle ya da vueltas cada 50 ms, asi que
+        # mirar un reloj es gratis, y un hilo mas en el guardia es una cosa
+        # mas que puede fallar justo donde no queremos -el cierre del juego-.
+        #
+        # Y envuelto, porque el puntero es lo MENOS importante de este
+        # proceso: si las X se van -gamescope reinicia su XWayland al cerrar
+        # un juego- esto no puede llevarse por delante el cierre con el mando.
+        if _cursor:
+            try:
+                cursor_vigilar(_cursor, ahora, _vistos[0])
+            except Exception as _e:
+                sys.stderr.write('menu_pygame: se deja de vigilar el puntero '
+                                 '(%s)\n' % _e)
+                _cursor = None
         if _vistos[0] == 0 and 'mudo' not in avisado and time.time() - _t0 > 60:
             avisado.add('mudo')
             sys.stderr.write('menu_pygame: guardia: 60s sin recibir NADA de %d '
@@ -11933,6 +12915,12 @@ def guardia(marca, segundos=5.0, combo='select'):
                 pass
             sys.stderr.write('menu_pygame: %s mantenido en %s -> cerrar el juego\n'
                              % (nombre_combo, cual))
+            # EL PUNTERO VISIBLE ANTES DE IRSE.
+            #
+            # Al cerrar nuestra conexion las X lo restauran solas, pero si el
+            # guardia sale por aqui y el proceso tarda en morir, el usuario se
+            # queda unos segundos sin puntero en el escritorio. Se enseña y ya.
+            cursor_cerrar(_cursor)
             return 0
         if cual is None:
             # Diagnostico: si se mantiene algo mucho rato y NO es la
@@ -27809,6 +28797,18 @@ NOVEDADES DE LA $WPROTON_VERSION
 
   Arreglada la carga de los juegos que traen su prefijo dentro.
 
+  El puntero se esconde solo al dejar el raton, y vuelve al moverlo.
+
+  WProton sabe cual de tus mandos usas y propone los ajustes.
+
+  Avisa cuando hay un GE-Proton nuevo, en Runners y herramientas.
+
+  En pantallas 4K la letra sube sola y se lee.
+
+  Los prefijos que vienen dentro del archivo se preparan bien.
+
+  Select cierra tambien los juegos de Linux en carpeta.
+
   Lo demas, en las novedades del repositorio."
     return 0
 }
@@ -31295,19 +32295,60 @@ proton_marcar_prefijo() {
     #
     # Lo unico que no lo era es copy_pfx, que es justo lo que el centinela
     # salta.
-    if [ ! -e "$pfx/creation_sync_guard" ]; then
-        if : > "$pfx/creation_sync_guard" 2>/dev/null; then
-            say "[+] Prefijo: puesto el centinela de creacion (Proton ya no"
-            say "    intentara crearlo encima del que trae el archivo)"
-        else
-            say "AVISO: no se pudo escribir el centinela de creacion en el prefijo;"
-            say "       Proton puede intentar rehacerlo y fallar al copiar."
+    #
+    # PERO SOLO SI EL PREFIJO SE SOSTIENE SOLO. ESTO ES LA OTRA MITAD.
+    #
+    # El centinela es una AFIRMACION: "este prefijo ya esta creado, no lo
+    # toques". Dicho de un prefijo que NO lo esta, es mentira, y Proton se la
+    # cree: se salta copy_pfx() y se estrella en la primera copia, porque la
+    # carpeta de destino no existe. Tal cual salio en el registro de un tester,
+    # con un prefijo nuevo y vacio de prefixes/<juego>:
+    #
+    #   FileNotFoundError: [Errno 2] No such file or directory:
+    #     '.../prefixes/Skate_3_Recompiled/pfx/drive_c/vrclient/bin'
+    #
+    # Asi que se comprueba antes, y se comprueban las dos cosas que de verdad
+    # hacen falta: que haya registro -o sea, que sea un prefijo- y que este
+    # kernel32.dll, que es el fichero exacto con el que fallaba Wine cuando el
+    # prefijo venia a medias. Con esas dos, Proton puede saltarse copy_pfx sin
+    # que falte nada.
+    local _pfx_entero=1
+    [ -f "$pfx/system.reg" ] || _pfx_entero=0
+    [ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || _pfx_entero=0
+    if [ "$_pfx_entero" = 1 ]; then
+        if [ ! -e "$pfx/creation_sync_guard" ]; then
+            if : > "$pfx/creation_sync_guard" 2>/dev/null; then
+                say "[+] Prefijo: puesto el centinela de creacion (Proton ya no"
+                say "    intentara crearlo encima del que trae el archivo)"
+            else
+                say "AVISO: no se pudo escribir el centinela de creacion en el prefijo;"
+                say "       Proton puede intentar rehacerlo y fallar al copiar."
+            fi
         fi
+    else
+        # Y SE QUITA EL QUE HUBIERA DE ANTES.
+        #
+        # Si no, un prefijo que se quedo a medias con un centinela puesto por
+        # una version anterior sigue roto para siempre: Proton no lo crea
+        # nunca y no hay forma de que se recupere solo.
+        if [ -e "$pfx/creation_sync_guard" ]; then
+            rm -f "$pfx/creation_sync_guard" 2>/dev/null
+            say "[+] Prefijo: quitado el centinela de creacion (el prefijo esta"
+            say "    a medias, asi que Proton TIENE que crearlo)"
+        fi
+        log "proton_marcar_prefijo: sin centinela; system.reg=$([ -f "$pfx/system.reg" ] && echo si || echo NO) kernel32=$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] && echo si || echo NO)"
     fi
     local _vname_actual _vname_nuevo
     if [ -n "$pver" ]; then
         _vname_nuevo="$pver"
-        log "proton_marcar_prefijo: CURRENT_PREFIX_VERSION del runner = $pver"
+        # DE DONDE SALE ESTE NUMERO, que no es obvio al leer el registro.
+        #
+        # Es la constante que el PROPIO runner lleva escrita en su script
+        # "proton", copiada tal cual. En un Proton de Valve se parece a
+        # "11.0-100" y en un GE-Proton al nombre del build: las dos son
+        # correctas, porque lo unico que importa es que sea LA MISMA con la que
+        # el se compara. Si aqui sale algo raro, se mira ese fichero, no esto.
+        log "proton_marcar_prefijo: CURRENT_PREFIX_VERSION leida de ${rdir##*/}/proton = $pver"
     else
         # Proton MUY antiguo que no lleva la constante: se cae al comportamiento
         # de siempre, que para aquellas versiones era lo correcto -su
@@ -31601,62 +32642,36 @@ prefijo_incluido_a_disco() {
     done
     [ -d "$origen/drive_c/ProgramData" ] \
         && cp -a "$origen/drive_c/ProgramData" "$destino/drive_c/" 2>/dev/null
-    # WINDOWS SIN LAS DLL DEL RUNNER.
+    # WINDOWS ENTERO, SIN QUITAR NADA. Y ESTO ES UN ARREGLO, NO UN DESCUIDO.
     #
-    # Copiar drive_c/windows entero son cientos de megas y casi todo son DLL
-    # que el runner vuelve a poner. Se copian solo las que NO trae el runner.
+    # Aqui se borraban todas las DLL y los EXE que trae el runner, con esta
+    # idea: "total, las vuelve a poner Proton al crear el prefijo". Y era
+    # verdad... hasta que se arreglo lo de Grandia.
     #
-    # DE UNA VEZ, NO FICHERO A FICHERO.
+    # LAS DOS COSAS SE ANULABAN ENTRE SI:
     #
-    # La primera version recorria el arbol con un "cp" por cada fichero: con
-    # 3.000 ficheros son 3.000 procesos, y medido aqui tardaba 10 s frente a
-    # 0,25 s de un solo "cp -a". CUARENTA VECES mas lento, y eso en disco
-    # local: sobre un squashfs comprimido leido de un USB es lo que hacia que
-    # el arranque se quedara minutos en "Preparando el entorno de Windows".
+    #   - este borrado contaba con que Proton ejecutara copy_pfx() y repusiera
+    #     los ficheros;
+    #   - y el centinela de creacion que pone proton_marcar_prefijo es JUSTO lo
+    #     que hace que Proton se SALTE copy_pfx().
     #
-    # Ahora se copia la carpeta de golpe y DESPUES se borran las DLL que pone
-    # el runner. Se escribe algo mas, pero una sola vez y secuencialmente, que
-    # es lo que los discos hacen bien.
+    # Asi que los ficheros no volvian nunca. En el registro de un tester se ve
+    # entero, y en este orden:
+    #
+    #   (305 DLL quitadas: las pone el runner)
+    #   [+] Actualizando el prefix incluido (wineboot)...
+    #   wine: could not load kernel32.dll, status c0000135
+    #   El prefijo parece roto: Wine no consigue arrancar ni Windows.
+    #
+    # El borrado existia para otra cosa: evitar el FileExistsError de copy_pfx
+    # al enlazar encima de un fichero que ya estaba. Si copy_pfx no se ejecuta,
+    # no hay con que chocar, asi que el borrado ya no evita nada y lo unico que
+    # hace es dejar el prefijo sin kernel32.
+    #
+    # Se copia windows/ entera. Ocupa mas, y a cambio el prefijo que sale de
+    # aqui ARRANCA.
     if [ -d "$origen/drive_c/windows" ]; then
         cp -a "$origen/drive_c/windows" "$destino/drive_c/" 2>/dev/null
-        local _delrunner="$destino/.dll_del_runner"
-        : > "$_delrunner"
-        if [ -n "$rdir" ]; then
-            # NO SOLO LAS .dll: el runner tambien enlaza EJECUTABLES.
-            #
-            # Proton enlaza sus ficheros de windows/ al prefijo, y si nosotros
-            # ya copiamos uno con ese nombre, muere:
-            #
-            #   FileExistsError: ... winhlp32.exe
-            #
-            # Lo arreglamos para las .dll y se quedo ahi. Pero en esas mismas
-            # carpetas hay .exe (winhlp32, notepad, regedit...) y con ellos
-            # pasaba igual: el juego no arrancaba y el error no hablaba de
-            # ningun juego, asi que parecia cosa del mando.
-            find "$rdir" \( -path '*x86_64-windows*' -o -path '*i386-windows*' \) \
-                \( -name '*.dll' -o -name '*.exe' -o -name '*.drv' \
-                   -o -name '*.ocx' -o -name '*.sys' \) \
-                -printf '%f\n' 2>/dev/null | sort -u > "$_delrunner"
-        fi
-        local _n_fuera=0 _sysdir _dll
-        if [ -s "$_delrunner" ]; then
-            # Y EN LA PROPIA windows/, no solo en system32.
-            #
-            # El error real era con "drive_c/windows/winhlp32.exe": ahi
-            # tambien enlaza Proton, y nosotros solo limpiabamos las dos
-            # carpetas de sistema.
-            for _sysdir in "$destino/drive_c/windows" \
-                           "$destino/drive_c/windows/system32" \
-                           "$destino/drive_c/windows/syswow64"; do
-                [ -d "$_sysdir" ] || continue
-                while IFS= read -r _dll; do
-                    [ -n "$_dll" ] && [ -f "$_sysdir/$_dll" ] || continue
-                    rm -f "$_sysdir/$_dll" 2>/dev/null && _n_fuera=$((_n_fuera+1))
-                done < "$_delrunner"
-            done
-        fi
-        rm -f "$_delrunner" 2>/dev/null
-        [ "$_n_fuera" -gt 0 ] && say "    ($_n_fuera DLL quitadas: las pone el runner)"
     fi
 
     # LOS USUARIOS: se copia todo salvo AppData, que se ENLAZA.
@@ -35565,6 +36580,126 @@ raton_menus_label() {
         0) printf ', rueda 1/3 de pantalla' ;;
         *) printf ', rueda %s filas' "$r" ;;
     esac
+}
+
+cursor_label() {
+    # Como se resume el puntero en el menu de preferencias.
+    if [ "${OCULTAR_CURSOR:-1}" = 0 ]; then
+        printf 'no se toca'
+        return 0
+    fi
+    printf 'se esconde a los %s s, margen %s px' \
+        "${CURSOR_SEGUNDOS:-3}" "${CURSOR_UMBRAL:-8}"
+}
+
+cursor_menu() {
+    # EL PUNTERO MIENTRAS JUEGAS.
+    #
+    # La queja era doble y las dos partes importan, porque los dos primeros
+    # intentos arreglaron una rompiendo la otra:
+    #
+    #   "realmente no desaparece el cursor, sigue en pantalla, lo que
+    #    desaparece es luego ese cursor ingame y no se puede usar en algunos
+    #    menus de configuracion"
+    #
+    # Asi que: tiene que desaparecer DE VERDAD, y tiene que VOLVER cuando
+    # haga falta. Lo que cumple las dos es esconderlo por inactividad, como
+    # unclutter: jugando con el mando el raton no se mueve y el puntero se
+    # va; en cuanto lo tocas, esta ahi para los menus del juego.
+    #
+    # Los segundos se dejan a mano porque es cuestion de gusto: quien lea
+    # despacio los menus de un juego querra mas, y quien juegue siempre con
+    # el mando querra menos.
+    local sel
+    while :; do
+        sel="$(menu "El puntero mientras juegas" \
+            "Esconderlo solo: $([ "${OCULTAR_CURSOR:-1}" = 0 ] && printf 'no' || printf 'si')" \
+            "Esperar: ${CURSOR_SEGUNDOS:-3} s sin mover el raton" \
+            "Margen de movimiento: ${CURSOR_UMBRAL:-8} px" \
+            "Como funciona" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Esconderlo solo:"*)
+                if [ "${OCULTAR_CURSOR:-1}" = 0 ]; then OCULTAR_CURSOR=1; else OCULTAR_CURSOR=0; fi
+                save_settings
+                ui_info "Esconder el puntero: $([ "$OCULTAR_CURSOR" = 0 ] && printf 'no' || printf 'si')
+
+Hace efecto en la proxima partida." ;;
+            "Esperar:"*)
+                local s
+                s="$(menu "Cuanto esperar sin mover el raton" \
+                    "1 - casi al momento" \
+                    "3 - normal" \
+                    "5 - tranquilo" \
+                    "10 - solo si de verdad lo dejas" \
+                    "<< Volver")" || continue
+                case "$s" in
+                    "<< Volver"|"") continue ;;
+                esac
+                CURSOR_SEGUNDOS="${s%% *}"
+                save_settings
+                ui_info "Se escondera tras $CURSOR_SEGUNDOS s sin mover el raton.
+
+Si se te esconde mientras lees un menu del juego, subelo." ;;
+            "Margen de movimiento:"*)
+                # EL AJUSTE QUE ARREGLA "sigue saliendo el cursor".
+                #
+                # Pidiendo el pixel exacto no se escondia nunca en un equipo
+                # donde algo mueve el raton solo, que es lo normal: Steam
+                # Input emulando raton, un trackpad, un stick que deriva.
+                local m
+                m="$(menu "Cuanto hay que mover el raton para que cuente" \
+                    "0 - el pixel exacto (si nada mueve el raton solo)" \
+                    "4 - poco margen" \
+                    "8 - normal" \
+                    "20 - mucho (si aun asi se te queda a la vista)" \
+                    "<< Volver")" || continue
+                case "$m" in
+                    "<< Volver"|"") continue ;;
+                esac
+                CURSOR_UMBRAL="${m%% *}"
+                save_settings
+                ui_info "Margen de movimiento: $CURSOR_UMBRAL px
+
+Un temblor de menos de $CURSOR_UMBRAL px ya no cuenta como mover
+el raton, asi que el puntero se esconde igual. Moverlo de
+verdad lo sigue devolviendo al instante." ;;
+            "Como funciona")
+                ui_info "Mientras juegas, si pasan ${CURSOR_SEGUNDOS:-3} s sin que muevas
+el raton mas de ${CURSOR_UMBRAL:-8} px, el puntero se esconde. En cuanto lo
+mueves de verdad, vuelve al instante. Y si estas jugando
+con el mando, con un segundo basta.
+
+El margen de ${CURSOR_UMBRAL:-8} px no sobra: en un equipo de juego el
+puntero casi nunca esta del todo quieto -Steam Input
+emulando un raton, un trackpad, un stick que deriva- y
+pidiendo el pixel exacto no se escondia NUNCA.
+
+Jugando con el mando el raton no se mueve, asi que el
+puntero desaparece y no molesta. Y si el juego tiene un
+menu de configuracion que se usa con el raton, lo tocas y
+el cursor esta ahi.
+
+Se hace en TODAS las pantallas de la sesion: con gamescope
+el juego pinta en una pantalla distinta de la de WProton, y
+tocando solo la nuestra el puntero del juego seguia a la
+vista.
+
+Y por dos caminos a la vez, porque uno solo no llega a todas
+partes: el de X (XFixes) y, ademas, poniendole a la ventana
+del juego un cursor transparente. En una sesion Wayland -lo
+normal en CachyOS con KDE- el puntero lo dibuja el
+compositor y el primero puede quedarse en nada; el segundo
+es el que si cruza XWayland.
+
+Si el juego captura el raton -lo normal en primera persona-
+para esto es \"no se mueve\" y se queda escondido, que es lo
+que se quiere ahi.
+
+Al cerrar el juego el puntero vuelve siempre." ;;
+        esac
+    done
 }
 
 raton_menus_menu() {
@@ -41951,6 +43086,50 @@ pad_exit_segundos() {
     printf '%s' "$v"
 }
 
+lanzador_es_de_linux() {
+    # ¿Este lanzador es un juego de Linux? $1 = ruta del lanzador.
+    #
+    # EL FALLO QUE ARREGLA, QUE ES LA SEGUNDA VEZ QUE PICAMOS EN LO MISMO.
+    #
+    # Antes esto era una lista de extensiones: .sh, .AppImage y poco mas, y si
+    # no casaba se miraba WP_NATIVO. Pero WP_NATIVO solo existe en el camino de
+    # imagen, asi que un juego de Linux EN CARPETA cuyo lanzador fuera un
+    # binario pelado -Juego.x86_64, juego.bin, o sin extension ninguna- no
+    # casaba con nada y se trataba como juego de Windows. Lo contaba un tester
+    # tal cual:
+    #
+    #   "los juegos de linux en modo carpeta no deja salir pulsando select, y
+    #    al salir del propio juego se queda un tiempo pensando. El mismo juego
+    #    comprimido en wsquashfs lo cierra perfecto."
+    #
+    # Las dos mitades son lo mismo: sin apuntar la carpeta, el guardia no sabe
+    # que cerrar -Select no hace nada- y al terminar se recorre el cierre de
+    # Wine entero, con sus esperas, para un juego que no tiene Wine. De ahi el
+    # "se queda pensando". Comprimido funcionaba porque ahi SI esta WP_NATIVO.
+    #
+    # Ahora no se adivina por el nombre: si la extension no lo dice, SE MIRA EL
+    # FICHERO. Un ELF o un guion con almohadilla-admiracion no mienten.
+    local _l="${1:-}"
+    [ -n "$_l" ] || return 1
+    case "$_l" in
+        # Lo de Windows es lo unico que descarta de entrada.
+        *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD|*.lnk|*.LNK|*.msi|*.MSI) return 1 ;;
+        *.sh|*.SH|*.AppImage|*.appimage|*.APPIMAGE) return 0 ;;
+    esac
+    [ -n "${WP_NATIVO:-}" ] && return 0
+    [ -f "$_l" ] || return 1
+    # ELF: 7f 45 4c 46. Es lo que es un binario de Linux, se llame como se
+    # llame -Juego.x86_64, Juego.bin, Juego a secas-.
+    case "$(head -c 4 "$_l" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')" in
+        7f454c46) return 0 ;;
+    esac
+    # Y un guion, aunque no acabe en .sh.
+    case "$(head -c 2 "$_l" 2>/dev/null)" in
+        '#!') return 0 ;;
+    esac
+    return 1
+}
+
 guardia_salida_start() {
     # Vigila la combinacion de salida durante la partida, para poder cerrar
     # el juego solo
@@ -41967,7 +43146,8 @@ guardia_salida_start() {
     # El vigilante corre en un subshell propio y no ve lo que el padre asigne
     # despues de crearlo. Por un fichero si se entera, y ademas sirve aunque el
     # padre haya cambiado de juego.
-    rm -f "$RUNTIME_DIR/.juego_raiz" "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+    rm -f "$RUNTIME_DIR/.juego_raiz" "$RUNTIME_DIR/.juego_pgid" \
+          "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
     # SE MIRA EL LANZADOR, NO LA VARIABLE WP_NATIVO.
     #
     # WP_NATIVO solo se asigna en el camino de imagen; en el de carpeta no
@@ -41975,18 +43155,19 @@ guardia_salida_start() {
     # juego era de Linux y llamaba a wine_matar_prefijo, que ahi no cierra
     # nada. El sintoma era que Select no hacia nada.
     #
-    # La extension del ejecutable no miente en ninguno de los dos caminos.
     # $1 = lanzador, opcional. Los tres caminos de lanzamiento guardan la ruta
     # en variables distintas ($EXE_PATH, $exe, $launcher), asi que se admite
     # que nos la pasen en vez de adivinar cual mirar.
     local _lanz="${1:-${EXE_PATH:-}}"
-    case "$_lanz" in
-        *.sh|*.AppImage|*.appimage)
-            dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
-        *)  [ -n "${WP_NATIVO:-}" ] && [ -n "$_lanz" ] \
-                && dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
-    esac
+    if lanzador_es_de_linux "$_lanz"; then
+        dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null
+        log "guardia: juego de Linux, raiz apuntada = $(dirname "$_lanz")"
+    else
+        log "guardia: juego de Windows (lanzador: ${_lanz:-ninguno})"
+    fi
     export WP_OCULTAR_CURSOR="${OCULTAR_CURSOR:-1}"
+    export WP_CURSOR_SEGUNDOS="${CURSOR_SEGUNDOS:-3}"
+    export WP_CURSOR_UMBRAL="${CURSOR_UMBRAL:-8}"
     GUARDIA_PID="$(lanzar_suelto "$PY_BIN" "$MENU_PYGAME_PY" guardia \
                    "$marca" "$(pad_exit_segundos)" "${PAD_EXIT_COMBO:-select}")"
     sleep 0.4
@@ -41997,8 +43178,30 @@ guardia_salida_start() {
         # Y comprobarlo otra vez mas adelante: si se cae a los pocos segundos
         # (por ejemplo al tocar las X para el cursor), antes no nos
         # enterabamos y parecia que la combinacion de salida no servia.
+        #
+        # PERO SOLO SI EL JUEGO SIGUE EN MARCHA, QUE ES LO QUE FALTABA.
+        #
+        # El vigilante termina a proposito cuando acaba la partida. Si el juego
+        # dura menos de 20 s -y en los registros de un tester duraba 3 y 7,
+        # porque el prefijo estaba roto- este aviso saltaba SIEMPRE, diciendo
+        # que algo no iba a funcionar cuando ya no habia nada que vigilar.
+        # Dos registros seguidos con un susto que no era.
+        #
+        # La marca la borra guardia_salida_start en la siguiente partida y el
+        # cierre al desmontar, asi que "existe" = "esto sigue en marcha".
+        #
+        # Y SE PREGUNTA POR EL NOMBRE, NO POR EL IDENTIFICADOR.
+        #
+        # GUARDIA_PID es el del "setsid" que lo lanza, y ese puede haber
+        # desaparecido en cuanto arranco al python: es el mismo fallo que ya
+        # tuvimos en guardia_salida_stop y que esta contado alli. Preguntando
+        # por el, este aviso salia aunque el vigilante estuviera perfectamente
+        # vivo -y en los registros de un tester salio dos veces seguidas-.
+        # proceso_vivo mira el nombre, que es lo que no miente.
+        : > "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
         ( sleep 20
-          kill -0 "$GUARDIA_PID" 2>/dev/null \
+          [ -e "$RUNTIME_DIR/.juego_en_marcha" ] || exit 0
+          proceso_vivo 'menu_pygame\.py guardia' \
             || say "AVISO: el vigilante de salida SE CERRO; el cierre con el mando no funcionara"
         ) < /dev/null >/dev/null 2>&1 &
     fi
@@ -42138,6 +43341,9 @@ guardia_salida_start() {
 }
 
 guardia_salida_stop() {
+    # LA PARTIDA HA TERMINADO. Se quita la marca para que el aviso de los 20 s
+    # no salte por un vigilante que se cerro porque tenia que cerrarse.
+    rm -f "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
     # OJO con el identificador: el vigilante se lanza con "lanzar_suelto",
     # que usa setsid, y setsid muere en cuanto arranca al python. Asi que
     # GUARDIA_PID apunta a un proceso que ya no existe y el kill no alcanzaba
@@ -42179,6 +43385,7 @@ menu_server_reiniciar() {
     export WP_GRID_COLS="${GRID_COLS:-0}"
     export WP_LANG="${LANGUAGE:-es}"
     export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+    export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
     menu_server_alive || return 0          # si no habia servidor, nada que hacer
     menu_server_stop
     menu_server_start || true
@@ -44882,6 +46089,8 @@ font_label() {
         1.5)  printf 'muy grande' ;;
         *)    printf 'normal' ;;
     esac
+    [ "${MENU_AUTO_ESCALA:-1}" = 1 ] && printf ', sube sola en 4K'
+    return 0
 }
 
 dev_dir() {
@@ -50461,6 +51670,155 @@ $_pfxu"
     return 0
 }
 
+mando_activo_detectar() {
+    # Pregunta al modulo QUE MANDOS HAY y cual manda eventos.
+    # Escribe las lineas MANDO/ACTIVO en $1 y lo deja todo en el registro.
+    #
+    # Devuelve 0 si hay un activo, 2 si nadie movio nada, 1 si no se pudo.
+    local salida="$1" seg="${2:-6}"
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_mando_virtual
+    [ -f "$MANDO_VIRTUAL_PY" ] || return 1
+    if ! evdev_disponible log; then
+        instalar_evdev >/dev/null 2>&1
+        evdev_disponible log || return 1
+    fi
+    "$PY_BIN" "$MANDO_VIRTUAL_PY" mandos "$seg" > "$salida" 2>>"$LOG_FILE"
+    local rc=$?
+    # TODO lo que se ha visto va al registro, no solo el ganador: cuando algo
+    # no cuadra, lo que hace falta es la lista entera con sus clases.
+    local l
+    while IFS= read -r l; do
+        [ -n "$l" ] && log "mandos: $l"
+    done < "$salida"
+    return $rc
+}
+
+mando_activo_clase() {
+    # La clase del mando activo (virtual_steam, sony, fisico...), o vacio.
+    awk -F'\t' '$1=="ACTIVO"{print $4; exit}' "$1" 2>/dev/null
+}
+
+mando_activo_nombre() {
+    awk -F'\t' '$1=="ACTIVO"{print $6; exit}' "$1" 2>/dev/null
+}
+
+mando_activo_proponer() {
+    # DETECTA EL MANDO QUE SE ESTA USANDO Y PROPONE LOS AJUSTES DEL JUEGO.
+    #
+    # Lo pidio Dani: WProton ya veia los dos mandos -el fisico y el
+    # "X-Box 360 pad 0" que ofrece Steam Input- pero no sabia cual se iba a
+    # usar, y de eso dependen justo los dos ajustes de esta pantalla.
+    #
+    # NO SE DEDUCE POR EL NOMBRE, SE MIDE. El virtual de Steam se hace pasar
+    # por un Xbox 360, asi que por nombre y por fabricante son indistinguibles
+    # de uno de verdad. Lo que no miente es cual manda eventos cuando mueves
+    # el stick, y eso es lo que se escucha.
+    local gid="$1" tmp rc clase nombre prop_si prop_sony
+    tmp="$(mktemp)" || return 1
+    ui_info "Se van a mirar los mandos del sistema.
+
+Cuando se cierre este aviso, MUEVE EL STICK o pulsa un
+boton del mando que quieras usar en este juego.
+
+Son unos segundos. No se cambia nada todavia."
+    loading_say "Escuchando los mandos (8 s)..."
+    mando_activo_detectar "$tmp" 8
+    rc=$?
+    loading_clear
+    if [ "$rc" = 1 ]; then
+        rm -f "$tmp"
+        ui_error "No se ha podido mirar los mandos.
+
+Falta el modulo evdev o el Python propio de WProton. El
+detalle esta en el registro."
+        return 1
+    fi
+    local cuantos
+    cuantos="$(grep -c '^MANDO' "$tmp" 2>/dev/null)"
+    [ -n "$cuantos" ] || cuantos=0
+    if [ "$rc" = 2 ]; then
+        # NO SE INVENTA UN GANADOR.
+        #
+        # Si nadie toco nada, decir "el activo es el primero de la lista" seria
+        # exactamente el error que esto viene a arreglar.
+        rm -f "$tmp"
+        ui_info "No se movio ningun mando, asi que no puedo decir cual
+estas usando.
+
+Se han visto $cuantos mando(s); estan en el registro.
+
+Vuelve a intentarlo y mueve el stick cuando se cierre
+este aviso."
+        return 2
+    fi
+    clase="$(mando_activo_clase "$tmp")"
+    nombre="$(mando_activo_nombre "$tmp")"
+    rm -f "$tmp"
+    log "mandos: el activo es '$nombre' (clase $clase) de $cuantos"
+    # LA PROPUESTA, segun lo que de verdad cambia para el juego.
+    prop_si=""; prop_sony=""
+    case "$clase" in
+        virtual_steam)
+            # El juego va a leer el mando VIRTUAL de Steam. Ahi el puente
+            # Steam Input -> XInput es lo que hace que el juego lo vea bien,
+            # y el "automatico" NO se enciende si ademas hay un fisico a la
+            # vista: solo cuando el virtual es el unico. Este es justo el caso
+            # en que hay que pedirlo a mano.
+            [ "${PAD_SIFALLBACK:-auto}" = 1 ] || prop_si=1 ;;
+        sony)
+            # Un DualSense/DS4 de verdad: el arreglo de mandos Sony es lo que
+            # hace que el juego lo tome por un Xbox.
+            [ "${PAD_SONY:-auto}" = 1 ] || prop_sony=1 ;;
+    esac
+    local texto="El mando que estas usando es:
+
+  $nombre
+  ($(mando_clase_texto "$clase"))
+
+De $cuantos mando(s) que ve el sistema."
+    if [ -z "$prop_si" ] && [ -z "$prop_sony" ]; then
+        ui_info "$texto
+
+Los ajustes de este juego ya son los que le tocan: no hay
+nada que cambiar."
+        return 0
+    fi
+    local cambios=""
+    [ -n "$prop_si" ]   && cambios="$cambios
+  Puente Steam Input -> XInput: SI"
+    [ -n "$prop_sony" ] && cambios="$cambios
+  Mando Sony (DualSense/DS4): ON"
+    if ! ui_ask "$texto
+
+Propuesta para este juego:$cambios
+
+¿Se aplica?"; then
+        say "[i] mandos: la propuesta no se aplica (lo ha dicho el usuario)"
+        return 0
+    fi
+    [ -n "$prop_si" ]   && PAD_SIFALLBACK=1
+    [ -n "$prop_sony" ] && PAD_SONY=1
+    write_full_profile "$gid"
+    ui_info "Aplicado a $gid.
+
+Hace efecto en el proximo lanzamiento de este juego."
+    return 0
+}
+
+mando_clase_texto() {
+    # La clase, en palabras que signifiquen algo para quien lo lee.
+    case "${1:-}" in
+        virtual_steam)       printf 'el mando virtual que ofrece Steam Input' ;;
+        virtual_wproton)     printf 'el mando virtual de WProton' ;;
+        valve)               printf 'un mando de Valve (Steam Deck o Steam Controller)' ;;
+        sony)                printf 'un mando Sony: DualSense o DualShock' ;;
+        escondido_por_steam) printf 'un mando fisico que Steam pide ignorar' ;;
+        fisico)              printf 'un mando fisico' ;;
+        *)                   printf 'sin clasificar' ;;
+    esac
+}
+
 cfg_mandos_menu() {
     # TODO LO DEL MANDO EN UN SITIO.
     #
@@ -50482,9 +51840,13 @@ cfg_mandos_menu() {
             "Mando virtual: $(case "${MANDO_VIRTUAL:-0}" in 0|nunca) printf 'no' ;; *) printf '%s' "$MANDO_VIRTUAL" ;; esac)" \
             "Escribir SDL en el registro del prefijo (avanzado): $(winebus_sdl_puesto "$PREFIX_DIR/$gid" && printf 'SI' || printf 'no')" \
             "$(es_steam_deck && printf 'Trackpad como raton en este juego: %s' "$(trackpad_juego_label)")" \
+            "Detectar el mando que usas y proponer ajustes" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver"|"") return 0 ;;
+            "Detectar el mando que usas"*)
+                mando_activo_proponer "$gid" || true
+                continue ;;
         esac
         cfg_aplicar "$sel" "$gid" "$squash"
     done
@@ -50828,6 +52190,7 @@ main_dispatch() {
             fi ;;
         "Descargar runners"*)    download_runner_menu ;;
         "Actualizar a la última versión"*) actualizar_runners_menu ;;
+        "*** RUNNER NUEVO"*) actualizar_runners_menu ;;
         "Actualizar GE-Proton"*)   setup_runner_ultimo ge ;;
         "Actualizar Wine"*)        setup_runner_ultimo wine ;;
         "Actualizar UMU-Proton"*)  setup_runner_ultimo umu ;;
@@ -50921,15 +52284,29 @@ $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf
                 "Normal" \
                 "Grande (recomendado en consolas portatiles)" \
                 "Muy grande" \
+                "Subir sola en pantallas 4K: $([ "${MENU_AUTO_ESCALA:-1}" = 1 ] && printf 'si' || printf 'no')" \
                 "<< Volver")" || fsz=""
             case "$fsz" in
                 Normal*)      FONT_SCALE=1.0 ;;
                 Grande*)      FONT_SCALE=1.25 ;;
                 "Muy grande"*) FONT_SCALE=1.5 ;;
+                "Subir sola"*)
+                    # EN PIXELES, UNA PANTALLA 4K ACHICA LA LETRA.
+                    #
+                    # Los tamaños van en pixeles y un pixel de un 4K mide la
+                    # cuarta parte que uno de un 1080p, asi que la misma letra
+                    # se ve diminuta. Con esto sube en la misma proporcion que
+                    # la resolucion. Solo sube, nunca baja.
+                    if [ "${MENU_AUTO_ESCALA:-1}" = 1 ]; then
+                        MENU_AUTO_ESCALA=0
+                    else
+                        MENU_AUTO_ESCALA=1
+                    fi ;;
                 *) fsz="" ;;
             esac
             if [ -n "$fsz" ]; then
                 export WP_FONT_SCALE="$FONT_SCALE"
+                export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
                 save_settings
             menu_server_reiniciar
                 ui_info "Tamaño de letra: $(font_label)"
@@ -51623,6 +53000,7 @@ library_menu() {
             "Motor de los menus: $(menu_motor_label)" \
             "Tamaño de la letra: $(font_label)" \
             "Raton en los menus: $(raton_menus_label)" \
+            "Puntero mientras juegas: $(cursor_label)" \
             "Registros: $(logs_label)" \
             "Idioma: ${LANGUAGE:-es}" \
             "Copia de tu configuración (exportar / importar)" \
@@ -51633,6 +53011,7 @@ library_menu() {
         case "$sel" in
             "<< Volver"|"") return ;;
             "Raton en los menus:"*) raton_menus_menu || true ;;
+            "Puntero mientras juegas:"*) cursor_menu || true ;;
             "Registros:"*) logs_menu || true ;;
             "Traer todas las carátulas"*) covers43_traer_todas || true ;;
             "Perfiles del repositorio"*) community_descargas_menu || true ;;
@@ -51891,9 +53270,9 @@ actualizar_runners_menu() {
 
 Se consulta GitHub y solo se descarga si hay una mas nueva que
 la que ya tienes." \
-            "GE-Proton    (el runner por defecto)   [$(runner_etiqueta_instalada ge)]" \
-            "Wine         (Kron4ek staging wow64)   [$(runner_etiqueta_instalada wine)]" \
-            "UMU-Proton   (Open Wine Components)    [$(runner_etiqueta_instalada umu)]" \
+            "GE-Proton    (el runner por defecto)   [$(runner_etiqueta_instalada ge)]$(runner_marca ge)" \
+            "Wine         (Kron4ek staging wow64)   [$(runner_etiqueta_instalada wine)]$(runner_marca wine)" \
+            "UMU-Proton   (Open Wine Components)    [$(runner_etiqueta_instalada umu)]$(runner_marca umu)" \
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
@@ -51904,10 +53283,116 @@ la que ya tienes." \
     done
 }
 
+runner_remoto_fich() {
+    # Donde se apunta el ultimo publicado de esa familia. $1 = ge | umu | wine.
+    printf '%s' "$CACHE_DIR/runner_remoto_${1:-ge}"
+}
+
+runner_familia_repo() {
+    # Familia -> repositorio y patron del fichero. LOS MISMOS que usa
+    # setup_runner_ultimo, a proposito: si el aviso mirara otro sitio que la
+    # descarga, podria avisar de algo que luego no se baja.
+    case "${1:-}" in
+        ge)   printf '%s\t%s' "GloriousEggroll/proton-ge-custom" 'GE-Proton.*\.tar\.gz$' ;;
+        umu)  printf '%s\t%s' "Open-Wine-Components/umu-proton" 'UMU-Proton-.*\.tar\.gz$' ;;
+        wine) printf '%s\t%s' "$K4_REPO" 'wine-.*-staging-amd64-wow64\.tar\.xz$' ;;
+        *)    return 1 ;;
+    esac
+}
+
+runner_comprobar_fondo() {
+    # Mira si hay runners nuevos SIN que nadie espere, igual que el aviso de
+    # WProton. Una vez por arranque y en segundo plano.
+    #
+    # POR QUE SE GUARDA EL NOMBRE DE LA CARPETA Y NO UN NUMERO DE VERSION
+    #
+    # Porque es lo que ya sabe hacer el programa y no hay que inventar nada.
+    # setup_runner_ultimo saca el nombre de la carpeta del propio fichero
+    # publicado -quitandole la extension- y luego mira si esa carpeta existe.
+    # El aviso hace EXACTAMENTE esa comparacion, asi que lo que avisa y lo que
+    # se descarga no pueden desviarse: si el aviso dice que hay una nueva, al
+    # pulsar se baja esa.
+    #
+    # Comparar numeros de version habria sido inventar un segundo criterio
+    # -y con "GE-Proton11-7" frente a "GE-Proton9-27" hay que acordarse de que
+    # el orden alfabetico miente-.
+    local f fam
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+    (
+        for fam in ge umu wine; do
+            # Solo se pregunta por lo que esta instalado: a quien no usa Wine
+            # no hay que avisarle de que hay un Wine nuevo, ni gastarle una
+            # consulta en ello.
+            [ -n "$(runner_ultimo_de "$fam")" ] || continue
+            local datos repo patron url name
+            datos="$(runner_familia_repo "$fam")" || continue
+            repo="${datos%%	*}"; patron="${datos##*	}"
+            f="$(runner_remoto_fich "$fam")"
+            url="$(curl -fsSL --max-time 8 \
+                "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+                | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+                | filter_assets | grep -iE "$patron" | head -n1)"
+            name="$(basename "$url" 2>/dev/null)"
+            name="${name%.tar.gz}"; name="${name%.tar.xz}"; name="${name%.tar.zst}"
+            # Solo se guarda si parece el nombre de una carpeta de runner. Lo
+            # escribe otro proceso y acaba PINTADO EN UN MENU y usado en una
+            # ruta: una respuesta rara de GitHub -o una pagina de error- no
+            # puede acabar ahi.
+            if printf '%s' "$name" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]{2,80}$'; then
+                printf '%s' "$name" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null
+            else
+                # Se toca igual para no reintentar en cada menu cuando GitHub
+                # no contesta.
+                : > "$f" 2>/dev/null
+            fi
+        done
+    ) >/dev/null 2>&1 &
+    return 0
+}
+
+runner_hay_nuevo() {
+    # Imprime el nombre del runner publicado si NO lo tenemos. $1 = familia.
+    # Lee del fichero: no toca la red.
+    local fam="${1:-}" f rem
+    [ -n "$fam" ] || return 1
+    # SI NO HAY NINGUNO INSTALADO, NO SE AVISA DE NADA.
+    #
+    # Ahi no hay "version nueva": hay "no instalado", que es lo que ya dice la
+    # fila. Avisar de una actualizacion de algo que no tienes confunde.
+    [ -n "$(runner_ultimo_de "$fam")" ] || return 1
+    f="$(runner_remoto_fich "$fam")"
+    [ -f "$f" ] || return 1
+    rem="$(cat "$f" 2>/dev/null)"
+    [ -n "$rem" ] || return 1
+    printf '%s' "$rem" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]{2,80}$' || return 1
+    # La MISMA comprobacion que hace la descarga: si esa carpeta ya esta, no
+    # hay nada nuevo.
+    [ -d "$RUNNERS_DIR/$rem" ] && return 1
+    printf '%s' "$rem"
+    return 0
+}
+
+runner_aviso_alguno() {
+    # ¿Hay algo nuevo en cualquiera de las tres familias? Para marcar la fila
+    # que lleva al submenu, que es donde se mira primero.
+    local fam
+    for fam in ge umu wine; do
+        runner_hay_nuevo "$fam" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
 runner_etiqueta_instalada() {
     # Que version de esa familia hay ya, o "no instalado".
     local d; d="$(runner_ultimo_de "${1:-}")"
     if [ -n "$d" ]; then basename "$d"; else printf 'no instalado'; fi
+}
+
+runner_marca() {
+    # El aviso que se pega detras de la fila, si hay una version nueva.
+    local n; n="$(runner_hay_nuevo "${1:-}")" || return 0
+    printf '  *** NUEVA: %s ***' "$n"
+    return 0
 }
 
 componentes_menu() {
@@ -51960,7 +53445,11 @@ tools_menu() {
         # significa submenu y quien la usa ya lo tiene aprendido.
         sel="$(menu "Runners y herramientas" \
             "Descargar runners (Proton / Wine) [$nrunners instalados]" \
-            "Actualizar a la última versión >>" \
+            "$(if _n="$(runner_hay_nuevo ge)"; then \
+                 printf '*** RUNNER NUEVO: %s *** >>' "$_n"; \
+               elif runner_aviso_alguno; then \
+                 printf '*** HAY UN RUNNER NUEVO *** >>'; \
+               else printf 'Actualizar a la última versión >>'; fi)" \
             "Borrar un runner" \
             "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
@@ -52441,6 +53930,7 @@ export WP_THEME="${THEME:-moderno}"
 export WP_GRID_COLS="${GRID_COLS:-0}"
 export WP_LANG="${LANGUAGE:-es}"
 export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
 
 # ¿Primera puesta en marcha? Se decide ANTES de tocar nada, porque check_deps
 # ya se pone a descargar las herramientas de montaje y el usuario no puede
@@ -52470,6 +53960,7 @@ datos_preparar          # crea metadata/ y trae lo que hubiera de antes
 rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
 perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
 update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
+runner_comprobar_fondo   # y si hay runners nuevos, igual: en segundo plano
 repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
 # EL TRACKPAD COMO RATON, SI ESTA PEDIDO.
 #

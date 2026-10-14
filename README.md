@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 2.0** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 2.04** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/biblioteca-ficha.jpg)
 
@@ -14,7 +14,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 📖 **[Manual de uso](MANUAL.md)** — todo, apartado por apartado.
 
-📝 **[Novedades de la 2.0](NOVEDADES-2.0.md)** — qué trae esta versión.
+📝 **[Novedades de la 2.04](NOVEDADES-2.04.md)** — qué trae esta versión.
 
 ---
 
@@ -84,7 +84,8 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 
 ### Mantenimiento
 - **Espacio en disco**: qué ocupa cada cosa, tamaño por juego, limpieza de cachés y detección de prefijos y partidas huérfanas.
-- **Descarga masiva de carátulas y de datos**: las carátulas desde SteamGridDB, y la ficha de Steam y la duración de HowLongToBeat de toda la biblioteca de una vez. Opcionalmente, **RAWG** rellena las notas y las fichas de los juegos que no están en Steam.
+- **Carátulas 4:3 propias**: las trae WProton de la carpeta `covers_43/` de este repositorio, ya recortadas a 640x480 y sin necesidad de ninguna clave. Se baja sola la primera vez que cargas un juego, o **todas de golpe** desde *Biblioteca y preferencias*.
+- **Descarga masiva de carátulas y de datos**: las verticales y las panorámicas desde SteamGridDB, y la ficha de Steam y la duración de HowLongToBeat de toda la biblioteca de una vez. Opcionalmente, **RAWG** rellena las notas y las fichas de los juegos que no están en Steam.
 - **Verificación de integridad** de los archivos y aviso de espacio insuficiente antes de importar.
 - **Reparación de montajes colgados**: los que deja un juego que se cuelga se limpian solos antes del siguiente lanzamiento, sin reiniciar. También a mano desde *Espacio en disco*.
 - **Exportar/importar tu configuración** completa para pasar de máquina a máquina.

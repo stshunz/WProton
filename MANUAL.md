@@ -264,6 +264,17 @@ juego: *Ajustes del juego → Carátula y ficha → **Carátula 4:3: descargarla
 repositorio de WProton***. Esa opción consulta la lista recién traída, sin
 esperar a que caduque la del día, y avisa si todavía no hay ninguna.
 
+**Y se pueden traer todas de golpe.** En *Biblioteca y preferencias → Traer
+todas las carátulas del repositorio* se baja la colección entera, no solo las de
+los juegos que tienes ahora: así, cuando añadas uno nuevo, su carátula ya estará
+puesta y no hay que descargar nada más. Antes de empezar dice cuántas son y
+cuánto ocupan, y no hace falta ninguna clave.
+
+Las que se bajan así se guardan con el nombre que tienen en el repositorio. Si
+alguno de tus juegos se llama distinto —`Halo_Combat_Evolved` frente a
+`Halo.Combat.Evolved.png`— WProton deja además una copia con **tu** nombre, para
+que se vea en la biblioteca sin tener que renombrar nada a mano.
+
 Si te falta la de algún juego, puedes proponerla: un `png` o `jpg` a 640x480 en
 la carpeta `covers_43/` del repositorio, con el nombre del juego.
 
@@ -435,6 +446,8 @@ extremos de la barra lateral. Se apagan en gris cuando ya no hay más por ese
 lado. Su zona de clic es más ancha que el dibujo —acertar un triángulo de diez
 píxeles con el puntero es incómodo— pero nunca invade la lista, para que los
 últimos píxeles de una fila no desplacen en vez de elegir el juego.
+
+**En pantallas de mucha resolución la letra sube sola.** Los tamaños van en píxeles, y un píxel de un 4K mide la cuarta parte que uno de un 1080p: la misma letra se ve diminuta. WProton mide la ventana y sube la letra en la misma proporción —1080p igual, 1440p un tercio más, 4K el doble—, y el resto del diseño sube con ella. Solo sube, nunca baja, y multiplica el tamaño que hayas elegido, así que *grande* sigue siendo más grande que *normal*. Se mira la ventana y no el escritorio a propósito: con gamescope dibujando a 1280x800 para un televisor 4K, del agrandado ya se encarga él, y hacerlo dos veces daría letras gigantes. Se apaga en *Preferencias → Tamaño de la letra → **Subir sola en pantallas 4K***, o con `MENU_AUTO_ESCALA=0`.
 
 **El puntero se esconde solo** tras unos segundos quieto y vuelve al primer
 movimiento: en una Deck sin ratón un puntero plantado en medio sobra, y con
@@ -816,6 +829,18 @@ hayas probado antes. El original no se toca.
 cero. El juego y las partidas no se tocan, y queda una copia `.bak` por si
 acaso. También están todos juntos en *Perfiles guardados*.
 
+**Borrar este juego DEL DISCO** (*Herramientas del prefijo*) — borra el juego de la carpeta donde esté, y con él lo que WProton guarda de él: ajustes, prefijo propio, carátulas y ficha. Antes de borrar nada **pregunta una sola vez, diciendo el nombre del juego y lo que ocupa**, y avisa de que no se puede deshacer.
+
+**Tus partidas se copian a `backups/` antes de borrar**, igual que en *Borrar TODOS los datos*. Si esa copia falla, no se borra nada: ni el juego ni los datos.
+
+Tres cosas que no hace nunca, por si acaso:
+
+- **No borra nada que esté fuera de tus carpetas de juegos.** Si el juego no está dentro de una carpeta que hayas configurado, lo dice y no lo toca.
+- **No borra la carpeta de juegos entera**, solo lo que hay dentro.
+- **Si el juego es un acceso directo** (un enlace a otro disco), quita el enlace y deja el juego donde está de verdad. Te lo dice antes.
+
+Tampoco borra mientras estés jugando: hay que salir del juego primero.
+
 **Acceso directo en el escritorio** — crea un icono que lanza ese juego
 directamente, con su carátula. Útil para los que juegas a menudo.
 
@@ -1087,6 +1112,18 @@ Los plazos se pueden cambiar en `settings.conf`, aunque no suele hacer falta:
 
 **Perfiles de la comunidad**: en *Carátulas y perfiles de la comunidad* puedes descargar configuraciones ya probadas para juegos problemáticos. Vienen con notas explicando por qué necesitan esos ajustes.
 
+Si el juego además necesita un **mapeo de mando**, el perfil trae también su `.keys` y se descarga con él; el diálogo lo avisa antes. Se guarda con el nombre de *tu* juego y queda marcado como suyo, así que funciona aunque en el repositorio se llame distinto. Si ya tenías uno, se te pregunta antes y el tuyo se conserva como `.bak`.
+
+También puedes pedirla tú en cualquier momento, sin esperar a que salte ningún aviso: *Ajustes del juego → **Traer la configuración de la comunidad***. La fila dice en qué situación estás —que no la tienes, que ya la tienes, o que hay una nueva—, y funciona siempre, incluso si tienes la misma versión: sirve para **volver atrás** cuando has estado toqueteando ajustes y lo has dejado peor. Antes de hacer nada avisa de que sustituye tu configuración, que se guarda como `.conf.bak`.
+
+Si el perfil que tienes **se mejora más tarde en el repositorio**, WProton te lo dice: al lanzar ese juego avisa de que la comunidad ha mejorado su configuración y te ofrece la nueva. Si dices que no, no vuelve a preguntar por *esa* versión, pero sí cuando salga la siguiente. Y si habías ajustado tu copia a mano te lo advierte antes: la tuya se guarda como `.conf.bak`.
+
+Para revisarlos todos de golpe, sin esperar a abrir cada juego: *Biblioteca y preferencias → Perfiles del repositorio → **Buscar perfiles actualizados***. Dice qué juegos tienen versión nueva, marca los que has modificado tú, y los actualiza todos con una sola confirmación.
+
+Esto no cuesta ninguna consulta extra a GitHub: la lista de perfiles que WProton ya pide al arrancar trae dentro la versión de cada fichero. Un perfil que te hayas hecho tú a mano no se compara con nada y no se toca nunca.
+
+Al arrancar, WProton **pone al día las listas de perfiles y de carátulas** del repositorio, en segundo plano y sin que el arranque espere (con un suelo de diez minutos entre refrescos, para no agotar las 60 peticiones por hora que da la API de GitHub sin credenciales). Además, **un juego que se acabe de subir se encuentra igual**: si no está en la lista guardada, WProton la pide otra vez antes de darlo por perdido (una sola vez por sesión). Y si aun así no aparece, *Biblioteca y preferencias → Comprobar el repositorio* dice por qué.
+
 ### Si hace falta mirar más adentro
 
 En `settings.conf` hay tres interruptores de diagnóstico. Se activan con `=1`, se
@@ -1145,6 +1182,11 @@ cada uno sale el tiempo jugado y cuándo fue la última vez:
 ![Vista de carátulas panorámicas, cuatro por fila](img/biblioteca-anchas.jpg)
 
 - **Carátulas por fila**: automático (se adapta a tu pantalla) o de 4 a 8. Menos carátulas por fila significa carátulas más grandes; más, ver más juegos de un vistazo.
+- **Traer todas las carátulas del repositorio**: baja de una vez TODAS las 4:3 de `covers_43/`, no solo las de tus juegos. Dice cuántas son y cuánto ocupan antes de empezar, y no pide clave ninguna.
+- **Perfiles del repositorio**: dos opciones que hacen cosas distintas.
+    - **Traer los de tus juegos (los instala)**: cruza tu biblioteca con `profiles/` e instala de una vez todas las configuraciones que te correspondan, con sus `.keys` cuando los haya. Quedan en `profiles/` con el nombre de *tus* juegos, listas para jugar. Pregunta **una sola vez**, antes de empezar, qué hacer con los juegos que ya tienen perfil: dejarlos como están (lo que viene marcado) o sustituirlos guardando el tuyo como `.conf.bak`.
+    - **Traer TODOS a comunidad/**: el repositorio entero, tengas sus juegos o no, en una carpeta aparte y con el nombre que tienen allá. No van a `profiles/` a propósito: ahí cada fichero tiene que llamarse como *tu* juego para que WProton lo encuentre, y el menú de perfiles pasaría a tener cientos de entradas que no son tuyas. En `comunidad/` los puedes abrir como ficheros de texto para mirar o comparar, y además **esta carpeta es la primera parada**: si el perfil de un juego ya está aquí, WProton lo instala del disco al instante sin preguntarle nada a GitHub, y funciona igual sin conexión. Solo si el juego no está en la copia se sale a la red. Las carátulas siguen saliendo del repositorio siempre. Solo descarga lo que falte.
+- **Comprobar el repositorio**: dice cuántos perfiles, ficheros de teclas y carátulas hay en el repositorio **ahora mismo**, y, cruzándolo con tu biblioteca, **cuáles de tus juegos se quedan sin perfil o sin carátula**. Es lo primero que hay que mirar cuando algo "no se descarga": separa los cinco motivos posibles (sin conexión, repositorio mal escrito, GitHub limitando peticiones, el fichero no está subido, o el nombre no coincide) sin tener que abrir una terminal. El detalle completo, con la lista entera de los que faltan, queda en el registro.
 - **Descargar carátulas**: las **4:3** salen de la carpeta `covers_43/` del repositorio de WProton y no piden nada; las **verticales** y las **panorámicas** necesitan una clave gratuita de [SteamGridDB](https://www.steamgriddb.com) (Perfil → Preferences → API), que se pide una sola vez y solo si las has pedido.
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
 - **Tamaño de la letra**: normal, grande o muy grande. En consolas portátiles se agradece "grande".
@@ -1352,12 +1394,67 @@ Un par de cosas que están ahí y ahorran tiempo:
 
 ## 11. Formatos de archivo
 
-WProton puede empaquetar en dos formatos (*Biblioteca y preferencias → Formato al empaquetar*):
+Al importar un juego, WProton puede dejarlo de tres maneras (*Biblioteca y preferencias → Formato al empaquetar*):
 
 - **wsquashfs** — el de siempre, compatible con Batocera y PortProton.
 - **dwarfs** — comprime más. Se nota sobre todo en juegos con muchos archivos parecidos; en juegos cuyos datos ya vienen comprimidos, la diferencia es pequeña.
+- **carpeta** — **sin empaquetar**: el juego queda como una carpeta normal dentro de tu carpeta de juegos.
 
-Los dos se montan igual de rápido y se usan exactamente igual. Puedes tener juegos de los dos tipos mezclados.
+Los dos primeros se montan igual de rápido y se usan exactamente igual. Puedes tener juegos de los tres tipos mezclados.
+
+**Todo lo demás funciona igual con los tres**, y esto se pregunta a menudo con los `.keys`: el mapeo del mando, los perfiles, las carátulas, el overlay de las partidas y los prefijos no miran el formato del paquete. Un `Mi_Juego.keys` junto a un `Mi_Juego.dwarfs` se encuentra exactamente igual que junto a un `.wsquashfs`, y lo mismo con `Mi_Juego.dwarfs.keys` o con el de `profiles/`.
+
+### Cuándo elegir "carpeta", y qué se pierde
+
+Es más sencillo y se entiende de un vistazo: lo que hay en el disco es el juego, sin nada en medio. A cambio se pierden las cuatro cosas para las que existe el empaquetado, y conviene saberlas antes de activarlo (WProton te las recuerda al elegirlo):
+
+- **Un fichero por juego.** Un juego son decenas de miles de archivos sueltos, y en una microSD eso se lee bastante más lento que un `.wsquashfs`.
+- **La compresión.** El juego ocupa lo que ocupa.
+- **El overlay que separa tus partidas del juego.** Con el juego en carpeta, las partidas se guardan entre sus archivos, como en Windows.
+- **Llevártelo a otro equipo copiando un archivo.**
+
+Los juegos que ya tengas empaquetados se siguen usando igual: el ajuste solo afecta a los que importes a partir de ese momento. Y las dos opciones cuyo trabajo *es* empaquetar —*Convertir carpeta a wsquashfs* y *empaquetar un juego con su prefijo*— siguen haciendo un archivo aunque tengas puesto "carpeta": si has pedido un paquete, es que quieres un paquete.
+
+### Juegos con decenas de miles de archivos
+
+Hay un caso en el que **"carpeta" es la buena**, y conviene conocerlo porque desde fuera parece una avería: un juego con *muchísimos* archivos —decenas de miles— puede quedarse cargando para siempre si lo empaquetas, mientras que en carpeta arranca normal.
+
+Pasó con un juego de 48 GB y 32.164 archivos. No estaba roto: en el registro no había ni un error y la ventana del juego llegaba a abrirse. Simplemente tardaba una barbaridad. El motivo es que se juntan dos cosas que por separado no se notan:
+
+- Un juego empaquetado se lee a través de **dos capas** (la imagen y la superposición que guarda tus partidas), y cada una de ellas atiende desde un programa, no desde el núcleo del sistema.
+- Wine resuelve las rutas **sin distinguir mayúsculas de minúsculas**, y para eso **lee la carpeta entera** cada vez que el juego abre un archivo.
+
+Con unos cientos de archivos eso es gratis. Con treinta mil en la misma carpeta, se multiplica.
+
+Por eso, **al empaquetar, si el juego pasa de 20.000 archivos WProton te avisa y te ofrece dejarlo en carpeta**, diciéndote cuántos son. Puedes decirle que no y empaquetar igualmente —el aviso no impide nada—, pero merece la pena pensárselo antes: rehacer el empaquetado de un juego grande en el otro formato son otras tantas horas.
+
+Dicho esto, **un paquete monta más rápido de lo que montaba**: WProton usa ahora `squashfuse_ll` cuando está disponible —el driver rápido del mismo proyecto— y le dice al sistema que lo que lee de una imagen no caduca, porque una imagen montada no puede cambiar. Eso quita muchísimas idas y venidas en juegos con muchos archivos.
+
+**Si no lo tienes, WProton se lo descarga solo**, en segundo plano al arrancar, sin que nadie espere: un binario a `runtime/tools`, como `squashfuse` o 7-Zip. Se intenta una vez; si no hay red o no se encuentra, se reintenta a la semana y mientras tanto se monta como siempre. Para forzarlo en el momento está *Runners y herramientas → Descargar herramientas FUSE*, que además te dice qué driver vas a usar. En el registro aparece en cada arranque:
+
+```
+Montaje de imagenes: driver = .../squashfuse_ll [low-level, cache permanente]
+```
+
+Si quieres cambiar ese número, o quitar el aviso, está en `settings.conf`:
+
+```
+PACK_AVISO_FICHEROS=20000   # 0 = no avisar nunca
+```
+
+Y si ya tienes el juego empaquetado y te pasa esto, la salida es *Archivos y discos → Convertir wsquashfs a carpeta*. Si ese juego tiene partidas guardadas en su superposición, **te pregunta si incluirlas** en la carpeta —lo normal es decir que sí: así la carpeta queda como lo veías al jugar—. Las originales no se tocan, siguen en `wsquashfs/overlays/<juego>/upper/`.
+
+### Los comprimidos de los que salió el juego
+
+Al importar un `.zip`, `.7z` o `.rar`, cuando el juego ya está instalado WProton **te pregunta** si borrar los comprimidos originales, diciéndote cuántos son y cuánto ocupan. Antes los borraba sin preguntar, y hay dos buenas razones para conservarlos que no puede adivinar: que sean tu única copia del juego, o que quieras importarlo en otro equipo.
+
+Solo toca ficheros con extensión de comprimido, incluidos los multiparte (`.001`, `.partN.rar`, `.rNN`, `.z01`). Un `Mi.Juego-partidas.txt` o un `Mi.Juego.jpg` al lado no se tocan.
+
+### 7-Zip
+
+Para abrir `.7z` y `.rar` hace falta 7-Zip, y **WProton se lo descarga solo**: un único binario en `runtime/tools`, sin sudo y sin instalar nada en el sistema, igual que hace con `squashfuse` o con su propio Python. Si ya tienes un `7z` en el sistema, usa el tuyo y no descarga nada.
+
+Esto importa sobre todo en la Steam Deck: su sistema es de solo lectura, así que la vía de "instala el paquete p7zip" no era una opción ahí. Si prefieres poner el binario a mano, vale cualquier 7z: déjalo en `runtime/tools` con el nombre `7zz`.
 
 ---
 
@@ -1366,11 +1463,97 @@ Los dos se montan igual de rápido y se usan exactamente igual. Puedes tener jue
 **¿Puedo mover WProton a otro sitio o a un pendrive?**
 Sí. Si en `settings.conf` usas una ruta relativa —`GAMES_PATH="games"`— puedes mover la carpeta entera y todo seguirá funcionando.
 
+**Se ve el puntero del ratón encima del juego.**
+
+WProton lo **esconde por inactividad**, como hace `unclutter`: si pasan unos segundos sin que muevas el ratón —que es lo que ocurre jugando con el mando— el puntero desaparece, y en cuanto lo mueves vuelve al instante. Se ajusta en *Preferencias → **Puntero mientras juegas***: encendido o apagado, 1, 3 (lo normal), 5 o 10 segundos de espera, y el **margen de movimiento**. En `settings.conf` son `OCULTAR_CURSOR`, `CURSOR_SEGUNDOS` y `CURSOR_UMBRAL`.
+
+**El margen de movimiento es la parte que no se ve venir.** En un equipo de juego el puntero casi nunca está en el píxel exacto: Steam Input puede estar emulando un ratón, un trackpad haciendo de ratón manda movimiento con solo apoyar el dedo y un stick con deriva lo empuja un píxel cada tanto. Pidiendo el píxel exacto, el puntero **no se escondía nunca** y parecía que la función no funcionaba. Con un margen de 8 px un temblor ya no cuenta como "estoy usando el ratón", y mover el ratón de verdad lo sigue devolviendo al instante. Si aún así se te queda a la vista, sube el margen; si tarda en reaparecer, bájalo.
+
+Y como WProton ya está leyendo el mando para poder cerrar el juego, lo aprovecha: **si están llegando eventos del mando, con un segundo quieto basta**, porque entonces es seguro que no estás en el ratón.
+
+Si el puntero sigue a la vista, el registro lo dice cada minuto con los números: cuánto hace que se movió de verdad, cuántas veces ha temblado y cuántas se ha movido. Eso distingue "no se intenta esconder" de "se esconde y algo lo vuelve a pintar", que son dos averías distintas.
+
+Está hecho así porque hay **dos cosas que cumplir a la vez**: el puntero tiene que irse de verdad, y el cursor tiene que estar cuando el juego lo pide. Esconderlo a secas (`XFixesHideCursor` y punto) cumplía la primera a medias y rompía la segunda: se llevaba por delante el cursor **del juego** y en los menús de configuración de algunos juegos no había con qué pinchar. Con la inactividad no hay que elegir: tocas el ratón y el cursor está ahí.
+
+**Si el puntero se esconde mientras lees un menú del juego**, sube los segundos. Y si el juego **captura** el ratón —lo normal en primera persona— para WProton eso es "no se mueve", así que se queda escondido, que es justo lo que quieres ahí.
+
+Se esconde en **todas las pantallas** de la sesión, no solo en la de WProton: con gamescope por medio el juego pinta en otro XWayland, y tocando solo la nuestra el puntero seguía viéndose encima del juego.
+
+**Y por dos caminos a la vez**, porque uno solo no llega a todas partes:
+
+1. `XFixesHideCursor`, el de X de toda la vida. Funciona en una sesión X11.
+2. Ponerle a la ventana del juego un **cursor transparente**. Es el camino que usa cualquier programa para enseñar su propio cursor, así que cruza XWayland sin problema.
+
+El segundo hace falta porque en una **sesión Wayland** —lo normal en CachyOS con KDE— el puntero no lo dibuja X: lo dibuja el compositor, y el juego corre dentro de XWayland. Ahí el primer camino puede quedarse en nada; es la misma razón por la que `unclutter` tampoco funciona en Wayland. El registro dice al arrancar qué clase de sesión hay, para que no haya que adivinarlo.
+
+El cursor transparente se vuelve a poner en cada vuelta mientras está escondido, porque el juego pone el suyo cuando le apetece —Wine lo hace con cada `WM_SETCURSOR`— y si no se repite el puntero reaparece solo. Al mover el ratón se le devuelve su cursor al juego, y al cerrar el juego el puntero vuelve siempre.
+
+**¿Cómo sé si hay un GE-Proton nuevo?**
+
+WProton lo avisa solo. En *Runners y herramientas*, la fila de actualizar pasa a decir `*** RUNNER NUEVO: GE-Proton11-8 *** >>`, y dentro cada familia (GE-Proton, Wine, UMU-Proton) lleva su aviso junto a la versión instalada. La consulta a GitHub se hace en segundo plano al arrancar, así que abrir el menú no espera a la red.
+
+Solo avisa de las familias que tienes instaladas: si no usas Wine, no te dice que hay un Wine nuevo. Y lo que compara no es el número de versión sino el nombre de la carpeta que se instalaría —la misma comprobación que hace la descarga—, así que lo que se avisa y lo que se baja son siempre lo mismo.
+
+**¿Qué mando va a usar el juego, si veo dos?**
+
+En *Ajustes del juego → Mandos → **Detectar el mando que usas y proponer ajustes***. Escucha unos segundos, le mueves el stick al mando que quieras usar, y te dice cuál es y qué ajustes le tocan a ese juego.
+
+Hace falta porque en una Deck, o con Steam abierto, se ven dos mandos: el físico y el `Microsoft X-Box 360 pad 0`, que es el virtual de Steam Input. Y por el nombre no se distinguen —el virtual se hace pasar por un Xbox 360—, así que WProton mira el sysfs, la lista de mandos que Steam pide ignorar, y sobre todo **cuál manda eventos**. Si no mueves nada, te lo dice y no cambia nada: no elige uno al azar.
+
+**Un juego trae su prefijo dentro del archivo y no arranca.**
+
+Proton no sabía que ese prefijo ya existía —le falta un fichero interno (`pfx/creation_sync_guard`) que sólo pone él al crear uno— así que intentaba crearlo encima y se caía con un `FileExistsError` al primer fichero repetido. El juego moría en tres segundos, en cada intento. WProton pone ese fichero y marca el prefijo con la versión de formato que Proton compara de verdad, leída del propio runner.
+
+**Ese arreglo trajo otro, y por eso en la 2.04 cambió el método.** Poner ese fichero hace que Proton se salte la creación del prefijo… y había otra parte de WProton contando con que la hiciera: al sacar el prefijo del archivo se borraban las DLL que trae el runner, con la idea de que Proton las repusiera. No las reponía nadie, y el prefijo se quedaba sin `kernel32.dll` (`wine: could not load kernel32.dll`). Ahora `windows/` se copia entera: ocupa más y arranca.
+
+Y el fichero **sólo se pone si el prefijo se sostiene solo** —tiene registro y tiene `kernel32.dll`—. Dicho de un prefijo vacío sería mentira, y Proton se la creía: se saltaba la creación y se estrellaba en la primera copia (`FileNotFoundError: .../pfx/drive_c/vrclient/bin`). Si encuentra uno puesto por una versión anterior en un prefijo a medias, **lo quita**, así que los prefijos que se rompieron con la 2.03 se arreglan solos al volver a entrar.
+
+Si tienes un juego así y sigue fallando, el registro lo dice: busca `creation_sync_guard` y `CURRENT_PREFIX_VERSION`.
+
 **¿Dónde están mis partidas?**
 En `wsquashfs/overlays/<juego>/upper/` y, según el juego, dentro de su prefijo. Esa carpeta **no se borra nunca** al reempaquetar un juego.
 
+**Los trackpads de la Steam Deck**
+
+Esto hay que contarlo bien, porque se arregló dos veces a ciegas antes de ir a mirar el código del driver (`drivers/hid/hid-steam.c` del kernel), y las dos veces se atacó un mecanismo equivocado.
+
+El mando tiene **dos modos**, y los cambias tú **manteniendo pulsado OPCIONES** (el botón de las tres rayas) **medio segundo**. El mando vibra al cambiar. Es el mismo gesto que usa Steam:
+
+- **Modo escritorio** (lo normal). El *firmware del mando* emula ratón y teclado: el pad **derecho** mueve el puntero y el **izquierdo** hace de rueda. A cambio, el sistema no publica los trackpads: el dispositivo existe pero no manda ni un evento.
+- **Modo gamepad**. Se apaga esa emulación —y esto es lo que la gente cuenta como *"se han muerto los trackpads"*— y el sistema empieza a publicar los dos pads como ejes del mando.
+
+**Así que si los trackpads no te mueven el puntero, lo más probable es que el mando esté en modo gamepad, y se arregla manteniendo OPCIONES medio segundo.** No hace falta WProton, ni `sudo`, ni reiniciar.
+
+Y lo que **no** es verdad, aunque antes lo dijera este manual: que WProton los apagara al abrir el mando. En el kernel, el apagado automático al abrir el dispositivo de entrada está excluido para la Deck desde la versión 6.8. Lo que sí puede apagarlos es un programa que abra el mando por `hidraw` y se lo pida al firmware — Steam lo hace, y los juegos hechos con SDL también.
+
+### Tus trackpads, no los de Steam
+
+Lo anterior obliga a mantener pulsado OPCIONES, que es el gesto de Steam. WProton tiene los suyos, y los enciende y apaga cuando tú quieras: en *Runners y herramientas → **Trackpads de la Deck*** eliges qué pad mueve el puntero y a qué velocidad, y ya funciona sin ningún gesto previo.
+
+Para eso WProton **le apaga al mando su emulación de ratón** mientras usa el pad, y **se la devuelve** al apagar la opción o al cerrar. No son registros inventados: son exactamente los dos comandos que manda el driver del kernel en `steam_set_lizard_mode()`, con los mismos valores y el mismo envoltorio (informe de característica de 65 bytes por `HIDIOCSFEATURE`, que es lo que el mando entiende; un `write()` normal manda un informe de salida y lo ignora).
+
+```
+apagar:   0x81                        (borrar las asignaciones de teclado/ratón)
+          0x87 06 09 00 00 47 00 00   (modo lagarto = 0, watchdog = 0)
+encender: 0x85  y  0x8E               (restaurar las de fábrica)
+```
+
+El watchdog se apaga porque es lo que hace el driver: sin eso, el firmware vuelve a encender su emulación al rato por su cuenta.
+
+**Se devuelve siempre.** Al apagar la opción, al cerrar WProton y también si a WProton lo matan con una señal. Y hay red de seguridad doble: al cerrarse el descriptor, el propio driver del kernel vuelve a registrar el mando y restaura la emulación. Si aun así te quedan muertos —un corte de luz, un `kill -9`—, hay *Devolver los pads al mando ahora* en ese mismo menú, y mantener OPCIONES dos veces también lo arregla.
+
+**Lo que cuesta, para que lo sepas:** mientras WProton lee el mando por `hidraw`, el driver retira el gamepad del sistema. Con Steam en marcha eso da igual, porque Steam ya lo tenía cogido y publica su propio mando virtual. Sin Steam, el mando desaparece para los juegos mientras el trackpad esté activo; queda dicho en el registro.
+
+Si prefieres que WProton **no le escriba nada** al mando, en ese menú está *Quién manda en los pads*. Con esa opción en "el mando", WProton sólo lee —por el dispositivo de entrada del sistema, donde el pad izquierdo son los ejes `ABS_HAT0X/Y` y el derecho los `ABS_HAT1X/Y`, publicados desde el kernel 6.3— y entonces sí hace falta poner el mando en modo gamepad a mano.
+
+**Y hay un diagnóstico que lo dice todo.** *Runners y herramientas → Trackpads de la Deck → Probar los trackpads* mira el parámetro del módulo, si existe el dispositivo con los pads, si otro programa tiene el `hidraw` cogido, y escucha unos segundos para saber en qué modo está el mando. Te dice en pantalla cuál de los casos es y qué hacer, y el detalle queda en el registro.
+
+**Y se puede decidir por juego.** En *Ajustes del juego → Mandos → **Trackpad como ratón en este juego*** eliges si ese juego concreto usa un pad como puntero, cuál, o ninguno. Viene en *"lo que diga el ajuste general"*, así que no cambia nada hasta que lo tocas. Se aplica al lanzar y, al salir, vuelve a lo que diga el ajuste general — también si el juego falla al arrancar.
+
 **¿Puedo lanzar los juegos desde Steam?**
 Sí: *Ajustes de un juego → Añadir este juego a Steam*. Aparecerá en tu biblioteca como juego no-Steam, con su carátula. Hazlo con Steam cerrado.
+
+Al añadirlo, WProton **descarga las carátulas de SteamGridDB** y pone las cuatro imágenes que usa la ficha de Steam: la vertical de la estantería, la apaisada de la cabecera, el fondo grande y el logotipo. Las dos primeras se guardan también en `covers/` y `covers_wide/`, así que sirven igual en la biblioteca de WProton. Si no tienes API key de SteamGridDB no se te pregunta nada en ese momento: el juego se añade con las carátulas que haya y el aviso del final te dice dónde se pone la clave.
 
 **¿Y desde EmulationStation o DeckStation?**
 Apunta el lanzador a `wproton.sh %ROM%`.
@@ -1428,6 +1611,19 @@ mandos que llegan de forma rara sin cambiar nada más. Si el juego lee la
 cruceta pero no la usa, prueba **+ cruceta al stick**. Y para juegos antiguos
 que se aceleran solos, **Mando clásico**.
 
+**Este juego apunta con el stick derecho y me iría mejor con el izquierdo.**
+En *Ajustes del juego → Mapeador .keys → **Intercambiar los sticks***. El juego verá el stick izquierdo donde estaba el derecho y al revés, y el **clic de cada stick se va con el suyo** (si apuntas con el izquierdo, pulsarlo hace lo que antes hacía pulsar el derecho).
+
+Esto no lo hace el mapeador de teclas —ése convierte el mando en pulsaciones—, sino el **mando virtual**, presentándole al juego otro mando con los sticks cambiados. Así que si lo tenías apagado se enciende solo, en modo copia, al lanzar ese juego: eso **captura el mando físico**, con lo que pierdes la vibración y el remapeado de Steam Input mientras juegas. Se combina con todo lo demás del mando virtual (Xbox, DualShock, clásico, cruceta al stick).
+
+Si es lo **único** que activas, se guarda igual: el editor escribe el `.keys` con sólo esa opción (y la salida de emergencia Select+Start, que va siempre). Y si WProton no consigue capturar el mando físico —normalmente porque ya lo tiene cogido el mapeador, cuando el `.keys` mapea el movimiento— el intercambio **no funciona**, porque el juego sigue viendo el mando real con los sticks en su sitio; eso queda dicho en el registro con el motivo.
+
+Se guarda **en el `.keys` del juego**, no en su perfil, por dos razones: es cosa de ese juego, y así viaja con él —un `.keys` de la comunidad puede traerlo ya puesto—. En el fichero es una sección propia de WProton que Batocera ignora:
+
+```json
+{ "sticks": { "swap": 1 } }
+```
+
 **Quiero que un juego responda a teclas concretas del teclado.**
 En *Ajustes del juego → Mapeador .keys*.
 
@@ -1455,7 +1651,20 @@ Se decide solo mirando el fichero, así que normalmente no hay que tocar nada. S
 un juego concreto lo lleva mal, está en *Mapeador .keys → El juego NO ve el mando*, con tres opciones y una explicación de cada una.
 
 > El ratón también funciona: si el `.keys` asigna un stick al ratón, WProton
-> crea un ratón virtual. Los clics (`BTN_LEFT`) van por ahí, no por el teclado.
+> crea un ratón virtual, y los clics van por ahí, no por el teclado.
+
+**Los tres botones del ratón.** En *Crear o editar las teclas → Ratón* se elige
+qué botón del mando hace cada clic: el **izquierdo**, el **derecho** y el
+**central**. El derecho hace falta en los juegos que lo usan para apuntar o para
+recargar; los dos últimos se pueden dejar sin asignar, que es como vienen.
+
+Funcionan igual si el botón elegido es un gatillo: en casi todos los mandos L2 y
+R2 no mandan una pulsación sino un eje, y WProton lo traduce.
+
+Y un clic se le puede colgar a cualquier botón **sin tocar el stick**: al asignar
+una tecla, en *Botones del ratón*. Sirve aunque el puntero no se mueva —WProton
+crea el ratón virtual igualmente—, así que vale para un juego que solo necesita
+un clic derecho de vez en cuando.
 
 **El teclado en pantalla** resuelve los juegos que te obligan a escribir un
 nombre y no soportan mando: una combinación abre un teclado que se maneja con
@@ -1533,8 +1742,10 @@ Cerrar el juego con el mando **no depende de eso**: WProton lee el mando
 directamente y funciona igual.
 
 **Se ve el puntero del ratón encima del juego.**
-WProton lo esconde al lanzar y lo devuelve al terminar. Si prefieres que no lo
-toque, pon `OCULTAR_CURSOR=0` en `settings.conf`.
+WProton lo esconde tras unos segundos sin mover el ratón y lo devuelve en
+cuanto lo mueves. Se ajusta en *Preferencias → **Puntero mientras juegas***, o
+con `OCULTAR_CURSOR`, `CURSOR_SEGUNDOS` y `CURSOR_UMBRAL` en `settings.conf`. Está contado con
+detalle en las preguntas frecuentes.
 
 **¿Cómo salgo de un juego que no tiene opción de salir?**
 Mantén pulsado **Select** cinco segundos y WProton lo cierra. En la Steam
@@ -1615,6 +1826,7 @@ respuesta, no avisa y ya lo hará en el siguiente arranque.
 |---|---|
 | `games/` | Tus juegos empaquetados |
 | `profiles/` | La configuración de cada juego |
+| `comunidad/` | Copia de los perfiles del repositorio, si la has pedido |
 | `wsquashfs/overlays/` | **Tus partidas** |
 | `prefixes/` | Los prefijos de Wine |
 | `backups/` | Copias de partidas y de tu configuración |

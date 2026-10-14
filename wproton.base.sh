@@ -52,7 +52,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.0"
+WPROTON_VERSION="2.04"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -145,6 +145,18 @@ CACHE_DIR="$BASE_DIR/cache"              # shaders dxvk/vkd3d/mesa/nvidia
 LOG_DIR="$BASE_DIR/logs"
 SETTINGS_FILE="$BASE_DIR/settings.conf"  # ajustes globales (carpeta de juegos)
 LOG_FILE="$LOG_DIR/wproton_$(date +%Y%m%d_%H%M%S).log"
+# LA MARCA DE "EN ESTA SESION PASO ALGO".
+#
+# Va en un FICHERO al lado del registro, y no en una variable, por la misma
+# razon de siempre en este programa: medio WProton se ejecuta dentro de
+# subshells -los menus son sel="$(menu ...)"- y una variable puesta ahi dentro
+# no llega al padre. Un error dentro de un menu tiene que contar igual.
+#
+# Se llama como el registro con ".err" detras, asi que cada sesion tiene la
+# suya aunque haya varios wproton.sh a la vez (en DeckStation cada juego lanza
+# el suyo).
+LOG_MARCA_ERR="$LOG_DIR/.$(basename "$LOG_FILE").err"
+LOG_MARCA_OK="$LOG_DIR/.$(basename "$LOG_FILE").ok"
 
 mkdir -p "$RUNTIME_DIR" "$RUNNERS_DIR" "$DL_DIR" "$MOUNT_BASE" "$OVERLAY_BASE" \
          "$BUILD_BASE" "$PREFIX_DIR" "$PROFILE_DIR" "$CACHE_DIR" "$LOG_DIR"
@@ -172,16 +184,75 @@ DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de j
 GRID_COLS=0                              # columnas de la rejilla (0 = automático)
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
-PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion)
+PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion) | carpeta (sin empaquetar)
+# JUEGOS CON MUCHISIMOS FICHEROS: se avisa ANTES de empaquetar.
+#
+# Un juego empaquetado se lee a traves de DOS capas FUSE (la imagen y la
+# superposicion de partidas); una carpeta la sirve el kernel. Mientras el
+# juego abre unos cientos de ficheros no se nota, pero Wine resuelve cada
+# ruta sin distinguir mayusculas, y para eso LEE LA CARPETA ENTERA cada vez
+# que abre un fichero. Con decenas de miles de ficheros eso se multiplica, y
+# el juego puede quedarse cargando varios minutos o no entrar nunca.
+# 0 = no avisar nunca.
+PACK_AVISO_FICHEROS=20000
+# Montaje DwarFS: cache de bloques descomprimidos e hilos que descomprimen.
+# De serie dwarfs usa 512m y 2 hilos, pensados para gastar poco; con un juego
+# grande en una microSD, subirlos hace que arranque antes. 0 hilos = tantos
+# como nucleos tenga el equipo (hasta 4). Solo se pasan si este binario de
+# dwarfs las entiende: ver dwarfs_opciones_monta().
+DWARFS_CACHE="1g"
+DWARFS_WORKERS=0
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
 MENU_SERVER=1                            # 1 = un solo proceso para todos los menus
 MENU_UI=auto                             # motor de menus: auto | pygame | qt
-OCULTAR_CURSOR=1                         # esconder el puntero mientras juegas
+# EL PUNTERO MIENTRAS JUEGAS: se esconde POR INACTIVIDAD.
+#
+# Con 1, si pasan CURSOR_SEGUNDOS sin mover el raton -que es lo que pasa
+# jugando con el mando- el puntero se esconde; y en cuanto mueves el raton,
+# vuelve. Es lo que hace unclutter y lo que arregla las dos quejas a la vez:
+# el puntero desaparece de verdad, y el cursor sigue estando para los menus
+# de configuracion del juego. Ponlo a 0 para no tocarlo nunca.
+OCULTAR_CURSOR=1
+# Cuantos segundos sin mover el raton antes de esconder el puntero.
+CURSOR_SEGUNDOS=3
+# CUANTO HAY QUE MOVER EL RATON PARA QUE CUENTE COMO MOVERLO (en pixeles).
+#
+# Hace falta porque en un equipo de juego el puntero casi nunca esta del todo
+# quieto: Steam Input puede estar emulando un raton, un trackpad haciendo de
+# raton manda movimiento con apoyar el dedo y un stick con deriva empuja un
+# pixel cada tanto. Pidiendo el pixel exacto, el puntero no se escondia nunca.
+# Subelo si aun asi se te queda a la vista; bajalo si tarda en reaparecer.
+CURSOR_UMBRAL=8
 # La glibc del equipo MAS ANTIGUO donde quieres que funcionen tus paquetes.
 # 2.36 cubre SteamOS 3.x (Steam Deck). Subela si solo usas equipos modernos.
 GLIBC_OBJETIVO="2.36"
 RATON_MENUS=1                            # 1 = manejar los menus con el raton
+# SENSIBILIDAD DEL RATON FISICO EN LOS MENUS.
+#
+# Con el raton en la mano la seleccion seguia al puntero SIN NINGUN UMBRAL:
+# un pixel de movimiento -o un golpe en la mesa- te cambiaba de fila, incluso
+# si estabas navegando con el mando. Y la rueda saltaba un tercio de pantalla
+# por muesca, que en un raton de sobremesa es muchisimo.
+#   RATON_UMBRAL  pixeles que hay que mover ANTES de que la seleccion siga al
+#                 puntero, contados desde la ultima tecla o boton del mando.
+#                 0 = como antes, sigue al puntero al instante.
+#   RATON_RUEDA   filas por muesca de la rueda. 0 = un tercio de pantalla.
+RATON_UMBRAL=12
+RATON_RUEDA=3
+# LOS REGISTROS DE LAS SESIONES QUE FUERON BIEN, SE BORRAN AL CERRAR.
+#   BORRAR_LOGS_OK   1 = al cerrar, si no hubo ningun aviso ni error, el
+#                    registro se borra. 0 = conservarlos todos (como antes).
+#   LOGS_OK_GUARDAR  cuantos registros SIN errores se conservan, contando
+#                    desde el mas reciente. 1 deja siempre el de la ultima
+#                    sesion: hace falta mas veces de lo que parece, porque
+#                    hay fallos que no escriben ni un error -un juego que se
+#                    queda cargando, por ejemplo- y ese registro es justo el
+#                    que hay que mirar. 0 = borrar tambien el ultimo.
+# Los registros CON algo nunca se borran aqui; de esos se encarga rotate_logs
+# por antiguedad (2 dias, 40 como maximo).
+BORRAR_LOGS_OK=1
+LOGS_OK_GUARDAR=1
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
@@ -214,6 +285,17 @@ GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Franken
 # ofrecer algo que no descarga nada.
 RUNNERS_ALOJADOS="Proton-Experimental|https://www.mediafire.com/file/s94oyk2njltcz9m/Proton_-_Experimental.tar.gz/file|el oficial de Valve, alojado por nosotros"
 FONT_SCALE=1.0                           # tamaño de letra: 1.0 | 1.25 | 1.5
+# LA LETRA EN PANTALLAS DE MUCHA RESOLUCION (4K).
+#
+# Con 1, en una pantalla grande la letra sube sola en la misma proporcion que
+# la resolucion: un 1080p se queda igual, un 1440p sube un tercio y un 4K la
+# dobla. Hace falta porque los tamaños estan en pixeles, y un pixel de un 4K
+# mide la cuarta parte que uno de un 1080p: la letra salia diminuta.
+#
+# Solo SUBE, nunca baja, y se multiplica por FONT_SCALE en vez de sustituirlo,
+# asi que "grande" sigue siendo mas grande que "normal" tambien en un 4K.
+# Ponlo a 0 si prefieres mandar tu con FONT_SCALE y nada mas.
+MENU_AUTO_ESCALA=1
 BACKUP_SYNC_DEST=""                      # destino rsync para backups/
 SINCRO_HOST=""                           # ultimo equipo del que se trajeron copias
 SINCRO_EQUIPOS=""                        # equipos guardados: nombre|ip|codigo, separados por ;
@@ -222,6 +304,39 @@ SINCRO_SERVIDOR=""                       # servidor permanente de partidas (ip)
 SINCRO_TOKEN=""                          # token de ese servidor
 SINCRO_PUERTO=8788                       # puerto para compartir copias en la red local
 SGDB_KEY=""                              # API key de steamgriddb.com (carátulas)
+
+# Ultimo id de juego que devolvio SteamGridDB. Lo deja sgdb_un_juego para que
+# quien lo llame pueda pedir mas imagenes del MISMO juego -el fondo y el
+# logotipo de Steam- sin gastar otra busqueda. Declarado aqui porque con
+# "set -u" una variable sin declarar mata el script.
+SGDB_ULTIMO_ID=""
+
+# ¿Se estan trayendo perfiles de la comunidad en tanda? Con esto puesto,
+# community_fetch no abre un dialogo por cada juego.
+WP_COMUNIDAD_TANDA=0
+
+# Pid del refresco de las listas del repositorio que se lanza al arrancar, para
+# poder pararlo al cerrar. Declarado aqui porque con "set -u" una variable sin
+# declarar mata el script.
+REPO_REFRESCO_PID=""
+# Y el de la busqueda de squashfuse_ll, por lo mismo.
+SQFUSE_LL_PID=""
+
+# TOMAR EL CONTROL DEL MANDO O SOLO LEERLO.
+#   1 = WProton le apaga al mando su emulacion de raton -los trackpads pasan a
+#       ser suyos- y se la devuelve al terminar. Es lo que hace que la opcion
+#       funcione cuando uno quiera, sin el gesto de mantener OPCIONES.
+#   0 = no se le escribe nada al mando. Entonces solo hay pads que leer si el
+#       mando ya esta en modo gamepad (manteniendo OPCIONES medio segundo).
+TRACKPAD_CONTROL=1
+
+# Trackpads de la Deck como raton: cual (no | izquierdo | derecho) y cuanto
+# corre el puntero. Van en settings.conf como el resto de ajustes.
+TRACKPAD_RATON="no"
+TRACKPAD_SENS="1.0"
+# 1 = la partida en curso cambio el trackpad y hay que devolverlo al salir.
+WP_TRACKPAD_CAMBIADO=0
+
 save_settings() {
     # RED DE SEGURIDAD para las carpetas de juegos.
     #
@@ -263,6 +378,19 @@ LAST_BROWSE="$LAST_BROWSE"
 THEME="$THEME"
 # API key de SteamGridDB (https://www.steamgriddb.com/profile/preferences/api):
 SGDB_KEY="$SGDB_KEY"
+TRACKPAD_RATON="$TRACKPAD_RATON"
+TRACKPAD_SENS="$TRACKPAD_SENS"
+# --------------------------------------------------------------------------
+# LOS TRACKPADS: ¿DE WProton O DEL MANDO?
+#   TRACKPAD_CONTROL=1  WProton le apaga al mando su emulacion de raton y se
+#                       la devuelve al salir. Asi el trackpad como raton
+#                       funciona cuando lo enciendas, sin tener que mantener
+#                       pulsado OPCIONES. Es lo normal.
+#   TRACKPAD_CONTROL=0  no se le escribe NADA al mando. Mas prudente, pero
+#                       entonces los pads solo se pueden leer si antes has
+#                       puesto el mando en modo gamepad a mano.
+# --------------------------------------------------------------------------
+TRACKPAD_CONTROL=$TRACKPAD_CONTROL
 # --------------------------------------------------------------------------
 # MODO "SOLO JUGAR" (no aparece en los menus: se activa aquí a mano)
 #   1 = al abrir WProton se va DIRECTO a la lista de juegos, y al salir de
@@ -282,6 +410,39 @@ GAMES_SORT="$GAMES_SORT"
 # Formato al empaquetar juegos: wsquashfs (compatible con Batocera) o
 # dwarfs (comprime bastante más y monta igual de rapido)
 PACK_FORMAT="$PACK_FORMAT"
+# --------------------------------------------------------------------------
+# JUEGOS CON MUCHISIMOS FICHEROS
+#   Al empaquetar, si el juego pasa de estos ficheros, WProton avisa y
+#   ofrece dejarlo en carpeta: empaquetado funciona, pero puede tardar
+#   muchisimo en cargar (ver el comentario de arriba en el programa).
+#   0 = no avisar nunca.
+# --------------------------------------------------------------------------
+PACK_AVISO_FICHEROS=$PACK_AVISO_FICHEROS
+# --------------------------------------------------------------------------
+# EL RATON FISICO EN LOS MENUS
+#   RATON_UMBRAL: pixeles a mover antes de que la seleccion siga al puntero,
+#                 contados desde la ultima tecla o boton del mando. Sube el
+#                 numero si se te cambia de fila al rozar el raton; ponlo a 0
+#                 para que siga al puntero al instante, como hacia antes.
+#   RATON_RUEDA:  filas que mueve cada muesca de la rueda (0 = un tercio de
+#                 pantalla, como hacia antes).
+# --------------------------------------------------------------------------
+RATON_UMBRAL=$RATON_UMBRAL
+RATON_RUEDA=$RATON_RUEDA
+# --------------------------------------------------------------------------
+# LIMPIEZA DE REGISTROS
+#   Al cerrar, los registros de las sesiones que fueron bien se borran y los
+#   que tienen algun aviso o error se quedan. LOGS_OK_GUARDAR dice cuantos de
+#   los "buenos" se conservan empezando por el mas reciente: 1 deja siempre
+#   el de la ultima sesion, que hace falta cuando algo va mal SIN dar error.
+#   BORRAR_LOGS_OK=0 los conserva todos, como se hacia antes.
+# --------------------------------------------------------------------------
+BORRAR_LOGS_OK=$BORRAR_LOGS_OK
+LOGS_OK_GUARDAR=$LOGS_OK_GUARDAR
+# Montaje DwarFS: cache de bloques y numero de hilos que descomprimen.
+# 0 hilos = automatico (tantos como nucleos, hasta 4).
+DWARFS_CACHE="$DWARFS_CACHE"
+DWARFS_WORKERS=$DWARFS_WORKERS
 # --------------------------------------------------------------------------
 # FONDO ENTRE MENUS
 #   Ventana de fondo con la marca WProton que se mantiene MIENTRAS SE NAVEGA:
@@ -318,7 +479,19 @@ MENU_UI="$MENU_UI"
 #   Con 1, una combinacion del mando cierra el juego. Util en el
 #   donde no hay boton de Steam y algunos juegos no traen opcion de salir.
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# EL PUNTERO MIENTRAS JUEGAS
+#   Con 1, el puntero se esconde tras CURSOR_SEGUNDOS sin mover el raton, y
+#   vuelve en cuanto lo mueves. Ponlo a 0 para que no se toque nunca.
+# --------------------------------------------------------------------------
 OCULTAR_CURSOR="$OCULTAR_CURSOR"
+# Segundos sin mover el raton antes de esconderlo. Subelo si se te esconde
+# mientras lees un menu del juego.
+CURSOR_SEGUNDOS=$CURSOR_SEGUNDOS
+# Pixeles que hay que mover el raton para que cuente como movimiento. Sin
+# margen, un trackpad o un stick que deriva lo mueven solos y nunca se
+# esconde. Subelo si se te queda a la vista.
+CURSOR_UMBRAL=$CURSOR_UMBRAL
 # --------------------------------------------------------------------------
 # DIAGNOSTICO DEL MANDO
 #   Con 1, el registro anota que dispositivos se leen, que variables recibe
@@ -379,6 +552,9 @@ GE_CUSTOM_URL="$GE_CUSTOM_URL"
 RUNNERS_ALOJADOS="$RUNNERS_ALOJADOS"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
+# Con 1, la letra sube sola en pantallas de mucha resolucion (4K). Solo sube,
+# nunca baja, y se multiplica por FONT_SCALE.
+MENU_AUTO_ESCALA=$MENU_AUTO_ESCALA
 # Destino de rsync para sincronizar backups/ (carpeta, USB o usuario@equipo:/ruta)
 BACKUP_SYNC_DEST="$BACKUP_SYNC_DEST"
 # Nota: GAMES_PATH admite rutas RELATIVAS (se resuelven respecto a la carpeta
@@ -623,7 +799,39 @@ py_libs_dir() {
 # ----------------------------------------------------------------------------
 # 2. LOG SOLO A FICHERO (nunca contaminar stdout: leccion del wrapper ES-DE)
 # ----------------------------------------------------------------------------
-log() { printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"; }
+log() {
+    printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"
+    # ¿ESTA LINEA ES MOTIVO PARA CONSERVAR EL REGISTRO?
+    #
+    # Se decide AQUI, en el momento, y no leyendo el registro al cerrar. Un
+    # grep a posteriori es adivinar: hay lineas que llevan la palabra "error"
+    # hablando de otra cosa -las que explican un error ya arreglado, por
+    # ejemplo- y hay salida de Proton que se escribe directa al fichero sin
+    # pasar por aqui, como su "unable to use parent for game drive", que es
+    # inofensivo y aparece en todas las partidas.
+    #
+    # Cuenta por dos caminos: el NIVEL (todo lo que no sea INFO lo pone quien
+    # escribe la linea a proposito) y el PRINCIPIO del texto, que es como se
+    # avisa por pantalla con say "AVISO: ..." o fallo/die, que mandan
+    # "ERROR: ...".
+    case "${2:-INFO}" in
+        INFO) ;;
+        *) log_marcar_error "nivel ${2}"; return 0 ;;
+    esac
+    case "$1" in
+        AVISO:*|AVISO\ *|ERROR:*|ERROR-UI:*|"[!]"*|FALLO:*)
+            log_marcar_error "linea" ;;
+    esac
+    return 0
+}
+
+log_marcar_error() {
+    # Deja constancia de que esta sesion tiene algo que merece conservarse.
+    # No se mira el contenido de la marca: basta con que exista.
+    [ -n "${LOG_MARCA_ERR:-}" ] || return 0
+    printf '%s %s\n' "$(date '+%H:%M:%S')" "${1:-}" >> "$LOG_MARCA_ERR" 2>/dev/null
+    return 0
+}
 say() { printf '%s\n' "$1" >&2; log "$1"; }
 die() { say "ERROR: $1"; ui_error "$1"; cleanup_mount; exit 1; }
 
@@ -734,6 +942,33 @@ SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
 OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
 FUSERMOUNT_BIN="$(command -v fusermount3 2>/dev/null || command -v fusermount 2>/dev/null)"
 
+squashfuse_monta_bin() {
+    # CON QUE SE MONTA UN wsquashfs: squashfuse_ll si esta, squashfuse si no.
+    #
+    # Son los dos drivers que trae el mismo proyecto (y el mismo paquete en
+    # Arch, SteamOS y Debian), y la diferencia importa:
+    #
+    #   squashfuse     usa la interfaz ALTA de FUSE. Le dice al kernel que lo
+    #                  que le contesta caduca en UN SEGUNDO, y las busquedas
+    #                  que no encuentran nada no se guardan en absoluto.
+    #   squashfuse_ll  usa la interfaz BAJA y responde con DBL_MAX, o sea
+    #                  "esto no caduca nunca", TAMBIEN para las busquedas
+    #                  fallidas (contesta inodo 0, que es como se guarda un
+    #                  "aqui no hay nada").
+    #
+    # Y eso es exactamente lo que duele con un juego de muchos ficheros: una
+    # imagen montada NO CAMBIA, asi que cada vez que el kernel vuelve a
+    # preguntar lo mismo es trabajo tirado. Wine resuelve las rutas sin
+    # distinguir mayusculas leyendo la carpeta entera, y encima pregunta por
+    # un monton de ficheros que no existen; con el driver bajo, todo eso lo
+    # contesta el kernel de su cache y no llega a salir a espacio de usuario.
+    #
+    # No se descarga aparte: viene en el mismo paquete que squashfuse, asi que
+    # o esta al lado o no esta, y si no esta se usa el de siempre.
+    local ll; ll="$(resolve_tool squashfuse_ll)"
+    if [ -n "$ll" ]; then printf '%s' "$ll"; else printf '%s' "$SQUASHFUSE_BIN"; fi
+}
+
 arch_tag() {
     case "$(uname -m)" in
         x86_64|amd64)   printf 'x86_64' ;;
@@ -786,6 +1021,143 @@ try_static_tool() {
         esac
     done
     rm -rf "$tmp"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# 7-ZIP PORTABLE
+#
+# Hace falta para IMPORTAR juegos: los comprimidos con los que llega un juego
+# son .zip, .7z y .rar, muchas veces multiparte, y de esos solo el zip se
+# puede abrir sin herramientas externas.
+#
+# POR QUE ESTO NO PODIA SEGUIR SIENDO "INSTALA p7zip"
+#
+# Lo que habia era: si no esta el 7z del sistema, un mensaje diciendo
+# "sudo pacman -S p7zip". Eso falla en los dos sitios donde mas se usa WProton:
+#
+#   - En una Steam Deck el sistema es de SOLO LECTURA. No es que sea incomodo:
+#     es que NO SE PUEDE. Un usuario en modo Juego no tenia ninguna forma de
+#     importar un .rar, y el mensaje le mandaba a hacer algo imposible.
+#   - Y va contra la regla de la casa: WProton no pide sudo ni instala nada en
+#     el sistema. Trae lo que necesita a runtime/, como squashfuse,
+#     fuse-overlayfs, DwarFS o el propio Python.
+#
+# 7-Zip publica desde la version 21 un binario de Linux ESTATICO y oficial
+# (7zz), sin dependencias, que abre zip, 7z, rar, iso y los multiparte. Es
+# exactamente el mismo caso que el binario universal de DwarFS: nada que
+# compilar, un fichero y listo.
+# ---------------------------------------------------------------------------
+SEVENZIP_BIN=""
+
+find_sevenzip() {
+    # El nuestro primero, despues cualquiera de los del sistema.
+    #
+    # Los nombres cambian segun quien lo empaquete: "7zz" es el oficial de
+    # 7-Zip, "7z" y "7za" vienen de p7zip, y "7zr" es la version reducida (que
+    # NO abre rar, asi que va al final y solo como ultimo recurso).
+    SEVENZIP_BIN=""
+    local c d="$RUNTIME_DIR/tools"
+    for c in 7zz 7z 7za; do
+        [ -x "$d/$c" ] && { SEVENZIP_BIN="$d/$c"; return 0; }
+    done
+    for c in 7zz 7z 7za 7zr; do
+        SEVENZIP_BIN="$(command -v "$c" 2>/dev/null)" && [ -n "$SEVENZIP_BIN" ] && return 0
+    done
+    SEVENZIP_BIN=""
+    return 1
+}
+
+setup_sevenzip() {
+    # Deja un 7z utilizable en $SEVENZIP_BIN. Devuelve 1 si no se pudo.
+    #
+    # No descarga nada si ya hay uno: ni el nuestro ni el del sistema. Quien
+    # tenga p7zip instalado no necesita que le bajemos otro.
+    find_sevenzip && return 0
+    say "[7zip] no hay ningun 7z; se trae el binario oficial portable..."
+    local a; a="$(arch_tag)"
+    # El nombre del fichero de 7-Zip no sigue el "arch_tag" de siempre.
+    local a7
+    case "$a" in
+        x86_64)  a7=x64 ;;
+        aarch64) a7=arm64 ;;
+        armv7l)  a7=arm ;;
+        *)       a7="" ;;
+    esac
+    # 1) EL REPOSITORIO DE WProton, lo primero.
+    #
+    # Es la via que controlamos: basta con subir el binario a tools/ y deja de
+    # depender de que una URL de terceros siga viva. Igual que con las demas
+    # herramientas.
+    try_wproton_repo_tool 7zz && { find_sevenzip && return 0; }
+    # 2) El paquete de Arch (sirve en Arch, CachyOS y SteamOS, que es Arch).
+    try_arch_package 7zip && { find_sevenzip && return 0; }
+    # 3) El tarball oficial de 7-Zip. No es un binario suelto, asi que no vale
+    #    try_static_tool: hay que desempaquetarlo y sacar el 7zz de dentro.
+    if [ -n "$a7" ] && sevenzip_del_tarball "$a7"; then
+        find_sevenzip && return 0
+    fi
+    say "[7zip] no se pudo conseguir ningun 7z" AVISO
+    return 1
+}
+
+sevenzip_del_tarball() {
+    # Saca el 7zz del tarball oficial de 7-Zip. $1 = x64 | arm64 | arm
+    #
+    # Las versiones van sin puntos en el nombre del fichero (2409 = 24.09), y
+    # no hay una URL "latest", asi que se prueban de la mas nueva conocida
+    # hacia atras. Si el dia de mañana sale una mas nueva, esto sigue
+    # funcionando con la ultima que conozca: es un extractor, no hace falta
+    # que sea el ultimo.
+    local a7="$1" v url tmp bin
+    tmp="$(mktemp -d)" || return 1
+    for v in 2501 2408 2409 2301 2201; do
+        url="https://www.7-zip.org/a/7z${v}-linux-${a7}.tar.xz"
+        say "[7zip] probando 7z${v}-linux-${a7}.tar.xz..."
+        dl "$url" "$tmp/7z.tar.xz" >/dev/null 2>&1 || continue
+        [ -s "$tmp/7z.tar.xz" ] || continue
+        if ! tar -xJf "$tmp/7z.tar.xz" -C "$tmp" 7zz >>"$LOG_FILE" 2>&1; then
+            # Algunas versiones lo traen en una subcarpeta.
+            tar -xJf "$tmp/7z.tar.xz" -C "$tmp" >>"$LOG_FILE" 2>&1 || continue
+        fi
+        bin="$(find "$tmp" -type f -name 7zz -print -quit 2>/dev/null)"
+        [ -n "$bin" ] || continue
+        chmod 755 "$bin" 2>/dev/null
+        # Que ARRANQUE aqui. Mismo criterio que try_static_tool: solo 126 y
+        # 127 significan "no se puede ejecutar".
+        "$bin" i >/dev/null 2>&1
+        local rc=$?
+        if [ "$rc" != 126 ] && [ "$rc" != 127 ]; then
+            mkdir -p "$RUNTIME_DIR/tools"
+            cp -f "$bin" "$RUNTIME_DIR/tools/7zz"
+            chmod 755 "$RUNTIME_DIR/tools/7zz"
+            rm -rf "$tmp"
+            say "[7zip] listo (7z $v portable, en runtime/tools)"
+            return 0
+        fi
+        say "[7zip] el binario de 7z$v no arranca en este sistema (rc=$rc)"
+    done
+    rm -rf "$tmp"
+    return 1
+}
+
+sevenzip_falta_aviso() {
+    # El mensaje de "no hay 7z", con lo que se puede hacer de verdad.
+    #
+    # Ya NO dice "sudo pacman -S p7zip" a secas: en una Deck eso es imposible
+    # y mandar al usuario a hacer algo que no puede hacer es peor que no decir
+    # nada. Primero lo que si funciona en todas partes.
+    ui_error "No se pudo conseguir 7-Zip, que hace falta para abrir
+.zip, .7z y .rar.
+
+WProton lo descarga solo (un unico fichero en
+runtime/tools, sin instalar nada en el sistema), asi que
+lo normal es que esto sea un problema de conexion:
+compruebala y vuelve a intentarlo.
+
+Si prefieres ponerlo a mano, vale cualquier 7z que ya
+tengas: deja el binario en runtime/tools con el nombre
+7zz. El detalle de lo que se intento esta en el registro."
     return 1
 }
 
@@ -871,49 +1243,135 @@ $(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases" 2>/dev/null \
     try_static_tool "$name" $(printf '%s\n' "$urls" | awk 'NF')
 }
 
-try_arch_package() {
-    # $1 = nombre del paquete y del binario (p.ej. squashfuse)
-    # Los paquetes de Arch son tarballs comprimidos con zstd: dentro esta
-    # usr/bin/<binario>. Sirve en Arch, CachyOS y SteamOS (que es Arch); en
-    # otras distros puede no arrancar por las librerias, pero eso se
-    # comprueba ejecutandolo antes de darlo por bueno.
-    local name="$1" tmp url
+arch_pkg_bajar() {
+    # Baja el paquete de Arch de $1 y lo deja SIN ABRIR en $2/pkg.tar.zst.
+    # $3 = etiqueta para los mensajes (por defecto, el nombre del paquete).
+    #
+    # Sirve en Arch, CachyOS y SteamOS (que es Arch); en otras distros el
+    # binario puede no arrancar por las librerias, y eso se comprueba
+    # ejecutandolo antes de darlo por bueno.
+    local paquete="$1" tmp="$2" etq="${3:-$1}" url
     command -v tar >/dev/null 2>&1 || return 1
+    url="https://archlinux.org/packages/extra/x86_64/$paquete/download/"
+    say "[$etq] probando el paquete de Arch Linux..."
+    dl "$url" "$tmp/pkg.tar.zst"
+}
+
+arch_pkg_abrir() {
+    # Deja el paquete en un formato que el tar de ESTE equipo sepa abrir.
+    # $1 = carpeta temporal, $2 = etiqueta para los mensajes.
+    #
+    # Los paquetes de Arch van comprimidos con zstd. Si el tar de aqui no
+    # sabe de zstd, se descomprime una vez a pkg.tar y se reutiliza: asi
+    # sacar varios binarios del mismo paquete no lo descomprime varias veces.
+    local tmp="$1" etq="$2"
+    # El listado no extrae nada: solo sirve para ver si este tar puede.
+    ( cd "$tmp" && tar --zstd -tf pkg.tar.zst >/dev/null ) 2>>"$LOG_FILE" && return 0
+    if ! command -v zstd >/dev/null 2>&1; then
+        say "[$etq] el paquete de Arch necesita zstd para abrirse"
+        return 1
+    fi
+    ( cd "$tmp" && zstd -d -q pkg.tar.zst -o pkg.tar ) >>"$LOG_FILE" 2>&1 || {
+        say "[$etq] no se pudo abrir el paquete de Arch"; return 1; }
+    return 0
+}
+
+arch_pkg_sacar() {
+    # Saca usr/bin/<binario> de un paquete ya abierto.
+    # $1 = carpeta temporal, $2 = nombre del binario.
+    #
+    # TOLERANTE A PROPOSITO: que un binario no este dentro es normal -hay
+    # acompañantes opcionales, como squashfuse_ll- y tar se queja por ello.
+    # Quien llama decide si la ausencia es un problema o no.
+    local tmp="$1" bin="$2"
+    if [ -f "$tmp/pkg.tar" ]; then
+        ( cd "$tmp" && tar -xf pkg.tar usr/bin/"$bin" ) >>"$LOG_FILE" 2>&1
+    else
+        ( cd "$tmp" && tar --zstd -xf pkg.tar.zst usr/bin/"$bin" ) >>"$LOG_FILE" 2>&1
+    fi
+    [ -f "$tmp/usr/bin/$bin" ]
+}
+
+arch_pkg_instalar() {
+    # Comprueba que el binario ARRANCA aqui y lo deja en runtime/tools.
+    # $1 = ruta del binario sacado, $2 = nombre con el que se guarda,
+    # $3 = etiqueta para los mensajes.
+    #
+    # Solo 126 y 127 significan "no se puede ejecutar" (arquitectura
+    # equivocada o libreria ausente). Cualquier otro codigo quiere decir que
+    # el programa arranco: squashfuse, por ejemplo, contesta a --help con su
+    # version y sale con 254, y es perfectamente valido.
+    local bin="$1" name="$2" etq="$3" arc
+    [ -f "$bin" ] || return 1
+    chmod +x "$bin" 2>/dev/null
+    "$bin" --help >/dev/null 2>&1
+    arc=$?
+    if [ "$arc" = 126 ] || [ "$arc" = 127 ]; then
+        say "[$etq] el binario de Arch no funciona en este sistema"
+        return 1
+    fi
+    mkdir -p "$RUNTIME_DIR/tools"
+    cp -f "$bin" "$RUNTIME_DIR/tools/$name" || return 1
+    chmod +x "$RUNTIME_DIR/tools/$name"
+    return 0
+}
+
+try_arch_package() {
+    # $1 = nombre del paquete Y del binario (p.ej. squashfuse)
+    # $2... = binarios ACOMPAÑANTES que vienen en el mismo paquete y que
+    #         tambien interesan (p.ej. squashfuse_ll). Son opcionales: si no
+    #         estan dentro no pasa nada, y no se validan uno a uno porque el
+    #         paquete ya se ha dado por bueno con el principal.
+    local name="$1" tmp extra
+    shift
     tmp="$(mktemp -d)"
-    url="https://archlinux.org/packages/extra/x86_64/$name/download/"
-    say "[$name] probando el paquete de Arch Linux..."
-    if ! dl "$url" "$tmp/pkg.tar.zst"; then
+    arch_pkg_bajar "$name" "$tmp"      || { rm -rf "$tmp"; return 1; }
+    arch_pkg_abrir "$tmp" "$name"      || { rm -rf "$tmp"; return 1; }
+    arch_pkg_sacar "$tmp" "$name"      || { rm -rf "$tmp"; return 1; }
+    if ! arch_pkg_instalar "$tmp/usr/bin/$name" "$name" "$name"; then
         rm -rf "$tmp"; return 1
     fi
-    # tar con soporte zstd, o el zstd suelto si el tar no lo trae
-    if ! ( cd "$tmp" && tar --zstd -xf pkg.tar.zst usr/bin/"$name" ) >>"$LOG_FILE" 2>&1; then
-        if command -v zstd >/dev/null 2>&1; then
-            ( cd "$tmp" && zstd -d -q pkg.tar.zst -o pkg.tar \
-              && tar -xf pkg.tar usr/bin/"$name" ) >>"$LOG_FILE" 2>&1 || {
-                say "[$name] no se pudo abrir el paquete de Arch"; rm -rf "$tmp"; return 1; }
+    say "[$name] listo (del paquete de Arch, en runtime/tools)"
+    # LOS ACOMPAÑANTES, DE LA MISMA DESCARGA.
+    #
+    # squashfuse_ll viene en el paquete de squashfuse, asi que sacarlo no
+    # cuesta ni una peticion mas.
+    for extra in "$@"; do
+        [ -n "$extra" ] || continue
+        if arch_pkg_sacar "$tmp" "$extra"; then
+            cp -f "$tmp/usr/bin/$extra" "$RUNTIME_DIR/tools/$extra" 2>/dev/null \
+                && chmod +x "$RUNTIME_DIR/tools/$extra" 2>/dev/null \
+                && say "[$name] incluido tambien $extra"
         else
-            say "[$name] el paquete de Arch necesita zstd para abrirse"
-            rm -rf "$tmp"; return 1
+            log "[$name] el paquete de Arch no trae $extra"
         fi
-    fi
-    local bin="$tmp/usr/bin/$name"
-    [ -f "$bin" ] || { rm -rf "$tmp"; return 1; }
-    chmod +x "$bin" 2>/dev/null
-    # comprobar que ARRANCA aqui: en distros no-Arch puede faltarle alguna
-    # libreria. Solo 126/127 son "no ejecutable"; otros codigos son validos.
-    "$bin" --help >/dev/null 2>&1
-    local arc=$?
-    if [ "$arc" != 126 ] && [ "$arc" != 127 ]; then
-        mkdir -p "$RUNTIME_DIR/tools"
-        cp -f "$bin" "$RUNTIME_DIR/tools/$name"
-        chmod +x "$RUNTIME_DIR/tools/$name"
-        rm -rf "$tmp"
-        say "[$name] listo (del paquete de Arch, en runtime/tools)"
-        return 0
-    fi
-    say "[$name] el binario de Arch no funciona en este sistema"
+    done
     rm -rf "$tmp"
-    return 1
+    return 0
+}
+
+try_arch_package_bin() {
+    # Saca UN SOLO binario de un paquete de Arch cuyo nombre NO coincide con
+    # el del binario. $1 = paquete, $2 = binario.
+    #
+    # Es el caso de squashfuse_ll: viene dentro del paquete "squashfuse", y
+    # aqui interesa SOLO el. Con try_arch_package habria que pedir el paquete
+    # entero, y eso pisaria el squashfuse que ya este funcionando -que puede
+    # ser una copia que vino de otra fuente y va perfectamente-.
+    local paquete="$1" bin="$2" tmp
+    tmp="$(mktemp -d)"
+    arch_pkg_bajar "$paquete" "$tmp" "$bin" || { rm -rf "$tmp"; return 1; }
+    arch_pkg_abrir "$tmp" "$bin"            || { rm -rf "$tmp"; return 1; }
+    if ! arch_pkg_sacar "$tmp" "$bin"; then
+        say "[$bin] el paquete $paquete de Arch no lo trae"
+        rm -rf "$tmp"; return 1
+    fi
+    if ! arch_pkg_instalar "$tmp/usr/bin/$bin" "$bin" "$bin"; then
+        rm -rf "$tmp"; return 1
+    fi
+    rm -rf "$tmp"
+    say "[$bin] listo (del paquete $paquete de Arch, en runtime/tools)"
+    return 0
 }
 
 build_squashfuse_src() {
@@ -966,6 +1424,14 @@ build_squashfuse_src() {
         mkdir -p "$RUNTIME_DIR/tools"
         cp -f "$src/squashfuse" "$RUNTIME_DIR/tools/squashfuse"
         chmod +x "$RUNTIME_DIR/tools/squashfuse"
+        # El mismo "make" construye squashfuse_ll si encuentra la interfaz baja
+        # de FUSE, que es lo normal. Es el driver que preferimos para montar
+        # (ver squashfuse_monta_bin), asi que si esta se guarda tambien.
+        if [ -x "$src/squashfuse_ll" ]; then
+            cp -f "$src/squashfuse_ll" "$RUNTIME_DIR/tools/squashfuse_ll"
+            chmod +x "$RUNTIME_DIR/tools/squashfuse_ll"
+            say "[squashfuse] compilado tambien squashfuse_ll (driver rapido)"
+        fi
         rm -rf "$tmp"
         say "[squashfuse] compilado e instalado en runtime/tools"
         return 0
@@ -982,6 +1448,107 @@ tool_is_ours() {
         "$BASE_DIR"/*) case "${1#"$BASE_DIR"/}" in */*) return 1 ;; *) return 0 ;; esac ;;
         *) return 1 ;;
     esac
+}
+
+setup_squashfuse_ll() {
+    # CONSIGUE squashfuse_ll, EL DRIVER RAPIDO PARA MONTAR IMAGENES.
+    #
+    # Por que importa esta en squashfuse_monta_bin(): el driver bajo le dice al
+    # kernel que lo que contesta NO CADUCA -tambien los "aqui no hay nada"-, y
+    # el alto le dice que caduca en un segundo. Como una imagen montada no
+    # puede cambiar, lo primero es lo correcto; y es justo donde se va el
+    # tiempo de carga de un juego con decenas de miles de ficheros.
+    #
+    # Es el mismo programa que squashfuse y el mismo proyecto, solo otra
+    # interfaz: no hay nada que configurar ni ningun riesgo de mezclar
+    # versiones, porque cada uno monta por su cuenta.
+    local a; a="$(arch_tag)"
+    local ll_urls="https://bin.pkgforge.dev/$a/squashfuse_ll"
+    ll_urls="$ll_urls
+$(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+    | grep -i 'squashfuse_ll' | grep -i "$a")"
+    # Por orden: nuestro repositorio -> binarios estaticos -> el paquete de
+    # Arch, del que se saca SOLO squashfuse_ll para no pisar un squashfuse que
+    # ya este funcionando.
+    # shellcheck disable=SC2086
+    if try_wproton_repo_tool squashfuse_ll; then
+        return 0
+    # shellcheck disable=SC2086
+    elif try_static_tool squashfuse_ll $(printf '%s\n' "$ll_urls" | awk 'NF'); then
+        return 0
+    elif try_arch_package_bin squashfuse squashfuse_ll; then
+        return 0
+    fi
+    log "[squashfuse_ll] no se ha encontrado en ninguna fuente"
+    return 1
+}
+
+squashfuse_ll_al_arrancar() {
+    # BUSCA squashfuse_ll AL ARRANCAR, EN SEGUNDO PLANO.
+    #
+    # Lo pidio Dani: el camino de setup_fuse_tools solo entra cuando FALTA
+    # squashfuse, asi que en una instalacion que ya funciona -que son todas
+    # las que vienen de una version anterior- nunca se llegaria a buscar el
+    # driver rapido, y la mejora se quedaria sin estrenar.
+    #
+    # EN SEGUNDO PLANO, por lo mismo que el refresco del repositorio: son una
+    # o dos consultas y una descarga de un mega. Esperarlas aqui seria hacer
+    # que arrancar WProton tarde lo que tarde la red, o lo que tarde en
+    # FALLAR, que es peor: en una Deck sin conexion serian varios segundos de
+    # pantalla muerta cada vez. Nadie la espera, y como el driver se elige en
+    # el momento de montar (squashfuse_monta_bin), si la descarga termina
+    # antes de que elijas juego ESTA partida ya va con el rapido; y si no,
+    # la siguiente.
+    #
+    # UNA VEZ A LA SEMANA COMO MUCHO.
+    #
+    # La marca se escribe ANTES de intentarlo, no despues: si la descarga se
+    # queda colgada y alguien mata WProton, no quedaria marca y volveria a
+    # intentarlo en cada arranque. Si sale bien, la marca sobra -el binario ya
+    # esta y no se vuelve a entrar aqui-, asi que escribirla de mas no cuesta.
+    [ -z "${WP_SIN_FUSE:-}" ] || return 0
+    [ -n "$SQUASHFUSE_BIN" ] || return 0
+    if [ -n "$(resolve_tool squashfuse_ll)" ]; then
+        log "squashfuse_ll: ya esta; no hay que buscarlo"
+        return 0
+    fi
+    local marca="$RUNTIME_DIR/.sqfuse_ll_try" edad
+    if [ -f "$marca" ]; then
+        edad=$(( $(date +%s) - $(stat -c %Y "$marca" 2>/dev/null || echo 0) ))
+        if [ "$edad" -lt 604800 ]; then       # una semana
+            log "squashfuse_ll: ultimo intento hace $((edad/3600))h; se monta con squashfuse"
+            return 0
+        fi
+    fi
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 0
+    : > "$marca" 2>/dev/null
+    (
+        if setup_squashfuse_ll; then
+            log "squashfuse_ll: listo; las imagenes montaran con el driver rapido"
+        else
+            log "squashfuse_ll: no se consiguio; se reintentara dentro de una semana" AVISO
+        fi
+    ) >/dev/null 2>&1 &
+    # EL PID, PARA PODER PARARLO AL CERRAR.
+    #
+    # Igual que con el refresco del repositorio: si alguien cierra WProton
+    # mientras esto descarga, el subproceso seguiria vivo con un curl colgado
+    # y el cierre avisaria de "trabajos en segundo plano".
+    SQFUSE_LL_PID=$!
+    log "squashfuse_ll: buscandolo en segundo plano (pid $SQFUSE_LL_PID)"
+    return 0
+}
+
+squashfuse_ll_stop() {
+    # Para la busqueda de arranque si todavia estuviera en marcha.
+    [ -n "${SQFUSE_LL_PID:-}" ] || return 0
+    if kill -0 "$SQFUSE_LL_PID" 2>/dev/null; then
+        kill "$SQFUSE_LL_PID" 2>/dev/null
+        log "Cierre: busqueda de squashfuse_ll detenida (pid $SQFUSE_LL_PID)"
+    fi
+    SQFUSE_LL_PID=""
+    return 0
 }
 
 setup_fuse_tools() {
@@ -1026,7 +1593,7 @@ $(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/d
             ok=1
         elif try_static_tool squashfuse $(printf '%s\n' "$sq_urls" | awk 'NF'); then
             ok=1
-        elif try_arch_package squashfuse; then
+        elif try_arch_package squashfuse squashfuse_ll; then
             ok=1
         elif [ -z "$SQUASHFUSE_BIN" ]; then
             # Compilar es el ULTIMO recurso y solo si NO hay ninguna squashfuse
@@ -1038,6 +1605,12 @@ $(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/d
             say "[squashfuse] sin copia portable; se seguira usando la del sistema"
         fi
     fi
+    # squashfuse_ll: EL DRIVER RAPIDO, Y ES OPCIONAL.
+    #
+    # Si el camino de Arch de aqui arriba se uso, ya lo saco de la misma
+    # descarga. Si no, se busca ahora. Que no se encuentre NO ES UN FALLO: se
+    # monta con el squashfuse normal, como siempre, y por eso no toca "ok".
+    [ -z "$(resolve_tool squashfuse_ll)" ] && { setup_squashfuse_ll || true; }
     SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
     OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
     [ "$ok" = 1 ]
@@ -1096,6 +1669,11 @@ Instalalas con el gestor de paquetes de tu distribucion."
     fi
     log "Este equipo tiene glibc $(glibc_de_este_equipo) (GLIBC_OBJETIVO=${GLIBC_OBJETIVO:-2.36} en settings.conf)"
     log "Herramientas: squashfuse=$SQUASHFUSE_BIN$(tool_is_ours "$SQUASHFUSE_BIN" && printf ' [portable]' || printf ' [sistema]') | overlayfs=$OVERLAYFS_BIN$(tool_is_ours "$OVERLAYFS_BIN" && printf ' [portable]' || printf ' [sistema]') | fusermount=$FUSERMOUNT_BIN"
+    # Con que driver se montaran las imagenes, que no es lo mismo que el
+    # squashfuse de arriba: si hay squashfuse_ll se usa ese. Importa tenerlo
+    # en el registro, porque la diferencia de velocidad al cargar un juego con
+    # muchos ficheros es enorme y asi no hay que adivinarlo.
+    log "Montaje de imagenes: driver = $(squashfuse_monta_bin)$([ -n "$(resolve_tool squashfuse_ll)" ] && printf ' [low-level, cache permanente]' || printf ' [high-level, cache de 1 segundo]')"
 }
 
 # ----------------------------------------------------------------------------
@@ -1293,8 +1871,6 @@ SAEOF
 # de ese Proton y solo ahi. Es lo que hace el ajuste PAD_SDL del perfil.
 #
 # El modulo steaminput.py se quito tambien. Esta en el historial de git.
-
-
 
 
 # TODA LA MAQUINARIA DE "APAGAR STEAM INPUT EN STEAM" SE QUITO.
@@ -1511,6 +2087,71 @@ steam_arte_juego() {
     return 0
 }
 
+steam_arte_descargar() {
+    # LAS CARATULAS DE STEAMGRIDDB, AL AÑADIR UN JUEGO A STEAM.
+    #
+    # $1 = carpeta userdata/<id>/config, $2 = appid, $3 = gid, $4 = titulo
+    #
+    # Hasta ahora "añadir a Steam" solo copiaba las carátulas que WProton YA
+    # tuviera, asi que un juego recien añadido salia casi siempre como un
+    # cuadro gris con el nombre. Lo normal es que el usuario lo añada a Steam
+    # ANTES de haber descargado ninguna carátula: justo el caso en el que
+    # hacia falta. Lo pidio un tester.
+    #
+    # Steam usa cuatro imagenes y cada una tiene su nombre obligatorio:
+    #   <appid>p.png      vertical, la de la estanteria   (600x900)
+    #   <appid>.png       apaisada, la de la cabecera     (460x215/920x430)
+    #   <appid>_hero.png  el fondo grande de la ficha
+    #   <appid>_logo.png  el logotipo que va encima del fondo
+    #
+    # Las dos primeras salen de "grids" y se guardan TAMBIEN en las carpetas de
+    # WProton: sirven igual en su biblioteca, asi que no se descargan dos veces.
+    # El fondo y el logotipo son solo de Steam -WProton no los usa- y van
+    # directos a su carpeta grid/.
+    local cfg="$1" appid="$2" gid="$3" titulo="$4"
+    local grid="$cfg/grid" id rc puestas=0
+    [ -n "$appid" ] && [ -n "$gid" ] || return 1
+    mkdir -p "$grid" 2>/dev/null || return 1
+
+    # SIN CLAVE NO SE PREGUNTA NADA AQUI.
+    #
+    # El usuario esta añadiendo un juego a Steam, posiblemente con Steam ya
+    # cerrado y esperando: un dialogo pidiendo una API key en medio de eso es
+    # una interrupcion, y encima bloqueante. Si no hay clave se sigue con las
+    # carátulas que haya y se le dice al final, en el mismo aviso.
+    if ! sgdb_key_pedir silencioso; then
+        log "Steam: no hay clave de SteamGridDB; solo se ponen las carátulas que ya habia"
+        return 1
+    fi
+
+    loading_say "Buscando carátulas de '$titulo' en SteamGridDB..."
+    sgdb_un_juego "$gid" "$titulo" "vertical wide"
+    rc=$?
+    if [ "$rc" = 2 ]; then
+        loading_clear
+        say "AVISO: SteamGridDB rechazo la peticion (¿API key invalida?)"
+        return 1
+    fi
+    id="${SGDB_ULTIMO_ID:-}"
+    if [ -z "$id" ]; then
+        loading_clear
+        log "Steam: SteamGridDB no conoce '$titulo'"
+        return 1
+    fi
+    # El fondo y el logotipo, solo para Steam.
+    if [ ! -s "$grid/${appid}_hero.png" ] \
+       && sgdb_bajar_a "$id" heroes "" "$grid/${appid}_hero.png"; then
+        puestas=$((puestas+1)); say "[SGDB]   OK (fondo) -> ${appid}_hero.png"
+    fi
+    if [ ! -s "$grid/${appid}_logo.png" ] \
+       && sgdb_bajar_a "$id" logos "" "$grid/${appid}_logo.png"; then
+        puestas=$((puestas+1)); say "[SGDB]   OK (logotipo) -> ${appid}_logo.png"
+    fi
+    loading_clear
+    log "Steam: arte de SteamGridDB para $gid (id $id): $puestas imagen(es) propias de Steam"
+    return 0
+}
+
 anadir_wproton_a_steam() {
     # Añade el propio WProton a Steam como juego no-Steam, con sus imagenes.
     # Asi se puede entrar en la biblioteca desde el modo Juego sin salir al
@@ -1593,13 +2234,42 @@ sus accesos directos al salir y se perdería el cambio.
     [ -f "$vdf" ] && cp -f "$vdf" "$vdf.wproton.bak"
     if "$PY_BIN" "$STEAM_ADD_PY" "$vdf" "$name" "$SELF" "$(dirname "$SELF")" \
         "\"$(readlink -f "$game")\"" "$icon" >> "$LOG_FILE" 2>&1; then
-        # las caratulas que ya tenemos, a la biblioteca de Steam
-        local _appid _gid
+        # EL ARTE DE LA FICHA, EN ESTE ORDEN:
+        #   1) lo que falte, descargado de SteamGridDB (y guardado tambien en
+        #      las carpetas de WProton, que sirve para su propia biblioteca)
+        #   2) copiar a Steam todo lo que haya, lo de antes y lo nuevo
+        #
+        # Primero descargar y luego copiar, no al reves: al reves se copiaba
+        # el hueco vacio y lo descargado no llegaba a Steam hasta la siguiente
+        # vez. El fondo y el logotipo los pone el propio paso 1, que son solo
+        # de Steam y no tienen sitio en las carpetas de WProton.
+        local _appid _gid _arte_sgdb=0
         _appid="$(grep -o 'appid=[0-9]*' "$LOG_FILE" | tail -n1 | cut -d= -f2)"
         _gid="$(game_id "$game")"
-        [ -n "$_appid" ] && steam_arte_juego "$(dirname "$vdf")" "$_appid" "$_gid"
+        if [ -n "$_appid" ]; then
+            steam_arte_descargar "$(dirname "$vdf")" "$_appid" "$_gid" "$name" \
+                && _arte_sgdb=1
+            steam_arte_juego "$(dirname "$vdf")" "$_appid" "$_gid"
+        fi
         [ "$reabrir" = 1 ] && steam_abrir
+        # EL AVISO DICE QUE PASO CON LAS CARATULAS.
+        #
+        # Si no hay clave de SteamGridDB, el juego entra igual pero con un
+        # cuadro gris: hay que decir POR QUE y donde se arregla, no dejar al
+        # usuario mirando un hueco sin saber si fallo algo.
+        local _nota_arte
+        if [ "$_arte_sgdb" = 1 ]; then
+            _nota_arte="Las carátulas se han traido de SteamGridDB."
+        elif [ -z "$(sgdb_key_leer)" ]; then
+            _nota_arte="Sin carátulas nuevas: no hay API key de SteamGridDB.
+Se pone en Biblioteca y preferencias -> Descargar carátulas."
+        else
+            _nota_arte="SteamGridDB no tenia carátulas para este juego.
+Puedes poner una a mano en Ajustes del juego -> Carátula."
+        fi
         ui_info "'$name' añadido a Steam como juego no-Steam.
+
+$_nota_arte
 
 $([ "$reabrir" = 1 ] && printf 'Steam se está abriendo de nuevo.' \
                      || printf 'Abre Steam para verlo.')
@@ -1623,6 +2293,123 @@ write_mapeador() {
     cat > "$MAPEADOR_PY" <<'MAPEOF'
 @@INCLUIR:mapeador.py@@
 MAPEOF
+}
+
+TRACKPAD_PY="$RUNTIME_DIR/trackpad.py"
+TRACKPAD_PID=""
+
+write_trackpad() {
+    grep -q "WPROTON_HELPER trackpad.py PENDIENTE" "$TRACKPAD_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$TRACKPAD_PY" <<'TPEOF'
+@@INCLUIR:trackpad.py@@
+TPEOF
+}
+
+trackpad_py() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 127
+    write_trackpad || return 127
+    "$PY_BIN" "$TRACKPAD_PY" "$@"
+}
+
+trackpad_hay_mando() {
+    # ¿Se ve el mando de la Deck por hidraw y se puede leer?
+    trackpad_py buscar >/dev/null 2>>"$LOG_FILE"
+}
+
+trackpad_raton_start() {
+    # Arranca el pad elegido como raton, en segundo plano.
+    # $1 = izquierdo | derecho (por defecto, lo que diga el ajuste)
+    local cual="${1:-${TRACKPAD_RATON:-no}}"
+    case "$cual" in izquierdo|derecho) ;; *) return 1 ;; esac
+    trackpad_raton_stop
+    if ! trackpad_hay_mando; then
+        log "trackpad: no hay mando de la Deck legible; no se activa el raton" AVISO
+        return 1
+    fi
+    # El 0 de los segundos es "sin limite"; detras va si tomamos el control.
+    trackpad_py raton "$cual" "${TRACKPAD_SENS:-1.0}" 0 \
+        "${TRACKPAD_CONTROL:-1}" >>"$LOG_FILE" 2>&1 &
+    TRACKPAD_PID=$!
+    log "trackpad: el pad $cual mueve el puntero (pid $TRACKPAD_PID, sensibilidad ${TRACKPAD_SENS:-1.0}, control=${TRACKPAD_CONTROL:-1})"
+    return 0
+}
+
+trackpad_efectivo() {
+    # QUE PAD MUEVE EL PUNTERO PARA ESTE JUEGO.
+    #
+    # El campo del perfil manda sobre el ajuste general, y "auto" significa
+    # "lo que diga el general". Asi, el ajuste de Runners y herramientas sigue
+    # valiendo para los menus y para todos los juegos que no digan otra cosa,
+    # y un juego concreto puede pedir lo suyo sin tocarle la configuracion a
+    # los demas.
+    case "${TRACKPAD:-auto}" in
+        no|izquierdo|derecho) printf '%s' "$TRACKPAD" ;;
+        *)                    printf '%s' "${TRACKPAD_RATON:-no}" ;;
+    esac
+}
+
+trackpad_para_el_juego() {
+    # Deja el trackpad como lo quiera ESTE juego, antes de lanzarlo.
+    #
+    # Devuelve 0 si ha cambiado algo, para que quien llame sepa que al terminar
+    # tiene que devolverlo a su sitio.
+    local quiere; quiere="$(trackpad_efectivo)"
+    local ahora="${TRACKPAD_RATON:-no}"
+    [ "$quiere" = "$ahora" ] && return 1
+    log "trackpad: este juego pide '$quiere' (el ajuste general es '$ahora')"
+    WP_TRACKPAD_CAMBIADO=1
+    if [ "$quiere" = no ]; then
+        trackpad_raton_stop
+    else
+        trackpad_raton_start "$quiere" || true
+    fi
+    return 0
+}
+
+trackpad_restaurar() {
+    # Devuelve el trackpad a lo que diga el ajuste general. Se llama al salir
+    # del juego: si no, el pad se quedaria como lo dejo la ultima partida y en
+    # los menus no se entenderia por que.
+    log "trackpad: se vuelve al ajuste general ('${TRACKPAD_RATON:-no}')"
+    if [ "${TRACKPAD_RATON:-no}" = no ]; then
+        trackpad_raton_stop
+    else
+        trackpad_raton_start "$TRACKPAD_RATON" || true
+    fi
+    return 0
+}
+
+trackpad_raton_stop() {
+    [ -n "${TRACKPAD_PID:-}" ] || return 0
+    if kill -0 "$TRACKPAD_PID" 2>/dev/null; then
+        # UN TERM, Y SE LE DA TIEMPO. NUNCA UN -9 DE ENTRADA.
+        #
+        # Cuando WProton tiene tomados los trackpads, ese proceso es el unico
+        # que sabe devolverselos al mando, y lo hace al recibir el TERM. Un
+        # "kill -9" lo mataria antes de que pudiera, y el usuario se quedaria
+        # con los trackpads muertos.
+        #
+        # (Hay red de seguridad: al cerrarse su fd de hidraw, el driver del
+        # kernel vuelve a registrar el mando y restaura la emulacion por su
+        # cuenta. Pero eso NO pasa si Steam tambien tiene el mando abierto,
+        # que en el modo Juego es lo normal.)
+        kill "$TRACKPAD_PID" 2>/dev/null
+        local _i=0
+        while [ "$_i" -lt 10 ] && kill -0 "$TRACKPAD_PID" 2>/dev/null; do
+            sleep 0.1; _i=$((_i+1))
+        done
+        if kill -0 "$TRACKPAD_PID" 2>/dev/null; then
+            kill -9 "$TRACKPAD_PID" 2>/dev/null
+            log "trackpad: no solto el mando a tiempo; se mato (pid $TRACKPAD_PID)" AVISO
+            log "trackpad: si los pads se quedan muertos, usalos desde Runners y" AVISO
+            log "          herramientas -> Trackpads -> Devolver los pads al mando" AVISO
+        else
+            log "Cierre: trackpad como raton detenido (pid $TRACKPAD_PID)"
+        fi
+    fi
+    TRACKPAD_PID=""
+    return 0
 }
 
 write_mando_virtual() {
@@ -1819,8 +2606,16 @@ find_keys_file() {
     fi
     # 2) EL QUE SE LLAMA COMO EL JUEGO, A SU LADO: explicito por su nombre.
     #
-    # "<juego>.keys" junto al .wsquashfs es una decision deliberada sobre ESTE
+    # "<juego>.keys" junto al paquete es una decision deliberada sobre ESTE
     # juego. Se acepta, se marca y se copia a profiles/, porque ya era suyo.
+    #
+    # VALE PARA CUALQUIER FORMATO, y conviene decirlo porque lo preguntan: aqui
+    # se recorta la extension con "${p%.*}", sea la que sea. Con un juego
+    # llamado "Mi_Juego.dwarfs" se buscan "Mi_Juego.keys" y
+    # "Mi_Juego.dwarfs.keys" exactamente igual que con un .wsquashfs, y el
+    # identificador que usa profiles/ sale de game_id, que tambien quita la
+    # extension. En todo el camino de las teclas no hay ni un formato escrito
+    # a mano.
     for k in "${p%.*}.keys" "$p.keys"; do
         [ -f "$k" ] || continue
         keys_es_de "$k" "$gid"; _r=$?
@@ -1880,14 +2675,25 @@ find_keys_file() {
 }
 
 mando_virtual_start() {
-    # Arranca el mando virtual si el juego lo tiene activado. $1 = modo.
+    # Arranca el mando virtual si el juego lo tiene activado.
+    # $1 = modo, $2 = 1 para intercambiar los sticks (del .keys del juego).
     #
     # Es una via APARTE del mapeador de teclas: aquel convierte el mando en
     # teclas y este convierte un mando en OTRO MANDO. Pueden usarse a la vez.
     #
     # Apagado por defecto: solo se enciende en los juegos que lo necesiten.
     WP_MANDO_VIRTUAL_PID=""
-    local modo="${1:-0}"
+    local modo="${1:-0}" sticks="${2:-0}"
+    # LOS STICKS AL REVES ENCIENDEN EL MANDO VIRTUAL POR SU CUENTA.
+    #
+    # El intercambio lo hace este modulo, asi que pedirlo en el .keys y tener
+    # el mando virtual apagado -que es como esta de serie- no haria nada, y
+    # desde fuera seria "he puesto la opcion y no pasa nada". Con "copia" el
+    # juego ve un Xbox normal con los sticks cambiados y nada mas.
+    if [ "$sticks" = 1 ] && { [ -z "$modo" ] || [ "$modo" = 0 ]; }; then
+        modo="copia"
+        log "Mando virtual: encendido en modo copia porque el .keys pide los sticks al reves"
+    fi
     # SE DICE SIEMPRE, tambien cuando esta apagado.
     #
     # En la prueba del 16/09 el usuario eligio "Mando Xbox" en el menu y en el
@@ -1953,7 +2759,9 @@ mando_virtual_start() {
         fi
         say "[+] evdev instalado; el mando virtual ya puede funcionar"
     fi
-    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo")" \
+    # El dispositivo va VACIO a proposito: que lo busque el modulo. Esta ahi
+    # para poder pasarle el tercer argumento, el de los sticks.
+    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo" "" "$sticks")" \
         || WP_MANDO_VIRTUAL_PID=""
     # SE COMPRUEBA QUE SIGUE VIVO, no solo que arrancara.
     #
@@ -2154,6 +2962,8 @@ fi
 # que un dia falta en alguno y el raton deja de ir en una pantalla suelta sin
 # que nadie sepa por que. Exportada, la heredan todos.
 export WP_RATON="${RATON_MENUS:-1}"
+export WP_RATON_UMBRAL="${RATON_UMBRAL:-12}"
+export WP_RATON_RUEDA="${RATON_RUEDA:-3}"
 
 pygame_available() {
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
@@ -3379,7 +4189,10 @@ extract_archive() {
             # El .exe va aqui a proposito: el instalador de ReShade es un
             # autoextraible y 7z le saca las DLL sin ejecutarlo. Nada de
             # correr un .exe descargado.
-            if command -v 7z >/dev/null 2>&1; then 7z x -y -o"$2" "$1" >> "$LOG_FILE" 2>&1
+            # El 7z portable primero; bsdtar (libarchive) como respaldo,
+            # que tambien abre 7z y suele estar en el sistema.
+            if setup_sevenzip; then
+                "$SEVENZIP_BIN" x -y -o"$2" "$1" >> "$LOG_FILE" 2>&1
             elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf "$1" -C "$2"
             else return 1; fi ;;
         *) return 1 ;;
@@ -4352,6 +5165,100 @@ montar_suelto() {
     fi
 }
 
+SQUASHFUSE_OPTS=""   # se calcula una vez por sesion
+squashfuse_opciones_monta() {
+    # Las opciones con las que se monta un wsquashfs. $1 = binario elegido.
+    #
+    # Deja el resultado en SQUASHFUSE_OPTS (no lo imprime: asi la cache de
+    # una vez por sesion no se pierde dentro de un subshell).
+    #
+    # CON squashfuse_ll NO SE PIDE NADA MAS QUE "ro".
+    #
+    # El driver bajo ya contesta "esto no caduca" por su cuenta, asi que no
+    # hay nada que afinar. Y SOBRE TODO: su "-o timeout=N" NO ES la caducidad
+    # de los atributos, es "desmontate solo tras N segundos sin uso". Pasarle
+    # ahi un numero grande pensando en la cache seria programar un desmontaje
+    # en medio de la partida.
+    #
+    # CON squashfuse (el alto) SI, y son las de la propia libreria FUSE:
+    #
+    #   kernel_cache        no tirar el contenido ya leido al abrir otra vez
+    #   attr_timeout        cuanto vale un "este fichero es asi"
+    #   entry_timeout       cuanto vale un "este nombre es este fichero"
+    #   negative_timeout    cuanto vale un "este nombre no existe"
+    #
+    # Una hora para las tres. No es una apuesta: una imagen montada no se
+    # puede modificar, asi que la respuesta de hace una hora sigue siendo
+    # verdad. De serie son 1 segundo, 1 segundo y CERO, que para un sistema
+    # de ficheros que puede cambiar esta bien, y para uno de solo lectura es
+    # tirar el trabajo.
+    #
+    # Estas NO salen en su --help -ahi solo pone "se admiten las opciones de
+    # la libreria fuse"-, asi que aqui no sirve el truco de leer la ayuda que
+    # se usa con dwarfs: se intenta montar y, si no las acepta, mount_image_ro
+    # reintenta sin ellas.
+    [ -n "$SQUASHFUSE_OPTS" ] && return 0
+    case "${1##*/}" in
+        *_ll) SQUASHFUSE_OPTS="ro" ;;
+        *)    SQUASHFUSE_OPTS="ro,kernel_cache,attr_timeout=3600,entry_timeout=3600,negative_timeout=3600" ;;
+    esac
+    log "squashfuse: driver = ${1:-?} | opciones de montaje = $SQUASHFUSE_OPTS"
+}
+
+squashfuse_montar() {
+    # Monta con las opciones que haya ahora en SQUASHFUSE_OPTS.
+    # $1 = binario, $2 = imagen, $3 = punto de montaje.
+    if [ "$SQUASHFUSE_OPTS" = "ninguna" ]; then
+        montar_suelto "$1" "$2" "$3"
+    else
+        montar_suelto "$1" "$2" "$3" -o "$SQUASHFUSE_OPTS"
+    fi
+}
+
+DWARFS_OPTS=""   # se calcula una vez por sesion en dwarfs_opciones_monta()
+dwarfs_opciones_monta() {
+    # Las opciones de montaje de dwarfs QUE ESTE BINARIO ENTIENDA.
+    #
+    # De serie dwarfs monta con cachesize=512m y 2 hilos de descompresion:
+    # valores prudentes, pensados para no comerse la memoria. Un juego de
+    # 30 GB en una microSD agradece bastante mas cache y mas hilos, y eso se
+    # nota justo donde duele, en el rato de carga.
+    #
+    # NO SE PASAN A CIEGAS. Una opcion -o que dwarfs no conozca no da un
+    # error suyo: se la pasa al kernel, y el kernel rechaza el montaje
+    # entero. Asi que primero se mira su propia ayuda y solo se pide lo que
+    # aparece ahi. Y aun asi, si el montaje afinado falla, mount_image_ro
+    # reintenta con las opciones de siempre: mas vale cargar lento que no
+    # cargar.
+    #
+    # DEJA EL RESULTADO EN DWARFS_OPTS Y NO LO IMPRIME.
+    #
+    # Lo imprimia, y quien la llamaba hacia opts="$(dwarfs_opciones_monta)".
+    # Eso es un subshell: la cache se escribia dentro y se perdia al salir,
+    # asi que preguntaba a dwarfs --help en cada montaje y el comentario de
+    # "una vez por sesion" era mentira. Escribiendo el global se cumple, y
+    # ademas el "me quedo con ro" del reintento usa el mismo sitio.
+    [ -n "$DWARFS_OPTS" ] && return 0
+    local ayuda opts="ro" hilos
+    ayuda="$("$DWARFS_BIN" --help 2>&1)"
+    case "$ayuda" in
+        *cachesize*) [ -n "${DWARFS_CACHE:-}" ] && opts="$opts,cachesize=$DWARFS_CACHE" ;;
+    esac
+    case "$ayuda" in
+        *workers*)
+            hilos="${DWARFS_WORKERS:-0}"
+            if [ "$hilos" = 0 ]; then
+                hilos="$(nproc 2>/dev/null || echo 2)"
+                [ "$hilos" -gt 4 ] 2>/dev/null && hilos=4
+                [ "$hilos" -ge 1 ] 2>/dev/null || hilos=2
+            fi
+            opts="$opts,workers=$hilos"
+            ;;
+    esac
+    DWARFS_OPTS="$opts"
+    log "dwarfs: opciones de montaje = $opts"
+}
+
 mount_image_ro() {
     # $1 = imagen, $2 = punto de montaje. Elige squashfuse o el driver dwarfs.
     local img="$1" mp="$2" fmt
@@ -4364,9 +5271,57 @@ mount_image_ro() {
 $(basename "$img")"; return 1; }
         fi
         say "[+] Montando imagen DwarFS con $(basename "$DWARFS_BIN")"
-        montar_suelto "$DWARFS_BIN" "$img" "$mp" -o ro || return 1
+        dwarfs_opciones_monta
+        if ! montar_suelto "$DWARFS_BIN" "$img" "$mp" -o "$DWARFS_OPTS"; then
+            # Si ya iba con las opciones de siempre, no hay nada que
+            # reintentar: el fallo es otro.
+            [ "$DWARFS_OPTS" = "ro" ] && return 1
+            say "AVISO: dwarfs no acepto '$DWARFS_OPTS'; se monta con las opciones de serie"
+            log "dwarfs: montaje con '$DWARFS_OPTS' fallo; reintento con -o ro" AVISO
+            # Para el resto de la sesion, las de siempre: si este binario no
+            # las entiende, no las va a entender en el juego siguiente.
+            DWARFS_OPTS="ro"
+            # Un montaje a medias deja el punto ocupado y haria fallar el
+            # reintento con "Device or resource busy".
+            umount_dir "$mp"
+            montar_suelto "$DWARFS_BIN" "$img" "$mp" -o ro || return 1
+        fi
     else
-        montar_suelto "$SQUASHFUSE_BIN" "$img" "$mp" || return 1
+        local sqbin; sqbin="$(squashfuse_monta_bin)"
+        [ -n "$sqbin" ] || { ui_error "Falta squashfuse para montar:
+$(basename "$img")"; return 1; }
+        squashfuse_opciones_monta "$sqbin"
+        case "${sqbin##*/}" in
+            *_ll) say "[+] Montando imagen con squashfuse_ll (driver rapido)" ;;
+        esac
+        # Tres intentos de menos a mas conservador, y el que funcione se queda
+        # para el resto de la sesion: si este driver no entiende algo, no lo
+        # va a entender en el juego siguiente.
+        #
+        # El valor "ninguna" significa montar SIN "-o" ninguno, que es como se
+        # montaba hasta ahora. Hace falta un centinela y no la cadena vacia:
+        # vacia es "todavia no se ha calculado", y guardar ahi el ultimo
+        # recurso haria que la siguiente imagen volviera a probar las opciones
+        # que ya sabemos que no valen.
+        if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
+            [ "$SQUASHFUSE_OPTS" = "ninguna" ] && return 1
+            say "AVISO: squashfuse no acepto '$SQUASHFUSE_OPTS'; se monta con menos opciones"
+            log "squashfuse: montaje con '$SQUASHFUSE_OPTS' fallo" AVISO
+            # Un montaje a medias deja el punto ocupado.
+            umount_dir "$mp"
+            if [ "$SQUASHFUSE_OPTS" = "ro" ]; then
+                SQUASHFUSE_OPTS="ninguna"
+            else
+                SQUASHFUSE_OPTS="ro"
+            fi
+            if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
+                [ "$SQUASHFUSE_OPTS" = "ninguna" ] && return 1
+                log "squashfuse: tampoco con -o ro; se monta sin opciones" AVISO
+                SQUASHFUSE_OPTS="ninguna"
+                umount_dir "$mp"
+                squashfuse_montar "$sqbin" "$img" "$mp" || return 1
+            fi
+        fi
     fi
     return 0
 }
@@ -4696,6 +5651,7 @@ cleanup_mount() {
 }
 
 WP_SALIENDO=0     # 1 = WProton se esta cerrando: no arrancar nada mas
+WP_LOGS_CERRADOS=0  # 1 = ya se decidio si el registro se queda (ver logs_cerrar)
 WP_HAY_MENU=0     # 1 = hay un menu detras al que volver tras jugar
 
 vigilante_cierre() {
@@ -5139,6 +6095,20 @@ partida_fin() {
     # Lo vigila auditoria_final.py, apartado 11.
     WP_JUGANDO=0
     trap cleanup_all INT TERM
+    # EL TRACKPAD VUELVE A SU SITIO.
+    #
+    # Va aqui y no al final de launch_game a proposito: por partida_fin pasan
+    # TODAS las salidas de una partida -la buena y las seis o siete de error-,
+    # y eso es justo lo que hace falta. Si se quedara en el camino bueno, un
+    # juego que no llega a arrancar dejaria el trackpad como lo pidio EL y los
+    # menus se comportarian raro sin que nada lo explicara.
+    #
+    # Solo si de verdad se cambio algo: si no, cada salida reiniciaria el
+    # proceso del trackpad sin motivo.
+    if [ "${WP_TRACKPAD_CAMBIADO:-0}" = 1 ]; then
+        WP_TRACKPAD_CAMBIADO=0
+        trackpad_restaurar
+    fi
     return 0
 }
 
@@ -5199,6 +6169,9 @@ cleanup_all() {
     mando_virtual_stop
     log "Cierre: parando el vigilante"
     guardia_salida_stop
+    repo_refresco_stop
+    squashfuse_ll_stop
+    trackpad_raton_stop
     # Estos dos existian pero el cierre no los llamaba: la barra de progreso
     # y el aviso de la primera instalacion podian quedarse en marcha. El aviso
     # ademas usa zenity, que no es ninguno de los procesos que vigilamos por
@@ -5379,6 +6352,11 @@ cleanup_all() {
     # ordenes). Si WProton sigue con sus menus, cerrar sus canales no aporta
     # nada y es un riesgo innecesario.
     [ "${WP_HAY_MENU:-0}" != 1 ] && exec 1>/dev/null 2>/dev/null
+    # Y LO ULTIMO DE TODO: el registro se borra si la sesion fue limpia.
+    #
+    # Aqui abajo porque despues de esto NO se escribe nada mas: una linea
+    # escrita tras el borrado resucitaria el fichero vacio.
+    logs_cerrar
 }
 # SE APUNTA QUIEN PIDIO EL CIERRE, no solo que se cierra.
 #
@@ -10460,7 +11438,15 @@ launch_game() {
 
     # Juego nuevo: si la comunidad ya tiene una configuracion probada para el,
     # ofrecerla antes de que el usuario tenga que pelearse con los ajustes.
-    profile_exists "$gid" || community_offer_for "$gid" || true
+    #
+    # Y si YA tiene perfil de la comunidad, mirar si lo han mejorado desde
+    # entonces. Son los dos lados de lo mismo, por eso van juntos: uno salta
+    # cuando no hay perfil y el otro cuando hay uno viejo.
+    if profile_exists "$gid"; then
+        community_update_offer_for "$gid" || true
+    else
+        community_offer_for "$gid" || true
+    fi
 
     # Y la carátula 4:3 del repositorio, si este juego aun no tiene ninguna.
     # Esto SI se mira siempre, no solo en los juegos nuevos: quien lleva meses
@@ -10523,6 +11509,9 @@ Configurar juego -> Comprobar integridad"
             || { cleanup_mount; partida_fin; return 1; }
     fi
     load_profile "$gid"
+    # El trackpad, como lo quiera ESTE juego. Va justo tras cargar el perfil,
+    # que es donde ya se sabe lo que pide, y partida_fin lo devuelve al salir.
+    trackpad_para_el_juego || true
     if [ "${RUNNER:-}" = "bundled" ] && [ -z "$BUNDLED_RUNNER_DIR" ]; then
         say "AVISO: el perfil pide el Wine incluido pero este wsquashfs no lo trae - runner automático"
         RUNNER=""
@@ -10890,7 +11879,16 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # guardaron mientras existio el automatico.
     local _mv="${MANDO_VIRTUAL:-0}"
     [ "$_mv" = nunca ] && _mv=0
-    mando_virtual_start "$_mv"
+    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
+    #
+    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
+    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
+    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
+    # como lo quiere el juego.
+    local _sticks=0
+    keys_sticks_cambiados "$keys_file" && _sticks=1
+    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
+    mando_virtual_start "$_mv" "$_sticks"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -11317,26 +12315,63 @@ Que cumplas muchos mas.
     # La 2.0 es la primera que sale para todo el mundo, y no habria llegado
     # aqui sin la gente que lleva meses probandola y mandando registros. Eso va
     # delante de las novedades, no en una nota al pie.
+    # EL AGRADECIMIENTO SE QUEDA, EL "PRIMERA VERSION" NO.
+    #
+    # Esa cabecera era verdad en la 2.0 y deja de serlo en cuanto hay una 2.01.
+    # Las dos lineas de gracias a los testers van tal cual, que es lo que
+    # importa; lo que cambia es el titulo de encima, para que no diga algo que
+    # ya no es cierto.
+    #
+    # Y LA LISTA VUELVE A SER CORTA.
+    #
+    # Habia crecido a dieciocho puntos, uno por cada tanda de trabajo, con
+    # novedades de la 2.0 que a estas alturas ya ha leido todo el mundo. Eso va
+    # justo contra lo que dice el aviso de arriba: en una pantalla de mano, una
+    # lista que no cabe de un vistazo no se lee. Se queda lo de ESTA version.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
-PRIMERA VERSION LISTA PARA EL PUBLICO GENERAL
+GRACIAS A LOS TESTERS
 
   Muchas gracias a Michel, Fransis y MRDeu por todas las horas de testeo.
   Sin vosotros este proyecto no habria sido posible.
 
-NOVEDADES
+NOVEDADES DE LA $WPROTON_VERSION
 
-  Las caratulas 4:3 las trae WProton de su repositorio.
+  Un juego se puede borrar del disco desde sus ajustes.
 
-  Arranca ya configurado con menu moderno, lista y caratulas 4:3.
+  Los perfiles del repositorio se pueden traer todos de una vez.
 
-  Mejoras en la carga y compresion de juegos Linux.
+  Si el perfil de la comunidad mejora, WProton te avisa.
 
-  Mejoras en el movimiento del raton.
+  Y puedes pedir el de la comunidad cuando quieras.
 
-  Las teclas del mando ya no se aplican a otro juego.
+  7-Zip ya no hay que instalarlo: lo descarga WProton.
 
-  El paquete se guarda en la carpeta de juegos de la que salio."
+  Los juegos se pueden importar sin empaquetar, en una carpeta.
+
+  Un juego con decenas de miles de ficheros avisa antes de empaquetarse.
+
+  Un juego puede intercambiar el stick izquierdo con el derecho.
+
+  Los registros de las sesiones que van bien se borran al cerrar.
+
+  Al añadir un juego a Steam, sus caratulas se descargan solas.
+
+  Arreglada la carga de los juegos que traen su prefijo dentro.
+
+  El puntero se esconde solo al dejar el raton, y vuelve al moverlo.
+
+  WProton sabe cual de tus mandos usas y propone los ajustes.
+
+  Avisa cuando hay un GE-Proton nuevo, en Runners y herramientas.
+
+  En pantallas 4K la letra sube sola y se lee.
+
+  Los prefijos que vienen dentro del archivo se preparan bien.
+
+  Select cierra tambien los juegos de Linux en carpeta.
+
+  Lo demas, en las novedades del repositorio."
     return 0
 }
 
@@ -11432,9 +12467,155 @@ Reiniciar WProton ahora?"; then
 #     incluido...). Se descargan al profiles/ local sin pisar nada sin avisar.
 # ----------------------------------------------------------------------------
 community_list() {
-    # Lista los .conf de la carpeta profiles/ del repo (API de GitHub)
-    curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/contents/profiles" 2>/dev/null \
-        | grep -o '"name": *"[^"]*\.conf"' | cut -d'"' -f4 | sort
+    # Lo que hay en la carpeta profiles/ del repo: los .conf Y LOS .keys.
+    #
+    # Un juego puede necesitar las dos cosas: el perfil con su runner y sus
+    # ajustes, y un .keys con el mapeo del mando. Se subian los dos al
+    # repositorio, pero WProton solo se bajaba el .conf, asi que el juego
+    # quedaba configurado a medias y el mando sin mapear. Lo vio un tester.
+    #
+    # --max-time: esto se consulta AL ARRANCAR UN JUEGO. Si GitHub se queda
+    # colgado, el juego no se espera; se arranca sin perfil y ya. Lo tenia
+    # covers43_list y aqui faltaba: un GitHub lento retrasaba cada partida.
+    #
+    # El codigo HTTP y el fallo de curl se guardan para poder EXPLICAR en el
+    # registro por que no hubo lista (sin red, repositorio mal escrito, 403
+    # por limite de peticiones...). Antes esto fallaba en silencio absoluto.
+    local tmp cod
+    tmp="$(mktemp)" || return 1
+    cod="$(curl -fsSL --max-time 12 \
+              -w '%{http_code}' \
+              "https://api.github.com/repos/$WPROTON_REPO/contents/profiles" \
+              -o "$tmp" 2>>"$LOG_FILE")" || {
+        log "comunidad: curl fallo al pedir la lista de profiles/ (codigo HTTP ${cod:-?})" AVISO
+        rm -f "$tmp"; return 1; }
+    REPO_ULTIMO_HTTP="${cod:-}"
+    community_json_a_lista < "$tmp"
+    rm -f "$tmp"
+    return 0
+}
+
+community_json_a_lista() {
+    # La respuesta de la API, por la entrada estandar -> "nombre<TAB>sha".
+    #
+    # EL sha ES LO QUE PERMITE SABER SI UN PERFIL SE HA ACTUALIZADO.
+    #
+    # La API ya devuelve, por cada fichero, el sha del contenido (el "blob
+    # sha" de git). O sea: la lista que WProton pide una vez al arrancar YA
+    # TRAE dentro la informacion de si cada perfil ha cambiado. No hace falta
+    # ninguna peticion mas, y eso importa: la alternativa evidente -preguntar
+    # por la fecha del ultimo commit de cada fichero- es UNA peticion POR
+    # JUEGO, y con 60 peticiones por hora que da la API sin credenciales eso
+    # se agota con treinta juegos.
+    #
+    # Y es mejor que una fecha: la fecha dice "esto se subio despues", que no
+    # es lo mismo que "esto es distinto". Un commit que toca otro fichero, o
+    # volver a subir el mismo contenido, cambian la fecha y no el sha.
+    #
+    # Se parte el JSON por objetos ("{") en vez de buscar los campos sueltos,
+    # como en covers43_list: asi "name" y "sha" se leen del MISMO fichero pase
+    # lo que pase con el orden en que GitHub los devuelva.
+    tr -d '\n' | tr '{' '\n' \
+        | awk -F'"' '
+            {
+                nom = ""; sha = ""
+                for (i = 1; i < NF; i++) if ($i == "name") { nom = $(i+2); break }
+                if (nom == "") next
+                for (i = 1; i < NF; i++) if ($i == "sha")  { sha = $(i+2); break }
+                if (tolower(nom) ~ /\.(conf|keys)$/) printf "%s\t%s\n", nom, sha
+            }' \
+        | sort
+}
+
+community_solo_conf() {
+    # Del indice, solo los perfiles. Los .keys van de la mano de uno de ellos
+    # y no se eligen por separado.
+    grep -i '\.conf$'
+}
+
+community_tiene_keys() {
+    # ¿El perfil $1 (nombre del .conf) trae ademas su .keys?
+    #
+    # Se mira en LOS DOS sitios, y la carpeta primero: si el perfil se encontro
+    # en la copia local puede que no haya lista del repositorio -sin conexion
+    # no la hay-, y mirando solo la lista diriamos que no trae teclas teniendolas
+    # al lado en el disco.
+    local base="${1%.conf}"
+    [ -s "$COMMUNITY_DIR/$base.keys" ] && return 0
+    [ -f "$COMMUNITY_INDEX" ] || return 1
+    grep -qxF "$base.keys" "$COMMUNITY_INDEX"
+}
+
+community_keys_fetch() {
+    # Trae el .keys que acompana a un perfil. $1 = nombre del .conf,
+    # $2 = gid del juego LOCAL. Devuelve 0 si quedo instalado.
+    #
+    # Se guarda con el nombre del juego de AQUI, igual que el .conf: el del
+    # repositorio puede llamarse distinto y entonces no lo encontraria nadie.
+    local name="$1" gid="$2"
+    [ -n "$gid" ] || return 1
+    community_tiene_keys "$name" || return 1
+    local base="${name%.conf}"
+    local dest="$PROFILE_DIR/$gid.keys"
+    local tmp; tmp="$(mktemp)" || return 1
+    # La copia local primero, igual que con el .conf.
+    if [ -s "$COMMUNITY_DIR/$base.keys" ]; then
+        cat "$COMMUNITY_DIR/$base.keys" > "$tmp" 2>/dev/null
+        log "comunidad: $base.keys sale de la copia local (comunidad/)"
+    else
+        local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$(url_escapar "$base.keys")"
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            log "comunidad: no se pudo descargar $base.keys" WARN
+            return 1
+        fi
+    fi
+    # QUE SEA UN .keys DE VERDAD.
+    #
+    # Un .keys es JSON. Si lo descargado no se puede leer, no se guarda: un
+    # fichero roto en profiles/ deja al juego sin mapeo y el motivo no se ve
+    # por ninguna parte.
+    if [ "$(keys_resumen "$tmp" 2>/dev/null)" = "!ROTO" ]; then
+        rm -f "$tmp"
+        log "comunidad: $base.keys no es un JSON valido; descartado" WARN
+        return 1
+    fi
+    if [ -f "$dest" ]; then
+        # EN TANDA, O ACTUALIZANDO, NO SE PREGUNTA OTRA VEZ.
+        #
+        # Le faltaba el caso que ya tenia community_fetch, y se veia: al
+        # actualizar un perfil que traia teclas salian DOS dialogos seguidos
+        # -"¿quieres la version nueva?" y "¿sustituyo tambien el .keys?"-
+        # cuando el usuario ya habia dicho que si una linea antes. Lo mismo al
+        # traer perfiles en tanda: un dialogo por juego con teclas.
+        if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+            cp -f "$dest" "$dest.bak"
+        else
+            ui_ask "Este perfil trae tambien las teclas del mando, y ya tienes
+un .keys para este juego:
+
+$(basename "$dest")
+
+Sustituirlo por el de la comunidad?
+(se guardara el tuyo como $(basename "$dest").bak)" || { rm -f "$tmp"; return 1; }
+            cp -f "$dest" "$dest.bak"
+        fi
+    fi
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    if ! cat "$tmp" > "$dest" 2>/dev/null; then
+        rm -f "$tmp"
+        log "comunidad: no se pudo escribir $dest" WARN
+        return 1
+    fi
+    rm -f "$tmp"
+    # SE MARCA COMO DE ESTE JUEGO, PISANDO LO QUE TRAIGA.
+    #
+    # El del repositorio viene marcado con el nombre de ALLI. Sin remarcarlo,
+    # WProton lo veria como "de otro juego" y lo ignoraria: es exactamente el
+    # fallo que se corrigio al asignar un .keys a mano.
+    keys_remarcar "$dest" "$gid"
+    log "comunidad: teclas instaladas en $dest (desde $base.keys)"
+    return 0
 }
 
 community_fetch() {
@@ -11453,9 +12634,19 @@ community_fetch() {
         dest="$PROFILE_DIR/$name"
     fi
     tmp="$(mktemp)"
-    local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
-    if ! dl "$url" "$tmp"; then
-        rm -f "$tmp"; ui_error "No se pudo descargar $name"; return 1
+    # PRIMERO LA COPIA LOCAL, SI LA HAY.
+    #
+    # Quien se bajo el repositorio entero a comunidad/ no tiene por que volver
+    # a Internet por un fichero que ya esta en su disco: asi instalar un perfil
+    # es instantaneo y funciona sin conexion.
+    if [ -s "$COMMUNITY_DIR/$name" ]; then
+        cat "$COMMUNITY_DIR/$name" > "$tmp" 2>/dev/null
+        log "comunidad: $name sale de la copia local (comunidad/)"
+    else
+        local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$name"
+        if ! dl "$url" "$tmp"; then
+            rm -f "$tmp"; ui_error "No se pudo descargar $name"; return 1
+        fi
     fi
     # seguridad: un perfil es solo CLAVE=valor, nada de ordenes
     if grep -qE '^[[:space:]]*(#|[A-Z_]+=)' "$tmp" && \
@@ -11466,19 +12657,67 @@ community_fetch() {
         ui_error "El perfil descargado tiene contenido raro y se ha descartado."
         return 1
     fi
+    # EN TANDA NO SE PREGUNTA NADA.
+    #
+    # Al traer los perfiles de golpe, el usuario ya decidio UNA vez -antes de
+    # empezar- si quiere sustituir los que ya tiene. Preguntarselo otra vez por
+    # cada juego convertiria la descarga en un interrogatorio de 50 dialogos.
+    # La copia .bak se hace igual, que es lo que protege su trabajo.
     if [ -f "$dest" ]; then
-        ui_ask "Ya tienes un perfil para este juego:
+        if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+            cp -f "$dest" "$dest.bak"
+        else
+            ui_ask "Ya tienes un perfil para este juego:
 $(basename "$dest")
 
 Sustituirlo por el de la comunidad?
 (se guardara el tuyo como $(basename "$dest").bak)" || { rm -f "$tmp"; return 1; }
-        cp -f "$dest" "$dest.bak"
+            cp -f "$dest" "$dest.bak"
+        fi
     fi
     mkdir -p "$PROFILE_DIR"
     cat "$tmp" > "$dest"
     rm -f "$tmp"
     local notas; notas="$(grep -m1 '^NOTAS=' "$dest" | cut -d= -f2- | tr -d '"')"
-    ui_info "Perfil instalado: $name
+    # EL .keys QUE VIENE CON EL PERFIL.
+    #
+    # Si en el repositorio hay un fichero con el MISMO nombre y extension
+    # .keys, es el mapeo de mando de ese juego y hace falta igual que el
+    # perfil. Antes se quedaba sin bajar y el juego arrancaba bien configurado
+    # pero con el mando sin mapear.
+    local _keys=""
+    if [ -n "$gid" ] && community_keys_fetch "$name" "$gid"; then
+        _keys="
+
+Trae tambien las teclas del mando, instaladas en:
+profiles/$gid.keys"
+    fi
+    # SE APUNTA QUE VERSION SE HA INSTALADO.
+    #
+    # Sin esto no hay forma de saber luego si el perfil del repositorio ha
+    # cambiado: el .conf de aqui puede estar ademas tocado a mano, asi que
+    # compararlo con el de alla no diria nada. Lo que se guarda es el sha que
+    # tenia el fichero EN EL REPOSITORIO el dia que se instalo.
+    #
+    # Si no hay sha -la lista venia de la copia local, o es un repositorio que
+    # no lo da- se calcula del propio fichero instalado, que es lo mismo
+    # mientras nadie lo toque.
+    if [ -n "$gid" ]; then
+        local _sc _sk
+        _sc="$(community_sha_repo "$name")" || _sc="$(git_blob_sha "$dest")" || _sc=""
+        _sk=""
+        if [ -f "$PROFILE_DIR/$gid.keys" ]; then
+            _sk="$(community_sha_repo "${name%.conf}.keys")" \
+                || _sk="$(git_blob_sha "$PROFILE_DIR/$gid.keys")" || _sk=""
+        fi
+        community_marca_escribir "$gid" "$name" "$_sc" "$_sk" "" || true
+    fi
+    if [ "${WP_COMUNIDAD_TANDA:-0}" = 1 ]; then
+        # En tanda el resumen va al final, una vez, no un dialogo por juego.
+        log "comunidad: instalado $name -> $(basename "$dest")${_keys:+ (con teclas)}"
+        return 0
+    fi
+    ui_info "Perfil instalado: $name$_keys
 ${notas:+
 Notas del autor: $notas}"
     return 0
@@ -11505,23 +12744,491 @@ Se han quitado tus estadísticas y rutas locales."
 
 COMMUNITY_INDEX="$RUNTIME_DIR/.community_index"
 
-community_index_refresh() {
-    # Lista de perfiles del repositorio, cacheada un dia. Se consulta en
-    # segundo plano y sin ruido: si no hay red, simplemente no hay aviso.
-    [ -n "${WPROTON_REPO:-}" ] || return 1
-    if [ -f "$COMMUNITY_INDEX" ]; then
-        local edad
-        edad=$(( $(date +%s) - $(stat -c %Y "$COMMUNITY_INDEX" 2>/dev/null || echo 0) ))
-        [ "$edad" -lt 86400 ] && return 0
+# EL sha DE CADA PERFIL DEL REPOSITORIO: "nombre<TAB>sha", una linea por fichero.
+#
+# Va en un fichero APARTE y no dentro de .community_index a proposito. El indice
+# lo leen media docena de funciones -el emparejamiento por nombre, el "¿trae
+# teclas?", el menu, el cruce con la biblioteca- con "grep '\.conf$'" y
+# "grep -qxF". Meterle una segunda columna obligaba a tocar todas esas, que son
+# justo las que mas cuesta probar y las que acabamos de dejar finas.
+#
+# Los dos ficheros se escriben en la MISMA funcion y de la MISMA respuesta, asi
+# que no pueden contarse cosas distintas. Y si este falta -una instalacion
+# vieja, o la lista hecha con la copia local- lo unico que pasa es que no se
+# avisa de actualizaciones: se degrada por el lado bueno.
+COMMUNITY_SHAS="$RUNTIME_DIR/.community_shas"
+
+# COPIA LOCAL COMPLETA DE profiles/ DEL REPOSITORIO.
+#
+# Aqui caben los perfiles con el nombre que tienen ALLA ("Silver Pines.conf"),
+# que es justo por lo que no pueden ir en profiles/: ahi cada fichero tiene
+# que llamarse como el juego de AQUI ("Silver_Pines.conf") para que WProton lo
+# encuentre, y ademas el menu de perfiles pasaria a tener cientos de entradas
+# que no son del usuario.
+#
+# Teniendolos en su propia carpeta se puede hacer algo que antes no: trabajar
+# SIN RED. Si no hay conexion, la lista y los ficheros salen de esta copia.
+COMMUNITY_DIR="$BASE_DIR/comunidad"
+
+# Ultimo codigo HTTP que devolvio la API del repositorio. Solo para el
+# registro: declarado aqui porque con "set -u" una variable sin declarar
+# mata el script.
+REPO_ULTIMO_HTTP=""
+
+# ¿Ya se ha pedido una lista NUEVA en esta sesion? Las dos listas -perfiles y
+# carátulas- se guardan un dia, y eso tiene un efecto que costo encontrar:
+# un juego subido al repositorio HOY no aparece hasta mañana. Cuando un juego
+# no esta en la copia guardada se pide la lista otra vez, UNA sola vez por
+# sesion y por lista, y se vuelve a buscar.
+COMUNIDAD_REFRESCADO=0
+COVERS43_REFRESCADO=0
+
+repo_indice_edad() {
+    # Segundos desde que se trajo esa lista. -1 si no hay ninguna copia.
+    local f="${1:-}" t
+    [ -f "$f" ] || { printf '%s' '-1'; return 0; }
+    t="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+    printf '%s' "$(( $(date +%s) - t ))"
+}
+
+repo_edad_humana() {
+    # La edad en palabras, para el registro.
+    local s="${1:-0}"
+    if   [ "$s" -lt 0 ];    then printf 'no habia copia'
+    elif [ "$s" -lt 60 ];   then printf 'traida hace %s s' "$s"
+    elif [ "$s" -lt 3600 ]; then printf 'traida hace %s min' "$((s/60))"
+    else printf 'traida hace %s h %s min' "$((s/3600))" "$(( (s%3600)/60 ))"
     fi
+}
+
+community_index_refresh() {
+    # Lista de perfiles del repositorio, guardada un dia. Nunca interrumpe:
+    # si no hay red no se avisa por pantalla, pero SI queda escrito en el
+    # registro por que no hubo lista. Antes esto fallaba en absoluto silencio
+    # y el unico sintoma era que el perfil "no se descargaba", sin mas pistas.
+    #
+    # $1 = "forzar" -> ignora la copia guardada y pide la lista otra vez.
+    local forzar="${1:-}" edad n_conf n_keys
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        log "comunidad: no hay repositorio configurado (WPROTON_REPO vacio)" AVISO
+        return 1
+    fi
+    edad="$(repo_indice_edad "$COMMUNITY_INDEX")"
+    if [ "$forzar" != forzar ] && [ "$edad" -ge 0 ] && [ "$edad" -lt 86400 ]; then
+        log "comunidad: se usa la lista guardada ($(repo_edad_humana "$edad"), $(wc -l < "$COMMUNITY_INDEX" 2>/dev/null || echo 0) entradas)"
+        return 0
+    fi
+    [ "$forzar" = forzar ] \
+        && log "comunidad: se pide la lista OTRA VEZ (la guardada fue $(repo_edad_humana "$edad"))" \
+        || log "comunidad: pidiendo la lista de profiles/ a $WPROTON_REPO ($(repo_edad_humana "$edad"))"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
-    community_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null
+    # UNA SOLA PETICION, DOS FICHEROS.
+    #
+    # community_list devuelve "nombre<TAB>sha". El indice se queda solo con los
+    # nombres -que es lo que esperan todos los que lo leen- y los shas van a su
+    # fichero. De la misma respuesta, asi que siempre cuentan lo mismo.
+    community_list > "$COMMUNITY_SHAS.tmp" 2>/dev/null
+    cut -f1 "$COMMUNITY_SHAS.tmp" 2>/dev/null > "$COMMUNITY_INDEX.tmp"
     if [ -s "$COMMUNITY_INDEX.tmp" ]; then
         mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
+        mv -f "$COMMUNITY_SHAS.tmp" "$COMMUNITY_SHAS" 2>/dev/null
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        log "comunidad: lista al dia -> $n_conf perfil(es) y $n_keys fichero(s) de teclas"
+        # LA API DEVUELVE COMO MUCHO 1000 FICHEROS POR CARPETA.
+        #
+        # Con los .keys al lado de los .conf, cada juego ocupa dos sitios: el
+        # tope llega a la mitad de juegos de lo que parece. Si se roza, hay
+        # que avisarlo AQUI, porque el sintoma -los ultimos juegos por orden
+        # alfabetico no se descargan nunca- no se parece en nada a la causa.
+        if [ "$(wc -l < "$COMMUNITY_INDEX" 2>/dev/null || echo 0)" -ge 1000 ]; then
+            log "comunidad: la carpeta profiles/ llega al tope de 1000 ficheros de la API de GitHub: los que pasen de ahi NO se ven. Hay que pasar a la API de arboles." AVISO
+        fi
     else
+        rm -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_SHAS.tmp"
+        log "comunidad: el repositorio no devolvio ninguna entrada (codigo HTTP ${REPO_ULTIMO_HTTP:-?}); se sigue con la copia guardada si la hay" AVISO
+        # Si habia copia, no se pierde: mejor una lista de ayer que ninguna.
+        [ -f "$COMMUNITY_INDEX" ] && return 0
+        # SIN RED Y SIN LISTA: LA COPIA LOCAL.
+        #
+        # Quien se bajo el repositorio entero con "Traer TODOS los perfiles"
+        # tiene los ficheros en comunidad/. Haciendo la lista con ellos,
+        # TODO lo de abajo -buscar el perfil de un juego, saber si trae teclas,
+        # el menu de perfiles- funciona igual sin conexion, porque community_fetch
+        # tambien mira ahi antes de descargar.
+        if community_local_list > "$COMMUNITY_INDEX.tmp" 2>/dev/null \
+           && [ -s "$COMMUNITY_INDEX.tmp" ]; then
+            mv -f "$COMMUNITY_INDEX.tmp" "$COMMUNITY_INDEX"
+            log "comunidad: sin conexion; la lista se hace con la copia local de comunidad/ ($(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null) perfiles)"
+            return 0
+        fi
         rm -f "$COMMUNITY_INDEX.tmp"
         return 1
     fi
+    return 0
+}
+
+git_blob_sha() {
+    # El sha de git del contenido de un fichero. $1 = ruta.
+    #
+    # Es lo que devuelve "git hash-object": sha1 de "blob <bytes>\\0" + contenido.
+    # Se calcula a mano y no con git, que no tiene por que estar instalado y
+    # ademas aqui no hay ningun repositorio: solo hace falta la cuenta.
+    #
+    # Sirve para lo mismo que el sha que da la API, asi que los dos se pueden
+    # comparar directamente: uno dice que hay en el repositorio y el otro que
+    # hay en el disco de esta persona.
+    local f="${1:-}" n
+    [ -f "$f" ] || return 1
+    n="$(stat -c %s "$f" 2>/dev/null)" || return 1
+    { printf 'blob %d\0' "$n"; cat "$f"; } | sha1sum 2>/dev/null | cut -d' ' -f1
+}
+
+community_sha_repo() {
+    # El sha que tiene AHORA en el repositorio el fichero $1.
+    local nom="${1:-}" linea
+    [ -n "$nom" ] || return 1
+    [ -f "$COMMUNITY_SHAS" ] || return 1
+    linea="$(grep -m1 -F "$(printf '%s\t' "$nom")" "$COMMUNITY_SHAS" 2>/dev/null)" || return 1
+    [ -n "$linea" ] || return 1
+    # Solo si el nombre es EXACTO: con "grep -F Doom" tambien casaria
+    # "Doom Eternal", y entonces se compararia el sha del juego equivocado.
+    [ "${linea%%	*}" = "$nom" ] || return 1
+    printf '%s' "${linea#*	}"
+}
+
+# Marca de "este perfil vino de la comunidad, y con esta version".
+#   linea 1: nombre del .conf en el repositorio
+#   linea 2: sha del .conf cuando se instalo
+#   linea 3: sha del .keys cuando se instalo (vacio si no traia)
+#   linea 4: sha que el usuario dijo que NO queria actualizar (si dijo que no)
+community_marca_fich() { printf '%s' "$PROFILE_DIR/.${1:-x}.comunidad"; }
+
+community_marca_escribir() {
+    # $1 = gid, $2 = nombre en el repositorio, $3 = sha del .conf,
+    # $4 = sha del .keys (opcional), $5 = sha rechazado (opcional)
+    local gid="${1:-}" nom="${2:-}" sc="${3:-}" sk="${4:-}" no="${5:-}" f
+    [ -n "$gid" ] && [ -n "$nom" ] || return 1
+    f="$(community_marca_fich "$gid")"
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    printf '%s\n%s\n%s\n%s\n' "$nom" "$sc" "$sk" "$no" > "$f" 2>/dev/null || return 1
+    log "comunidad: marca de '$gid' -> $nom (sha ${sc:0:8}${sk:+ + teclas ${sk:0:8}})"
+    return 0
+}
+
+WP_CM_NOMBRE=""; WP_CM_SHA=""; WP_CM_SHAK=""; WP_CM_NO=""
+
+community_marca_leer() {
+    # Lee la marca de $1 a las variables WP_CM_*. 1 si no hay marca.
+    local gid="${1:-}" f
+    WP_CM_NOMBRE=""; WP_CM_SHA=""; WP_CM_SHAK=""; WP_CM_NO=""
+    [ -n "$gid" ] || return 1
+    f="$(community_marca_fich "$gid")"
+    [ -f "$f" ] || return 1
+    { IFS= read -r WP_CM_NOMBRE
+      IFS= read -r WP_CM_SHA
+      IFS= read -r WP_CM_SHAK
+      IFS= read -r WP_CM_NO
+    } < "$f" 2>/dev/null || true
+    [ -n "$WP_CM_NOMBRE" ] || return 1
+    return 0
+}
+
+WP_CM_SHA_NUEVO=""      # el sha que hay ahora en el repositorio
+WP_CM_TOCADO=0          # 1 = el usuario ha modificado su copia
+
+community_hay_actualizacion() {
+    # ¿Hay en el repositorio una version MAS NUEVA del perfil de este juego?
+    #
+    # $1 = gid. Devuelve 0 si la hay, y deja en WP_CM_SHA_NUEVO el sha de
+    # ahora y en WP_CM_TOCADO si el usuario habia tocado su copia.
+    #
+    # El caso que lo pidio: alguien se baja el perfil de un juego, Dani lo
+    # mejora en el repositorio, y esa persona no se entera nunca porque el
+    # aviso de "la comunidad tiene un perfil" solo sale cuando NO tienes
+    # ninguno. Con la marca del sha, se puede saber.
+    local gid="${1:-}" sha_local
+    WP_CM_SHA_NUEVO=""; WP_CM_TOCADO=0
+    community_marca_leer "$gid" || return 1
+    [ -f "$PROFILE_DIR/$gid.conf" ] || return 1     # ya no tiene perfil
+    WP_CM_SHA_NUEVO="$(community_sha_repo "$WP_CM_NOMBRE")" || return 1
+    [ -n "$WP_CM_SHA_NUEVO" ] || return 1
+    [ -n "$WP_CM_SHA" ] || return 1
+    [ "$WP_CM_SHA_NUEVO" = "$WP_CM_SHA" ] && return 1       # el mismo de siempre
+    # ¿HA TOCADO EL USUARIO SU COPIA?
+    #
+    # Si la ha ajustado a mano, actualizar le pisa su trabajo. No se decide
+    # por el: se le dice, y el .bak se hace igual.
+    sha_local="$(git_blob_sha "$PROFILE_DIR/$gid.conf")" || sha_local=""
+    [ -n "$sha_local" ] && [ "$sha_local" != "$WP_CM_SHA" ] && WP_CM_TOCADO=1
+    return 0
+}
+
+community_local_list() {
+    # Lo que haya en la copia local del repositorio, en el mismo formato que
+    # community_list: un nombre de fichero por linea, .conf y .keys.
+    [ -d "$COMMUNITY_DIR" ] || return 1
+    find "$COMMUNITY_DIR" -maxdepth 1 -type f \
+         \( -iname '*.conf' -o -iname '*.keys' \) -printf '%f\n' 2>/dev/null | sort
+}
+
+community_match_local() {
+    # LO MISMO QUE community_match, PERO MIRANDO LA CARPETA comunidad/.
+    #
+    # $1 = gid -> el nombre del .conf de la copia local que le corresponde.
+    #
+    # Es la PRIMERA parada al buscar el perfil de un juego: si el fichero ya
+    # esta en el disco, ir a GitHub a preguntar si existe es gastar una espera
+    # -y una peticion de la API- para enterarse de algo que ya sabemos. Solo
+    # si no esta aqui se sale a la red.
+    #
+    # Reutiliza community_match apuntandolo a una lista hecha con la carpeta:
+    # asi la regla para decidir si dos nombres son el mismo juego -mayusculas,
+    # separadores, coletilla de version- es LA MISMA en los dos sitios. Tenerla
+    # escrita dos veces seria tener dos reglas que se separan con el tiempo.
+    local gid="${1:-}" lista r
+    [ -n "$gid" ] || return 1
+    [ -d "$COMMUNITY_DIR" ] || return 1
+    lista="$(mktemp)" || return 1
+    if ! community_local_list > "$lista" 2>/dev/null || [ ! -s "$lista" ]; then
+        rm -f "$lista"; return 1
+    fi
+    # "local" aqui tapa la global solo mientras dure esta funcion: bash da a
+    # las funciones que se llamen desde aqui la version local, y al volver la
+    # global vuelve a su sitio sola. Con un prefijo "VAR=x funcion" el
+    # resultado depende del shell, y esto tiene que ser exacto.
+    local COMMUNITY_INDEX="$lista"
+    r="$(community_match "$gid")" || r=""
+    rm -f "$lista"
+    [ -n "$r" ] || return 1
+    printf '%s' "$r"
+}
+
+community_buscar_actualizaciones() {
+    # REVISA DE GOLPE SI ALGUNO DE TUS PERFILES DE LA COMUNIDAD HA MEJORADO.
+    #
+    # El aviso al lanzar un juego solo llega cuando lo lanzas, y a los juegos
+    # que uno no toca en meses no llega nunca. Esto lo mira para todos de una
+    # vez, sin preguntar juego por juego.
+    local _ok informe gid nom
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+    if [ ! -s "$COMMUNITY_SHAS" ]; then
+        ui_error "El repositorio no dio las versiones de los perfiles, asi que
+no se puede saber cuales han cambiado.
+
+Inténtalo otra vez más tarde."
+        return 1
+    fi
+
+    # LOS PERFILES QUE VINIERON DE LA COMUNIDAD, QUE SON LOS UNICOS QUE SE
+    # PUEDEN COMPARAR. Un perfil hecho a mano no tiene con que compararse.
+    loading_say "Comparando tus perfiles con el repositorio..."
+    informe="$(mktemp)" || return 1
+    local f n_mirados=0
+    for f in "$PROFILE_DIR"/.*.comunidad; do
+        [ -f "$f" ] || continue
+        gid="$(basename "$f")"; gid="${gid#.}"; gid="${gid%.comunidad}"
+        [ -n "$gid" ] || continue
+        n_mirados=$((n_mirados+1))
+        if community_hay_actualizacion "$gid"; then
+            printf '%s\t%s\t%s\n' "$gid" "$WP_CM_NOMBRE" "$WP_CM_TOCADO" >> "$informe"
+        fi
+    done
+    loading_clear
+
+    local n; n="$(grep -c . "$informe" 2>/dev/null)"
+    if [ "$n" = 0 ]; then
+        rm -f "$informe"
+        ui_info "Tus perfiles de la comunidad estan al dia.
+
+Mirados: $n_mirados"
+        log "comunidad: $n_mirados perfil(es) revisados, ninguno con version nueva"
+        return 0
+    fi
+
+    # QUE JUEGOS SON, CON NOMBRE, Y CUALES HAS TOCADO TU.
+    local listado="" tocados=0 tcd
+    while IFS="$(printf '\t')" read -r gid nom tcd; do
+        [ -n "$gid" ] || continue
+        if [ "$tcd" = 1 ]; then
+            tocados=$((tocados+1))
+            listado="$listado
+  $gid  (tu copia esta modificada)"
+        else
+            listado="$listado
+  $gid"
+        fi
+        log "comunidad: version nueva para '$gid' (desde '$nom')"
+    done < "$informe"
+
+    local aviso=""
+    [ "$tocados" -gt 0 ] && aviso="
+
+De esos, $tocados los has modificado tu: el tuyo se guardara
+como .conf.bak antes de sustituirlo."
+    if ! ui_ask "Hay version nueva del perfil de $n juego(s):$listado$aviso
+
+Actualizarlos todos?"; then
+        rm -f "$informe"
+        say "[comunidad] el usuario no quiso actualizar ahora"
+        return 0
+    fi
+
+    local hechos=0 fallos=0 idx=0
+    progress_start "Actualizando perfiles de la comunidad"
+    WP_COMUNIDAD_TANDA=1
+    while IFS="$(printf '\t')" read -r gid nom tcd; do
+        [ -n "$gid" ] && [ -n "$nom" ] || continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / n ))" "($idx/$n) $gid"
+        if community_fetch "$nom" "$gid"; then
+            hechos=$((hechos+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo actualizar el perfil de '$gid'" AVISO
+        fi
+    done < "$informe"
+    WP_COMUNIDAD_TANDA=0
+    progress_stop
+    rm -f "$informe"
+
+    log "comunidad: actualizacion en tanda -> $hechos actualizados, $fallos fallos"
+    ui_info "Perfiles actualizados: $hechos de $n$([ "$fallos" -gt 0 ] && printf '\n\nNo se pudieron actualizar: %s (mira el registro)' "$fallos")$([ "$tocados" -gt 0 ] && printf '\n\nLos que tenias modificados estan como .conf.bak')"
+    return 0
+}
+
+community_traer_todo() {
+    # SE BAJA EL REPOSITORIO DE PERFILES ENTERO A comunidad/.
+    #
+    # Distinto de "los perfiles para tus juegos": eso instala los que te tocan
+    # y ya. Esto trae los 250, tengas sus juegos o no, con el nombre que tienen
+    # en el repositorio. No se usa todos los dias, pero hay dos momentos en que
+    # vale oro: cuando vas a estar sin conexion, y cuando quieres mirar o
+    # comparar los perfiles de otros sin ir juego por juego.
+    #
+    # Y SIRVE PARA ALGO MAS QUE MIRARLOS: con la copia hecha, buscar el perfil
+    # de un juego, saber si trae teclas e instalarlo funcionan SIN RED, porque
+    # community_fetch mira en esta carpeta antes de salir a Internet.
+    local _ok
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez.
+En 'Comprobar el repositorio' sale el detalle."
+        return 1
+    fi
+
+    mkdir -p "$COMMUNITY_DIR" 2>/dev/null || {
+        ui_error "No se pudo crear la carpeta comunidad/"; return 1; }
+
+    # Cuantos hay y cuantos faltan. Un perfil son uno o dos KB, asi que no se
+    # avisa del peso como con las carátulas: el aviso seria "vas a descargar
+    # 400 KB", que no le importa a nadie.
+    local total=0 faltan=0 nom
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        total=$((total+1))
+        [ -f "$COMMUNITY_DIR/$nom" ] || faltan=$((faltan+1))
+    done < "$COMMUNITY_INDEX"
+
+    if [ "$total" = 0 ]; then
+        ui_error "El repositorio no tiene ningun perfil."
+        return 1
+    fi
+    if [ "$faltan" = 0 ]; then
+        ui_info "Ya tienes los $total fichero(s) del repositorio en:
+
+comunidad/
+
+No hay nada nuevo que traer."
+        return 0
+    fi
+    ui_ask "El repositorio tiene $total fichero(s) de perfil
+y te faltan $faltan.
+
+Se guardaran en comunidad/, con el nombre que tienen en el
+repositorio. Desde ahi WProton los usa aunque no haya
+conexión, y los puedes mirar como ficheros de texto.
+
+Descargarlos ahora?" || return 0
+
+    local hechos=0 fallos=0 malos=0 idx=0 url tmp
+    progress_start "Descargando los perfiles del repositorio"
+    while IFS= read -r nom; do
+        [ -n "$nom" ] || continue
+        [ -f "$COMMUNITY_DIR/$nom" ] && continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / faltan ))" "($idx/$faltan) $nom"
+        url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$(url_escapar "$nom")"
+        tmp="$(mktemp)" || { fallos=$((fallos+1)); continue; }
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"; fallos=$((fallos+1))
+            log "comunidad: no se pudo traer $nom" AVISO
+            continue
+        fi
+        # LO DESCARGADO SE REVISA ANTES DE GUARDARLO.
+        #
+        # Un .conf es solo CLAVE=valor y un .keys es un JSON: cualquier otra
+        # cosa (una pagina de error de GitHub, por ejemplo) se descarta en vez
+        # de dejar basura en la carpeta que luego alguien intente instalar.
+        local bueno=1
+        case "$nom" in
+            *.conf|*.CONF)
+                grep -qE '^[[:space:]]*(#|[A-Z_]+=)' "$tmp" || bueno=0 ;;
+            *) [ "$(keys_resumen "$tmp" 2>/dev/null)" = "!ROTO" ] && bueno=0 ;;
+        esac
+        if [ "$bueno" = 0 ]; then
+            rm -f "$tmp"; malos=$((malos+1))
+            log "comunidad: $nom tiene contenido raro; descartado" AVISO
+            continue
+        fi
+        if cat "$tmp" > "$COMMUNITY_DIR/$nom" 2>/dev/null; then
+            hechos=$((hechos+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo escribir comunidad/$nom" AVISO
+        fi
+        rm -f "$tmp"
+    done < "$COMMUNITY_INDEX"
+    progress_stop
+
+    local resumen="Perfiles traidos: $hechos de $faltan
+Total en comunidad/: $(community_local_list 2>/dev/null | grep -c .)"
+    [ "$fallos" -gt 0 ] && resumen="$resumen
+
+No se pudieron traer: $fallos (mira el registro)"
+    # LOS FICHEROS CON CONTENIDO RARO SE NOMBRAN, Y SE DICE QUE VOLVERAN A SALIR.
+    #
+    # Un .conf que no es un .conf es un fallo DEL REPOSITORIO, no del usuario:
+    # alguien subio mal un fichero. Al no guardarse, cuenta como "que falta"
+    # cada vez, asi que sin este aviso la pantalla diria eternamente "te falta
+    # 1" sin explicar cual ni por que. Nombrarlo es lo que hace que se arregle.
+    if [ "$malos" -gt 0 ]; then
+        resumen="$resumen
+
+Descartados por contenido raro: $malos
+Son ficheros mal subidos al repositorio; cuales son, en el
+registro. Saldran otra vez la proxima vez hasta que se
+arreglen alla."
+    fi
+    log "comunidad: copia completa -> $hechos traidos, $fallos fallos, $malos descartados"
+    ui_info "$resumen
+
+A partir de ahora, instalar el perfil de un juego no necesita
+conexión: sale de esta carpeta."
     return 0
 }
 
@@ -12011,14 +13718,21 @@ community_match() {
     [ -f "$COMMUNITY_INDEX" ] || return 1
     clave="$(printf '%s' "$gid" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
     [ -n "$clave" ] || return 1
+    # SOLO LOS .conf.
+    #
+    # El indice lleva ahora tambien los .keys que acompanan a los perfiles.
+    # Sin este filtro, un "Juego.keys" podria devolverse como si fuera el
+    # perfil y se intentaria instalar un JSON como .conf.
     # 1) coincidencia exacta
     while IFS= read -r linea; do
+        case "$linea" in *.conf) ;; *) continue ;; esac
         [ -n "$linea" ] || continue
         lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
         [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
     done < "$COMMUNITY_INDEX"
     # 2) el juego lleva version/grupo detras del nombre del perfil
     while IFS= read -r linea; do
+        case "$linea" in *.conf) ;; *) continue ;; esac
         [ -n "$linea" ] || continue
         lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
         [ ${#lclave} -ge 6 ] || continue          # nombres muy cortos: no arriesgar
@@ -12034,24 +13748,302 @@ community_match() {
     return 1
 }
 
+community_ya_preguntado() {
+    # ¿Se le pregunto YA por este juego? El "ya preguntado" es un campo del
+    # perfil del juego (COMUNIDAD_VISTO), asi que se lee de SU .conf.
+    #
+    # Antes se miraba la variable $COMUNIDAD_VISTO que hay en memoria, y eso
+    # estaba mal de una forma dificil de ver: community_offer_for se llama al
+    # principio de launch_game, ANTES de cargar el perfil del juego, asi que
+    # la variable conservaba el valor del juego ANTERIOR. Resultado: bastaba
+    # arrancar un juego sin perfil en la comunidad -que pone la variable a 1-
+    # para que a partir de ahi, en toda la sesion, NINGUN otro juego volviera
+    # a preguntar. Incluido uno que si tenia perfil.
+    local gid="${1:-}" f
+    [ -n "$gid" ] || return 1
+    # El fichero al lado del perfil: sirve tambien para los juegos que todavia
+    # NO tienen perfil, que son justo los que se preguntan.
+    [ -f "$PROFILE_DIR/.$gid.nocomm" ] && return 0
+    f="$PROFILE_DIR/$gid.conf"
+    [ -f "$f" ] || return 1          # juego nuevo: nunca se le pregunto
+    grep -qE '^COMUNIDAD_VISTO=1[[:space:]]*$' "$f" 2>/dev/null
+}
+
+community_marcar_preguntado() {
+    # Deja el "ya preguntado" de ESTE juego en disco.
+    #
+    # Va a un fichero al lado del perfil y no al campo del .conf, porque este
+    # momento es antes de que el juego tenga perfil: el campo se escribiria en
+    # un perfil que aun no existe. load_profile ya traduce este fichero al
+    # campo COMUNIDAD_VISTO en cuanto el perfil exista.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 0
+    COMUNIDAD_VISTO=1
+    mkdir -p "$PROFILE_DIR" 2>/dev/null
+    : > "$PROFILE_DIR/.$gid.nocomm" 2>/dev/null || true
+    return 0
+}
+
+community_traer_ahora() {
+    # TRAER EL PERFIL DE LA COMUNIDAD AHORA, PORQUE EL USUARIO LO PIDE.
+    #
+    # $1 = gid, $2 = ruta del juego (opcional, solo para el registro)
+    #
+    # Es distinta de las otras dos a proposito:
+    #
+    #   community_offer_for        salta sola, y solo si NO tienes perfil
+    #   community_update_offer_for salta sola, y solo si hay version MAS NUEVA
+    #   community_traer_ahora      la pide el usuario, y funciona SIEMPRE
+    #
+    # Ese "siempre" es el motivo de que exista. El caso que la pidio es el de
+    # alguien que va a jugar, ve que su configuracion no le va bien y quiere la
+    # de la comunidad ya, sin esperar a que haya una version nueva ni tener que
+    # borrar su perfil para que salte el aviso del juego nuevo. Tambien sirve
+    # para volver atras: si uno ha estado toqueteando ajustes y lo ha dejado
+    # peor, esto le devuelve el que funcionaba.
+    local gid="${1:-}" ruta="${2:-}" cand=""
+    [ -n "$gid" ] || return 1
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        ui_error "No hay repositorio configurado (WPROTON_REPO)."
+        return 1
+    fi
+    say "[comunidad] el usuario pide el perfil de '$gid'${ruta:+ ($ruta)}"
+
+    # LA COPIA LOCAL PRIMERO, COMO EN TODO LO DEMAS; SI NO, AL REPOSITORIO.
+    #
+    # Y pidiendo lista nueva: quien pulsa esto lo hace AHORA y espera lo de
+    # ahora, no lo de la copia de esta mañana.
+    if cand="$(community_match_local "$gid")" && [ -n "$cand" ]; then
+        log "comunidad: '$cand' sale de la copia local"
+    else
+        loading_say "Buscando una configuración de la comunidad para '$gid'..."
+        community_index_refresh forzar || true
+        loading_clear
+        cand="$(community_match "$gid")" || cand=""
+    fi
+    if [ -z "$cand" ]; then
+        ui_info "La comunidad no tiene una configuración para:
+
+$gid
+
+Se busca por el nombre del juego, asi que puede estar subida
+con otro nombre. En Biblioteca y preferencias -> Comprobar el
+repositorio sale con qué nombre se busca este juego.
+
+Si consigues que te funcione, tu perfil esta en
+profiles/$gid.conf: subirlo al repositorio ayuda al
+siguiente que llegue con este juego."
+        return 1
+    fi
+
+    # QUE SE VA A HACER, ANTES DE HACERLO.
+    #
+    # Aqui el usuario ya tiene un perfil casi seguro -viene de la pantalla de
+    # ajustes-, asi que lo importante no es "¿quieres el de la comunidad?" sino
+    # "esto va a sustituir el tuyo". Se dice con esas palabras.
+    local _tengo="" _conk="" _misma=""
+    if [ -f "$PROFILE_DIR/$gid.conf" ]; then
+        _tengo="
+
+Sustituira la configuración que tienes ahora, que se
+guardara como $gid.conf.bak"
+    fi
+    community_tiene_keys "$cand" && _conk="
+Trae tambien las teclas del mando (.keys)."
+    # SI YA TIENES ESA MISMA VERSION, SE DICE.
+    #
+    # Sin esto, alguien puede estar descargando una y otra vez el fichero que
+    # ya tiene, convencido de que le falta algo. Y no se le impide: puede
+    # querer justo eso, deshacer sus cambios y volver al original.
+    if community_marca_leer "$gid" && [ -n "$WP_CM_SHA" ]; then
+        local _sha_repo; _sha_repo="$(community_sha_repo "$cand")" || _sha_repo=""
+        if [ -n "$_sha_repo" ] && [ "$_sha_repo" = "$WP_CM_SHA" ]; then
+            local _sha_mio; _sha_mio="$(git_blob_sha "$PROFILE_DIR/$gid.conf")" || _sha_mio=""
+            if [ -n "$_sha_mio" ] && [ "$_sha_mio" != "$WP_CM_SHA" ]; then
+                _misma="
+
+Ya tienes esta misma version, pero la has modificado: esto
+la devuelve a como la subio la comunidad."
+            else
+                _misma="
+
+Ya tienes esta misma version, sin cambios: volver a traerla
+no cambiara nada."
+            fi
+        fi
+    fi
+
+    ui_ask "Configuración de la comunidad para:
+
+$gid
+
+Perfil: $cand$_conk$_tengo$_misma
+
+¿Traerla ahora?" || { say "[comunidad] cancelado por el usuario"; return 1; }
+
+    # SIN UNA SEGUNDA PREGUNTA: el usuario ya ha dicho que si a sustituirla.
+    local _tanda_antes="${WP_COMUNIDAD_TANDA:-0}"
+    WP_COMUNIDAD_TANDA=1
+    if ! community_fetch "$cand" "$gid"; then
+        WP_COMUNIDAD_TANDA="$_tanda_antes"
+        ui_error "No se pudo traer la configuración. El detalle esta en el
+registro; tu configuración no se ha tocado."
+        return 1
+    fi
+    WP_COMUNIDAD_TANDA="$_tanda_antes"
+
+    # Y AHORA LO IMPORTANTE, QUE NO SE VE: RECARGAR EL PERFIL EN MEMORIA.
+    #
+    # game_config_menu guarda el perfil al salir con write_full_profile, con
+    # los valores que haya EN MEMORIA. Si no se recargan, salir de los ajustes
+    # reescribe el .conf con los valores de antes y la descarga parece no
+    # haber hecho nada: el fichero se baja bien y acto seguido se pisa. Es el
+    # mismo fallo que ya se habia visto al borrar los datos de un juego.
+    load_profile "$gid"
+    log "comunidad: perfil de '$gid' sustituido por '$cand' y recargado en memoria"
+    local notas; notas="$(grep -m1 '^NOTAS=' "$PROFILE_DIR/$gid.conf" 2>/dev/null | cut -d= -f2- | tr -d '"')"
+    ui_info "Configuración de la comunidad puesta.
+
+Runner: ${RUNNER:-el de siempre}
+Prefijo: ${PREFIX_MODE:-shared}${notas:+
+
+Notas del autor: $notas}${_tengo:+
+
+La tuya esta en $gid.conf.bak}"
+    return 0
+}
+
+community_update_offer_for() {
+    # AVISA DE QUE HAY UNA VERSION MAS NUEVA DEL PERFIL DE ESTE JUEGO.
+    #
+    # $1 = gid. Es el hermano de community_offer_for: ese salta cuando NO
+    # tienes perfil, y este cuando SI lo tienes y el del repositorio ha
+    # cambiado. Sin este, quien se bajo el perfil el primer dia no se enteraba
+    # nunca de las mejoras: el aviso de la comunidad no volvia a salir.
+    #
+    # NO SE PREGUNTA DOS VECES POR LA MISMA VERSION.
+    #
+    # Si dice que no, se apunta ESE sha como rechazado. Asi no vuelve a
+    # preguntar por esa version -que seria un dialogo antes de cada partida,
+    # que es la forma mas rapida de que alguien deje de leer los dialogos- pero
+    # SI preguntara cuando salga la siguiente.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 1
+    [ -n "${WPROTON_REPO:-}" ] || return 1
+    community_hay_actualizacion "$gid" || return 1
+    if [ -n "$WP_CM_NO" ] && [ "$WP_CM_NO" = "$WP_CM_SHA_NUEVO" ]; then
+        log "comunidad: hay version nueva de '$gid' pero ya se dijo que no a esta (${WP_CM_SHA_NUEVO:0:8})"
+        return 1
+    fi
+    say "[comunidad] hay una version mas nueva del perfil de $gid"
+    log "comunidad: '$gid' -> instalado ${WP_CM_SHA:0:8}, en el repositorio ${WP_CM_SHA_NUEVO:0:8}${WP_CM_TOCADO:+ (copia local modificada)}"
+    local _tocado=""
+    [ "$WP_CM_TOCADO" = 1 ] && _tocado="
+
+OJO: tu copia esta modificada. Si actualizas se guardara
+como .conf.bak antes de sustituirla."
+    if ui_ask "La comunidad ha MEJORADO la configuracion de:
+
+$gid
+
+Tienes una version anterior, de cuando la descargaste.$_tocado
+
+Quieres la nueva?"; then
+        # SIN UNA SEGUNDA PREGUNTA.
+        #
+        # community_fetch, cuando ve que ya hay un perfil, pregunta "ya tienes
+        # uno, ¿lo sustituyo?". Encadenada a la de arriba es una pregunta
+        # redundante -acaba de decir que si- y es exactamente la forma de que
+        # la gente deje de leer los dialogos. Con esta marca puesta,
+        # community_fetch hace la copia .bak y sigue sin preguntar, que es lo
+        # que ya hace cuando se traen perfiles en tanda.
+        local _tanda_antes="${WP_COMUNIDAD_TANDA:-0}"
+        WP_COMUNIDAD_TANDA=1
+        if community_fetch "$WP_CM_NOMBRE" "$gid"; then
+            WP_COMUNIDAD_TANDA="$_tanda_antes"
+            say "[+] Perfil de la comunidad actualizado: $gid (el anterior, en .conf.bak)"
+            return 0
+        fi
+        WP_COMUNIDAD_TANDA="$_tanda_antes"
+        return 1
+    fi
+    # El "no" se apunta junto a la version concreta que se ha rechazado.
+    community_marca_escribir "$gid" "$WP_CM_NOMBRE" "$WP_CM_SHA" "$WP_CM_SHAK" \
+        "$WP_CM_SHA_NUEVO" || true
+    log "comunidad: el usuario no quiso actualizar el perfil de '$gid'"
+    return 1
+}
+
 community_offer_for() {
     # Al configurar o lanzar un juego por primera vez: si la comunidad tiene
     # un perfil con ese nombre, ofrecerlo. Solo se pregunta UNA vez por juego.
     local gid="$1" cand
-    [ "${COMUNIDAD_VISTO:-0}" = 1 ] && return 1
+    if community_ya_preguntado "$gid"; then
+        log "comunidad: a '$gid' ya se le pregunto antes; no se repite"
+        return 1
+    fi
     [ -n "${WPROTON_REPO:-}" ] || return 1
+    # PRIMERO LA CARPETA, DESPUES GITHUB.
+    #
+    # Si el perfil de este juego ya esta en comunidad/ -porque se trajo el
+    # repositorio entero- no hay nada que preguntarle a GitHub: ni la lista ni
+    # el fichero. Se ahorra la espera de la red en el arranque del juego y una
+    # peticion de la API, y funciona igual sin conexion.
+    if cand="$(community_match_local "$gid")" && [ -n "$cand" ]; then
+        log "comunidad: '$gid' sale de la copia local: $cand (no se consulta GitHub)"
+        say "[comunidad] hay perfil para $gid: $cand (copia local)"
+        local _conkl=""
+        community_tiene_keys "$cand" && _conkl="
+Este trae ademas las teclas del mando (.keys)."
+        if ui_ask "La comunidad tiene una configuracion ya probada para:
+
+$gid
+
+Suele traer el runner y los ajustes que hacen falta para que
+funcione bien.$_conkl Quieres instalarla?"; then
+            community_fetch "$cand" "$gid" && return 0
+        fi
+        log "comunidad: el usuario no quiso el perfil de '$gid'"
+        community_marcar_preguntado "$gid"
+        return 1
+    fi
     community_index_refresh || return 1
-    cand="$(community_match "$gid")" || { COMUNIDAD_VISTO=1; return 1; }
+    if ! cand="$(community_match "$gid")"; then
+        # NO ESTA EN LA LISTA. Antes se daba por perdido aqui mismo, y con una
+        # lista que se guarda un dia eso significaba que un juego subido al
+        # repositorio hoy no aparecia hasta mañana. Es el fallo que conto
+        # Dani con Silver Pines: estaba en el repositorio y WProton no lo veia.
+        #
+        # Asi que si la lista era de antes, se pide una nueva y se vuelve a
+        # buscar. Una sola vez por sesion: no se va a GitHub una vez por juego.
+        local edad; edad="$(repo_indice_edad "$COMMUNITY_INDEX")"
+        if [ "$COMUNIDAD_REFRESCADO" = 0 ] && [ "$edad" -gt 60 ]; then
+            log "comunidad: '$gid' (clave '$(nombre_clave "$gid")') no esta en la lista guardada; se pide una nueva por si se acaba de subir"
+            COMUNIDAD_REFRESCADO=1
+            community_index_refresh forzar || true
+            cand="$(community_match "$gid")" || cand=""
+        fi
+        if [ -z "$cand" ]; then
+            log "comunidad: no hay perfil para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null) perfiles en la lista)"
+            community_marcar_preguntado "$gid"
+            return 1
+        fi
+    fi
     say "[comunidad] hay perfil para $gid: $cand"
+    local _conk=""
+    community_tiene_keys "$cand" && _conk="
+Este trae ademas las teclas del mando (.keys)."
     if ui_ask "La comunidad tiene una configuracion ya probada para:
 
 $gid
 
 Suele traer el runner y los ajustes que hacen falta para que
-funcione bien. Quieres descargarla?"; then
+funcione bien.$_conk Quieres descargarla?"; then
         community_fetch "$cand" "$gid" && return 0
     fi
-    COMUNIDAD_VISTO=1             # no volver a preguntar por este juego
+    # Dijo que no: no volver a preguntar por ESTE juego (los demas, si).
+    log "comunidad: el usuario no quiso el perfil de '$gid'"
+    community_marcar_preguntado "$gid"
     return 1
 }
 
@@ -12149,11 +14141,24 @@ community_menu() {
         return 1
     fi
     say "Consultando perfiles de la comunidad..."
-    list="$(community_list)"
+    # LA LISTA GUARDADA, NO UNA CONSULTA NUEVA.
+    #
+    # Antes esto llamaba a community_list, o sea a GitHub, cada vez que se
+    # abria el menu: una espera por cada vez, y sin conexion un "no se pudieron
+    # leer" aunque hubiera una copia local entera en comunidad/. Ahora pasa por
+    # community_index_refresh, que usa la lista guardada -que el arranque deja
+    # al dia- y, si no hay red ni lista, la hace con la copia local.
+    community_index_refresh || true
+    # Solo los perfiles: los .keys van con el suyo y no se eligen aparte.
+    list=""
+    [ -f "$COMMUNITY_INDEX" ] && list="$(community_solo_conf < "$COMMUNITY_INDEX")"
     if [ -z "$list" ]; then
         ui_info "No se pudieron leer los perfiles del repositorio.
 Comprueba la conexion o que exista la carpeta profiles/ en:
-$WPROTON_REPO"
+$WPROTON_REPO
+
+Con 'Traer TODOS a comunidad/' se guarda una copia que
+funciona sin conexion."
         return 1
     fi
     while true; do
@@ -13762,26 +15767,174 @@ proton_marcar_prefijo() {
     #
     # Se prefiere el de la carga util, y los tres quedan en el registro: es el
     # dato que hace falta para entender un cuelgue de estos.
+    # LO QUE PROTON COMPARA DE VERDAD: SU PROPIA CONSTANTE.
+    #
+    # ESTE ERA EL FALLO, Y LLEVABA AQUI DESDE SIEMPRE.
+    #
+    # Todo lo de abajo -elegir entre version, dist/version y files/version-
+    # parte de una idea equivocada: que Proton compara el prefijo con la
+    # VERSION DEL RUNNER. No lo hace. En su codigo (proton, de ValveSoftware):
+    #
+    #   CURRENT_PREFIX_VERSION="11.0-100"
+    #   ...
+    #   old_ver = f.readline().strip()      # <compatdata>/version
+    #   self.upgrade_pfx(old_ver)
+    #   ...
+    #   def upgrade_pfx(self, old_ver):
+    #           if old_ver == CURRENT_PREFIX_VERSION:
+    #                   return
+    #
+    # O sea que lo que va en <compatdata>/version NO es "GE-Proton11-6": es la
+    # version del FORMATO de prefijo, "11.0-100", que Proton lleva escrita
+    # dentro y que cambia cuando cambia el formato, no cuando cambias de runner.
+    #
+    # Escribiendole el nombre del runner pasaban dos cosas, las dos malas:
+    # nunca coincidia -asi que Proton entraba siempre al camino de
+    # actualizacion- y encima "GE-Proton11-6".split('-') le da TRES trozos
+    # donde espera dos.
+    #
+    # Se lee del propio runner, que es donde esta, y asi vale para cualquier
+    # version de Proton sin tener que tocar esto nunca mas.
+    local pver=""
+    if [ -f "$rdir/proton" ]; then
+        pver="$(sed -n 's/^CURRENT_PREFIX_VERSION="\([^"]*\)".*/\1/p' \
+                "$rdir/proton" 2>/dev/null | head -n1)"
+    fi
     local vsrc="" _vc
     for _vc in "$rdir/dist/version" "$rdir/files/version" "$rdir/version"; do
         [ -f "$_vc" ] && { vsrc="$_vc"; break; }
     done
-    [ -n "$vsrc" ] || { say "[i] El runner no trae fichero 'version'; Proton"
-                        say "    preparara el prefijo a su manera."; return 0; }
+    # SOLO SE ABANDONA SI NO HAY NI LO UNO NI LO OTRO.
+    #
+    # Antes se volvia aqui en cuanto faltaba el fichero "version" del runner...
+    # y de paso se saltaba el centinela de creacion, que es lo que de verdad
+    # hace falta. Con la constante del propio Proton, ese fichero ya no es
+    # necesario para nada.
+    if [ -z "$pver" ] && [ -z "$vsrc" ]; then
+        say "[i] El runner no dice ni su CURRENT_PREFIX_VERSION ni su 'version';"
+        say "    Proton preparara el prefijo a su manera."
+        return 0
+    fi
     for _vc in "$rdir/version" "$rdir/dist/version" "$rdir/files/version"; do
         [ -f "$_vc" ] || continue
         log "version en ${_vc#"$rdir"/}: $(tr -d '\r\n' < "$_vc" 2>/dev/null)"
     done
-    log "proton_marcar_prefijo usa ${vsrc#"$rdir"/}"
+    [ -n "$vsrc" ] && log "proton_marcar_prefijo: fichero de version del runner = ${vsrc#"$rdir"/}"
     # compatdata es la carpeta que contiene pfx/. Con el enlace pfx -> . que
     # ponemos, las dos son la misma.
     local pfx="$WINEPREFIX"
     [ -d "$WINEPREFIX/pfx" ] && pfx="$WINEPREFIX/pfx"
+    # EL CENTINELA DE CREACION: SIN EL, PROTON REHACE EL PREFIJO SIEMPRE.
+    #
+    # Es la otra mitad del fallo, y es la que de verdad tumbaba el juego. En
+    # setup_prefix():
+    #
+    #   if not file_exists(self.creation_sync_guard, follow_symlinks=False):
+    #           makedirs(self.prefix_dir + "/drive_c")
+    #           ...
+    #           self.copy_pfx()
+    #
+    # con self.creation_sync_guard = self.path("pfx/creation_sync_guard").
+    #
+    # Un prefijo que viene dentro de un archivo -hecho con Wine a secas, estilo
+    # Batocera- NO tiene ese fichero. Asi que Proton creia que tenia que crear
+    # el prefijo desde cero ENCIMA del que ya estaba, y copy_pfx reventaba al
+    # primer fichero que ya existia:
+    #
+    #   os.symlink(contents, dst)
+    #   FileExistsError: [Errno 17] File exists: '.../i386-windows/wmplayer.exe'
+    #       -> '.../pfx/drive_c/Program Files (x86)/Windows Media Player/wmplayer.exe'
+    #
+    # El juego moria en 3 segundos, en CADA intento, y el registro solo decia
+    # "murio en RUN_CMD".
+    #
+    # Poner el centinela es decirle la verdad: este prefijo ya esta creado. El
+    # resto de setup_prefix SI es seguro sobre un prefijo lleno, porque usa
+    # try_copy, que borra el destino antes de copiar:
+    #
+    #   if file_exists(dst, follow_symlinks=False):
+    #           os.remove(dst)
+    #
+    # Lo unico que no lo era es copy_pfx, que es justo lo que el centinela
+    # salta.
+    #
+    # PERO SOLO SI EL PREFIJO SE SOSTIENE SOLO. ESTO ES LA OTRA MITAD.
+    #
+    # El centinela es una AFIRMACION: "este prefijo ya esta creado, no lo
+    # toques". Dicho de un prefijo que NO lo esta, es mentira, y Proton se la
+    # cree: se salta copy_pfx() y se estrella en la primera copia, porque la
+    # carpeta de destino no existe. Tal cual salio en el registro de un tester,
+    # con un prefijo nuevo y vacio de prefixes/<juego>:
+    #
+    #   FileNotFoundError: [Errno 2] No such file or directory:
+    #     '.../prefixes/Skate_3_Recompiled/pfx/drive_c/vrclient/bin'
+    #
+    # Asi que se comprueba antes, y se comprueban las dos cosas que de verdad
+    # hacen falta: que haya registro -o sea, que sea un prefijo- y que este
+    # kernel32.dll, que es el fichero exacto con el que fallaba Wine cuando el
+    # prefijo venia a medias. Con esas dos, Proton puede saltarse copy_pfx sin
+    # que falte nada.
+    local _pfx_entero=1
+    [ -f "$pfx/system.reg" ] || _pfx_entero=0
+    [ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || _pfx_entero=0
+    if [ "$_pfx_entero" = 1 ]; then
+        if [ ! -e "$pfx/creation_sync_guard" ]; then
+            if : > "$pfx/creation_sync_guard" 2>/dev/null; then
+                say "[+] Prefijo: puesto el centinela de creacion (Proton ya no"
+                say "    intentara crearlo encima del que trae el archivo)"
+            else
+                say "AVISO: no se pudo escribir el centinela de creacion en el prefijo;"
+                say "       Proton puede intentar rehacerlo y fallar al copiar."
+            fi
+        fi
+    else
+        # Y SE QUITA EL QUE HUBIERA DE ANTES.
+        #
+        # Si no, un prefijo que se quedo a medias con un centinela puesto por
+        # una version anterior sigue roto para siempre: Proton no lo crea
+        # nunca y no hay forma de que se recupere solo.
+        if [ -e "$pfx/creation_sync_guard" ]; then
+            rm -f "$pfx/creation_sync_guard" 2>/dev/null
+            say "[+] Prefijo: quitado el centinela de creacion (el prefijo esta"
+            say "    a medias, asi que Proton TIENE que crearlo)"
+        fi
+        log "proton_marcar_prefijo: sin centinela; system.reg=$([ -f "$pfx/system.reg" ] && echo si || echo NO) kernel32=$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] && echo si || echo NO)"
+    fi
     local _vname_actual _vname_nuevo
-    _vname_nuevo="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
-    _vname_actual="$(tr -d '\r' < "$WINEPREFIX/version" 2>/dev/null | head -n1 | awk '{print $NF}')"
+    if [ -n "$pver" ]; then
+        _vname_nuevo="$pver"
+        # DE DONDE SALE ESTE NUMERO, que no es obvio al leer el registro.
+        #
+        # Es la constante que el PROPIO runner lleva escrita en su script
+        # "proton", copiada tal cual. En un Proton de Valve se parece a
+        # "11.0-100" y en un GE-Proton al nombre del build: las dos son
+        # correctas, porque lo unico que importa es que sea LA MISMA con la que
+        # el se compara. Si aqui sale algo raro, se mira ese fichero, no esto.
+        log "proton_marcar_prefijo: CURRENT_PREFIX_VERSION leida de ${rdir##*/}/proton = $pver"
+    else
+        # Proton MUY antiguo que no lleva la constante: se cae al comportamiento
+        # de siempre, que para aquellas versiones era lo correcto -su
+        # CURRENT_PREFIX_VERSION se parecia a la version del runner-.
+        _vname_nuevo="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
+        log "proton_marcar_prefijo: el runner no lleva CURRENT_PREFIX_VERSION;" AVISO
+        log "                       se marca con el nombre del runner ($_vname_nuevo)" AVISO
+    fi
+    # SE COMPRUEBA QUE EL FICHERO ESTA ANTES DE LEERLO.
+    #
+    # Con "tr < fichero 2>/dev/null" el 2>/dev/null tapa los errores DE tr,
+    # pero el "no existe" lo imprime el shell al hacer la redireccion, antes
+    # de que tr llegue a correr. Resultado: cada prefijo nuevo dejaba un
+    # "version: No such file or directory" en el registro, que parece un fallo
+    # y no lo es.
+    _vname_actual=""
+    [ -f "$WINEPREFIX/version" ] \
+        && _vname_actual="$(tr -d '\r' < "$WINEPREFIX/version" | head -n1)"
     if [ -n "$_vname_actual" ] && [ "$_vname_actual" = "$_vname_nuevo" ]; then
-        say "[+] Prefijo: ya marcado para $(basename "$rdir")"
+        say "[+] Prefijo: ya marcado como '$_vname_actual' (al dia)"
+        # OJO: NO se vuelve antes de poner el centinela. Eso ya esta hecho
+        # arriba a proposito: la version puede estar bien y faltar el
+        # centinela, que es exactamente el caso del prefijo que viene en un
+        # archivo, y entonces el juego seguia sin arrancar.
         return 0
     fi
     # MANDA EL RUNNER QUE HAYAS ELEGIDO.
@@ -13817,8 +15970,12 @@ proton_marcar_prefijo() {
     #   Proton: Prefix has an invalid version?!
     #
     # O sea que mi marca provocaba justo la actualizacion que pretendia evitar.
-    local vname
-    vname="$(tr -d '\r' < "$vsrc" 2>/dev/null | head -n1 | awk '{print $NF}')"
+    # SE ESCRIBE EL MISMO VALOR CON EL QUE SE HA COMPARADO.
+    #
+    # Antes se recalculaba aqui abajo por otro camino, y comparar una cosa y
+    # escribir otra es como se llega a un registro que dice "ya marcado para
+    # GE-Proton11-6-x86_64" justo despues de haber escrito "GE-Proton11-6".
+    local vname="$_vname_nuevo"
     [ -n "$vname" ] || vname="$(basename "$rdir")"
     if printf '%s\n' "$vname" > "$WINEPREFIX/version" 2>/dev/null; then
         say "[+] Prefijo marcado como preparado para $vname"
@@ -13841,6 +15998,43 @@ overlay_opacos_listar() {
     # Las carpetas del upper marcadas como opacas. $1 = carpeta upper.
     [ -d "$1" ] || return 0
     find "$1" -name '.wh..wh..opq' -printf '%h\n' 2>/dev/null | sort -u
+}
+
+overlay_hay_partidas() {
+    # ¿El overlay de este juego tiene algo dentro? $1 = carpeta upper.
+    #
+    # Se descartan las marcas internas de la superposicion: un upper que solo
+    # tiene ".wh..wh..opq" o un ".wh.algo" no son partidas, es contabilidad de
+    # overlayfs.
+    #
+    # Y SE PIDE UN FICHERO, NO UNA CARPETA ("! -type d").
+    #
+    # Las marcas viven dentro del arbol de carpetas que overlayfs crea para
+    # llegar a ellas: drive_c/users/steamuser/.wh..wh..opq. Mirando solo el
+    # nombre, esas carpetas intermedias contaban como partidas, y un upper
+    # que solo tenia marcas de wineboot decia "tienes partidas guardadas"
+    # cuando no habia ninguna.
+    [ -d "${1:-}" ] || return 1
+    [ -n "$(find "$1" -mindepth 1 -name '.wh.*' -prune -o ! -type d -print -quit 2>/dev/null)" ]
+}
+
+overlay_copiar_encima() {
+    # Pone las partidas del overlay ENCIMA de una carpeta ya extraida, que es
+    # justo lo que el juego veria al jugar con el paquete montado.
+    # $1 = carpeta upper, $2 = destino.
+    #
+    # POR QUE HACE FALTA: un juego empaquetado guarda sus partidas en
+    # overlays/<juego>/upper, NO dentro del archivo. Al convertirlo a carpeta
+    # se extrae el archivo... y las partidas se quedaban fuera. Quien convierte
+    # su juego a carpeta precisamente para que cargue rapido se encontraba el
+    # juego entero y la partida a cero.
+    #
+    # Se usa tar y no "cp -a" para poder dejar fuera las marcas ".wh.*" de la
+    # superposicion, que no son ficheros del juego.
+    local upper="$1" dst="$2"
+    [ -d "$upper" ] || return 0
+    tar -C "$upper" --exclude='.wh.*' -cf - . 2>>"$LOG_FILE" \
+        | tar -C "$dst" -xf - 2>>"$LOG_FILE"
 }
 
 overlay_opacos_prevenir() {
@@ -14010,62 +16204,36 @@ prefijo_incluido_a_disco() {
     done
     [ -d "$origen/drive_c/ProgramData" ] \
         && cp -a "$origen/drive_c/ProgramData" "$destino/drive_c/" 2>/dev/null
-    # WINDOWS SIN LAS DLL DEL RUNNER.
+    # WINDOWS ENTERO, SIN QUITAR NADA. Y ESTO ES UN ARREGLO, NO UN DESCUIDO.
     #
-    # Copiar drive_c/windows entero son cientos de megas y casi todo son DLL
-    # que el runner vuelve a poner. Se copian solo las que NO trae el runner.
+    # Aqui se borraban todas las DLL y los EXE que trae el runner, con esta
+    # idea: "total, las vuelve a poner Proton al crear el prefijo". Y era
+    # verdad... hasta que se arreglo lo de Grandia.
     #
-    # DE UNA VEZ, NO FICHERO A FICHERO.
+    # LAS DOS COSAS SE ANULABAN ENTRE SI:
     #
-    # La primera version recorria el arbol con un "cp" por cada fichero: con
-    # 3.000 ficheros son 3.000 procesos, y medido aqui tardaba 10 s frente a
-    # 0,25 s de un solo "cp -a". CUARENTA VECES mas lento, y eso en disco
-    # local: sobre un squashfs comprimido leido de un USB es lo que hacia que
-    # el arranque se quedara minutos en "Preparando el entorno de Windows".
+    #   - este borrado contaba con que Proton ejecutara copy_pfx() y repusiera
+    #     los ficheros;
+    #   - y el centinela de creacion que pone proton_marcar_prefijo es JUSTO lo
+    #     que hace que Proton se SALTE copy_pfx().
     #
-    # Ahora se copia la carpeta de golpe y DESPUES se borran las DLL que pone
-    # el runner. Se escribe algo mas, pero una sola vez y secuencialmente, que
-    # es lo que los discos hacen bien.
+    # Asi que los ficheros no volvian nunca. En el registro de un tester se ve
+    # entero, y en este orden:
+    #
+    #   (305 DLL quitadas: las pone el runner)
+    #   [+] Actualizando el prefix incluido (wineboot)...
+    #   wine: could not load kernel32.dll, status c0000135
+    #   El prefijo parece roto: Wine no consigue arrancar ni Windows.
+    #
+    # El borrado existia para otra cosa: evitar el FileExistsError de copy_pfx
+    # al enlazar encima de un fichero que ya estaba. Si copy_pfx no se ejecuta,
+    # no hay con que chocar, asi que el borrado ya no evita nada y lo unico que
+    # hace es dejar el prefijo sin kernel32.
+    #
+    # Se copia windows/ entera. Ocupa mas, y a cambio el prefijo que sale de
+    # aqui ARRANCA.
     if [ -d "$origen/drive_c/windows" ]; then
         cp -a "$origen/drive_c/windows" "$destino/drive_c/" 2>/dev/null
-        local _delrunner="$destino/.dll_del_runner"
-        : > "$_delrunner"
-        if [ -n "$rdir" ]; then
-            # NO SOLO LAS .dll: el runner tambien enlaza EJECUTABLES.
-            #
-            # Proton enlaza sus ficheros de windows/ al prefijo, y si nosotros
-            # ya copiamos uno con ese nombre, muere:
-            #
-            #   FileExistsError: ... winhlp32.exe
-            #
-            # Lo arreglamos para las .dll y se quedo ahi. Pero en esas mismas
-            # carpetas hay .exe (winhlp32, notepad, regedit...) y con ellos
-            # pasaba igual: el juego no arrancaba y el error no hablaba de
-            # ningun juego, asi que parecia cosa del mando.
-            find "$rdir" \( -path '*x86_64-windows*' -o -path '*i386-windows*' \) \
-                \( -name '*.dll' -o -name '*.exe' -o -name '*.drv' \
-                   -o -name '*.ocx' -o -name '*.sys' \) \
-                -printf '%f\n' 2>/dev/null | sort -u > "$_delrunner"
-        fi
-        local _n_fuera=0 _sysdir _dll
-        if [ -s "$_delrunner" ]; then
-            # Y EN LA PROPIA windows/, no solo en system32.
-            #
-            # El error real era con "drive_c/windows/winhlp32.exe": ahi
-            # tambien enlaza Proton, y nosotros solo limpiabamos las dos
-            # carpetas de sistema.
-            for _sysdir in "$destino/drive_c/windows" \
-                           "$destino/drive_c/windows/system32" \
-                           "$destino/drive_c/windows/syswow64"; do
-                [ -d "$_sysdir" ] || continue
-                while IFS= read -r _dll; do
-                    [ -n "$_dll" ] && [ -f "$_sysdir/$_dll" ] || continue
-                    rm -f "$_sysdir/$_dll" 2>/dev/null && _n_fuera=$((_n_fuera+1))
-                done < "$_delrunner"
-            done
-        fi
-        rm -f "$_delrunner" 2>/dev/null
-        [ "$_n_fuera" -gt 0 ] && say "    ($_n_fuera DLL quitadas: las pone el runner)"
     fi
 
     # LOS USUARIOS: se copia todo salvo AppData, que se ENLAZA.
@@ -16267,6 +18435,376 @@ keys_raton_leer() {
     return 0
 }
 
+logs_label() {
+    # Como se resume la limpieza de registros en el menu.
+    if [ "${BORRAR_LOGS_OK:-1}" != 1 ]; then
+        printf 'se conservan todos'
+        return 0
+    fi
+    local g="${LOGS_OK_GUARDAR:-1}"
+    case "$g" in
+        0) printf 'los limpios se borran al cerrar' ;;
+        1) printf 'se borran los limpios, menos el ultimo' ;;
+        *) printf 'se borran los limpios, menos los %s ultimos' "$g" ;;
+    esac
+}
+
+logs_cuantos() {
+    # Cuantos registros hay y cuantos de ellos estan marcados como limpios.
+    # Sale "total limpios".
+    local t l
+    t="$(find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' 2>/dev/null | wc -l | tr -d ' ')"
+    l="$(find "$LOG_DIR" -maxdepth 1 -type f -name '.wproton_*.log.ok' 2>/dev/null | wc -l | tr -d ' ')"
+    printf '%s %s' "${t:-0}" "${l:-0}"
+}
+
+logs_menu() {
+    # LIMPIEZA AUTOMATICA DE REGISTROS.
+    #
+    # Lo pidio Dani: si la sesion fue bien, el registro no le sirve a nadie y
+    # la carpeta se llena. En DeckStation cada juego lanza su propio
+    # wproton.sh, asi que una tarde de pruebas deja decenas de ficheros.
+    #
+    # Se queda configurable porque el equilibrio depende de para que uses
+    # WProton: quien esta probando cosas quiere los registros, y quien solo
+    # juega no quiere ni saber que existen.
+    local sel tot lim
+    while :; do
+        set -- $(logs_cuantos); tot="$1"; lim="$2"
+        sel="$(menu "Registros  ($tot en la carpeta, $lim sin errores)" \
+            "Borrar los que fueron bien: $([ "${BORRAR_LOGS_OK:-1}" = 1 ] && printf 'si' || printf 'no')" \
+            "Conservar siempre: $(case "${LOGS_OK_GUARDAR:-1}" in 0) printf 'ninguno' ;; 1) printf 'el ultimo' ;; *) printf 'los %s ultimos' "${LOGS_OK_GUARDAR:-1}" ;; esac)" \
+            "Ver el registro de la última sesión" \
+            "Borrar ahora los registros sin errores" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Borrar los que fueron bien:"*)
+                if [ "${BORRAR_LOGS_OK:-1}" = 1 ]; then BORRAR_LOGS_OK=0; else BORRAR_LOGS_OK=1; fi
+                save_settings
+                if [ "$BORRAR_LOGS_OK" = 1 ]; then
+                    ui_info "Al cerrar WProton, si la sesion no dio ningun
+aviso ni error, su registro se borra.
+
+Los que tengan algo se quedan siempre."
+                else
+                    ui_info "Se conservan todos los registros, como antes.
+
+Los antiguos se siguen borrando por fecha:
+2 dias, y 40 como maximo."
+                fi ;;
+            "Conservar siempre:"*)
+                local g
+                g="$(menu "Cuantos registros SIN errores se conservan" \
+                    "1 - el de la ultima sesion (recomendado)" \
+                    "3 - los tres ultimos" \
+                    "10 - los diez ultimos" \
+                    "0 - ninguno, borrarlos todos al cerrar" \
+                    "<< Volver")" || continue
+                case "$g" in
+                    "<< Volver"|"") continue ;;
+                esac
+                LOGS_OK_GUARDAR="${g%% *}"
+                save_settings
+                # POR QUE SE RECOMIENDA DEJAR UNO.
+                #
+                # Hay fallos que NO escriben ni un error: el caso que nos lo
+                # enseño fue un juego que se quedaba cargando y no entraba, y
+                # su registro no tenia una sola linea de error -el juego hasta
+                # abria su ventana-. Ese registro fue justo el que hizo falta.
+                if [ "$LOGS_OK_GUARDAR" = 0 ]; then
+                    ui_info "No se conservara ningun registro limpio.
+
+Ten en cuenta que hay fallos que no escriben ningun
+error -un juego que se queda cargando, por ejemplo- y
+entonces no quedara nada que mirar."
+                else
+                    ui_info "Se conservaran los $LOGS_OK_GUARDAR registro(s) mas
+recientes sin errores, ademas de todos los que
+tengan algun aviso o error."
+                fi ;;
+            "Ver el registro"*)
+                ver_fichero "$LOG_FILE" "Registro de la última sesión" ;;
+            "Borrar ahora los registros sin errores"*)
+                # Solo los MARCADOS como limpios: los de versiones anteriores
+                # y los de sesiones que murieron de golpe no llevan marca, y a
+                # esos no se les toca aqui.
+                local n=0 marca base
+                for marca in "$LOG_DIR"/.wproton_*.log.ok; do
+                    [ -f "$marca" ] || continue
+                    base="$(basename "$marca")"; base="${base#.}"; base="${base%.ok}"
+                    # El de la sesion EN MARCHA no, que es este.
+                    [ "$LOG_DIR/$base" = "$LOG_FILE" ] && continue
+                    rm -f "$LOG_DIR/$base" "$marca" 2>/dev/null && n=$((n+1))
+                done
+                ui_info "Borrados $n registro(s) sin errores.
+
+Los que tienen avisos o errores se han quedado." ;;
+        esac
+    done
+}
+
+raton_menus_label() {
+    # Como se resume el ajuste del raton en el menu de preferencias.
+    if [ "${RATON_MENUS:-1}" = 0 ]; then
+        printf 'apagado'
+        return 0
+    fi
+    local u="${RATON_UMBRAL:-12}" r="${RATON_RUEDA:-3}"
+    case "$u" in
+        0) printf 'al instante' ;;
+        *) printf 'umbral %s px' "$u" ;;
+    esac
+    case "$r" in
+        0) printf ', rueda 1/3 de pantalla' ;;
+        *) printf ', rueda %s filas' "$r" ;;
+    esac
+}
+
+cursor_label() {
+    # Como se resume el puntero en el menu de preferencias.
+    if [ "${OCULTAR_CURSOR:-1}" = 0 ]; then
+        printf 'no se toca'
+        return 0
+    fi
+    printf 'se esconde a los %s s, margen %s px' \
+        "${CURSOR_SEGUNDOS:-3}" "${CURSOR_UMBRAL:-8}"
+}
+
+cursor_menu() {
+    # EL PUNTERO MIENTRAS JUEGAS.
+    #
+    # La queja era doble y las dos partes importan, porque los dos primeros
+    # intentos arreglaron una rompiendo la otra:
+    #
+    #   "realmente no desaparece el cursor, sigue en pantalla, lo que
+    #    desaparece es luego ese cursor ingame y no se puede usar en algunos
+    #    menus de configuracion"
+    #
+    # Asi que: tiene que desaparecer DE VERDAD, y tiene que VOLVER cuando
+    # haga falta. Lo que cumple las dos es esconderlo por inactividad, como
+    # unclutter: jugando con el mando el raton no se mueve y el puntero se
+    # va; en cuanto lo tocas, esta ahi para los menus del juego.
+    #
+    # Los segundos se dejan a mano porque es cuestion de gusto: quien lea
+    # despacio los menus de un juego querra mas, y quien juegue siempre con
+    # el mando querra menos.
+    local sel
+    while :; do
+        sel="$(menu "El puntero mientras juegas" \
+            "Esconderlo solo: $([ "${OCULTAR_CURSOR:-1}" = 0 ] && printf 'no' || printf 'si')" \
+            "Esperar: ${CURSOR_SEGUNDOS:-3} s sin mover el raton" \
+            "Margen de movimiento: ${CURSOR_UMBRAL:-8} px" \
+            "Como funciona" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Esconderlo solo:"*)
+                if [ "${OCULTAR_CURSOR:-1}" = 0 ]; then OCULTAR_CURSOR=1; else OCULTAR_CURSOR=0; fi
+                save_settings
+                ui_info "Esconder el puntero: $([ "$OCULTAR_CURSOR" = 0 ] && printf 'no' || printf 'si')
+
+Hace efecto en la proxima partida." ;;
+            "Esperar:"*)
+                local s
+                s="$(menu "Cuanto esperar sin mover el raton" \
+                    "1 - casi al momento" \
+                    "3 - normal" \
+                    "5 - tranquilo" \
+                    "10 - solo si de verdad lo dejas" \
+                    "<< Volver")" || continue
+                case "$s" in
+                    "<< Volver"|"") continue ;;
+                esac
+                CURSOR_SEGUNDOS="${s%% *}"
+                save_settings
+                ui_info "Se escondera tras $CURSOR_SEGUNDOS s sin mover el raton.
+
+Si se te esconde mientras lees un menu del juego, subelo." ;;
+            "Margen de movimiento:"*)
+                # EL AJUSTE QUE ARREGLA "sigue saliendo el cursor".
+                #
+                # Pidiendo el pixel exacto no se escondia nunca en un equipo
+                # donde algo mueve el raton solo, que es lo normal: Steam
+                # Input emulando raton, un trackpad, un stick que deriva.
+                local m
+                m="$(menu "Cuanto hay que mover el raton para que cuente" \
+                    "0 - el pixel exacto (si nada mueve el raton solo)" \
+                    "4 - poco margen" \
+                    "8 - normal" \
+                    "20 - mucho (si aun asi se te queda a la vista)" \
+                    "<< Volver")" || continue
+                case "$m" in
+                    "<< Volver"|"") continue ;;
+                esac
+                CURSOR_UMBRAL="${m%% *}"
+                save_settings
+                ui_info "Margen de movimiento: $CURSOR_UMBRAL px
+
+Un temblor de menos de $CURSOR_UMBRAL px ya no cuenta como mover
+el raton, asi que el puntero se esconde igual. Moverlo de
+verdad lo sigue devolviendo al instante." ;;
+            "Como funciona")
+                ui_info "Mientras juegas, si pasan ${CURSOR_SEGUNDOS:-3} s sin que muevas
+el raton mas de ${CURSOR_UMBRAL:-8} px, el puntero se esconde. En cuanto lo
+mueves de verdad, vuelve al instante. Y si estas jugando
+con el mando, con un segundo basta.
+
+El margen de ${CURSOR_UMBRAL:-8} px no sobra: en un equipo de juego el
+puntero casi nunca esta del todo quieto -Steam Input
+emulando un raton, un trackpad, un stick que deriva- y
+pidiendo el pixel exacto no se escondia NUNCA.
+
+Jugando con el mando el raton no se mueve, asi que el
+puntero desaparece y no molesta. Y si el juego tiene un
+menu de configuracion que se usa con el raton, lo tocas y
+el cursor esta ahi.
+
+Se hace en TODAS las pantallas de la sesion: con gamescope
+el juego pinta en una pantalla distinta de la de WProton, y
+tocando solo la nuestra el puntero del juego seguia a la
+vista.
+
+Y por dos caminos a la vez, porque uno solo no llega a todas
+partes: el de X (XFixes) y, ademas, poniendole a la ventana
+del juego un cursor transparente. En una sesion Wayland -lo
+normal en CachyOS con KDE- el puntero lo dibuja el
+compositor y el primero puede quedarse en nada; el segundo
+es el que si cruza XWayland.
+
+Si el juego captura el raton -lo normal en primera persona-
+para esto es \"no se mueve\" y se queda escondido, que es lo
+que se quiere ahi.
+
+Al cerrar el juego el puntero vuelve siempre." ;;
+        esac
+    done
+}
+
+raton_menus_menu() {
+    # EL RATON FISICO EN LOS MENUS.
+    #
+    # Lo pidieron desde un sobremesa: con el raton en la mano, la seleccion
+    # seguia al puntero sin ningun margen -un roce y te cambiaba de fila,
+    # incluso navegando con el mando- y cada muesca de la rueda saltaba un
+    # tercio de pantalla.
+    #
+    # Se queda configurable y no solo mas suave, porque esto es cuestion de
+    # gusto y de que raton tengas: hay quien quiere que siga al puntero al
+    # instante, que es como estaba.
+    local sel
+    while :; do
+        sel="$(menu "Raton en los menus" \
+            "Usar el raton: $([ "${RATON_MENUS:-1}" = 0 ] && printf 'no' || printf 'si')" \
+            "Umbral del puntero: $([ "${RATON_UMBRAL:-12}" = 0 ] && printf 'sin umbral' || printf '%s px' "${RATON_UMBRAL:-12}")" \
+            "Rueda: $([ "${RATON_RUEDA:-3}" = 0 ] && printf 'un tercio de pantalla' || printf '%s filas por muesca' "${RATON_RUEDA:-3}")" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Usar el raton:"*)
+                if [ "${RATON_MENUS:-1}" = 0 ]; then RATON_MENUS=1; else RATON_MENUS=0; fi
+                save_settings
+                ui_info "El raton en los menus: $([ "$RATON_MENUS" = 0 ] && printf 'apagado' || printf 'encendido')
+
+Hace efecto en el proximo menu que se abra." ;;
+            "Umbral del puntero:"*)
+                local u
+                u="$(menu "Cuanto hay que mover el raton para cambiar de fila" \
+                    "0 - sin umbral, sigue al puntero al instante" \
+                    "6 - poco" \
+                    "12 - normal" \
+                    "24 - mucho (el raton casi no manda)" \
+                    "<< Volver")" || continue
+                case "$u" in
+                    "<< Volver"|"") continue ;;
+                esac
+                RATON_UMBRAL="${u%% *}"
+                save_settings
+                ui_info "Umbral del puntero: $RATON_UMBRAL px
+
+Se cuenta desde la ultima tecla o boton del mando: un roce
+ya no te cambia de fila, pero si mueves el raton de verdad
+la seleccion le sigue igual que antes." ;;
+            "Rueda:"*)
+                local r
+                r="$(menu "Cuanto mueve una muesca de la rueda" \
+                    "1 - una fila" \
+                    "3 - tres filas" \
+                    "5 - cinco filas" \
+                    "0 - un tercio de pantalla (como antes)" \
+                    "<< Volver")" || continue
+                case "$r" in
+                    "<< Volver"|"") continue ;;
+                esac
+                RATON_RUEDA="${r%% *}"
+                save_settings
+                ui_info "Rueda: $([ "$RATON_RUEDA" = 0 ] && printf 'un tercio de pantalla' || printf '%s fila(s) por muesca' "$RATON_RUEDA")" ;;
+        esac
+        # Los menus se dibujan en un proceso aparte que ya tiene las variables
+        # heredadas: se reinicia para que coja las nuevas. Si no, el cambio no
+        # se notaria hasta cerrar WProton y quedaria como "no funciona".
+        export WP_RATON="${RATON_MENUS:-1}"
+        export WP_RATON_UMBRAL="${RATON_UMBRAL:-12}"
+        export WP_RATON_RUEDA="${RATON_RUEDA:-3}"
+        menu_server_stop
+    done
+}
+
+keys_campo_poner() {
+    # Cambia UN campo de un bloque del .keys, sin meter valores de partida.
+    # $1 = fichero, $2 = campo, $3 = valor
+    teclas_py campo-poner "$1" "$2" "$3" 2>>"$LOG_FILE"
+}
+
+keys_sticks_swap_etq() {
+    # Como se enseña la opcion en el editor. $1 = temporal de "sticks".
+    if [ -s "${1:-}" ] && [ "$(keys_raton_leer "$1" swap)" = 1 ]; then
+        printf 'SI (apuntas con el izquierdo)'
+    else
+        printf 'no'
+    fi
+}
+
+keys_sticks_swap_cambiar() {
+    # Enciende y apaga el intercambio. $1 = temporal de "sticks".
+    #
+    # Al apagarlo se BORRA el temporal en vez de poner swap=0: asi el .keys
+    # final no se queda con una seccion "sticks" que no pide nada, que es ruido
+    # para quien abra el fichero y para quien lo comparta.
+    local f="$1"
+    if [ -s "$f" ] && [ "$(keys_raton_leer "$f" swap)" = 1 ]; then
+        : > "$f"
+        ui_info "Sticks intercambiados: NO
+
+El juego vuelve a ver cada stick en su sitio."
+        return 0
+    fi
+    # keys_campo_poner Y NO keys_raton_poner: aquel, en un fichero vacio,
+    # arranca el bloque con los valores de partida DEL RATON, y aqui dejaria
+    # un "sticks" con axis y speed dentro.
+    keys_campo_poner "$f" swap 1
+    ui_info "Sticks intercambiados: SI
+
+El juego vera el stick izquierdo donde estaba el derecho
+y al contrario, y el clic de cada stick se va con el suyo.
+
+Lo hace el mando virtual: si lo tenias apagado, se
+encendera solo (modo copia) al lanzar este juego. Eso
+captura el mando fisico, asi que se pierden la vibracion
+y el remapeado de Steam Input mientras juegas."
+    return 0
+}
+
+keys_sticks_cambiados() {
+    # ¿Este .keys pide intercambiar los sticks? rc 0 = si. $1 = el .keys FINAL.
+    #
+    # Lo lee el lanzador para decirselo al MANDO VIRTUAL, que es el unico que
+    # puede hacerlo: el mapeador convierte el mando en teclas, y para que el
+    # juego vea los sticks al reves hay que presentarle otro mando.
+    [ -n "${1:-}" ] && [ -s "$1" ] || return 1
+    teclas_py sticks "$1" >/dev/null 2>>"$LOG_FILE"
+}
+
 keys_raton_poner() {
     # Cambia UN campo del temporal del raton. $1 = fichero, $2 = campo, $3 = valor
     teclas_py raton-poner "$1" "$2" "$3" 2>>"$LOG_FILE"
@@ -16282,8 +18820,9 @@ keys_combos_cuantos() {
 }
 
 keys_componer() {
-    # Arma el .keys final. $1 = destino, $2 = teclas, $3 = combos, $4 = raton.
-    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" 2>>"$LOG_FILE"
+    # Arma el .keys final.
+    # $1 = destino, $2 = teclas, $3 = combos, $4 = raton, $5 = sticks.
+    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" "${5:-}" 2>>"$LOG_FILE"
 }
 
 keys_sustituye_al_mando() {
@@ -17046,9 +19585,9 @@ descarga de reshade.me, y ahora mismo no responde."
     # El instalador es un autoextraible: 7z le saca las DLL SIN ejecutarlo.
     if ! extract_archive "$pkg" "$tmp"; then
         ui_error "No se ha podido extraer ReShade.
-Hace falta 7z (paquete p7zip).
 
-  CachyOS / Arch: sudo pacman -S p7zip"
+Hace falta 7-Zip, que WProton descarga solo. Comprueba la
+conexión y vuelve a intentarlo; el detalle esta en el registro."
         rm -rf "$tmp"; rm -f "$pkg"; release_game_root; return 1
     fi
 
@@ -17410,7 +19949,7 @@ que el prefijo se cree del todo, y vuelve a intentarlo."
     say "[+] El prefijo incluye: $(ls "$tmp" | tr '\n' ' ')"
 
     loading_clear
-    if build_wsquashfs "$tmp" "$gid"; then
+    if build_wsquashfs "$tmp" "$gid" "$(pack_formato_archivo)"; then
         rm -rf "$tmp"
         ui_info "'$gid' empaquetado con su prefijo.
 
@@ -17500,12 +20039,172 @@ EOFD
     return 0
 }
 
+pack_formato_archivo() {
+    # El formato de ARCHIVO elegido. Nunca "carpeta": quien llama a esto
+    # quiere un paquete, y si el ajuste dice "carpeta" se empaqueta en
+    # wsquashfs, que es el formato de siempre.
+    case "${PACK_FORMAT:-wsquashfs}" in
+        dwarfs) printf 'dwarfs' ;;
+        *)      printf 'wsquashfs' ;;
+    esac
+}
+
+paquete_valido() {
+    # ¿Lo que devolvio build_wsquashfs esta ahi de verdad?
+    #
+    # Vale para las dos formas: un archivo (que tiene que tener contenido) y
+    # una carpeta (donde "-s" no sirve: una carpeta llena da falso).
+    local p="${1:-}"
+    [ -n "$p" ] || return 1
+    [ -d "$p" ] && return 0
+    [ -s "$p" ]
+}
+
+contar_ficheros() {
+    # Cuantos ficheros hay dentro de una carpeta, con tope.
+    #
+    # El numero exacto no importa: solo si pasa de la raya. Con el tope, un
+    # juego de 300.000 ficheros no deja la cuenta corriendo un minuto para
+    # decir lo mismo que ya se sabia a los 50.000.
+    local d="$1" tope="${2:-60000}" n
+    n="$(find "$d" -type f 2>/dev/null | head -n "$tope" | wc -l | tr -d ' ')"
+    printf '%s' "${n:-0}"
+}
+
+aviso_muchos_ficheros() {
+    # ¿Merece la pena empaquetar este juego?
+    #
+    # Devuelve 0 = sigue empaquetando, 1 = el usuario prefiere dejarlo en
+    # carpeta.
+    #
+    # DE DONDE SALE ESTO: un tester empaqueto un juego de 48 GB con 32.164
+    # ficheros. En carpeta arrancaba bien; empaquetado se quedaba cargando y
+    # no entraba nunca. No estaba roto -el registro no tenia ni un error, la
+    # ventana del juego llegaba a abrirse-, simplemente tardaba una barbaridad.
+    #
+    # El motivo esta en el comentario de PACK_AVISO_FICHEROS: dos capas FUSE
+    # mas la resolucion de rutas de Wine, que lee la carpeta entera cada vez
+    # que abre un fichero. Son cosas que por separado no se notan y juntas,
+    # con decenas de miles de ficheros, se hacen eternas.
+    #
+    # No se puede impedir empaquetarlo -hay quien quiere el fichero unico
+    # cueste lo que cueste-, pero si se puede decir antes, que es cuando
+    # todavia se puede elegir sin repetir una hora de empaquetado.
+    local src="$1" name="$2" ofrecer="${3:-1}" n tope
+    [ "${PACK_AVISO_FICHEROS:-0}" -gt 0 ] 2>/dev/null || return 0
+    # Se cuenta un poco por encima del aviso: asi se puede decir "mas de X"
+    # cuando se llega al tope, sin mentir con un numero redondo.
+    tope=$(( PACK_AVISO_FICHEROS * 3 ))
+    n="$(contar_ficheros "$src" "$tope")"
+    log "empaquetado: '$name' tiene $n fichero(s) (aviso a partir de $PACK_AVISO_FICHEROS)"
+    [ "$n" -ge "$PACK_AVISO_FICHEROS" ] 2>/dev/null || return 0
+    local cuantos="$n"
+    [ "$n" -ge "$tope" ] && cuantos="mas de $tope"
+    say "AVISO: '$name' tiene $cuantos ficheros: empaquetado puede cargar muy lento"
+    # Donde el formato viene FORZADO (convertir carpeta a wsquashfs,
+    # empaquetar con su prefijo) el usuario ha pedido un archivo a proposito;
+    # ahi se avisa y se sigue, no se le ofrece justo lo contrario de lo que
+    # acaba de pulsar.
+    [ "$ofrecer" = 1 ] || return 0
+    if ui_ask "'$name' tiene $cuantos ficheros.
+
+Empaquetado funciona, pero un juego con tantos ficheros
+puede tardar MUCHISIMO en cargar, o quedarse cargando sin
+entrar: cada fichero que abre pasa por las dos capas del
+paquete. En carpeta carga a velocidad normal.
+
+¿Lo dejamos en carpeta?
+
+  Si = se queda como carpeta, sin empaquetar (recomendado)
+  No = se empaqueta igualmente"; then
+        return 1
+    fi
+    log "empaquetado: avisado de $n ficheros y el usuario empaqueta igualmente"
+    return 0
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
     #   dwarfs    -> mkdwarfs   (comprime bastante mas, monta igual de rapido)
+    #   carpeta   -> NO se empaqueta: la carpeta se mueve tal cual
+    # $3 = formato FORZADO (opcional). Lo usan los caminos cuyo trabajo es
+    #      precisamente empaquetar -"convertir carpeta a wsquashfs", "empaquetar
+    #      con su prefijo"-: ahi "carpeta" no significa nada, porque el usuario
+    #      ha pedido un archivo. Sin esto, con PACK_FORMAT=carpeta esas dos
+    #      opciones se habrian quedado moviendo carpetas de sitio en vez de
+    #      empaquetar, que es justo lo contrario de lo que dicen hacer.
     local src="$1" name="$2"
-    local fmt="${PACK_FORMAT:-wsquashfs}" out
+    local fmt="${3:-${PACK_FORMAT:-wsquashfs}}" out
+    # ANTES DE EMPAQUETAR: ¿CUANTOS FICHEROS TIENE?
+    #
+    # Se pregunta aqui y no despues porque despues ya no sirve de nada: el
+    # empaquetado de un juego grande son horas, y rehacerlo en el otro
+    # formato son otras tantas.
+    if [ "$fmt" != "carpeta" ] && [ -d "$src" ]; then
+        if ! aviso_muchos_ficheros "$src" "$name" "$([ -n "${3:-}" ] && printf 0 || printf 1)"; then
+            say "[i] '$name' se queda en carpeta, sin empaquetar"
+            log "empaquetado: carpeta elegida por el numero de ficheros"
+            fmt="carpeta"
+        fi
+    fi
+    # SIN EMPAQUETAR: LA CARPETA SE QUEDA COMO ESTA.
+    #
+    # Lo pidieron desde el canal: hay gente que no quiere el .wsquashfs, solo
+    # jugar. WProton ya sabe lanzar un juego que es una carpeta -desde
+    # siempre: es_juego_carpeta, el autorun.cmd, el prefijo- asi que no hace
+    # falta nada nuevo para que funcione; basta con no empaquetar.
+    #
+    # Lo que se pierde conviene tenerlo claro, y esta en el manual: un fichero
+    # por juego en vez de miles, la compresion (mucho espacio en una SD), el
+    # overlay que separa las partidas del juego, y poder llevarte un juego a
+    # otro equipo copiando un solo archivo.
+    if [ "$fmt" = "carpeta" ]; then
+        local _destc; _destc="$(destino_del_paquete "$src")"
+        [ -n "$_destc" ] || _destc="$GAMES_PATH"
+        mkdir -p "$_destc" 2>/dev/null
+        out="$_destc/$name"
+        # Si ya hay una carpeta con ese nombre no se pisa: se busca un nombre
+        # libre. Machacar un juego que ya estaba instalado seria irreparable.
+        if [ -e "$out" ]; then
+            local _n=2
+            while [ -e "$_destc/$name ($_n)" ] && [ "$_n" -lt 50 ]; do _n=$((_n+1)); done
+            out="$_destc/$name ($_n)"
+            say "[i] Ya habia una carpeta '$name'; esta se guarda como '$(basename "$out")'"
+        fi
+        # mv primero: si origen y destino estan en el mismo disco es
+        # instantaneo y no hace falta el doble de espacio. Si estan en discos
+        # distintos, mv copia, y entonces SI hay que comprobar el sitio antes.
+        # AQUI NO SE TOCA EL OVERLAY, A DIFERENCIA DEL CAMINO QUE EMPAQUETA.
+        #
+        # Al empaquetar se borra overlays/<nombre>, porque ese overlay era de
+        # la version anterior del paquete y habria quedado descolgado. Un juego
+        # en carpeta no usa overlay -se ejecuta directamente-, asi que ese
+        # borrado no haria falta... y SI haria daño: si antes tuviste el mismo
+        # juego empaquetado, en ese overlay estan TUS PARTIDAS. Se quedan donde
+        # estan.
+        if mv -f "$src" "$out" 2>/dev/null; then
+            say "[OK] Juego guardado como carpeta: $out"
+            printf '%s' "$out"; return 0
+        fi
+        local needc; needc="$(dir_bytes "$src")"
+        if [ -n "$needc" ] && ! check_space "$needc" "$_destc" "mover '$name'"; then
+            return 1
+        fi
+        if run_with_progress "Moviendo '$name' a la carpeta de juegos..." \
+               cp -a "$src" "$out"; then
+            rm -rf "$src"
+            say "[OK] Juego guardado como carpeta: $out"
+            printf '%s' "$out"; return 0
+        fi
+        rm -rf "$out" 2>/dev/null
+        fallo "No se pudo mover '$name' a:
+$_destc
+
+NO se ha borrado nada: lo extraido sigue en
+$src"
+        return 1
+    fi
     if [ "$fmt" = "dwarfs" ]; then
         find_dwarfs_tools
         if [ -z "$MKDWARFS_BIN" ]; then
@@ -17637,8 +20336,8 @@ do_pack_dir() {
     # asistente-. Ponerlo en uno solo seria repetir el fallo de siempre: algo
     # que se arregla en un camino y no en los otros.
     libs_antes_de_empaquetar "$dir" "$name"
-    out="$(build_wsquashfs "$dir" "$name")"
-    if [ -n "$out" ] && [ -s "$out" ]; then
+    out="$(build_wsquashfs "$dir" "$name" "$(pack_formato_archivo)")"
+    if paquete_valido "$out"; then
         say "[OK] Empaquetado: $out"
         if ui_ask "Borrar la carpeta original?
 $(basename "$dir")
@@ -17687,8 +20386,6 @@ Empaquetar '$name' a wsquashfs ahora?
         esac
     done
 }
-
-
 
 
 INNOEXTRACT_BIN=""
@@ -18151,18 +20848,16 @@ directamente el ejecutable."
     fi
 }
 
-purgar_comprimidos() {
-    # Borra los comprimidos de los que salio el juego. SOLO se llama cuando
-    # el .wsquashfs ya esta en disco.
+comprimidos_originales() {
+    # Los comprimidos de los que salio el juego, uno por linea.
     #
-    # Antes esto empezaba con "rm -f ${prefijo}*", un comodin sobre la ruta
+    # Antes la purga empezaba con "rm -f ${prefijo}*", un comodin sobre la ruta
     # sin extension: con un juego llamado "Halo" se llevaba por delante
     # Halo.txt, Halo.jpg, Halo-partidas.zip... cualquier cosa que empezara
-    # igual. Ahora se mira SIEMPRE la extension, una por una.
+    # igual. Aqui se mira SIEMPRE la extension, una por una.
     local in_dir="$1" base_prefix="$2" game_name="$3"
-    local pat f n borrados=0
+    local pat f n
     pat="$(basename "$base_prefix")"
-    say "[+] Purgando archivos comprimidos originales..."
     while IFS= read -r f; do
         [ -f "$f" ] || continue
         n="$(basename "$f")"
@@ -18173,11 +20868,66 @@ purgar_comprimidos() {
             *.r[0-9][0-9]|*.R[0-9][0-9]) ;;   # .r00 ...     rar antiguo
             *) continue ;;                    # cualquier otra cosa NO se toca
         esac
-        rm -f "$f" && borrados=$((borrados+1))
+        printf '%s\n' "$f"
     done <<EOFPURGA
 $(find "$in_dir" -maxdepth 1 -type f \( -name "$pat.*" -o -name "$game_name.*" \) 2>/dev/null)
 EOFPURGA
+    return 0
+}
+
+purgar_comprimidos() {
+    # Los comprimidos de los que salio el juego: se PREGUNTA si se borran.
+    # SOLO se llama cuando el juego ya esta en disco.
+    #
+    # ANTES SE BORRABAN SIN PREGUNTAR.
+    #
+    # Y hay dos motivos de peso para conservarlos que WProton no puede
+    # adivinar: que el comprimido sea la unica copia que tiene esa persona del
+    # juego, y que quiera volver a importarlo en otro equipo. Un borrado de
+    # 40 GB que nadie pidio no se deshace.
+    #
+    # Se dice CUANTOS son y CUANTO ocupan, que es lo que de verdad decide la
+    # respuesta: tres ficheros de 200 MB y veinte de 60 GB no son lo mismo.
+    local in_dir="$1" base_prefix="$2" game_name="$3"
+    local lista f n=0 bytes=0 tam borrados=0
+    lista="$(mktemp)" || return 0
+    comprimidos_originales "$in_dir" "$base_prefix" "$game_name" > "$lista"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        n=$((n+1))
+        tam="$(du -b "$f" 2>/dev/null | awk '{print $1}')"
+        bytes=$(( bytes + ${tam:-0} ))
+    done < "$lista"
+    if [ "$n" = 0 ]; then
+        rm -f "$lista"
+        log "importar: no habia comprimidos originales que borrar"
+        return 0
+    fi
+    if ! ui_ask "El juego ya esta instalado. ¿Borrar los archivos
+comprimidos de los que salio?
+
+  $n fichero(s), $(human_size "$bytes")
+
+Si es la unica copia que tienes del juego, o piensas
+importarlo en otro equipo, conservalos."; then
+        rm -f "$lista"
+        say "[+] Comprimidos originales conservados ($n fichero(s), $(human_size "$bytes"))"
+        return 0
+    fi
+    say "[+] Borrando los $n comprimido(s) originales..."
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        # SE COMPRUEBA OTRA VEZ QUE ES UN FICHERO.
+        #
+        # Entre hacer la lista y borrar ha pasado un dialogo, y el usuario ha
+        # podido mover o borrar cosas mientras estaba abierto.
+        [ -f "$f" ] || continue
+        rm -f "$f" && borrados=$((borrados+1))
+    done < "$lista"
+    rm -f "$lista"
     say "[+] Borrados $borrados fichero(s) comprimido(s)."
+    [ "$borrados" = "$n" ] || log "importar: se pidieron $n y se borraron $borrados" AVISO
+    return 0
 }
 
 es_instalador_gog() {
@@ -18218,8 +20968,15 @@ es_instalador_gog() {
 
 import_archive() {
     # zip/7z/rar (multiparte) -> extraer, PURGAR originales, empaquetar/mover, lanzar
-    command -v 7z >/dev/null 2>&1 || { fallo "Falta 7z (paquete p7zip):
-CachyOS: sudo pacman -S p7zip"; return 1; }
+    # 7-Zip, traido por WProton si no lo hay. Antes aqui habia un
+    # "sudo pacman -S p7zip" que en una Deck es imposible de cumplir.
+    loading_say "Preparando 7-Zip..."
+    if ! setup_sevenzip; then
+        loading_clear
+        sevenzip_falta_aviso
+        return 1
+    fi
+    loading_clear
 
     local input="$1"
     local in_dir name_raw prefix game_name extract_dir
@@ -18273,7 +21030,7 @@ CachyOS: sudo pacman -S p7zip"; return 1; }
             # quedaba como orden aparte en la linea siguiente. Que es, ademas,
             # la que hay que usar: 7z sabe decir el porcentaje de verdad.
             run_con_porcentaje "Extrayendo $name_raw..." \
-                7z x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
+                "$SEVENZIP_BIN" x "$input" -o"$extract_dir" -y -bsp1 || ext_ok=0 ;;
     esac
     if [ "$ext_ok" = 1 ]; then
         say "[+] Extraccion completada."
@@ -18353,7 +21110,7 @@ Para jugarlo: Añadir un juego -> elige esa carpeta."
         # build_wsquashfs devuelve 1 y no escribe nada si falta espacio, si
         # falla mksquashfs o si se cancela. Antes no se miraba: se borraba lo
         # extraido igualmente y se intentaba lanzar una ruta vacia.
-        if [ -z "$out" ] || [ ! -s "$out" ]; then
+        if ! paquete_valido "$out"; then
             fallo "No se pudo empaquetar '$game_name'.\n\nNO se ha borrado nada: tienes el comprimido original donde estaba, y lo ya extraido en:\n$extract_dir"
             return 1
         fi
@@ -18362,7 +21119,11 @@ Para jugarlo: Añadir un juego -> elige esa carpeta."
     fi
     # El juego ya esta en disco: ahora si se puede tirar el comprimido.
     purgar_comprimidos "$in_dir" "$prefix" "$game_name"
-    launch_game "$out" "auto"
+    # play_any Y NO launch_game: con PACK_FORMAT=carpeta lo que hay en $out es
+    # una CARPETA, y launch_game espera una imagen que montar. play_any ya
+    # distingue las tres formas -imagen, carpeta y .exe suelto- y manda cada
+    # una a su camino.
+    play_any "$out"
 }
 
 raiz_paquete_detectar() {
@@ -18568,7 +21329,14 @@ launch_loose_exe() {
     # con los ajustes desde cero. Misma condicion: solo si no tiene perfil,
     # y ANTES del asistente, que es lo que la configuracion descargada
     # evita tener que rellenar.
-    profile_exists "$gid" || community_offer_for "$gid" || true
+    #
+    # Y lo mismo con la actualizacion: este camino es el de los juegos en
+    # carpeta, y tambien tienen que enterarse de que su perfil ha mejorado.
+    if profile_exists "$gid"; then
+        community_update_offer_for "$gid" || true
+    else
+        community_offer_for "$gid" || true
+    fi
     if ! profile_exists "$gid"; then
         # LA MISMA RAIZ QUE SE USARA AL LANZAR.
         #
@@ -18588,6 +21356,10 @@ launch_loose_exe() {
             || { partida_fin; return 1; }
     fi
     load_profile "$gid"
+    # El trackpad, como lo quiera este juego. Por aqui pasan los .exe sueltos y
+    # los juegos en carpeta -play_folder acaba llamando aqui-, asi que con esto
+    # y lo de launch_game quedan cubiertas las tres formas de lanzar.
+    trackpad_para_el_juego || true
     # EL EJECUTABLE ELEGIDO MANDA SOBRE EL QUE LLEGO.
     #
     # Este camino se lanzaba SIEMPRE con el "$exe" que recibio -el que
@@ -18921,7 +21693,16 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # guardaron mientras existio el automatico.
     local _mv="${MANDO_VIRTUAL:-0}"
     [ "$_mv" = nunca ] && _mv=0
-    mando_virtual_start "$_mv"
+    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
+    #
+    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
+    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
+    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
+    # como lo quiere el juego.
+    local _sticks=0
+    keys_sticks_cambiados "$keys_file" && _sticks=1
+    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
+    mando_virtual_start "$_mv" "$_sticks"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -19326,8 +22107,6 @@ glibc_mayor() {
     [ "${a1:-0}" -lt "${b1:-0}" ] && return 1
     [ "${a2:-0}" -gt "${b2:-0}" ]
 }
-
-
 
 
 ARCH_ARCHIVO="https://archive.archlinux.org/packages"
@@ -20057,11 +22836,107 @@ play_any() {
     esac
 }
 
+LIZARD_SYSFS="/sys/module/hid_steam/parameters/lizard_mode"
+
+es_steam_deck() {
+    # ¿Esto es una Steam Deck (o el mando de Valve)? Por el nombre del equipo,
+    # que es lo que no cambia; el modelo exacto no importa aqui.
+    grep -qi 'valve' /sys/devices/virtual/dmi/id/sys_vendor 2>/dev/null && return 0
+    [ -e "$LIZARD_SYSFS" ] && return 0
+    return 1
+}
+
+deck_lizard_estado() {
+    # EL PARAMETRO lizard_mode DEL MODULO, EN UNA LINEA.
+    #
+    # CUIDADO CON LO QUE ESTO SIGNIFICA, que es lo que nos tuvo dos arreglos
+    # dando palos de ciego. Esto NO dice si los trackpads mueven el puntero
+    # ahora mismo: dice si el DRIVER tiene permiso para encender la emulacion
+    # del firmware. Son cosas distintas.
+    #
+    # Lo que de verdad decide si los pads mueven el puntero son los dos modos
+    # del mando, y los cambia EL USUARIO manteniendo pulsado OPCIONES medio
+    # segundo (450 ms en el driver, con vibracion de aviso, igual que hace
+    # Steam):
+    #
+    #   modo ESCRITORIO  el firmware mueve el puntero (derecho = raton,
+    #                    izquierdo = rueda) y el driver no publica nada.
+    #   modo GAMEPAD     el firmware NO mueve el puntero -esto es lo que la
+    #                    gente cuenta como "se han muerto los trackpads"- y el
+    #                    driver publica los dos pads por evdev.
+    #
+    # Y lo que NO es verdad, aunque lo dijera el comentario de antes: que
+    # WProton los apague al abrir el mando. En hid-steam.c el apagado
+    # automatico al abrir el dispositivo de entrada esta excluido para la Deck
+    # desde el kernel 6.8:
+    #
+    #   if (!(steam->quirks & (STEAM_QUIRK_DECK | STEAM_QUIRK_IBEX))) {
+    #
+    # El diagnostico de verdad lo hace "trackpad.py estado", que mira los dos
+    # caminos y dice en que modo esta el mando.
+    [ -r "$LIZARD_SYSFS" ] || return 1
+    local v; v="$(cat "$LIZARD_SYSFS" 2>/dev/null)" || return 1
+    case "$v" in
+        [Yy]|1) printf 'encendido' ;;
+        [Nn]|0) printf 'APAGADO' ;;
+        *)      printf '%s' "$v" ;;
+    esac
+    return 0
+}
+
+trackpad_lagarto_log() {
+    # Deja en el registro como esta el modo lagarto, con una etiqueta de donde
+    # se ha mirado. $1 = etiqueta ("arranque", "tras abrir los menus"...).
+    #
+    # SOLO AL REGISTRO Y SIN AVISAR DE NADA.
+    #
+    # Esto existe porque el primer arreglo de los trackpads se dio por bueno y
+    # los testers dijeron "no funciona", y no habia NADA en el registro con lo
+    # que distinguir las tres posibilidades: que ya llegaran apagados, que los
+    # apagaran nuestros menus, o que los apagara el juego. Dos lineas -antes y
+    # despues de abrir los menus- lo resuelven sin preguntarle nada a nadie.
+    es_steam_deck || return 0
+    local est; est="$(deck_lizard_estado)" || {
+        log "trackpads ($1): no se puede leer $LIZARD_SYSFS"
+        return 0; }
+    log "trackpads ($1): modo lagarto $est"
+    return 0
+}
+
+diag_trackpads() {
+    # Lo de arriba, contado para el registro y para quien lo lea.
+    es_steam_deck || return 0
+    local est; est="$(deck_lizard_estado)" || {
+        log "trackpads: no se puede leer $LIZARD_SYSFS (kernel sin hid_steam?)"
+        return 0; }
+    say "Trackpads de la Deck: parametro lizard_mode = $est"
+    if [ "$est" = "APAGADO" ]; then
+        say "  Con el parametro a 0 el driver NO enciende la emulacion de raton"
+        say "  del firmware, y ademas el cambio de modo manteniendo OPCIONES"
+        say "  deja de funcionar. Se enciende con:"
+        say "    echo 1 | sudo tee $LIZARD_SYSFS"
+    else
+        # EL CONSEJO QUE DE VERDAD ARREGLA EL PROBLEMA.
+        #
+        # Con el parametro a 1, si los trackpads no mueven el puntero es que el
+        # mando esta en modo gamepad. Eso NO se arregla con sudo ni reiniciando:
+        # se arregla manteniendo pulsado opciones, que es el mismo gesto que usa
+        # Steam. Es la primera cosa que hay que decirle a quien lo reporta.
+        say "  Si los trackpads no mueven el puntero, el mando esta en modo"
+        say "  gamepad: manten pulsado OPCIONES (las tres rayas) medio segundo"
+        say "  y vibrara al volver al modo escritorio."
+    fi
+    # Y el estado de verdad, mirando los dos caminos de lectura. Va al registro.
+    trackpad_py estado 4 >>"$LOG_FILE" 2>&1 || true
+    return 0
+}
+
 diag_mando_antes() {
     # Todo lo que hace falta para diagnosticar un problema de mando, ANTES de
     # lanzar. Sin esto habia que adivinar: el registro decia que se exportaban
     # las variables, pero no si el juego las recibia ni si veia el mando.
     say "--- diagnostico de mando -------------------------------------"
+    diag_trackpads
     # 1) Que variables de mando van a llegar al juego
     local v vistas=0
     for v in PROTON_USE_SDL PROTON_PREFER_SDL PROTON_DISABLE_HIDRAW \
@@ -20485,6 +23360,7 @@ keys_tecla_elegir() {
         "Enter" "Espacio" "Escape" "Tabulador" "Retroceso" \
         "Shift" "Control" "Alt" \
         "Teclas F (F1 a F12)" \
+        "Botones del ratón" \
         "-- quitar esta asignación --" \
         "<< Volver")" || return 1
     case "$sel" in
@@ -20505,6 +23381,28 @@ keys_tecla_elegir() {
         "Teclas F"*)
             sel="$(menu "¿Qué tecla F?" F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 "<< Volver")" || return 1
             case "$sel" in F*) printf 'KEY_%s' "$sel" ;; *) return 1 ;; esac ;;
+        "Botones del ratón")
+            # UN BOTON DEL MANDO PUEDE SER UN CLIC, SIN TOCAR EL STICK.
+            #
+            # El mapeador ya sabia mandar BTN_LEFT/RIGHT/MIDDLE desde hace
+            # tiempo -y crea el raton virtual el solo al verlos-, pero no habia
+            # por donde elegirlos: habia que escribir el .keys a mano. Lo pidio
+            # un tester que necesitaba el clic derecho para recargar.
+            #
+            # Esto es INDEPENDIENTE del submenu "Raton": alli se dice que
+            # boton hace clic MIENTRAS el stick mueve el puntero; aqui se le
+            # cuelga un clic a un boton suelto, mueva o no el puntero nadie.
+            sel="$(menu "¿Qué botón del ratón pulsa \"$1\"?" \
+                "Clic izquierdo" \
+                "Clic derecho" \
+                "Clic central (rueda)" \
+                "<< Volver")" || return 1
+            case "$sel" in
+                "Clic izquierdo") printf 'BTN_LEFT' ;;
+                "Clic derecho")   printf 'BTN_RIGHT' ;;
+                "Clic central"*)  printf 'BTN_MIDDLE' ;;
+                *) return 1 ;;
+            esac ;;
         Enter)      printf 'KEY_ENTER' ;;
         Espacio)    printf 'KEY_SPACE' ;;
         Escape)     printf 'KEY_ESC' ;;
@@ -20833,9 +23731,50 @@ keys_raton_fila() {
     fi
     eje="$(keys_raton_leer "$1" axis)"
     click="$(keys_raton_leer "$1" click_left)"
-    printf 'Raton: si  (%s mueve, %s hace clic)' \
+    local der cen extra=""
+    der="$(keys_raton_leer "$1" click_right)"
+    cen="$(keys_raton_leer "$1" click_middle)"
+    [ -n "$der" ] && extra="$extra, $(keys_boton_nombre "$der") el derecho"
+    [ -n "$cen" ] && extra="$extra, $(keys_boton_nombre "$cen") el central"
+    printf 'Raton: si  (%s mueve, %s hace clic%s)' \
         "$(keys_boton_nombre "${eje:-joystick2}")" \
-        "$(keys_boton_nombre "${click:-r2}")"
+        "$(keys_boton_nombre "${click:-r2}")" "$extra"
+}
+
+keys_raton_boton_elegir() {
+    # Que boton del mando hace un clic. $1 = titulo, $2 = 1 si se puede quitar.
+    # Imprime el nombre del boton, "__QUITAR__", o nada si se cancela.
+    #
+    # R3 VA PRIMERO Y RECOMENDADO.
+    #
+    # Lo pidieron los testers, y con motivo: los gatillos son lo que mas se usa
+    # EN el juego -disparar, acelerar, frenar- asi que poner ahi el clic choca
+    # justo en los juegos donde mas falta hace el raton. R3 es pulsar el stick
+    # derecho, o sea el mismo dedo que ya esta moviendo el puntero: se hace sin
+    # soltar, y casi ningun juego lo usa para nada.
+    local titulo="$1" sepuede="${2:-0}" sel opts=()
+    opts=("r3 - pulsar el stick derecho   (recomendado)" \
+          "l3 - pulsar el stick izquierdo" \
+          "r2 - gatillo derecho" \
+          "l2 - gatillo izquierdo" \
+          "pagedown - R1" \
+          "pageup - L1" \
+          "a - boton de abajo" \
+          "b - boton de la derecha" \
+          "x - boton de arriba" \
+          "y - boton de la izquierda")
+    [ "$sepuede" = 1 ] && opts+=("-- sin asignar --")
+    opts+=("<< Volver")
+    sel="$(menu "$titulo
+
+R3 es pulsar el stick derecho: el mismo dedo que mueve el
+puntero. Los gatillos suelen estar ocupados por el juego." "${opts[@]}")" || return 1
+    case "$sel" in
+        "<< Volver"|"") return 1 ;;
+        "-- sin asignar"*) printf '__QUITAR__' ; return 0 ;;
+    esac
+    printf '%s' "${sel%% *}"
+    return 0
 }
 
 keys_boton_nombre() {
@@ -20883,9 +23822,14 @@ keys_raton_editar() {
             eje="$(keys_raton_leer "$f" axis)";      eje="${eje:-joystick2}"
             click="$(keys_raton_leer "$f" click_left)"; click="${click:-r2}"
             vel="$(keys_raton_leer "$f" speed)";     vel="${vel:-900}"
+            local der cen
+            der="$(keys_raton_leer "$f" click_right)"
+            cen="$(keys_raton_leer "$f" click_middle)"
             sel="$(menu "Raton con el mando" \
                 "Mover con: $(keys_boton_nombre "$eje")" \
-                "Clic con: $(keys_boton_nombre "$click")" \
+                "Clic izquierdo con: $(keys_boton_nombre "$click")" \
+                "Clic derecho con: $([ -n "$der" ] && keys_boton_nombre "$der" || printf 'sin asignar')" \
+                "Clic central con: $([ -n "$cen" ] && keys_boton_nombre "$cen" || printf 'sin asignar')" \
                 "Velocidad: $vel" \
                 "Apagar el raton" \
                 "<< Volver")" || return 0
@@ -20903,37 +23847,31 @@ keys_raton_editar() {
             "Mover con:"*)
                 if [ "$eje" = "joystick2" ]; then eje=joystick1; else eje=joystick2; fi
                 keys_raton_poner "$f" axis "$eje" ;;
-            "Clic con:"*)
-                # Los que tienen sentido: los que no suelen hacer falta en el
-                # juego y caen bien con el pulgar en el stick.
+            "Clic izquierdo con:"*)
                 local nuevo
-                # R3 VA PRIMERO Y RECOMENDADO.
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC IZQUIERDO" 0)" || continue
+                [ -n "$nuevo" ] && keys_raton_poner "$f" click_left "$nuevo" ;;
+            "Clic derecho con:"*)
+                # EL DERECHO, QUE FALTABA.
                 #
-                # Lo pidieron los testers, y con motivo: los gatillos son lo que
-                # mas se usa EN el juego -disparar, acelerar, frenar- asi que
-                # poner ahi el clic choca justo en los juegos donde mas falta
-                # hace el raton. R3 es pulsar el stick derecho, o sea el mismo
-                # dedo que ya esta moviendo el puntero: se hace sin soltar, y
-                # casi ningun juego lo usa para nada.
-                #
-                # Se deja r2 en la lista, que era el de antes: quien lo tenga
-                # puesto y le vaya bien no tiene por que cambiarlo.
-                nuevo="$(menu "Que boton hace clic
-
-R3 es pulsar el stick derecho: el mismo dedo que mueve el
-puntero. Los gatillos suelen estar ocupados por el juego." \
-                    "r3 - pulsar el stick derecho   (recomendado)" \
-                    "l3 - pulsar el stick izquierdo" \
-                    "r2 - gatillo derecho" \
-                    "l2 - gatillo izquierdo" \
-                    "pagedown - R1" \
-                    "pageup - L1" \
-                    "a - boton de abajo" \
-                    "<< Volver")" || continue
+                # Lo pidio un tester con un juego donde recargar es el boton
+                # derecho del raton: podia mover el puntero y disparar, pero no
+                # recargar. Se puede dejar sin asignar, que es como estaba.
+                local nuevo
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC DERECHO" 1)" || continue
                 case "$nuevo" in
-                    "<< Volver"|"") continue ;;
-                esac
-                keys_raton_poner "$f" click_left "${nuevo%% *}" ;;
+                    "") continue ;;
+                    __QUITAR__) keys_raton_poner "$f" click_right "" ;;
+                    *)          keys_raton_poner "$f" click_right "$nuevo" ;;
+                esac ;;
+            "Clic central con:"*)
+                local nuevo
+                nuevo="$(keys_raton_boton_elegir "Que boton hace el CLIC CENTRAL" 1)" || continue
+                case "$nuevo" in
+                    "") continue ;;
+                    __QUITAR__) keys_raton_poner "$f" click_middle "" ;;
+                    *)          keys_raton_poner "$f" click_middle "$nuevo" ;;
+                esac ;;
             "Velocidad:"*)
                 local v
                 v="$(menu "Velocidad del puntero (ahora $vel)" \
@@ -20997,12 +23935,14 @@ keys_editor() {
     # no vale nada y el fichero saldria con el nombre equivocado.
     local gid="$1" squash="${2:-}" destino
     destino="$PROFILE_DIR/$gid.keys"
-    local tmp tmpc tmpr origen=""
+    local tmp tmpc tmpr tmps origen=""
     tmp="$(mktemp)" || return 1
     tmpc="$(mktemp)" || { rm -f "$tmp"; return 1; }
-    tmpr="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
+    tmpr="$(mktemp)" || { rm -f "$tmp" "$tmpc"; return 1; }
+    tmps="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
     printf '{"actions_player1": []}' > "$tmpc"
     : > "$tmpr"                      # vacio = este .keys no lleva raton
+    : > "$tmps"                      # vacio = los sticks, como vienen
 
     # De donde se parte. OJO: NO vale mirar solo profiles/<gid>.keys. El .keys
     # puede estar junto al juego (<juego>.wsquashfs.keys), que es como lo pone
@@ -21012,7 +23952,7 @@ keys_editor() {
     [ -n "$origen" ] || { [ -f "$destino" ] && origen="$destino"; }
 
     if [ -n "$origen" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
-        teclas_py descomponer "$origen" "$tmp" "$tmpc" "$tmpr" 2>/dev/null
+        teclas_py descomponer "$origen" "$tmp" "$tmpc" "$tmpr" "$tmps" 2>/dev/null
         say "[keys] Partiendo de $(basename "$origen")"
     fi
 
@@ -21063,27 +24003,43 @@ $KEYS_STICKS
 EOFSN
         opciones="${opciones}Sticks (izquierdo y derecho) >>   $([ "$_nst" -gt 0 ] && printf '%s asignadas' "$_nst" || printf 'ninguna')
 "
+        # INTERCAMBIAR LOS STICKS.
+        #
+        # Lo pidieron para un juego que apunta con el derecho y se maneja mucho
+        # mejor apuntando con el izquierdo. Va aqui, en el .keys, por dos
+        # razones: es cosa de ESE juego, y asi viaja con el -un .keys de la
+        # comunidad puede traerlo ya puesto-.
+        #
+        # No lo hace el mapeador, que convierte el mando en TECLAS: lo hace el
+        # mando virtual, presentandole al juego otro mando con los sticks al
+        # reves. Si el mando virtual estaba apagado, se enciende solo en modo
+        # copia al lanzar.
+        opciones="${opciones}Intercambiar los sticks: $(keys_sticks_swap_etq "$tmps")
+"
         opciones="$opciones$(keys_raton_fila "$tmpr")
 $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
 Rellenar: juego de teclado y raton   (WASD, flechas, clics)
 "
-        n="$(grep -c . "$tmp" 2>/dev/null || echo 0)"
+        n="$(grep -c . "$tmp" 2>/dev/null)"
         local titulo="Teclas de $gid  ($n asignadas"
         [ "$nc" -gt 0 ] && titulo="$titulo + $nc combinaciones"
         titulo="$titulo)"
         # shellcheck disable=SC2046
         sel="$(IFS=$'\n'; set -f; menu "$titulo" \
-               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr"; return 1; }
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1; }
 
         case "$sel" in
-            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr"; return 1 ;;
+            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1 ;;
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
                 continue ;;
             "Sticks (izquierdo y derecho)"*)
                 keys_sticks_editar "$tmp"
+                continue ;;
+            "Intercambiar los sticks:"*)
+                keys_sticks_swap_cambiar "$tmps"
                 continue ;;
             "Rellenar: juego de teclado y raton"*)
                 keys_plantilla_teclado "$tmp" "$tmpr"
@@ -21142,9 +24098,25 @@ Asignar la tecla de todas formas?" || continue
     # vacio como fichero. Hay que contar lo que lleva dentro.
     local n_combos
     n_combos="$(keys_combos_cuantos "$tmpc")"
-    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ]; then
-        ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton."
-        rm -f "$tmp" "$tmpc" "$tmpr"; return 1
+    # Y LOS STICKS INTERCAMBIADOS TAMBIEN CUENTAN.
+    #
+    # ESTE FUE EL FALLO QUE DEJO LA OPCION SIN FUNCIONAR.
+    #
+    # Se añadio "Intercambiar los sticks" y no se toco esta comprobacion, asi
+    # que quien activaba SOLO eso -que es justo el caso normal: el juego se
+    # maneja bien, lo unico que molesta es que apunta con el derecho- se
+    # encontraba un "No has asignado nada" y el .keys NO SE ESCRIBIA. Sin
+    # fichero no hay nada que leer al lanzar, asi que la opcion parecia no
+    # existir: ni funcionaba ni daba un error que lo explicara.
+    #
+    # Es el mismo error que ya se cometio con el raton, y esta arriba contado:
+    # cada vez que se añade algo que se puede guardar solo, hay que sumarlo
+    # aqui. Lo cubren ahora las pruebas.
+    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ] \
+       && [ ! -s "$tmps" ]; then
+        ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton,
+ni los sticks intercambiados."
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
@@ -21153,17 +24125,17 @@ Asignar la tecla de todas formas?" || continue
     # Un .keys hecho aqui es de este juego por definicion: lo acaba de crear el
     # usuario para el. Dejarlo sin marca lo convertiria en un fichero anonimo
     # mas, que es de donde venia todo el problema.
-    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr"; then
+    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr" "$tmps"; then
         keys_marcar "$destino" "$gid"
     else
         ui_error "No se pudo guardar el mapeo en:
 $destino
 
 El fichero anterior sigue intacto."
-        rm -f "$tmp" "$tmpc" "$tmpr"
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
         return 1
     fi
-    rm -f "$tmp" "$tmpc" "$tmpr"
+    rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
@@ -21173,13 +24145,20 @@ El fichero anterior sigue intacto."
         for _k in "${squash%.*}.keys" "${squash}.keys"; do
             [ -f "$_k" ] && { otro="$(basename "$_k")"; break; }
         done
-        ui_info "Teclas guardadas en:
+        # SE DICE QUE SE HA GUARDADO DE VERDAD.
+        #
+        # Decia "Teclas guardadas" siempre, y quien venia de activar solo el
+        # intercambio de sticks no veia su opcion mencionada en ninguna parte:
+        # desde fuera, indistinguible de que se hubiera ignorado.
+        local _quegua="Teclas guardadas en:"
+        [ -s "$tmps" ] && _quegua="Guardado (con los sticks intercambiados) en:"
+        ui_info "$_quegua
 profiles/$gid.keys${otro:+
 
 Este juego traia el suyo ($otro). El tuyo manda a partir
 de ahora; para volver al original, borra profiles/$gid.keys}
 
-Se activan solas al lanzar el juego.
+Se activa solo al lanzar el juego.
 Select + Start cierra el juego (Alt+F4)."
         return 0
     fi
@@ -21216,6 +24195,50 @@ pad_exit_segundos() {
     printf '%s' "$v"
 }
 
+lanzador_es_de_linux() {
+    # ¿Este lanzador es un juego de Linux? $1 = ruta del lanzador.
+    #
+    # EL FALLO QUE ARREGLA, QUE ES LA SEGUNDA VEZ QUE PICAMOS EN LO MISMO.
+    #
+    # Antes esto era una lista de extensiones: .sh, .AppImage y poco mas, y si
+    # no casaba se miraba WP_NATIVO. Pero WP_NATIVO solo existe en el camino de
+    # imagen, asi que un juego de Linux EN CARPETA cuyo lanzador fuera un
+    # binario pelado -Juego.x86_64, juego.bin, o sin extension ninguna- no
+    # casaba con nada y se trataba como juego de Windows. Lo contaba un tester
+    # tal cual:
+    #
+    #   "los juegos de linux en modo carpeta no deja salir pulsando select, y
+    #    al salir del propio juego se queda un tiempo pensando. El mismo juego
+    #    comprimido en wsquashfs lo cierra perfecto."
+    #
+    # Las dos mitades son lo mismo: sin apuntar la carpeta, el guardia no sabe
+    # que cerrar -Select no hace nada- y al terminar se recorre el cierre de
+    # Wine entero, con sus esperas, para un juego que no tiene Wine. De ahi el
+    # "se queda pensando". Comprimido funcionaba porque ahi SI esta WP_NATIVO.
+    #
+    # Ahora no se adivina por el nombre: si la extension no lo dice, SE MIRA EL
+    # FICHERO. Un ELF o un guion con almohadilla-admiracion no mienten.
+    local _l="${1:-}"
+    [ -n "$_l" ] || return 1
+    case "$_l" in
+        # Lo de Windows es lo unico que descarta de entrada.
+        *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD|*.lnk|*.LNK|*.msi|*.MSI) return 1 ;;
+        *.sh|*.SH|*.AppImage|*.appimage|*.APPIMAGE) return 0 ;;
+    esac
+    [ -n "${WP_NATIVO:-}" ] && return 0
+    [ -f "$_l" ] || return 1
+    # ELF: 7f 45 4c 46. Es lo que es un binario de Linux, se llame como se
+    # llame -Juego.x86_64, Juego.bin, Juego a secas-.
+    case "$(head -c 4 "$_l" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d ' \n')" in
+        7f454c46) return 0 ;;
+    esac
+    # Y un guion, aunque no acabe en .sh.
+    case "$(head -c 2 "$_l" 2>/dev/null)" in
+        '#!') return 0 ;;
+    esac
+    return 1
+}
+
 guardia_salida_start() {
     # Vigila la combinacion de salida durante la partida, para poder cerrar
     # el juego solo
@@ -21232,7 +24255,8 @@ guardia_salida_start() {
     # El vigilante corre en un subshell propio y no ve lo que el padre asigne
     # despues de crearlo. Por un fichero si se entera, y ademas sirve aunque el
     # padre haya cambiado de juego.
-    rm -f "$RUNTIME_DIR/.juego_raiz" "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+    rm -f "$RUNTIME_DIR/.juego_raiz" "$RUNTIME_DIR/.juego_pgid" \
+          "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
     # SE MIRA EL LANZADOR, NO LA VARIABLE WP_NATIVO.
     #
     # WP_NATIVO solo se asigna en el camino de imagen; en el de carpeta no
@@ -21240,18 +24264,19 @@ guardia_salida_start() {
     # juego era de Linux y llamaba a wine_matar_prefijo, que ahi no cierra
     # nada. El sintoma era que Select no hacia nada.
     #
-    # La extension del ejecutable no miente en ninguno de los dos caminos.
     # $1 = lanzador, opcional. Los tres caminos de lanzamiento guardan la ruta
     # en variables distintas ($EXE_PATH, $exe, $launcher), asi que se admite
     # que nos la pasen en vez de adivinar cual mirar.
     local _lanz="${1:-${EXE_PATH:-}}"
-    case "$_lanz" in
-        *.sh|*.AppImage|*.appimage)
-            dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
-        *)  [ -n "${WP_NATIVO:-}" ] && [ -n "$_lanz" ] \
-                && dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null ;;
-    esac
+    if lanzador_es_de_linux "$_lanz"; then
+        dirname "$_lanz" > "$RUNTIME_DIR/.juego_raiz" 2>/dev/null
+        log "guardia: juego de Linux, raiz apuntada = $(dirname "$_lanz")"
+    else
+        log "guardia: juego de Windows (lanzador: ${_lanz:-ninguno})"
+    fi
     export WP_OCULTAR_CURSOR="${OCULTAR_CURSOR:-1}"
+    export WP_CURSOR_SEGUNDOS="${CURSOR_SEGUNDOS:-3}"
+    export WP_CURSOR_UMBRAL="${CURSOR_UMBRAL:-8}"
     GUARDIA_PID="$(lanzar_suelto "$PY_BIN" "$MENU_PYGAME_PY" guardia \
                    "$marca" "$(pad_exit_segundos)" "${PAD_EXIT_COMBO:-select}")"
     sleep 0.4
@@ -21262,8 +24287,30 @@ guardia_salida_start() {
         # Y comprobarlo otra vez mas adelante: si se cae a los pocos segundos
         # (por ejemplo al tocar las X para el cursor), antes no nos
         # enterabamos y parecia que la combinacion de salida no servia.
+        #
+        # PERO SOLO SI EL JUEGO SIGUE EN MARCHA, QUE ES LO QUE FALTABA.
+        #
+        # El vigilante termina a proposito cuando acaba la partida. Si el juego
+        # dura menos de 20 s -y en los registros de un tester duraba 3 y 7,
+        # porque el prefijo estaba roto- este aviso saltaba SIEMPRE, diciendo
+        # que algo no iba a funcionar cuando ya no habia nada que vigilar.
+        # Dos registros seguidos con un susto que no era.
+        #
+        # La marca la borra guardia_salida_start en la siguiente partida y el
+        # cierre al desmontar, asi que "existe" = "esto sigue en marcha".
+        #
+        # Y SE PREGUNTA POR EL NOMBRE, NO POR EL IDENTIFICADOR.
+        #
+        # GUARDIA_PID es el del "setsid" que lo lanza, y ese puede haber
+        # desaparecido en cuanto arranco al python: es el mismo fallo que ya
+        # tuvimos en guardia_salida_stop y que esta contado alli. Preguntando
+        # por el, este aviso salia aunque el vigilante estuviera perfectamente
+        # vivo -y en los registros de un tester salio dos veces seguidas-.
+        # proceso_vivo mira el nombre, que es lo que no miente.
+        : > "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
         ( sleep 20
-          kill -0 "$GUARDIA_PID" 2>/dev/null \
+          [ -e "$RUNTIME_DIR/.juego_en_marcha" ] || exit 0
+          proceso_vivo 'menu_pygame\.py guardia' \
             || say "AVISO: el vigilante de salida SE CERRO; el cierre con el mando no funcionara"
         ) < /dev/null >/dev/null 2>&1 &
     fi
@@ -21403,6 +24450,9 @@ guardia_salida_start() {
 }
 
 guardia_salida_stop() {
+    # LA PARTIDA HA TERMINADO. Se quita la marca para que el aviso de los 20 s
+    # no salte por un vigilante que se cerro porque tenia que cerrarse.
+    rm -f "$RUNTIME_DIR/.juego_en_marcha" 2>/dev/null
     # OJO con el identificador: el vigilante se lanza con "lanzar_suelto",
     # que usa setsid, y setsid muere en cuanto arranca al python. Asi que
     # GUARDIA_PID apunta a un proceso que ya no existe y el kill no alcanzaba
@@ -21444,6 +24494,7 @@ menu_server_reiniciar() {
     export WP_GRID_COLS="${GRID_COLS:-0}"
     export WP_LANG="${LANGUAGE:-es}"
     export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+    export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
     menu_server_alive || return 0          # si no habia servidor, nada que hacer
     menu_server_stop
     menu_server_start || true
@@ -21481,10 +24532,12 @@ menu_server_start() {
     # La marca es el hash que pone build.sh: si no coincide con la del
     # wproton.sh que estas usando, el modulo esta desfasado.
     log "menus: modulo $(grep -m1 -o 'WPROTON_HELPER menu_pygame.py [0-9a-f]*' \
-        "$MENU_PYGAME_PY" 2>/dev/null | awk '{print $3}' || printf 'desconocido') | raton=${RATON_MENUS:-1}"
+        "$MENU_PYGAME_PY" 2>/dev/null | awk '{print $3}' || printf 'desconocido') | raton=${RATON_MENUS:-1} umbral=${RATON_UMBRAL:-12} rueda=${RATON_RUEDA:-3}"
     MENUSRV_PID="$(PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
         DIAG_TIEMPOS="${DIAG_TIEMPOS:-0}" WP_TEMA="$(tema_temporada)" \
         WP_RATON="${RATON_MENUS:-1}" \
+        WP_RATON_UMBRAL="${RATON_UMBRAL:-12}" \
+        WP_RATON_RUEDA="${RATON_RUEDA:-3}" \
         lanzar_suelto env -u LD_PRELOAD "$PY_BIN" "$(menu_helper server)" server "$dir")"
     disown "$MENUSRV_PID" 2>/dev/null || true
     printf '%s' "$MENUSRV_PID" > "$(menusrv_pidfile)" 2>/dev/null
@@ -21497,6 +24550,14 @@ menu_server_start() {
     done
     if kill -0 "$MENUSRV_PID" 2>/dev/null; then
         say "[+] Servidor de menus activo (pid $MENUSRV_PID)"
+        # Y COMO HAN QUEDADO LOS TRACKPADS.
+        #
+        # Este proceso es el sospechoso natural: es pygame -o sea SDL- y se
+        # queda vivo mientras navegas, asi que si abriera el mando estaria
+        # apagando el modo lagarto cada 800 ms durante toda la sesion. Si la
+        # linea de "arranque" dice ENCENDIDO y esta dice APAGADO, el culpable
+        # es este y no el juego.
+        trackpad_lagarto_log "tras abrir el servidor de menus"
         return 0
     fi
     say "AVISO: el servidor de menus no arranco; un proceso por menu"
@@ -23284,6 +26345,211 @@ stats_line() {
     fi
 }
 
+trackpad_menu() {
+    # LOS TRACKPADS DE LA DECK, LOS DE WProton.
+    #
+    # De fabrica el pad DERECHO mueve el puntero y el IZQUIERDO hace de rueda,
+    # y eso lo hace el FIRMWARE del mando. Lo que no se le puede pedir al
+    # firmware es que el izquierdo mueva el puntero.
+    #
+    # Asi que WProton le apaga al mando esa emulacion -con los mismos comandos
+    # que usa el driver del kernel- y mueve el puntero el mismo leyendo el pad.
+    # Al apagar la opcion, o al cerrar, se la devuelve.
+    local sel
+    while :; do
+        sel="$(menu "Trackpads de la Deck" \
+            "Cual mueve el puntero: $(trackpad_label)" \
+            "Sensibilidad: ${TRACKPAD_SENS:-1.0}" \
+            "Quien manda en los pads: $(trackpad_control_label)" \
+            "Probar los trackpads (ver en que estado estan)" \
+            "Devolver los pads al mando ahora (arreglo)" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Quien manda en los pads:"*)
+                # EL INTERRUPTOR DE "MIS TRACKPADS" / "LOS DE VALVE".
+                #
+                # Con control=1 WProton le escribe al mando para quedarse los
+                # pads; con 0 no le escribe nada y entonces solo funciona si el
+                # usuario ha puesto el mando en modo gamepad a mano.
+                if [ "${TRACKPAD_CONTROL:-1}" = 1 ]; then
+                    TRACKPAD_CONTROL=0
+                else
+                    TRACKPAD_CONTROL=1
+                fi
+                save_settings
+                # Si estaba en marcha, se reinicia para que coja el modo nuevo.
+                [ "${TRACKPAD_RATON:-no}" != no ] && trackpad_raton_start "$TRACKPAD_RATON"
+                if [ "$TRACKPAD_CONTROL" = 1 ]; then
+                    ui_info "Los pads son de WProton.
+
+Al encender el trackpad como raton, WProton le apaga al
+mando su emulacion y mueve el puntero el mismo. Al
+apagarlo, o al cerrar WProton, se la devuelve.
+
+Mientras esta asi, el pad derecho deja de mover el puntero
+por su cuenta: lo mueve el que hayas elegido tu."
+                else
+                    ui_info "Los pads son del mando.
+
+WProton no le escribe nada. El pad derecho mueve el
+puntero y el izquierdo hace de rueda, como de fabrica.
+
+Si quieres que WProton use un pad en este modo, tienes que
+poner el mando en modo gamepad tu: manten pulsado OPCIONES
+medio segundo."
+                fi ;;
+            "Devolver los pads al mando ahora"*)
+                # LA SALIDA DE EMERGENCIA.
+                #
+                # Si una sesion anterior murio de golpe con los pads tomados
+                # -un corte de luz, un kill -9-, nadie se los devolvio y el
+                # usuario se encuentra los trackpads muertos sin saber por que.
+                # Esto los devuelve en un segundo y sin reiniciar.
+                trackpad_raton_stop
+                loading_say "Devolviendo los trackpads al mando..."
+                if trackpad_py lagarto on >>"$LOG_FILE" 2>&1; then
+                    loading_clear
+                    ui_info "Hecho: el mando vuelve a mover el puntero.
+
+El pad derecho hace de raton y el izquierdo de rueda."
+                else
+                    loading_clear
+                    ui_error "No se ha podido escribir al mando.
+
+O esto no es una Steam Deck, o faltan permisos sobre
+/dev/hidraw. El detalle esta en el registro.
+
+Tambien lo arregla manteniendo pulsado OPCIONES medio
+segundo, dos veces."
+                fi ;;
+            "Cual mueve el puntero:"*)
+                local c
+                c="$(menu "¿Que pad mueve el puntero?" \
+                    "Ninguno (como viene de fabrica)" \
+                    "El izquierdo" \
+                    "El derecho" \
+                    "<< Volver")" || continue
+                case "$c" in
+                    "Ninguno"*)      TRACKPAD_RATON=no ;;
+                    "El izquierdo")  TRACKPAD_RATON=izquierdo ;;
+                    "El derecho")    TRACKPAD_RATON=derecho ;;
+                    *) continue ;;
+                esac
+                save_settings
+                if [ "$TRACKPAD_RATON" = no ]; then
+                    trackpad_raton_stop
+                    ui_info "Los trackpads vuelven a hacer lo de siempre: el derecho
+mueve el puntero y el izquierdo hace de rueda."
+                elif trackpad_raton_start "$TRACKPAD_RATON"; then
+                    ui_info "Listo: el pad $TRACKPAD_RATON mueve el puntero.
+
+Si notas que va muy lento o muy rapido, cambialo en
+Sensibilidad."
+                else
+                    ui_error "No se pudo leer el mando por /dev/hidraw.
+
+Hacen falta las reglas udev de Steam para leer ese nodo.
+En 'Arreglar permisos del mando' esta el detalle, y en el
+registro queda lo que se intento."
+                fi ;;
+            "Sensibilidad:"*)
+                local sv
+                sv="$(menu "¿Cuanto corre el puntero?" \
+                    "0.5 - lento y fino" \
+                    "1.0 - normal" \
+                    "1.5 - rapido" \
+                    "2.5 - muy rapido" \
+                    "<< Volver")" || continue
+                case "$sv" in
+                    0.5*|1.0*|1.5*|2.5*) TRACKPAD_SENS="${sv%% *}" ;;
+                    *) continue ;;
+                esac
+                save_settings
+                # Si estaba en marcha, se reinicia para que coja el valor nuevo.
+                [ "${TRACKPAD_RATON:-no}" != no ] && trackpad_raton_start "$TRACKPAD_RATON"
+                ui_info "Sensibilidad: $TRACKPAD_SENS" ;;
+            "Probar los trackpads"*)
+                # SOLO MIRA, NO TOCA NADA.
+                #
+                # Esto ya no es un volcado de bytes: es el diagnostico. Mira el
+                # parametro del modulo, si existe el dispositivo de entrada con
+                # los pads, si alguien tiene abierto el hidraw, y escucha unos
+                # segundos para saber EN QUE MODO esta el mando. Lo que faltaba
+                # las dos veces que se intento arreglar esto a ciegas.
+                ui_info "Se va a comprobar el estado de los trackpads.
+
+Cuando lo diga, mueve el dedo por los DOS pads.
+
+No se le escribe nada al mando: solo se lee."
+                loading_say "Comprobando los trackpads (10 s)..."
+                trackpad_py estado 8 >>"$LOG_FILE" 2>&1
+                local _rc=$?
+                loading_clear
+                case "$_rc" in
+                    0) ui_info "Los trackpads se leen bien.
+
+El mando esta en MODO GAMEPAD, que es el modo en el que
+WProton puede usar un pad como raton. En este modo el
+firmware NO mueve el puntero: eso es lo normal.
+
+El detalle esta en el registro." ;;
+                    2) ui_info "El mando esta en MODO ESCRITORIO.
+
+Aqui el puntero lo mueve el propio mando: el pad DERECHO
+hace de raton y el IZQUIERDO de rueda. El sistema no
+publica los pads, asi que WProton no tiene nada que leer
+-ni le hace falta-.
+
+Si los trackpads NO te responden estando asi, el mando se
+ha quedado en modo gamepad: manten pulsado OPCIONES (las
+tres rayas) medio segundo. Vibrara al cambiar." ;;
+                    *) ui_error "No se ha podido leer el mando.
+
+O esto no es una Steam Deck, o faltan permisos, o hay otro
+programa (Steam) con el mando cogido en exclusiva. El
+detalle esta en el registro." ;;
+                esac ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+trackpad_juego_label() {
+    # Lo que hace ESTE juego. "auto" enseña ademas que sale de ahi, porque
+    # "automatico" a secas no dice si el puntero se va a mover o no.
+    case "${TRACKPAD:-auto}" in
+        no)         printf 'no' ;;
+        izquierdo)  printf 'el pad izquierdo' ;;
+        derecho)    printf 'el pad derecho' ;;
+        *)          printf 'lo general (%s)' "$(trackpad_label_corta)" ;;
+    esac
+}
+
+trackpad_label_corta() {
+    case "${TRACKPAD_RATON:-no}" in
+        izquierdo) printf 'pad izquierdo' ;;
+        derecho)   printf 'pad derecho' ;;
+        *)         printf 'ninguno' ;;
+    esac
+}
+
+trackpad_control_label() {
+    # Quien manda en los trackpads, en dos palabras.
+    if [ "${TRACKPAD_CONTROL:-1}" = 1 ]; then
+        printf 'WProton (se los pide al mando)'
+    else
+        printf 'el mando (WProton no le escribe)'
+    fi
+}
+
+trackpad_label() {
+    case "${TRACKPAD_RATON:-no}" in
+        izquierdo) printf 'el pad izquierdo mueve el puntero' ;;
+        derecho)   printf 'el pad derecho mueve el puntero' ;;
+        *)         printf 'no (solo lo que haga la consola)' ;;
+    esac
+}
+
 grid_cols_label() {
     case "${GRID_COLS:-0}" in
         0|"") printf 'automático' ;;
@@ -23297,6 +26563,8 @@ font_label() {
         1.5)  printf 'muy grande' ;;
         *)    printf 'normal' ;;
     esac
+    [ "${MENU_AUTO_ESCALA:-1}" = 1 ] && printf ', sube sola en 4K'
+    return 0
 }
 
 dev_dir() {
@@ -23441,6 +26709,129 @@ $dst"
     return 0
 }
 
+dev_video_libre() {
+    # GRABAR UN TUTORIAL ENTERO, SIN RELOJ. L3 empieza, R3 para.
+    #
+    # Las otras dos grabaciones duran lo que se les diga y se paran solas. Para
+    # un videotutorial eso no sirve: no se sabe de antemano cuanto va a durar
+    # lo que se quiere ense\u00f1ar, y cortar a los 60 segundos obliga a repetirlo.
+    #
+    # Aqui se deja la grabacion ARMADA y se maneja con el mando desde los
+    # propios menus. Como los fotogramas los guarda pygame desde dentro, sale
+    # exacto; ffmpeg leyendo la pantalla desde fuera saca video negro con los
+    # menus (ver dev_video_menus).
+    #
+    # Mientras no haya nada armado, L3 sigue haciendo la captura de pantalla de
+    # siempre: los dos usos no coinciden nunca.
+    command -v ffmpeg >/dev/null 2>&1 || {
+        ui_error "Para montar el video hace falta ffmpeg."; return 1; }
+    local dir; dir="$(dev_dir)"
+    mkdir -p "$dir" 2>/dev/null
+    local dst="$dir/tutorial_$(date +%Y%m%d_%H%M%S).mp4"
+    # Si quedo algo de una grabacion anterior a medias, fuera: si no, pygame
+    # creeria que sigue armada o que todavia esta grabando.
+    rm -f "$dir/.rec" "$dir/.rec_fin" "$dir/.rec_armado" 2>/dev/null
+    # LA CARPETA, CON mktemp.
+    #
+    # Con un nombre hecho de la fecha, armar dos veces en el mismo segundo daba
+    # la MISMA carpeta para las dos y los fotogramas se habrian mezclado. El
+    # PID tampoco vale: las dos llamadas salen del mismo WProton.
+    local frames
+    frames="$(mktemp -d "$dir/.frames_$(date +%Y%m%d_%H%M%S)_XXXXXX")" || {
+        ui_error "No se pudo crear la carpeta de fotogramas en $dir"; return 1; }
+    printf '%s\n' "$frames" > "$dir/.rec_armado"
+
+    # EL VIGILANTE.
+    #
+    # Espera a que los menus dejen el .rec_fin (lo escribe R3, o el propio
+    # pygame si el disco se queda sin sitio) y monta el mp4. Tiene un tope de
+    # cuatro horas para no quedarse vivo para siempre si alguien arma la
+    # grabacion y se olvida.
+    ( _limite=$(( $(date +%s) + 14400 ))
+      while [ ! -f "$dir/.rec_fin" ]; do
+          sleep 2
+          [ "$(date +%s)" -gt "$_limite" ] && break
+          # Si alguien borra la marca a mano, no tiene sentido seguir.
+          [ -f "$dir/.rec_armado" ] || [ -f "$dir/.rec" ] || break
+      done
+      rm -f "$dir/.rec" "$dir/.rec_armado" 2>/dev/null
+      if [ -f "$dir/.rec_fin" ]; then
+          rm -f "$dir/.rec_fin"
+          if [ -n "$(ls -A "$frames" 2>/dev/null)" ]; then
+              _n="$(ls -1 "$frames" 2>/dev/null | wc -l)"
+              log "[dev] Montando el tutorial: $_n fotogramas -> $dst"
+              ffmpeg -y -framerate 10 -i "$frames/f%05d.png" \
+                  -c:v libx264 -preset veryfast -pix_fmt yuv420p -r 30 "$dst"
+              if [ -s "$dst" ]; then
+                  log "[dev] Tutorial guardado: $dst ($(human_size "$(stat -c%s "$dst" 2>/dev/null || echo 0)"))"
+              else
+                  log "[dev] ffmpeg no pudo montar el tutorial" WARN
+              fi
+          else
+              log "[dev] No se capturo ningun fotograma" WARN
+          fi
+      else
+          log "[dev] La grabacion se armo y nadie la arranco (o se paso de 4 h)" WARN
+      fi
+      rm -rf "$frames"
+    ) < /dev/null >> "$LOG_FILE" 2>&1 &
+
+    ui_info "Grabacion ARMADA. No empieza todavia.
+
+  L3  (pulsar el stick izquierdo)  empezar a grabar
+  R3  (pulsar el stick derecho)    parar y montar el video
+
+Sal de este menu y ponte donde quieras empezar. Mientras grabe
+veras 'REC' y el tiempo arriba a la derecha; eso NO sale en el
+video.
+
+Graba los MENUS, no los juegos: dentro de un juego no hay menus
+que dibujar. Para la partida esta 'Grabar la pantalla entera'.
+
+Se para sola si el disco se queda sin sitio.
+
+El video ira a:
+$dst"
+    return 0
+}
+
+dev_rec_estado() {
+    # Que hay ahora mismo: armada, grabando, montando o nada.
+    local dir; dir="$(dev_dir)"
+    if [ -f "$dir/.rec_fin" ]; then
+        printf 'montando el video'
+    elif [ -f "$dir/.rec" ]; then
+        local _n _f
+        _f="$(sed -n 2p "$dir/.rec" 2>/dev/null)"
+        _n="$(ls -1 "$_f" 2>/dev/null | wc -l)"
+        printf 'GRABANDO (%s fotogramas)' "${_n:-0}"
+    elif [ -f "$dir/.rec_armado" ]; then
+        printf 'armada, esperando a L3'
+    else
+        printf 'parada'
+    fi
+}
+
+dev_rec_cancelar() {
+    # Desarmar sin montar nada: para cuando se arma por error.
+    # OJO CON EL "local" DE DOS VARIABLES.
+    #
+    # Esto estaba escrito como: local dir; dir="$(dev_dir)" f
+    # Bash no lee eso como "declara dir y f": lee una asignacion y luego la
+    # ORDEN f. Resultado: "f: command not found", dir sin definir y, con
+    # set -u, WProton muerto. Las dos se declaran juntas y se asignan despues.
+    local dir f
+    dir="$(dev_dir)"
+    f="$(sed -n 1p "$dir/.rec_armado" 2>/dev/null)"
+    [ -n "$f" ] || f="$(sed -n 2p "$dir/.rec" 2>/dev/null)"
+    rm -f "$dir/.rec" "$dir/.rec_armado" "$dir/.rec_fin" 2>/dev/null
+    case "$f" in
+        "$dir"/.frames_*) rm -rf "$f" 2>/dev/null ;;
+    esac
+    ui_info "Grabacion cancelada. No se ha montado ningun video."
+    return 0
+}
+
 dev_probar_tema() {
     # VER LOS FONDOS DE TEMPORADA SIN ESPERAR A LA FECHA.
     #
@@ -23483,9 +26874,11 @@ dev_menu() {
     local sel
     while :; do
         sel="$(menu "Modo desarrollo" \
+            "Grabar sin limite - L3 empieza, R3 para  [$(dev_rec_estado)]" \
+            "Cancelar la grabacion armada" \
             "Captura de pantalla (5 s de margen)" \
             "Captura de pantalla (15 s de margen)" \
-            "Grabar los menus - 30 s (recomendado)" \
+            "Grabar los menus - 30 s" \
             "Grabar los menus - 60 s" \
             "Grabar la pantalla entera - 30 s (puede salir en negro)" \
             "Ver la carpeta de capturas" \
@@ -23493,6 +26886,8 @@ dev_menu() {
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
+            "Grabar sin limite"*)        dev_video_libre || true ;;
+            "Cancelar la grabacion"*)    dev_rec_cancelar || true ;;
             "Captura de pantalla (5"*)   dev_captura_pantalla 5  || true ;;
             "Captura de pantalla (15"*)  dev_captura_pantalla 15 || true ;;
             "Grabar los menus - 30"*)    dev_video_menus 30 5  || true ;;
@@ -23569,8 +26964,8 @@ Despues se te enseñara lo que ha llegado."
     ( PYGAME_HIDE_SUPPORT_PROMPT=1 timeout 15 "$PY_BIN" "$MENU_PYGAME_PY" \
         guardia "$RUNTIME_DIR/.prueba_mando" 2 select ) >"$salida" 2>&1
     rm -f "$RUNTIME_DIR/.prueba_mando" 2>/dev/null
-    local visto; visto="$(grep -c 'guardia: boton' "$salida" 2>/dev/null || echo 0)"
-    local disp;  disp="$(grep -c 'guardia vigilando' "$salida" 2>/dev/null || echo 0)"
+    local visto; visto="$(grep -c 'guardia: boton' "$salida" 2>/dev/null)"
+    local disp;  disp="$(grep -c 'guardia vigilando' "$salida" 2>/dev/null)"
     cat "$salida" >> "$LOG_FILE" 2>/dev/null
     if [ "$disp" = 0 ]; then
         ui_error "No se ha encontrado ningun mando.
@@ -24007,6 +27402,15 @@ COVERS43_INDEX="$RUNTIME_DIR/.covers43_index"
 covers43_list() {
     # Ficheros de imagen de la carpeta covers_43/ del repositorio.
     #
+    # Sale una linea por carátula: "nombre<TAB>bytes". El tamaño lo da la
+    # propia API y sirve para poder decirle al usuario cuanto va a descargar
+    # ANTES de empezar, que con una coleccion que crece es la diferencia entre
+    # una descarga tranquila y una sorpresa con datos moviles.
+    #
+    # Se parte el JSON por objetos ("{") en vez de buscar los campos sueltos:
+    # asi "name" y "size" se leen del MISMO fichero pase lo que pase con el
+    # orden en que GitHub los devuelva.
+    #
     # --max-time: esto se consulta al arrancar un juego. Si GitHub se queda
     # colgado, el juego NO se espera: se tira sin carátula y ya.
     #
@@ -24014,25 +27418,52 @@ covers43_list() {
     # momento sobra; si algun dia se pasa, habra que ir por la API de arboles.
     curl -fsSL --max-time 12 \
         "https://api.github.com/repos/$WPROTON_REPO/contents/covers_43" 2>/dev/null \
-        | grep -oE '"name": *"[^"]*\.(png|jpg|jpeg|webp|PNG|JPG|JPEG|WEBP)"' \
-        | cut -d'"' -f4 | sort
+        | tr -d '\n' | tr '{' '\n' \
+        | awk -F'"' '
+            {
+                nom = ""; tam = 0
+                for (i = 1; i < NF; i++) if ($i == "name") { nom = $(i+2); break }
+                if (nom == "") next
+                if (match($0, /"size"[ \t]*:[ \t]*[0-9]+/)) {
+                    t = substr($0, RSTART, RLENGTH); sub(/[^0-9]+/, "", t); tam = t
+                }
+                if (tolower(nom) ~ /\.(png|jpg|jpeg|webp)$/) printf "%s\t%s\n", nom, tam
+            }' \
+        | sort
 }
 
+
 covers43_index_refresh() {
-    # Lista cacheada un dia, como la de los perfiles. Sin red no se avisa de
-    # nada: simplemente no hay carátulas nuevas esta vez.
-    [ -n "${WPROTON_REPO:-}" ] || return 1
-    if [ -f "$COVERS43_INDEX" ]; then
-        local edad
-        edad=$(( $(date +%s) - $(stat -c %Y "$COVERS43_INDEX" 2>/dev/null || echo 0) ))
-        [ "$edad" -lt 86400 ] && return 0
+    # Lista guardada un dia, como la de los perfiles. Sin red no se avisa por
+    # pantalla -no hay carátulas nuevas esta vez y punto- pero SI queda en el
+    # registro por que no las hubo.
+    #
+    # $1 = "forzar" -> ignora la copia guardada y pide la lista otra vez.
+    local forzar="${1:-}" edad
+    if [ -z "${WPROTON_REPO:-}" ]; then
+        log "covers_43: no hay repositorio configurado (WPROTON_REPO vacio)" AVISO
+        return 1
     fi
+    edad="$(repo_indice_edad "$COVERS43_INDEX")"
+    if [ "$forzar" != forzar ] && [ "$edad" -ge 0 ] && [ "$edad" -lt 86400 ]; then
+        log "covers_43: se usa la lista guardada ($(repo_edad_humana "$edad"), $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátulas)"
+        return 0
+    fi
+    [ "$forzar" = forzar ] \
+        && log "covers_43: se pide la lista OTRA VEZ (la guardada fue $(repo_edad_humana "$edad"))" \
+        || log "covers_43: pidiendo la lista de covers_43/ a $WPROTON_REPO ($(repo_edad_humana "$edad"))"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     covers43_list > "$COVERS43_INDEX.tmp" 2>/dev/null
     if [ -s "$COVERS43_INDEX.tmp" ]; then
         mv -f "$COVERS43_INDEX.tmp" "$COVERS43_INDEX"
+        log "covers_43: lista al dia -> $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátula(s) en el repositorio"
+        if [ "$(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0)" -ge 1000 ]; then
+            log "covers_43: la carpeta covers_43/ llega al tope de 1000 ficheros de la API de GitHub: las que pasen de ahi NO se ven. Hay que pasar a la API de arboles." AVISO
+        fi
     else
         rm -f "$COVERS43_INDEX.tmp"
+        log "covers_43: el repositorio no devolvio ninguna carátula; se sigue con la copia guardada si la hay" AVISO
+        [ -f "$COVERS43_INDEX" ] && return 0
         return 1
     fi
     return 0
@@ -24051,12 +27482,14 @@ covers43_match() {
     [ -n "$clave" ] || return 1
     # 1) coincidencia exacta
     while IFS= read -r linea; do
+        linea="${linea%%	*}"          # el indice lleva "nombre<TAB>bytes"
         [ -n "$linea" ] || continue
         lclave="$(nombre_clave "${linea%.*}")"
         [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
     done < "$COVERS43_INDEX"
     # 2) el juego lleva version o grupo detras del nombre de la carátula
     while IFS= read -r linea; do
+        linea="${linea%%	*}"
         [ -n "$linea" ] || continue
         lclave="$(nombre_clave "${linea%.*}")"
         [ ${#lclave} -ge 6 ] || continue      # nombres muy cortos: no arriesgar
@@ -24157,12 +27590,173 @@ covers43_offer_for() {
     local gid="${1:-}" cand
     [ -n "$gid" ] || return 1
     [ -n "${WPROTON_REPO:-}" ] || return 1
-    cover_tipo_real "$gid" 43 >/dev/null 2>&1 && return 1   # ya la tiene
+    if cover_tipo_real "$gid" 43 >/dev/null 2>&1; then
+        log "covers_43: '$gid' ya tiene carátula 4:3; no se toca"
+        return 1
+    fi
     covers43_index_refresh || return 1
-    cand="$(covers43_match "$gid")" || return 1
+    if ! cand="$(covers43_match "$gid")"; then
+        # Lo mismo que con los perfiles: una carátula subida hoy no puede
+        # esperar a mañana. Si la lista era de antes, se pide una nueva y se
+        # vuelve a buscar, una sola vez por sesion.
+        local edad; edad="$(repo_indice_edad "$COVERS43_INDEX")"
+        if [ "$COVERS43_REFRESCADO" = 0 ] && [ "$edad" -gt 60 ]; then
+            log "covers_43: '$gid' (clave '$(nombre_clave "$gid")') no esta en la lista guardada; se pide una nueva por si se acaba de subir"
+            COVERS43_REFRESCADO=1
+            covers43_index_refresh forzar || true
+            cand="$(covers43_match "$gid")" || cand=""
+        fi
+        if [ -z "$cand" ]; then
+            log "covers_43: no hay carátula para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0) carátulas en la lista)"
+            return 1
+        fi
+    fi
     say "[covers_43] el repositorio tiene carátula 4:3 para $gid: $cand"
     covers43_fetch "$cand" "$gid" || return 1
     say "[+] Carátula 4:3 descargada del repositorio"
+    return 0
+}
+
+
+covers43_traer_todas() {
+    # TRAE LA COLECCION ENTERA DE CARATULAS 4:3 DEL REPOSITORIO.
+    #
+    # Es distinto de "Descargar carátulas", que solo busca las de LOS JUEGOS QUE
+    # TIENES. Aqui se baja todo de una vez, asi que cuando añadas un juego mas
+    # adelante su carátula ya esta puesta y no hay que volver a descargar nada.
+    # Lo pidio un tester, y tiene razon: son unos pocos megas y se hace una vez.
+    local _ok
+    loading_say "Consultando las carátulas del repositorio..."
+    # Lista RECIEN TRAIDA: quien pulsa esto quiere las que se subieron hoy, no
+    # las de la copia de ayer.
+    #
+    # Se pide con "forzar" en vez de borrar la copia antes: si GitHub falla
+    # justo ahora, la lista de ayer sigue ahi y las carátulas que ya conoce se
+    # pueden seguir bajando. Borrandola, un fallo de red dejaba a WProton sin
+    # ninguna lista.
+    covers43_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez."
+        return 1
+    fi
+
+    mkdir -p "$COVERS_43_DIR" 2>/dev/null || {
+        ui_error "No se pudo crear la carpeta covers_43"; return 1; }
+
+    # Cuantas hay, cuantas faltan y cuanto pesa lo que falta.
+    local total=0 faltan=0 bytes_faltan=0 nom tam
+    while IFS="$(printf '\t')" read -r nom tam; do
+        [ -n "$nom" ] || continue
+        total=$((total+1))
+        if [ ! -f "$COVERS_43_DIR/$nom" ]; then
+            faltan=$((faltan+1))
+            bytes_faltan=$(( bytes_faltan + ${tam:-0} ))
+        fi
+    done < "$COVERS43_INDEX"
+
+    if [ "$total" = 0 ]; then
+        ui_info "El repositorio todavía no tiene ninguna carátula 4:3."
+        return 1
+    fi
+    if [ "$faltan" = 0 ]; then
+        ui_info "Ya tienes las $total carátulas del repositorio.
+
+Las nuevas se bajan solas la primera vez que cargas un juego."
+        return 0
+    fi
+
+    ui_ask "El repositorio tiene $total carátulas 4:3 y te faltan $faltan.
+
+Se descargarán $(human_size "$bytes_faltan") en covers_43/.
+
+Se bajan TODAS, no solo las de tus juegos: así, cuando añadas
+uno nuevo, su carátula ya estará puesta." || return 1
+
+    # ---- la descarga ------------------------------------------------------
+    local idx=0 hechas=0 fallos=0 url tmp
+    progress_start "Trayendo las carátulas del repositorio"
+    tmp="$(mktemp)" || { progress_stop; ui_error "No se pudo crear un temporal"; return 1; }
+    while IFS="$(printf '\t')" read -r nom tam; do
+        [ -n "$nom" ] || continue
+        [ -f "$COVERS_43_DIR/$nom" ] && continue
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / faltan ))" "($idx/$faltan) ${nom%.*}"
+        url="https://raw.githubusercontent.com/$WPROTON_REPO/main/covers_43/$(url_escapar "$nom")"
+        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+            fallos=$((fallos+1)); log "covers_43: no se pudo descargar $nom" WARN; continue
+        fi
+        # Lo mismo que en la descarga de una sola: si GitHub devuelve una
+        # pagina de error en vez de la imagen, se descarta.
+        if ! es_imagen "$tmp"; then
+            fallos=$((fallos+1)); log "covers_43: $nom no es una imagen; descartada" WARN; continue
+        fi
+        if cat "$tmp" > "$COVERS_43_DIR/$nom" 2>/dev/null; then
+            hechas=$((hechas+1))
+        else
+            fallos=$((fallos+1)); log "covers_43: no se pudo escribir $nom" WARN
+        fi
+    done < "$COVERS43_INDEX"
+    rm -f "$tmp"
+    progress_stop
+
+    # ---- y que se vean en TU biblioteca -----------------------------------
+    local puestas; puestas="$(covers43_enlazar_locales)" || puestas=0
+
+    # LAS FRASES DE MAS, SOLO SI HAY ALGO QUE CONTAR.
+    #
+    # Con ${var:+...} salian siempre: un "0" no es una cadena vacia, asi que el
+    # resumen acababa diciendo "0 no se pudieron traer" y "0 se han puesto
+    # ademas", que sobra y encima preocupa.
+    local _fall="" _ext=""
+    [ "${fallos:-0}" -gt 0 ] 2>/dev/null && _fall="
+$fallos no se pudieron traer (mira el registro)."
+    [ "${puestas:-0}" -gt 0 ] 2>/dev/null && _ext="
+
+$puestas se han puesto además con el nombre de tus juegos, que
+se llaman distinto que en el repositorio."
+    ui_info "Carátulas 4:3 del repositorio: $hechas de $faltan descargadas.$_fall$_ext
+
+Están en covers_43/. Para verlas, pon la vista de lista con
+carátula 4:3 en Biblioteca y preferencias."
+    return 0
+}
+
+covers43_enlazar_locales() {
+    # Deja cada carátula tambien con el nombre del juego de AQUI, cuando no
+    # coincide con el del repositorio. Imprime cuantas ha puesto.
+    #
+    # POR QUE HACE FALTA
+    #
+    # Al traerlas todas no se sabe a que juego va cada una, asi que se guardan
+    # con el nombre del repositorio. Y la busqueda de carátulas prueba el
+    # identificador del juego con espacios y con guiones bajos, pero no con
+    # puntos: un "Halo.Combat.Evolved.png" del repositorio no lo encontraria un
+    # juego llamado "Halo_Combat_Evolved". covers43_match SI sabe emparejarlos
+    # -es el mismo criterio de los perfiles de la comunidad-, asi que aqui se
+    # usa para dejar una copia con el nombre que el juego va a buscar.
+    local n=0 f gid cand ext
+    local lista; lista="$(find_paquetes "$GAMES_PATH" 3 | sort)" || lista=""
+    [ -n "$lista" ] || { printf '0'; return 1; }
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        gid="$(game_id "$f")"
+        [ -n "$gid" ] || continue
+        cover_tipo_real "$gid" 43 >/dev/null 2>&1 && continue   # ya se le ve una
+        cand="$(covers43_match "$gid")" || continue
+        [ -n "$cand" ] && [ -f "$COVERS_43_DIR/$cand" ] || continue
+        ext="$(printf '%s' "${cand##*.}" | tr 'A-Z' 'a-z')"
+        if cp -f "$COVERS_43_DIR/$cand" "$COVERS_43_DIR/$gid.$ext" 2>/dev/null; then
+            n=$((n+1))
+            log "covers_43: $cand -> tambien como $gid.$ext"
+        fi
+    done <<EOFCL
+$lista
+EOFCL
+    printf '%s' "$n"
     return 0
 }
 
@@ -24175,9 +27769,8 @@ caratula43_repo_manual() {
     [ -n "$gid" ] || return 1
     loading_say "Buscando una carátula 4:3 para '$gid' en el repositorio..."
     # El usuario la pide AHORA: lista fresca, sin esperar a que caduque la
-    # cacheada de un dia (puede que la carátula se subiera esta mañana).
-    rm -f "$COVERS43_INDEX" 2>/dev/null
-    covers43_index_refresh
+    # guardada de un dia (puede que la carátula se subiera esta mañana).
+    covers43_index_refresh forzar
     _ok=$?
     loading_clear
     if [ "$_ok" != 0 ]; then
@@ -24313,6 +27906,139 @@ EOFC3
 
 urlencode_py() {
     ficha_py urlencode "$1" 2>/dev/null
+}
+
+sgdb_key_pedir() {
+    # La clave de SteamGridDB, pidiendosela al usuario si aun no la hay.
+    # Deja la clave en $SGDB_KEY y devuelve 0 si al final hay clave.
+    #
+    # $1 = "silencioso" -> si no hay clave, NO se pregunta: se devuelve 1.
+    #      Sirve para los sitios donde la descarga es un extra y no puede
+    #      interrumpir lo que el usuario estaba haciendo.
+    local modo="${1:-}" k
+    SGDB_KEY="$(sgdb_key_leer)"
+    [ -n "$SGDB_KEY" ] && return 0
+    [ "$modo" = silencioso ] && return 1
+    k="$(ask_text "Pega tu API key de SteamGridDB
+(gratis en steamgriddb.com -> Profile -> Preferences -> API)
+
+Se guardara en sgdb.key, solo legible por ti, y NO en
+settings.conf (que se comparte al pedir ayuda)." "")"
+    [ -z "$k" ] && return 1
+    SGDB_KEY="$k"
+    # en su propio fichero y sin permisos para nadie mas
+    if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
+        chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
+        say "[+] Clave guardada en sgdb.key (solo legible por ti)"
+    else
+        save_settings           # si no se pudo escribir, como antes
+    fi
+    return 0
+}
+
+sgdb_id_de_juego() {
+    # $1 = titulo -> el id de SteamGridDB, o nada.
+    local titulo="${1:-}" q gjson
+    [ -n "$titulo" ] && [ -n "${SGDB_KEY:-}" ] || return 1
+    q="$(urlencode_py "$titulo")"
+    gjson="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $SGDB_KEY" \
+        "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")" || return 1
+    if printf '%s' "$gjson" | grep -q '"success": *false'; then
+        log "SGDB: la peticion fue rechazada (API key invalida?)" AVISO
+        printf '!CLAVE'
+        return 1
+    fi
+    printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*'
+}
+
+sgdb_url_de() {
+    # La URL de una imagen de SteamGridDB. Nada si no hay ninguna.
+    # $1 = id del juego en SGDB, $2 = familia (grids|heroes|logos),
+    # $3 = dimensiones pedidas (opcional; en heroes y logos no aplica)
+    local id="${1:-}" fam="${2:-grids}" dims="${3:-}" ujson url
+    [ -n "$id" ] && [ -n "${SGDB_KEY:-}" ] || return 1
+    url="https://www.steamgriddb.com/api/v2/$fam/game/$id?types=static"
+    [ -n "$dims" ] && url="$url&dimensions=$dims"
+    ujson="$(curl -fsSL --max-time 20 -H "Authorization: Bearer $SGDB_KEY" \
+        "$url" 2>>"$LOG_FILE")" || return 1
+    printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 \
+        | cut -d'"' -f4 | sed 's|\\/|/|g'
+}
+
+sgdb_bajar_a() {
+    # Baja una imagen de SteamGridDB a un fichero EXACTO.
+    # $1 = id del juego en SGDB, $2 = familia, $3 = dimensiones (o vacio),
+    # $4 = ruta destino (con su extension ya puesta)
+    #
+    # Se usa para el arte de Steam, donde el nombre del fichero no lo
+    # elegimos nosotros: Steam exige "<appid>p.png", "<appid>_hero.png"...
+    local id="$1" fam="$2" dims="$3" destino="$4" url tmp
+    url="$(sgdb_url_de "$id" "$fam" "$dims")" || return 1
+    [ -n "$url" ] || return 1
+    tmp="$(mktemp)" || return 1
+    if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"; return 1
+    fi
+    if ! es_imagen "$tmp"; then
+        rm -f "$tmp"
+        log "SGDB: lo descargado para $fam no es una imagen; descartado" AVISO
+        return 1
+    fi
+    mkdir -p "$(dirname "$destino")" 2>/dev/null
+    cat "$tmp" > "$destino" || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+    return 0
+}
+
+sgdb_un_juego() {
+    # LAS CARATULAS DE UN SOLO JUEGO, A LAS CARPETAS DE WProton.
+    #
+    # $1 = gid, $2 = titulo para buscar, $3 = formas ("vertical wide")
+    # Devuelve 0 si bajo alguna.
+    #
+    # Es el mismo trabajo que hace la descarga en tanda, sacado aparte para
+    # que lo puedan usar los dos sitios que lo necesitan -la tanda y el "añadir
+    # a Steam"- sin tener dos copias del protocolo de la API que se vayan
+    # separando con el tiempo.
+    local gid="${1:-}" titulo="${2:-}" tipos="${3:-vertical wide}"
+    local id tipo destino dims url ext bajadas=0
+    # SE BORRA EL ID ANTERIOR LO PRIMERO.
+    #
+    # Si no, un juego que SteamGridDB no conozca deja en pie el id del juego
+    # ANTERIOR, y quien lea SGDB_ULTIMO_ID despues -el arte de Steam, que pide
+    # con ese id el fondo y el logotipo- se trae las imagenes DE OTRO JUEGO.
+    # Salio en una prueba: al añadir a Steam un juego desconocido aparecia con
+    # el fondo del que se habia añadido antes.
+    SGDB_ULTIMO_ID=""
+    [ -n "$gid" ] && [ -n "$titulo" ] || return 1
+    [ -n "${SGDB_KEY:-}" ] || return 1
+    id="$(sgdb_id_de_juego "$titulo")" || {
+        [ "$id" = '!CLAVE' ] && return 2        # clave mala: quien llama avisa
+        log "SGDB: sin resultados para '$titulo'"
+        return 1; }
+    [ -n "$id" ] || { log "SGDB: sin resultados para '$titulo'"; return 1; }
+    for tipo in $tipos; do
+        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
+        destino="$(covers_dir_de "$tipo")"
+        case "$tipo" in
+            vertical) dims="600x900" ;;
+            wide)     dims="920x430,460x215" ;;
+            *) continue ;;
+        esac
+        url="$(sgdb_url_de "$id" grids "$dims")" || url=""
+        if [ -z "$url" ]; then
+            log "SGDB: sin carátula $tipo ($dims) para '$titulo'"
+            continue
+        fi
+        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
+        mkdir -p "$destino" 2>/dev/null
+        if sgdb_bajar_a "$id" grids "$dims" "$destino/$gid.$ext"; then
+            bajadas=$((bajadas+1))
+            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
+        fi
+    done
+    SGDB_ULTIMO_ID="$id"
+    [ "$bajadas" -gt 0 ]
 }
 
 caratula_manual() {
@@ -24618,8 +28344,7 @@ sgdb_download_covers() {
     case " $tipos " in
         *" 43 "*)
             loading_say "Consultando las carátulas 4:3 del repositorio..."
-            rm -f "$COVERS43_INDEX" 2>/dev/null
-            covers43_index_refresh || say "AVISO: no se pudo consultar covers_43/ del repositorio"
+            covers43_index_refresh forzar || say "AVISO: no se pudo consultar covers_43/ del repositorio"
             loading_clear ;;
     esac
     # LA CLAVE DE STEAMGRIDDB, SOLO SI SE VA A USAR.
@@ -24627,30 +28352,13 @@ sgdb_download_covers() {
     # Antes se pedia siempre. Quien solo quiera las 4:3 -que salen de nuestro
     # repositorio- no tiene por que darse de alta en ningun sitio.
     if [ -n "$tipos_sgdb" ]; then
-        SGDB_KEY="$(sgdb_key_leer)"
-        if [ -z "$SGDB_KEY" ]; then
-            local k
-            k="$(ask_text "Pega tu API key de SteamGridDB
-(gratis en steamgriddb.com -> Profile -> Preferences -> API)
-
-Se guardara en sgdb.key, solo legible por ti, y NO en
-settings.conf (que se comparte al pedir ayuda)." "")"
-            [ -z "$k" ] && return 1
-            SGDB_KEY="$k"
-            # en su propio fichero y sin permisos para nadie mas
-            if (umask 077; printf '%s\n' "$k" > "$BASE_DIR/sgdb.key") 2>/dev/null; then
-                chmod 600 "$BASE_DIR/sgdb.key" 2>/dev/null
-                say "[+] Clave guardada en sgdb.key (solo legible por ti)"
-            else
-                save_settings           # si no se pudo escribir, como antes
-            fi
-        fi
+        sgdb_key_pedir || return 1
     fi
     mkdir -p "$COVERS_DIR"
     local list total=0 got=0 pend=0 idx=0
     list="$(find_paquetes "$GAMES_PATH" 3 | sort)"
     [ -z "$list" ] && { ui_info "No hay juegos en $GAMES_PATH"; return 1; }
-    local f gid title q gjson gameid ujson url ext _falta _t
+    local f gid title _falta _t _rc_sgdb=0
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         # Pendiente si le falta alguna de las que se han pedido
@@ -24710,45 +28418,18 @@ EOF0
             done
             if [ "$_falta_sgdb" = 1 ]; then
                 say "[SGDB] Buscando carátula: $title"
-                q="$(urlencode_py "$title")"
-                gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                    "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
-                if printf '%s' "$gjson" | grep -q '"success": *false'; then
+                # EL PROTOCOLO DE LA API, EN UN SOLO SITIO.
+                #
+                # Esto era una copia del mismo codigo que usa "añadir a
+                # Steam". Dos copias del mismo protocolo se separan en cuanto
+                # una se arregla y la otra no, asi que ahora las dos llaman a
+                # sgdb_un_juego.
+                sgdb_un_juego "$gid" "$title" "$tipos_sgdb"
+                _rc_sgdb=$?
+                [ "$_rc_sgdb" = 0 ] && bajada=1
+                if [ "$_rc_sgdb" = 2 ]; then
                     progress_stop
                     ui_error "SteamGridDB rechazo la peticion (API key invalida?)"; return 1
-                fi
-                gameid="$(printf '%s' "$gjson" | grep -o '"id": *[0-9]*' | head -n1 | grep -o '[0-9]*')"
-                if [ -z "$gameid" ]; then
-                    say "[SGDB]   sin resultados para: $title"
-                else
-                    # Se piden las DOS: la vertical para la rejilla clasica y la
-                    # horizontal para la vista de carátulas anchas. Cada una se
-                    # guarda con su nombre, asi que no se pisan.
-                    local destino dims
-                    for tipo in $tipos_sgdb; do
-                        destino="$(covers_dir_de "$tipo")"
-                        case "$tipo" in
-                            vertical) dims="600x900" ;;
-                            wide)     dims="920x430,460x215" ;;
-                        esac
-                        mkdir -p "$destino" 2>/dev/null
-                        # No se vuelve a descargar lo que ya hay: la vertical
-                        # podria ser una que el usuario eligio a mano.
-                        cover_tipo_real "$gid" "$tipo" >/dev/null 2>&1 && continue
-                        ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
-                            "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
-                            2>>"$LOG_FILE")"
-                        url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
-                        if [ -z "$url" ]; then
-                            say "[SGDB]   sin carátula $tipo ($dims) para: $title"
-                            continue
-                        fi
-                        ext="${url##*.}"; case "$ext" in png|jpg|jpeg|webp) ;; *) ext=png ;; esac
-                        if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
-                            bajada=1
-                            say "[SGDB]   OK ($tipo) -> $(basename "$destino")/$gid.$ext"
-                        fi
-                    done
                 fi
             fi
         fi
@@ -26487,6 +30168,7 @@ cfg_prefijo_menu() {
             "Instalar ReShade (Windows: D3D8-12 y OpenGL)" \
             "Borrar prefijo (reinstala DLLs)" \
             "Borrar TODOS los datos de este juego" \
+            "Borrar este juego DEL DISCO (no se puede deshacer)" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver") return 0 ;;
@@ -26499,47 +30181,42 @@ cfg_prefijo_menu() {
     done
 }
 
-borrar_datos_juego() {
-    # Borra TODO lo que WProton guarda de un juego, dejandolo como si nunca se
-    # hubiera lanzado: perfil, mapeo del mando, prefijo propio, overlay,
-    # caratulas y fichas.
-    #
-    # LO QUE NO BORRA, Y HAY QUE DECIRLO CLARO
-    #
-    # El juego. "Borrar los datos del juego" se puede entender como "borrar el
-    # juego", y no es eso: el .wsquashfs o la carpeta se quedan donde estan.
-    # Por eso el aviso lo dice con todas las letras antes de preguntar.
-    #
-    # TRES COSAS QUE NO SE PUEDEN EQUIVOCAR AQUI:
-    #
-    #   1. El prefijo COMPARTIDO no se toca nunca. Es de todos los juegos, y
-    #      un rm -rf ahi se lleva las partidas de la biblioteca entera. Solo
-    #      se borra prefixes/<gid>, y solo si el juego lo usa de verdad.
-    #   2. El identificador vacio seria "rm -rf $PREFIX_DIR/", o sea todos los
-    #      prefijos. Se comprueba antes de nada.
-    #   3. Las partidas se copian ANTES de borrar, como en "Borrar prefijo".
-    #      Aqui hay mas en juego: se borran el prefijo Y el overlay, que es
-    #      donde viven las de los juegos empaquetados.
-    local gid="$1"
-    # TRAZA DESDE LA PRIMERA LINEA.
-    #
-    # Un tester eligio esta opcion y WProton se cerro sin borrar nada y sin
-    # escribir NADA en el registro: entre la linea del menu y el cierre no
-    # habia ni un mensaje. Con eso no se puede saber ni si la funcion llego a
-    # entrar. Estas trazas lo contestan en el proximo registro.
-    say "[borrado] entrando, juego='$gid'"
-    # (1 de 3) SIN IDENTIFICADOR NO SE BORRA NADA.
-    case "$gid" in
-        ""|.|..|*/*)
-            ui_error "Identificador de juego no valido: no se borra nada."
-            return 1 ;;
-    esac
+# ---------------------------------------------------------------------------
+# BORRAR: INVENTARIO, DATOS Y JUEGO
+#
+# Las tres piezas estaban dentro de borrar_datos_juego, que preguntaba y
+# borraba de una vez. Al añadir "borrar el juego del disco" habia que
+# reutilizar el inventario y el borrado SIN volver a preguntar -una segunda
+# pregunta encadenada a la primera es como la gente acaba dandole a "si" sin
+# leer-, asi que se han separado:
+#
+#   juego_datos_inventario  -> QUE hay guardado de este juego (no borra nada)
+#   juego_datos_borrar      -> lo borra, copiando antes las partidas (no pregunta)
+#   borrar_datos_juego      -> las dos anteriores, con su dialogo (como siempre)
+#   borrar_juego_entero     -> el JUEGO y, con el, sus datos. Un solo dialogo.
+#
+# Los resultados del inventario van por variables globales y no por la salida
+# estandar: son cinco datos -texto y cuatro numeros- y devolverlos por stdout
+# obligaria a partir una cadena, que con nombres de juego que llevan de todo
+# es justo donde salen los fallos raros.
+# ---------------------------------------------------------------------------
+WP_BD_LISTA=""      # texto con lo que hay, una linea por cosa
+WP_BD_PFX=""        # ruta del prefijo propio, si lo tiene
+WP_BD_NSAVES=0      # ficheros dentro de users/ del prefijo
+WP_BD_NOV=0         # ficheros dentro del overlay
+WP_BD_FALLOS=0      # cuantos borrados han fallado
 
-    # QUE HAY, ANTES DE PREGUNTAR.
+juego_datos_inventario() {
+    # QUE HAY GUARDADO DE ESTE JUEGO. No borra nada.
     #
     # Un "¿seguro?" a secas no deja decidir: no es lo mismo tirar un perfil
     # recien hecho que uno con 40 horas y las partidas dentro. Se cuenta y se
     # enseña.
+    local gid="${1:-}"
+    case "$gid" in
+        ""|.|..|*/*) return 1 ;;
+    esac
+    WP_BD_LISTA=""; WP_BD_PFX=""; WP_BD_NSAVES=0; WP_BD_NOV=0
     local lista="" pfx="" n_saves=0 ov="$OVERLAY_BASE/$gid/upper"
     local n_ov=0 f
 
@@ -26597,30 +30274,25 @@ EOF
     [ "$n_meta" -gt 0 ] && lista="$lista
   - ficha y datos descargados"
 
-    if [ -z "$lista" ]; then
-        ui_info "De '$gid' no hay nada guardado: no se ha jugado todavia
-o ya se borro. No hay nada que hacer."
-        return 0
-    fi
+    WP_BD_LISTA="$lista"; WP_BD_PFX="$pfx"
+    WP_BD_NSAVES="$n_saves"; WP_BD_NOV="$n_ov"
+    return 0
+}
 
+juego_datos_borrar() {
+    # BORRA lo que WProton guarda de un juego. NO pregunta: quien llama ya lo
+    # ha hecho. Las partidas se copian a backups/ antes de tocar nada.
+    local gid="${1:-}"
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+    WP_BD_FALLOS=0
+    local pfx="$WP_BD_PFX" n_saves="$WP_BD_NSAVES" n_ov="$WP_BD_NOV"
+    local ov="$OVERLAY_BASE/$gid/upper"
     local total_saves=$((n_saves + n_ov))
-    # EL DETALLE VA AL REGISTRO, EL DIALOGO CORTO.
-    #
-    # El aviso tenia quince lineas. En una pantalla de mano no se lee, y ademas
-    # el titulo viaja por el protocolo del servidor de menus: cuanto mas corto,
-    # menos cosas pueden salir mal. Lo que se borra queda escrito en el
-    # registro, que es donde hace falta para diagnosticar despues.
-    say "[borrado] se borrara de '$gid':$lista"
-    say "[borrado] ficheros que pueden ser partidas: $total_saves"
-
-    ui_ask "Borrar TODOS los datos de '$gid'?
-
-El JUEGO NO se borra, solo lo que WProton guarda de el:
-ajustes, prefijo, partidas, caratulas y ficha.
-$([ "$total_saves" -gt 0 ] && printf 'Las partidas se copian a backups/ antes de borrar.' || printf 'Arrancara como la primera vez.')" || {
-        say "[borrado] cancelado por el usuario"
-        return 0; }
-
+    local nom e f
     # (3 de 3) LAS PARTIDAS, PRIMERO.
     #
     # Si la copia falla NO se borra nada. Es preferible dejarlo todo como
@@ -26681,6 +30353,267 @@ EOF
     # Una marca global, no un valor de retorno: entre el borrado y esa
     # escritura hay dos menus por medio, y cada uno tendria que ir pasandose el
     # dato hacia arriba. La marca la lee quien va a escribir.
+    WP_BD_FALLOS="$fallos"
+    return 0
+}
+
+juego_dentro_de_biblioteca() {
+    # ¿Esta ruta esta DENTRO de una de las carpetas de juegos configuradas?
+    #
+    # ESTE ES EL SEGURO MAS IMPORTANTE DE TODO EL BORRADO.
+    #
+    # Lo que va a pasar despues es un "rm -rf" sobre una ruta que viene de un
+    # menu. Si esa ruta se puede quedar fuera de las carpetas de juegos -por un
+    # enlace simbolico, por una ruta relativa, por un ".." colado en un
+    # nombre-, entonces el borrado puede caer en cualquier sitio del disco del
+    # usuario. Asi que no se borra NADA que no este debajo de una carpeta que
+    # el propio usuario haya configurado como carpeta de juegos.
+    #
+    # Se compara con las rutas YA RESUELTAS (realpath): sin eso,
+    # "/juegos/../../home" pasaria la comparacion de texto tal cual.
+    # $2 = "incluir_raiz" -> la carpeta de juegos MISMA tambien vale. Solo lo
+    #      usa la comprobacion del enlace simbolico, que mira la carpeta DONDE
+    #      ESTA el enlace, y esa puede ser la raiz.
+    local ruta="${1:-}" modo="${2:-}" real raiz rreal
+    [ -n "$ruta" ] || return 1
+    real="$(realpath -- "$ruta" 2>/dev/null)" || return 1
+    [ -n "$real" ] || return 1
+    while IFS= read -r raiz; do
+        [ -n "$raiz" ] || continue
+        rreal="$(realpath -- "$raiz" 2>/dev/null)" || continue
+        [ -n "$rreal" ] || continue
+        # La raiz MISMA no vale: borrar la carpeta de juegos entera no es
+        # borrar un juego. Tiene que ser algo DEBAJO de ella.
+        if [ "$real" = "$rreal" ]; then
+            [ "$modo" = incluir_raiz ] && return 0
+            continue
+        fi
+        case "$real/" in
+            "$rreal"/*) return 0 ;;
+        esac
+    done <<EOFRAIZ
+$(games_paths)
+EOFRAIZ
+    return 1
+}
+
+borrar_juego_entero() {
+    # BORRA EL JUEGO DEL DISCO, y con el lo que WProton guarda de el.
+    #
+    # $1 = ruta del juego (archivo .wsquashfs/.dwarfs o carpeta), $2 = gid
+    #
+    # Lo pidieron los testers: hasta ahora se podian borrar los DATOS de un
+    # juego, pero el juego habia que ir a borrarlo al explorador de archivos.
+    #
+    # UN SOLO DIALOGO, CON EL NOMBRE Y EL TAMAÑO.
+    #
+    # Y con los datos incluidos a proposito: borrar el juego y dejarse un
+    # prefijo de 12 GB colgando no es lo que nadie quiere, y encadenar un
+    # segundo "¿y los datos tambien?" es como la gente acaba dandole a "si"
+    # sin leer. Las partidas se copian a backups/ antes de borrar, igual que
+    # en "Borrar los datos", asi que lo irreversible es el juego, no la
+    # partida.
+    local ruta="${1:-}" gid="${2:-}"
+    say "[borrado] borrar el juego: ruta='$ruta' gid='$gid'"
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+    if [ -z "$ruta" ] || [ ! -e "$ruta" ]; then
+        ui_error "Ya no existe:
+$ruta"
+        return 1
+    fi
+    # NO SE BORRA UN JUEGO QUE SE ESTA JUGANDO.
+    #
+    # Con el archivo montado, borrarlo deja al juego leyendo de un montaje sin
+    # fichero debajo: se cuelga o se cae, y el desmontaje posterior falla.
+    if [ "${WP_JUGANDO:-0}" = 1 ]; then
+        ui_error "Hay una partida en marcha. Sal del juego y vuelve a
+intentarlo."
+        return 1
+    fi
+    # EL ENLACE SE MIRA ANTES DEL SEGURO, Y NO AL REVES.
+    #
+    # Lo tenia al reves y una prueba lo cazo: un enlace en la carpeta de juegos
+    # apunta FUERA de ella a proposito -ahi esta la gracia-, asi que el seguro,
+    # que resuelve la ruta, lo rechazaba antes de llegar a tratarlo como
+    # enlace. Quien tiene sus juegos en un disco externo no podia quitar sus
+    # accesos directos.
+    #
+    # Lo que se comprueba aqui es que el ENLACE este en la biblioteca, no su
+    # destino: se va a borrar el enlace, no lo que hay al otro lado.
+    if [ -L "$ruta" ]; then
+        if ! juego_dentro_de_biblioteca "$(dirname -- "$ruta")" incluir_raiz; then
+            ui_error "Por seguridad, WProton solo borra accesos directos que esten
+DENTRO de tus carpetas de juegos. Este no lo esta:
+$ruta"
+            say "[borrado] RECHAZADO: el enlace '$ruta' no esta en la biblioteca" AVISO
+            return 1
+        fi
+        if ui_ask "'$gid' es un acceso directo (enlace), no el juego.
+
+Se quitara el enlace y el juego seguira donde esta de
+verdad:
+$(readlink -f -- "$ruta" 2>/dev/null)
+
+¿Quitar el enlace?"; then
+            rm -f -- "$ruta" && say "[+] Enlace quitado: $ruta"
+            ui_info "Enlace quitado. El juego sigue en su sitio."
+            return 0
+        fi
+        return 0
+    fi
+    if ! juego_dentro_de_biblioteca "$ruta"; then
+        ui_error "Por seguridad, WProton solo borra juegos que esten DENTRO de
+tus carpetas de juegos.
+
+Esto no lo esta:
+$ruta
+
+Si de verdad quieres borrarlo, hazlo desde el explorador de
+archivos, o añade su carpeta en Biblioteca y preferencias."
+        say "[borrado] RECHAZADO: '$ruta' no esta en ninguna carpeta de juegos" AVISO
+        return 1
+    fi
+
+    # QUE SE VA A BORRAR Y CUANTO OCUPA.
+    local tam_juego que
+    tam_juego="$(du -sh -- "$ruta" 2>/dev/null | cut -f1)"
+    [ -n "$tam_juego" ] || tam_juego="?"
+    if [ -d "$ruta" ]; then que="la carpeta"; else que="el archivo"; fi
+    # Y lo que WProton guarda de el, con el mismo inventario que usa
+    # "Borrar los datos del juego": una sola lista, no dos criterios.
+    local lista="" saves=0
+    if juego_datos_inventario "$gid"; then
+        lista="$WP_BD_LISTA"
+        saves=$(( WP_BD_NSAVES + WP_BD_NOV ))
+    fi
+    say "[borrado] $que '$(basename -- "$ruta")' ($tam_juego)${lista:+ + datos:$lista}"
+    say "[borrado] ficheros que pueden ser partidas: $saves"
+
+    local aviso_saves
+    if [ "$saves" -gt 0 ]; then
+        aviso_saves="Tus partidas se copian a backups/ antes de borrar."
+    else
+        aviso_saves="No se han encontrado partidas guardadas."
+    fi
+    ui_ask "¿BORRAR DEL DISCO este juego?
+
+  $gid
+  $que, $tam_juego
+
+Se borra tambien lo que WProton guarda de el (ajustes,
+prefijo, caratulas y ficha). $aviso_saves
+
+Esto NO se puede deshacer." || {
+        say "[borrado] cancelado por el usuario"
+        return 0; }
+
+    # LAS PARTIDAS Y LOS DATOS, PRIMERO.
+    #
+    # Si la copia de las partidas falla, juego_datos_borrar no borra nada y
+    # devuelve 1: entonces el JUEGO TAMPOCO se borra. Al reves -borrar el
+    # juego y luego descubrir que no se pudo guardar la partida- deja a la
+    # persona sin las dos cosas.
+    if [ -n "$lista" ] && ! juego_datos_borrar "$gid"; then
+        say "[borrado] los datos no se pudieron borrar; el juego NO se toca" AVISO
+        return 1
+    fi
+
+    # Y AHORA EL JUEGO.
+    local real; real="$(realpath -- "$ruta" 2>/dev/null)"
+    if [ -z "$real" ] || ! juego_dentro_de_biblioteca "$real"; then
+        ui_error "La ruta del juego cambio mientras se preguntaba.
+No se ha borrado el juego."
+        return 1
+    fi
+    if ! rm -rf -- "${real:?}"; then
+        ui_error "No se pudo borrar:
+$real
+
+Comprueba los permisos o si el disco esta de solo lectura.
+Los datos del juego si se han borrado."
+        return 1
+    fi
+    log "Juego borrado del disco: $real"
+    # Que no vuelva a salir como "ultimo juego jugado" apuntando a la nada.
+    if [ "${LAST_GAME:-}" = "$real" ] || [ "${LAST_GAME:-}" = "$ruta" ]; then
+        LAST_GAME=""; save_settings
+        log "borrado: era el ultimo juego jugado; se olvida"
+    fi
+    # La marca que evita que game_config_menu reescriba el perfil al salir.
+    WP_BORRADO_TOTAL=1
+    ui_info "'$gid' borrado.$([ "$saves" -gt 0 ] && printf '\n\nTus partidas estan en backups/.')"
+    return 0
+}
+
+borrar_datos_juego() {
+    # Borra TODO lo que WProton guarda de un juego, dejandolo como si nunca se
+    # hubiera lanzado: perfil, mapeo del mando, prefijo propio, overlay,
+    # caratulas y fichas.
+    #
+    # LO QUE NO BORRA, Y HAY QUE DECIRLO CLARO
+    #
+    # El juego. "Borrar los datos del juego" se puede entender como "borrar el
+    # juego", y no es eso: el .wsquashfs o la carpeta se quedan donde estan.
+    # Por eso el aviso lo dice con todas las letras antes de preguntar.
+    #
+    # TRES COSAS QUE NO SE PUEDEN EQUIVOCAR AQUI:
+    #
+    #   1. El prefijo COMPARTIDO no se toca nunca. Es de todos los juegos, y
+    #      un rm -rf ahi se lleva las partidas de la biblioteca entera. Solo
+    #      se borra prefixes/<gid>, y solo si el juego lo usa de verdad.
+    #   2. El identificador vacio seria "rm -rf $PREFIX_DIR/", o sea todos los
+    #      prefijos. Se comprueba antes de nada.
+    #   3. Las partidas se copian ANTES de borrar, como en "Borrar prefijo".
+    #      Aqui hay mas en juego: se borran el prefijo Y el overlay, que es
+    #      donde viven las de los juegos empaquetados.
+    local gid="$1"
+    # TRAZA DESDE LA PRIMERA LINEA.
+    #
+    # Un tester eligio esta opcion y WProton se cerro sin borrar nada y sin
+    # escribir NADA en el registro: entre la linea del menu y el cierre no
+    # habia ni un mensaje. Con eso no se puede saber ni si la funcion llego a
+    # entrar. Estas trazas lo contestan en el proximo registro.
+    say "[borrado] entrando, juego='$gid'"
+    # (1 de 3) SIN IDENTIFICADOR NO SE BORRA NADA.
+    case "$gid" in
+        ""|.|..|*/*)
+            ui_error "Identificador de juego no valido: no se borra nada."
+            return 1 ;;
+    esac
+
+    juego_datos_inventario "$gid" || return 1
+    local lista="$WP_BD_LISTA" pfx="$WP_BD_PFX"
+    local n_saves="$WP_BD_NSAVES" n_ov="$WP_BD_NOV"
+    if [ -z "$lista" ]; then
+        ui_info "De '$gid' no hay nada guardado: no se ha jugado todavia
+o ya se borro. No hay nada que hacer."
+        return 0
+    fi
+
+    local total_saves=$((n_saves + n_ov))
+    # EL DETALLE VA AL REGISTRO, EL DIALOGO CORTO.
+    #
+    # El aviso tenia quince lineas. En una pantalla de mano no se lee, y ademas
+    # el titulo viaja por el protocolo del servidor de menus: cuanto mas corto,
+    # menos cosas pueden salir mal. Lo que se borra queda escrito en el
+    # registro, que es donde hace falta para diagnosticar despues.
+    say "[borrado] se borrara de '$gid':$lista"
+    say "[borrado] ficheros que pueden ser partidas: $total_saves"
+
+    ui_ask "Borrar TODOS los datos de '$gid'?
+
+El JUEGO NO se borra, solo lo que WProton guarda de el:
+ajustes, prefijo, partidas, caratulas y ficha.
+$([ "$total_saves" -gt 0 ] && printf 'Las partidas se copian a backups/ antes de borrar.' || printf 'Arrancara como la primera vez.')" || {
+        say "[borrado] cancelado por el usuario"
+        return 0; }
+
+    juego_datos_borrar "$gid" || return 1
+    local fallos="$WP_BD_FALLOS"
     WP_BORRADO_TOTAL=1
     if [ "$fallos" -gt 0 ]; then
         ui_error "Se ha borrado casi todo, pero $fallos cosa(s) han fallado.
@@ -27234,6 +31167,34 @@ cfg_ap_mando() {
     # usa cfg_aplicar para pasar al siguiente manejador.
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
+        "Trackpad como raton en este juego:"*)
+            # POR JUEGO, PORQUE LA MAYORIA NO LO QUIERE.
+            #
+            # El ajuste general vale para los menus y para todos los juegos; un
+            # point-and-click agradece el puntero en un pad aunque el resto de
+            # la biblioteca no lo use, y en uno de accion estorba. "Lo general"
+            # es el valor de partida, asi que esto no cambia nada hasta que
+            # alguien lo toca.
+            local _t
+            _t="$(menu "Trackpad como raton en '$gid'" \
+                "Lo que diga el ajuste general ($(trackpad_label_corta))" \
+                "No, en este juego no" \
+                "El pad izquierdo" \
+                "El pad derecho" \
+                "<< Volver")" || return 0
+            case "$_t" in
+                "Lo que diga"*)  TRACKPAD=auto ;;
+                "No, en este"*)  TRACKPAD=no ;;
+                "El pad izq"*)   TRACKPAD=izquierdo ;;
+                "El pad der"*)   TRACKPAD=derecho ;;
+                *) return 0 ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Trackpad en '$gid': $(trackpad_juego_label)
+
+Se aplica al lanzar el juego, y al salir el trackpad vuelve
+a lo que diga el ajuste general."
+            return 0 ;;
         "Escribir SDL en el registro del prefijo"*)
             # El arreglo que usa media comunidad para los mandos que Proton no
             # coge bien: winebus deja de leer por hidraw y lee por SDL.
@@ -28126,6 +32087,16 @@ y lo veran todos los juegos en modo compartido. Seguir?" || return 0
             redist_menu "$squash" "$gid" ;;
         "Importar un fichero .reg"*) reg_importar "$squash" "$gid" ;;
         "Abrir winetricks") run_in_prefix "$squash" "$gid" winetricks --gui ;;
+        "Borrar este juego DEL DISCO"*)
+            # ANTES QUE LAS OTRAS DOS "Borrar...", por lo mismo que dice el
+            # comentario de abajo: el case coge la primera rama que casa, y
+            # estas tres etiquetas empiezan igual.
+            borrar_juego_entero "$squash" "$gid"
+            # Si se ha borrado, el perfil ya no existe: a los valores de
+            # fabrica, para que el menu no siga enseñando los del juego que
+            # acaba de desaparecer.
+            [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && profile_defaults
+            return 0 ;;
         "Borrar TODOS los datos"*)
             # VA ANTES QUE "Borrar prefijo" a proposito: las dos empiezan por
             # "Borrar", y el case coge la PRIMERA rama que casa. Si "Borrar
@@ -28150,7 +32121,7 @@ usa 'Borrar saves del overlay (upper/)' para dejarlo de fabrica."
             # COMPARTIDO son las de todos los juegos que lo usan. Borrarlo sin
             # mas se las llevaba por delante sin avisar siquiera.
             local _n_saves=0 _pfxu="$pfx/drive_c/users"
-            [ -d "$_pfxu" ] && _n_saves="$(find "$_pfxu" -type f 2>/dev/null | grep -c . || echo 0)"
+            [ -d "$_pfxu" ] && _n_saves="$(find "$_pfxu" -type f 2>/dev/null | grep -c .)"
             if ui_ask "Borrar el prefijo $(basename "$pfx")?$([ "$PREFIX_MODE" = shared ] && printf '\nOJO: es el COMPARTIDO, afecta a todos los juegos que lo usan.')$([ "${_n_saves:-0}" -gt 0 ] && printf '\n\nDentro hay %s fichero(s) en users/ (partidas y configuracion).\nSe guardara una copia antes de borrar.' "$_n_saves")"; then
                 if [ "${_n_saves:-0}" -gt 0 ]; then
                     local _dest="$BACKUP_DIR/prefijo_$(basename "$pfx")_$(date +%Y%m%d_%H%M%S)"
@@ -28173,6 +32144,155 @@ $_pfxu"
     return 0
 }
 
+mando_activo_detectar() {
+    # Pregunta al modulo QUE MANDOS HAY y cual manda eventos.
+    # Escribe las lineas MANDO/ACTIVO en $1 y lo deja todo en el registro.
+    #
+    # Devuelve 0 si hay un activo, 2 si nadie movio nada, 1 si no se pudo.
+    local salida="$1" seg="${2:-6}"
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_mando_virtual
+    [ -f "$MANDO_VIRTUAL_PY" ] || return 1
+    if ! evdev_disponible log; then
+        instalar_evdev >/dev/null 2>&1
+        evdev_disponible log || return 1
+    fi
+    "$PY_BIN" "$MANDO_VIRTUAL_PY" mandos "$seg" > "$salida" 2>>"$LOG_FILE"
+    local rc=$?
+    # TODO lo que se ha visto va al registro, no solo el ganador: cuando algo
+    # no cuadra, lo que hace falta es la lista entera con sus clases.
+    local l
+    while IFS= read -r l; do
+        [ -n "$l" ] && log "mandos: $l"
+    done < "$salida"
+    return $rc
+}
+
+mando_activo_clase() {
+    # La clase del mando activo (virtual_steam, sony, fisico...), o vacio.
+    awk -F'\t' '$1=="ACTIVO"{print $4; exit}' "$1" 2>/dev/null
+}
+
+mando_activo_nombre() {
+    awk -F'\t' '$1=="ACTIVO"{print $6; exit}' "$1" 2>/dev/null
+}
+
+mando_activo_proponer() {
+    # DETECTA EL MANDO QUE SE ESTA USANDO Y PROPONE LOS AJUSTES DEL JUEGO.
+    #
+    # Lo pidio Dani: WProton ya veia los dos mandos -el fisico y el
+    # "X-Box 360 pad 0" que ofrece Steam Input- pero no sabia cual se iba a
+    # usar, y de eso dependen justo los dos ajustes de esta pantalla.
+    #
+    # NO SE DEDUCE POR EL NOMBRE, SE MIDE. El virtual de Steam se hace pasar
+    # por un Xbox 360, asi que por nombre y por fabricante son indistinguibles
+    # de uno de verdad. Lo que no miente es cual manda eventos cuando mueves
+    # el stick, y eso es lo que se escucha.
+    local gid="$1" tmp rc clase nombre prop_si prop_sony
+    tmp="$(mktemp)" || return 1
+    ui_info "Se van a mirar los mandos del sistema.
+
+Cuando se cierre este aviso, MUEVE EL STICK o pulsa un
+boton del mando que quieras usar en este juego.
+
+Son unos segundos. No se cambia nada todavia."
+    loading_say "Escuchando los mandos (8 s)..."
+    mando_activo_detectar "$tmp" 8
+    rc=$?
+    loading_clear
+    if [ "$rc" = 1 ]; then
+        rm -f "$tmp"
+        ui_error "No se ha podido mirar los mandos.
+
+Falta el modulo evdev o el Python propio de WProton. El
+detalle esta en el registro."
+        return 1
+    fi
+    local cuantos
+    cuantos="$(grep -c '^MANDO' "$tmp" 2>/dev/null)"
+    [ -n "$cuantos" ] || cuantos=0
+    if [ "$rc" = 2 ]; then
+        # NO SE INVENTA UN GANADOR.
+        #
+        # Si nadie toco nada, decir "el activo es el primero de la lista" seria
+        # exactamente el error que esto viene a arreglar.
+        rm -f "$tmp"
+        ui_info "No se movio ningun mando, asi que no puedo decir cual
+estas usando.
+
+Se han visto $cuantos mando(s); estan en el registro.
+
+Vuelve a intentarlo y mueve el stick cuando se cierre
+este aviso."
+        return 2
+    fi
+    clase="$(mando_activo_clase "$tmp")"
+    nombre="$(mando_activo_nombre "$tmp")"
+    rm -f "$tmp"
+    log "mandos: el activo es '$nombre' (clase $clase) de $cuantos"
+    # LA PROPUESTA, segun lo que de verdad cambia para el juego.
+    prop_si=""; prop_sony=""
+    case "$clase" in
+        virtual_steam)
+            # El juego va a leer el mando VIRTUAL de Steam. Ahi el puente
+            # Steam Input -> XInput es lo que hace que el juego lo vea bien,
+            # y el "automatico" NO se enciende si ademas hay un fisico a la
+            # vista: solo cuando el virtual es el unico. Este es justo el caso
+            # en que hay que pedirlo a mano.
+            [ "${PAD_SIFALLBACK:-auto}" = 1 ] || prop_si=1 ;;
+        sony)
+            # Un DualSense/DS4 de verdad: el arreglo de mandos Sony es lo que
+            # hace que el juego lo tome por un Xbox.
+            [ "${PAD_SONY:-auto}" = 1 ] || prop_sony=1 ;;
+    esac
+    local texto="El mando que estas usando es:
+
+  $nombre
+  ($(mando_clase_texto "$clase"))
+
+De $cuantos mando(s) que ve el sistema."
+    if [ -z "$prop_si" ] && [ -z "$prop_sony" ]; then
+        ui_info "$texto
+
+Los ajustes de este juego ya son los que le tocan: no hay
+nada que cambiar."
+        return 0
+    fi
+    local cambios=""
+    [ -n "$prop_si" ]   && cambios="$cambios
+  Puente Steam Input -> XInput: SI"
+    [ -n "$prop_sony" ] && cambios="$cambios
+  Mando Sony (DualSense/DS4): ON"
+    if ! ui_ask "$texto
+
+Propuesta para este juego:$cambios
+
+¿Se aplica?"; then
+        say "[i] mandos: la propuesta no se aplica (lo ha dicho el usuario)"
+        return 0
+    fi
+    [ -n "$prop_si" ]   && PAD_SIFALLBACK=1
+    [ -n "$prop_sony" ] && PAD_SONY=1
+    write_full_profile "$gid"
+    ui_info "Aplicado a $gid.
+
+Hace efecto en el proximo lanzamiento de este juego."
+    return 0
+}
+
+mando_clase_texto() {
+    # La clase, en palabras que signifiquen algo para quien lo lee.
+    case "${1:-}" in
+        virtual_steam)       printf 'el mando virtual que ofrece Steam Input' ;;
+        virtual_wproton)     printf 'el mando virtual de WProton' ;;
+        valve)               printf 'un mando de Valve (Steam Deck o Steam Controller)' ;;
+        sony)                printf 'un mando Sony: DualSense o DualShock' ;;
+        escondido_por_steam) printf 'un mando fisico que Steam pide ignorar' ;;
+        fisico)              printf 'un mando fisico' ;;
+        *)                   printf 'sin clasificar' ;;
+    esac
+}
+
 cfg_mandos_menu() {
     # TODO LO DEL MANDO EN UN SITIO.
     #
@@ -28193,9 +32313,14 @@ cfg_mandos_menu() {
             "Mando Sony (DualSense/DS4): $(pad_sony_label)" \
             "Mando virtual: $(case "${MANDO_VIRTUAL:-0}" in 0|nunca) printf 'no' ;; *) printf '%s' "$MANDO_VIRTUAL" ;; esac)" \
             "Escribir SDL en el registro del prefijo (avanzado): $(winebus_sdl_puesto "$PREFIX_DIR/$gid" && printf 'SI' || printf 'no')" \
+            "$(es_steam_deck && printf 'Trackpad como raton en este juego: %s' "$(trackpad_juego_label)")" \
+            "Detectar el mando que usas y proponer ajustes" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver"|"") return 0 ;;
+            "Detectar el mando que usas"*)
+                mando_activo_proponer "$gid" || true
+                continue ;;
         esac
         cfg_aplicar "$sel" "$gid" "$squash"
     done
@@ -28385,6 +32510,18 @@ game_config_menu() {
                 *) r_deps="Dependencias del juego: SIN INSTALAR" ;;
             esac
         fi
+        # LA FILA DE LA COMUNIDAD DICE EN QUE SITUACION ESTAS.
+        #
+        # Son cuatro estados distintos y cada uno quiere una palabra distinta:
+        # no tengo nada, tengo el de la comunidad y esta al dia, tengo el de la
+        # comunidad y hay uno mejor, o el perfil es mio. Una etiqueta fija
+        # -"Perfil de la comunidad"- obligaria a entrar para saber cual es.
+        local r_comunidad="Traer la configuración de la comunidad"
+        if community_hay_actualizacion "$gid" 2>/dev/null; then
+            r_comunidad="Traer la configuración de la comunidad: HAY UNA NUEVA"
+        elif community_marca_leer "$gid" 2>/dev/null; then
+            r_comunidad="Traer la configuración de la comunidad: ya la tienes"
+        fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
         [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
@@ -28400,6 +32537,7 @@ game_config_menu() {
             "$r_redist" \
             "$r_rarezas" \
             "Protonfixes / UMU >>" \
+            "$r_comunidad" \
             "Carátula y ficha >>" \
             "$pack_row" \
             "$r_packpfx" \
@@ -28439,6 +32577,14 @@ que ya esta- pero tarda." || continue
             "Casos especiales >>"*)
                 cfg_rarezas_menu "$gid" "$squash"
                 [ "${WP_BORRADO_TOTAL:-0}" = 1 ] && return 0
+                continue ;;
+            "Traer la configuración de la comunidad"*)
+                # NO se guarda el perfil al volver de aqui: community_traer_ahora
+                # ya ha escrito el .conf y lo ha recargado en memoria. Un
+                # write_full_profile detras pisaria lo descargado con lo que
+                # hubiera antes, que es el fallo que mas veces ha aparecido en
+                # esta pantalla.
+                community_traer_ahora "$gid" "$squash" || true
                 continue ;;
             "Herramientas del prefijo >>")
                 cfg_prefijo_menu "$gid" "$squash"
@@ -28518,6 +32664,7 @@ main_dispatch() {
             fi ;;
         "Descargar runners"*)    download_runner_menu ;;
         "Actualizar a la última versión"*) actualizar_runners_menu ;;
+        "*** RUNNER NUEVO"*) actualizar_runners_menu ;;
         "Actualizar GE-Proton"*)   setup_runner_ultimo ge ;;
         "Actualizar Wine"*)        setup_runner_ultimo wine ;;
         "Actualizar UMU-Proton"*)  setup_runner_ultimo umu ;;
@@ -28532,6 +32679,7 @@ mkdwarfs para empaquetar y dwarfs para montar."
         "Añadir WProton a Steam"*) anadir_wproton_a_steam || true ;;
         "Cambiar las imágenes"*)   cambiar_imagenes_steam || true ;;
         "Probar el mando"*) probar_mando ;;
+        "Trackpads de la Deck:"*) trackpad_menu ;;
         "Comprobar lo descargado"*) descargas_revisar ;;
         "Arreglar permisos del mando"*) arreglar_permisos_mando ;;
         "Instalar evdev"*)
@@ -28558,12 +32706,23 @@ evmapy/ con el modulo ya compilado a la raiz de WProton."
         "Convertir wsquashfs a carpeta"*) archivos_extraer ;;
         "Descargar herramientas FUSE"*)
             rm -f "$RUNTIME_DIR/.fuse_tools_try"   # permitir reintentar
+            # Y la del driver rapido: si alguien entra aqui a proposito es
+            # porque quiere que se intente AHORA, no dentro de una semana.
+            rm -f "$RUNTIME_DIR/.sqfuse_ll_try"
             SQUASHFUSE_BIN=""; OVERLAYFS_BIN=""
             setup_fuse_tools
+            # setup_fuse_tools solo busca el driver rapido si entro por el
+            # camino de squashfuse. Pedido a mano, se intenta siempre, y aqui
+            # SI se espera: lo ha pulsado alguien que esta delante.
+            [ -z "$(resolve_tool squashfuse_ll)" ] && { setup_squashfuse_ll || true; }
             SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
             OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
             ui_info "squashfuse:     ${SQUASHFUSE_BIN:-NO disponible}
 $(tool_is_ours "$SQUASHFUSE_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')
+squashfuse_ll:  $(resolve_tool squashfuse_ll || true)
+$([ -n "$(resolve_tool squashfuse_ll)" ] \
+    && printf '  (driver rapido: es el que se usara al montar)' \
+    || printf '  NO disponible: se montara con squashfuse (mas lento\n  en juegos con muchisimos ficheros)')
 fuse-overlayfs: ${OVERLAYFS_BIN:-NO disponible}
 $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf '  (del sistema)')" ;;
         "Descargar extractores GOG"*)
@@ -28599,15 +32758,29 @@ $(tool_is_ours "$OVERLAYFS_BIN" && printf '  (copia propia, portable)' || printf
                 "Normal" \
                 "Grande (recomendado en consolas portatiles)" \
                 "Muy grande" \
+                "Subir sola en pantallas 4K: $([ "${MENU_AUTO_ESCALA:-1}" = 1 ] && printf 'si' || printf 'no')" \
                 "<< Volver")" || fsz=""
             case "$fsz" in
                 Normal*)      FONT_SCALE=1.0 ;;
                 Grande*)      FONT_SCALE=1.25 ;;
                 "Muy grande"*) FONT_SCALE=1.5 ;;
+                "Subir sola"*)
+                    # EN PIXELES, UNA PANTALLA 4K ACHICA LA LETRA.
+                    #
+                    # Los tamaños van en pixeles y un pixel de un 4K mide la
+                    # cuarta parte que uno de un 1080p, asi que la misma letra
+                    # se ve diminuta. Con esto sube en la misma proporcion que
+                    # la resolucion. Solo sube, nunca baja.
+                    if [ "${MENU_AUTO_ESCALA:-1}" = 1 ]; then
+                        MENU_AUTO_ESCALA=0
+                    else
+                        MENU_AUTO_ESCALA=1
+                    fi ;;
                 *) fsz="" ;;
             esac
             if [ -n "$fsz" ]; then
                 export WP_FONT_SCALE="$FONT_SCALE"
+                export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
                 save_settings
             menu_server_reiniciar
                 ui_info "Tamaño de letra: $(font_label)"
@@ -28681,14 +32854,38 @@ Cambia el motor en Biblioteca y preferencias."
         "Carátulas y perfiles"*) media_menu ;;
         "Formato al empaquetar:"*)
             local pf
-            pf="$(menu "Formato para los juegos que empaquetes" \
+            pf="$(menu "Formato para los juegos que importes" \
                 "wsquashfs - compatible con Batocera y PortProton" \
                 "dwarfs - comprime bastante mas, monta igual de rapido" \
+                "carpeta - sin empaquetar, el juego queda en una carpeta" \
                 "<< Volver")" || pf=""
             case "$pf" in
                 wsquashfs*)
                     PACK_FORMAT=wsquashfs; save_settings
                     ui_info "Los juegos nuevos se empaquetaran en wsquashfs." ;;
+                carpeta*)
+                    # SE DICE QUE SE PIERDE ANTES DE ACTIVARLO.
+                    #
+                    # Es un ajuste que suena a "mas sencillo" y tiene cuatro
+                    # consecuencias que no se ven hasta mucho despues: la SD
+                    # llena, el juego imposible de llevar a otro equipo, las
+                    # partidas mezcladas con el juego y la carpeta lenta de
+                    # leer. Mejor leerlo una vez aqui que descubrirlo luego.
+                    if ui_ask "Los juegos que importes quedaran como una CARPETA, sin
+empaquetar. Es mas sencillo, pero se pierde esto:
+
+  - Un fichero por juego. Pasas a tener miles de ficheros
+    sueltos, y en una microSD eso va bastante mas lento.
+  - La compresion. Un juego ocupa lo que ocupa.
+  - El overlay que separa tus partidas del juego.
+  - Llevarte un juego a otro equipo copiando un archivo.
+
+Los juegos que ya tengas empaquetados se siguen usando
+igual. ¿Activarlo?"; then
+                        PACK_FORMAT=carpeta; save_settings
+                        ui_info "Los juegos nuevos quedaran sin empaquetar, en una
+carpeta dentro de tu carpeta de juegos."
+                    fi ;;
                 dwarfs*)
                     find_dwarfs_tools || setup_dwarfs_tools || true
                     find_dwarfs_tools
@@ -28871,6 +33068,392 @@ vista_forma() {
     esac
 }
 
+REPO_REFRESCO_MINIMO=600     # segundos entre dos refrescos de arranque
+
+repo_refrescar_al_arrancar() {
+    # LAS DOS LISTAS DEL REPOSITORIO, AL DIA EN CADA ARRANQUE.
+    #
+    # Lo pidio Dani para no volver a tener el problema de Silver Pines: un
+    # juego subido al repositorio y WProton mirando una lista de ayer.
+    #
+    # EN SEGUNDO PLANO, SIEMPRE.
+    #
+    # Son dos consultas a GitHub. Hacerlas aqui y esperarlas significaria que
+    # arrancar WProton tarda lo que tarde la red -o lo que tarde en FALLAR,
+    # que es peor, y en una Deck sin conexion son doce segundos de pantalla
+    # muerta-. Van a un subproceso y nadie las espera: las listas se escriben
+    # con un temporal y un "mv", asi que quien las lea mientras tanto lee la
+    # anterior entera, nunca una a medias.
+    #
+    # Y NO MAS DE UNA VEZ CADA DIEZ MINUTOS.
+    #
+    # La API de GitHub sin credenciales da 60 peticiones por hora y por IP.
+    # Dos por arranque parecen pocas hasta que se cuenta como se usa esto de
+    # verdad: en DeckStation cada juego lanza su propio wproton.sh, asi que
+    # una tarde de pruebas lanzando juegos son dos peticiones por juego. Al
+    # pasar de 60 GitHub contesta 403 a TODO durante el resto de la hora, y
+    # entonces no funciona ni la lista, ni las caratulas, ni los perfiles. El
+    # suelo de diez minutos deja el "cada vez que arranque" intacto en el uso
+    # normal y evita el unico caso en que se rompia.
+    [ -n "${WPROTON_REPO:-}" ] || return 0
+    local marca="$CACHE_DIR/.repo_refresco" edad
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+    edad="$(repo_indice_edad "$marca")"
+    if [ "$edad" -ge 0 ] && [ "$edad" -lt "$REPO_REFRESCO_MINIMO" ]; then
+        log "repositorio: las listas se refrescaron hace $edad s; este arranque no vuelve a preguntar"
+        return 0
+    fi
+    : > "$marca" 2>/dev/null
+    (
+        # Las caratulas se siguen trayendo del repositorio siempre: aqui solo
+        # se actualiza la LISTA de las que hay, que es lo que decide si una
+        # caratula nueva se ve o no.
+        community_index_refresh forzar || true
+        covers43_index_refresh  forzar || true
+        log "repositorio: listas actualizadas en segundo plano al arrancar"
+    ) >/dev/null 2>&1 &
+    # SE APUNTA EL PID PARA PODER PARARLO AL CERRAR.
+    #
+    # Si alguien cierra WProton en los dos segundos que tarda, este subproceso
+    # seguiria vivo con un curl colgado y el cierre avisaria de "trabajos en
+    # segundo plano". Con el PID apuntado, el cierre lo remata como a los demas.
+    REPO_REFRESCO_PID=$!
+    log "repositorio: refrescando las listas en segundo plano (pid $REPO_REFRESCO_PID)"
+    return 0
+}
+
+repo_refresco_stop() {
+    # Para el refresco de arranque si todavia estuviera en marcha.
+    [ -n "${REPO_REFRESCO_PID:-}" ] || return 0
+    if kill -0 "$REPO_REFRESCO_PID" 2>/dev/null; then
+        kill "$REPO_REFRESCO_PID" 2>/dev/null
+        log "Cierre: refresco del repositorio detenido (pid $REPO_REFRESCO_PID)"
+    fi
+    REPO_REFRESCO_PID=""
+    return 0
+}
+
+repo_cruzar_biblioteca() {
+    # CRUZA TU BIBLIOTECA CON LAS DOS LISTAS DEL REPOSITORIO, DE UNA PASADA.
+    #
+    # $1 = 1 si hay que mirar los perfiles, $2 = 1 si hay que mirar las 4:3.
+    # Sale una linea por juego:
+    #
+    #   gid <TAB> perfil.conf del repositorio (o vacio) <TAB> carátula (o vacio)
+    #
+    # POR QUE NO SE LLAMA A community_match/covers43_match POR CADA JUEGO:
+    # esas recorren la lista entera llamando a nombre_clave, que es un proceso
+    # aparte. Con 300 juegos y 300 carátulas salen decenas de miles de
+    # procesos y el cruce tardaba CINCO MINUTOS. Medido. Aqui las claves se
+    # normalizan de una vez con tr -el mismo juego de caracteres que
+    # nombre_clave, para que el resultado sea identico- y la comparacion la
+    # hace awk en memoria, con la misma regla de coletilla de version que
+    # nombre_coletilla. Baja a un segundo, y da las mismas respuestas:
+    # comprobado juego a juego contra las funciones de verdad.
+    local con_p="${1:-0}" con_c="${2:-0}"
+    local juego gid gids claves pares nom_p nom_c tab_p tab_c
+    gids="$(mktemp)"; claves="$(mktemp)"; pares="$(mktemp)"
+    nom_p="$(mktemp)"; nom_c="$(mktemp)"
+    tab_p="$(mktemp)"; tab_c="$(mktemp)"
+    while IFS= read -r juego; do
+        [ -n "$juego" ] || continue
+        gid="$(game_id "$juego")"
+        [ -n "$gid" ] && printf '%s\n' "$gid"
+    done > "$gids" <<EOFJ
+$(lista_juegos 2>/dev/null)
+EOFJ
+    tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' < "$gids" | tr -d ' ._-' > "$claves"
+    paste "$gids" "$claves" > "$pares"
+    : > "$tab_p"; : > "$tab_c"
+    if [ "$con_p" = 1 ] && [ -f "$COMMUNITY_INDEX" ]; then
+        grep -i '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null > "$nom_p"
+        sed 's/\.[Cc][Oo][Nn][Ff]$//' "$nom_p" \
+            | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-' \
+            | paste - "$nom_p" > "$tab_p"
+    fi
+    if [ "$con_c" = 1 ] && [ -f "$COVERS43_INDEX" ]; then
+        cut -f1 "$COVERS43_INDEX" 2>/dev/null > "$nom_c"
+        sed 's/\.[^.]*$//' "$nom_c" \
+            | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-' \
+            | paste - "$nom_c" > "$tab_c"
+    fi
+    awk -F'\t' -v fp="$tab_p" -v fc="$tab_c" '
+        function coletilla(r) {
+            return r ~ /^(v[0-9]|[0-9]|gog|repack|p2p|fitgirl|dodi|elamigos|multi[0-9]|rip|proper|update|build|remastered0)/
+        }
+        function cual(clave, mapa, claves_, n,   i, lc, resto) {
+            if (clave in mapa) return mapa[clave]
+            for (i = 1; i <= n; i++) {
+                lc = claves_[i]
+                if (length(lc) < 6) continue
+                if (index(clave, lc) == 1) {
+                    resto = substr(clave, length(lc) + 1)
+                    if (coletilla(resto)) return mapa[lc]
+                }
+            }
+            return ""
+        }
+        BEGIN {
+            FS = "\t"; np = 0; nc = 0
+            while ((getline l < fp) > 0) {
+                split(l, c, "\t")
+                if (c[1] != "" && !(c[1] in mp)) { mp[c[1]] = c[2]; np++; kp[np] = c[1] }
+            }
+            while ((getline l < fc) > 0) {
+                split(l, c, "\t")
+                if (c[1] != "" && !(c[1] in mc)) { mc[c[1]] = c[2]; nc++; kc[nc] = c[1] }
+            }
+        }
+        $1 != "" {
+            printf "%s\t%s\t%s\n", $1, cual($2, mp, kp, np), cual($2, mc, kc, nc)
+        }' "$pares"
+    rm -f "$gids" "$claves" "$pares" "$nom_p" "$nom_c" "$tab_p" "$tab_c"
+    return 0
+}
+
+community_traer_todas() {
+    # TRAE DE GOLPE LOS PERFILES QUE EL REPOSITORIO TIENE PARA TUS JUEGOS.
+    #
+    # Lo pidio un tester: "igual que las carátulas, poder bajar todas las
+    # configuraciones de una vez".
+    #
+    # POR QUE NO SE BAJAN LOS 250 PERFILES DEL REPOSITORIO, SOLO LOS TUYOS:
+    # un perfil tiene que guardarse como "<tu juego>.conf" para que WProton lo
+    # encuentre, y en el repositorio se llama como el juego de QUIEN LO SUBIO
+    # ("Silver Pines.conf" frente a "Silver_Pines"). Bajarlos todos tal cual
+    # llenaria profiles/ de ficheros que ningun juego tuyo encuentra, y el
+    # menu de perfiles pasaria a tener cientos de entradas que no son del
+    # usuario. Las carátulas si se pueden bajar todas porque una carátula
+    # sobrante no estorba a nada; un perfil, si.
+    local _ok informe
+    loading_say "Consultando los perfiles del repositorio..."
+    community_index_refresh forzar
+    _ok=$?
+    loading_clear
+    if [ "$_ok" != 0 ]; then
+        ui_error "No se pudo consultar el repositorio.
+
+Comprueba la conexión e inténtalo otra vez.
+En 'Comprobar el repositorio' sale el detalle."
+        return 1
+    fi
+
+    loading_say "Cruzando tu biblioteca con el repositorio..."
+    informe="$(mktemp)"
+    repo_cruzar_biblioteca 1 0 > "$informe"
+    loading_clear
+
+    # Tres cuentas distintas, porque llevan a tres mensajes distintos:
+    #   nuevos   -> juegos tuyos con perfil en el repositorio y SIN perfil aqui
+    #   ya_tengo -> juegos tuyos con perfil en el repositorio y CON perfil aqui
+    #   sin_nada -> juegos tuyos que el repositorio no conoce
+    local gid m_conf nuevos=0 ya_tengo=0 sin_nada=0 total=0
+    while IFS="$(printf '\t')" read -r gid m_conf _; do
+        [ -n "$gid" ] || continue
+        total=$((total+1))
+        if [ -z "$m_conf" ]; then sin_nada=$((sin_nada+1))
+        elif profile_exists "$gid"; then ya_tengo=$((ya_tengo+1))
+        else nuevos=$((nuevos+1)); fi
+    done < "$informe"
+
+    if [ "$nuevos" = 0 ] && [ "$ya_tengo" = 0 ]; then
+        rm -f "$informe"
+        ui_info "El repositorio no tiene perfil para ninguno de tus
+$total juego(s).
+
+Si crees que alguno si deberia estar, mira
+'Comprobar el repositorio': dice con que nombre se busca."
+        return 0
+    fi
+
+    # LA UNICA PREGUNTA, Y ANTES DE EMPEZAR.
+    #
+    # Sustituir un perfil que el usuario ha ajustado a mano es destructivo, asi
+    # que no puede ser lo que pase por defecto. Se decide aqui una vez y luego
+    # la descarga va del tirón.
+    local tocar_existentes=0 sel
+    if [ "$ya_tengo" -gt 0 ]; then
+        sel="$(menu "Perfiles de la comunidad para tus juegos" \
+            "Solo los $nuevos juego(s) que aun no tienen perfil" \
+            "Tambien sustituir los $ya_tengo que ya tienen (copia .bak)" \
+            "<< Volver")" || { rm -f "$informe"; return 0; }
+        case "$sel" in
+            "Solo los"*)    tocar_existentes=0 ;;
+            "Tambien sus"*) tocar_existentes=1 ;;
+            *) rm -f "$informe"; return 0 ;;
+        esac
+    else
+        ui_ask "El repositorio tiene perfil para $nuevos de tus juegos
+y ninguno de ellos tiene perfil todavia.
+
+Descargarlos ahora?" || { rm -f "$informe"; return 0; }
+    fi
+
+    local cuantos=$nuevos
+    [ "$tocar_existentes" = 1 ] && cuantos=$((nuevos+ya_tengo))
+    local hechos=0 fallos=0 con_teclas=0 idx=0
+    progress_start "Descargando perfiles de la comunidad"
+    # WP_COMUNIDAD_TANDA: que community_fetch no abra un dialogo por juego.
+    WP_COMUNIDAD_TANDA=1
+    while IFS="$(printf '\t')" read -r gid m_conf _; do
+        [ -n "$gid" ] && [ -n "$m_conf" ] || continue
+        if profile_exists "$gid" && [ "$tocar_existentes" = 0 ]; then continue; fi
+        idx=$((idx+1))
+        progress_set "$(( idx * 100 / (cuantos > 0 ? cuantos : 1) ))" "($idx/$cuantos) $gid"
+        if community_fetch "$m_conf" "$gid"; then
+            hechos=$((hechos+1))
+            [ -f "$PROFILE_DIR/$gid.keys" ] && con_teclas=$((con_teclas+1))
+        else
+            fallos=$((fallos+1))
+            log "comunidad: no se pudo instalar $m_conf para $gid" AVISO
+        fi
+    done < "$informe"
+    WP_COMUNIDAD_TANDA=0
+    progress_stop
+    rm -f "$informe"
+
+    local resumen="Perfiles instalados: $hechos de $cuantos"
+    [ "$con_teclas" -gt 0 ] && resumen="$resumen
+Con teclas del mando: $con_teclas"
+    [ "$fallos" -gt 0 ] && resumen="$resumen
+No se pudieron traer: $fallos (mira el registro)"
+    [ "$ya_tengo" -gt 0 ] && [ "$tocar_existentes" = 1 ] && resumen="$resumen
+
+Los perfiles que tenias se han guardado como .conf.bak"
+    [ "$sin_nada" -gt 0 ] && resumen="$resumen
+
+El repositorio no conoce $sin_nada de tus juegos. Cuales son,
+en 'Comprobar el repositorio'."
+    log "comunidad: tanda terminada -> $hechos instalados, $fallos fallos, $con_teclas con teclas"
+    ui_info "$resumen"
+    return 0
+}
+
+repo_comprobar() {
+    # COMPROBACION DEL REPOSITORIO, DESDE DENTRO DE WPROTON.
+    #
+    # Cuando algo "no se descarga" hay cinco motivos posibles y desde fuera
+    # son indistinguibles: sin red, repositorio mal escrito, GitHub limitando
+    # peticiones, el fichero no esta subido, o el nombre no coincide. Esto los
+    # separa y lo dice en pantalla, sin que nadie tenga que abrir una terminal
+    # ni leerse el registro.
+    #
+    # Pide las dos listas RECIEN TRAIDAS a proposito: la gracia es saber que
+    # hay en el repositorio AHORA, no que habia en la copia de ayer.
+    local t_ok c_ok n_conf=0 n_keys=0 n_cov=0 texto sin_perfil=0 sin_cov=0
+    loading_say "Comprobando el repositorio $WPROTON_REPO..."
+    community_index_refresh forzar; t_ok=$?
+    covers43_index_refresh  forzar; c_ok=$?
+    loading_clear
+
+    texto="Repositorio: $WPROTON_REPO
+
+--- Perfiles de la comunidad (profiles/) ---"
+    if [ "$t_ok" = 0 ] && [ -f "$COMMUNITY_INDEX" ]; then
+        n_conf="$(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        n_keys="$(grep -ci '\.keys$' "$COMMUNITY_INDEX" 2>/dev/null)"
+        texto="$texto
+$n_conf perfil(es) .conf
+$n_keys fichero(s) .keys de teclas
+Lista $(repo_edad_humana "$(repo_indice_edad "$COMMUNITY_INDEX")")"
+    else
+        texto="$texto
+NO se pudo consultar (codigo HTTP ${REPO_ULTIMO_HTTP:-sin respuesta}).
+Comprueba la conexión; el detalle esta en el registro."
+    fi
+
+    texto="$texto
+
+--- Carátulas 4:3 (covers_43/) ---"
+    if [ "$c_ok" = 0 ] && [ -f "$COVERS43_INDEX" ]; then
+        n_cov="$(wc -l < "$COVERS43_INDEX" 2>/dev/null || echo 0)"
+        texto="$texto
+$n_cov carátula(s)
+Lista $(repo_edad_humana "$(repo_indice_edad "$COVERS43_INDEX")")"
+    else
+        texto="$texto
+NO se pudo consultar. El detalle esta en el registro."
+    fi
+
+    # LO QUE DE VERDAD IMPORTA: de TUS juegos, cuales no encuentran nada.
+    #
+    # El numero de ficheros del repositorio no dice si el juego que uno tiene
+    # delante va a encontrar el suyo: el nombre puede no coincidir. Asi que se
+    # cruza la biblioteca entera contra las dos listas y se nombran los que se
+    # quedan fuera, que son los que hay que subir o renombrar.
+    local gid faltan_p="" faltan_c="" informe m_conf m_cov
+    if [ "$t_ok" = 0 ] || [ "$c_ok" = 0 ]; then
+        loading_say "Cruzando tu biblioteca con el repositorio..."
+        informe="$(mktemp)"
+        repo_cruzar_biblioteca "$([ "$t_ok" = 0 ] && echo 1 || echo 0)" \
+                               "$([ "$c_ok" = 0 ] && echo 1 || echo 0)" > "$informe"
+        while IFS="$(printf '\t')" read -r gid m_conf m_cov; do
+            [ -n "$gid" ] || continue
+            if [ "$t_ok" = 0 ] && [ -z "$m_conf" ]; then
+                sin_perfil=$((sin_perfil+1))
+                log "repositorio: sin perfil -> $gid"
+                [ "$sin_perfil" -le 12 ] && faltan_p="$faltan_p
+  $gid"
+            fi
+            if [ "$c_ok" = 0 ] && [ -z "$m_cov" ]; then
+                sin_cov=$((sin_cov+1))
+                log "repositorio: sin carátula 4:3 -> $gid"
+                [ "$sin_cov" -le 12 ] && faltan_c="$faltan_c
+  $gid"
+            fi
+        done < "$informe"
+        rm -f "$informe"
+        loading_clear
+    fi
+
+    if [ "$t_ok" = 0 ]; then
+        texto="$texto
+
+--- Tus juegos SIN perfil en el repositorio ($sin_perfil) ---$faltan_p"
+        [ "$sin_perfil" -gt 12 ] && texto="$texto
+  ... y $((sin_perfil-12)) mas (la lista entera esta en el registro)"
+        [ "$sin_perfil" = 0 ] && texto="$texto
+  ninguno: todos tienen perfil"
+    fi
+    if [ "$c_ok" = 0 ]; then
+        texto="$texto
+
+--- Tus juegos SIN carátula 4:3 en el repositorio ($sin_cov) ---$faltan_c"
+        [ "$sin_cov" -gt 12 ] && texto="$texto
+  ... y $((sin_cov-12)) mas (la lista entera esta en el registro)"
+        [ "$sin_cov" = 0 ] && texto="$texto
+  ninguna: todos tienen carátula"
+    fi
+
+    log "repositorio: comprobacion -> $n_conf perfiles, $n_keys teclas, $n_cov carátulas | de tu biblioteca: $sin_perfil sin perfil, $sin_cov sin carátula"
+    ui_info "$texto"
+    return 0
+}
+
+community_descargas_menu() {
+    # Las dos formas de traer perfiles, que no son lo mismo y conviene que no
+    # se confundan en una sola fila del menu:
+    #
+    #   "para tus juegos" -> instala los que te tocan, listos para jugar
+    #   "todos"           -> copia del repositorio entero en comunidad/, para
+    #                        tenerlos sin red o para mirarlos
+    local sel n_local
+    while :; do
+        n_local="$(community_local_list 2>/dev/null | grep -c . || true)"
+        sel="$(menu "Perfiles del repositorio" \
+            "Traer los de tus juegos (los instala)" \
+            "Buscar perfiles actualizados" \
+            "Traer TODOS a comunidad/ (ahora hay ${n_local:-0})" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Traer los de tus juegos"*) community_traer_todas || true ;;
+            "Buscar perfiles actualizados"*) community_buscar_actualizaciones || true ;;
+            "Traer TODOS"*)             community_traer_todo  || true ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 library_menu() {
     # Todo lo que afecta a como se ve y se ordena la biblioteca
     local sel
@@ -28882,11 +33465,17 @@ library_menu() {
             "Vista de juegos: $(vista_label)" \
             "Carátula en la vista de lista: $(list_cover_label)" \
             "Carátulas por fila: $(grid_cols_label)" \
+            "Traer todas las carátulas del repositorio" \
+            "Perfiles del repositorio (traer para tus juegos o todos)" \
+            "Comprobar el repositorio (perfiles y carátulas)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Tema de los menus: $THEME" \
             "Motor de los menus: $(menu_motor_label)" \
             "Tamaño de la letra: $(font_label)" \
+            "Raton en los menus: $(raton_menus_label)" \
+            "Puntero mientras juegas: $(cursor_label)" \
+            "Registros: $(logs_label)" \
             "Idioma: ${LANGUAGE:-es}" \
             "Copia de tu configuración (exportar / importar)" \
             "Base de datos de arcades (TeknoParrot, JConfig...)" \
@@ -28895,6 +33484,12 @@ library_menu() {
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
+            "Raton en los menus:"*) raton_menus_menu || true ;;
+            "Puntero mientras juegas:"*) cursor_menu || true ;;
+            "Registros:"*) logs_menu || true ;;
+            "Traer todas las carátulas"*) covers43_traer_todas || true ;;
+            "Perfiles del repositorio"*) community_descargas_menu || true ;;
+            "Comprobar el repositorio"*) repo_comprobar || true ;;
             "Base de datos de arcades"*) arcade_consultar ;;
             "Generar fotogramas (MAKO):"*)
                 # Aqui se instala o se quita; el encendido es POR JUEGO, en
@@ -28982,7 +33577,13 @@ archivos_comprimir() {
     [ -w "$dst" ] || { ui_error "No se puede escribir en:\n$dst"; return 1; }
 
     nombre="$(basename "$src")"
-    fmt="${PACK_FORMAT:-wsquashfs}"
+    # pack_formato_archivo Y NO PACK_FORMAT A PELO.
+    #
+    # Aqui se pide un ARCHIVO: si el ajuste dice "carpeta" no hay nada que
+    # convertir -ya es una carpeta-, asi que se usa wsquashfs. Con
+    # PACK_FORMAT a pelo salia un fichero llamado "nombre.carpeta" que por
+    # dentro era un squashfs, y que luego no se reconocia por la extension.
+    fmt="$(pack_formato_archivo)"
     out="$dst/$nombre.$fmt"
     if [ -e "$out" ]; then
         ui_ask "Ya existe:
@@ -29048,7 +33649,7 @@ archivos_extraer() {
     # sobre todo NO hace falta ninguna herramienta mas: squashfuse y el driver
     # de dwarfs ya estan, y son los mismos que usa WProton para jugar. Con
     # unsquashfs habria que descargarlo aparte y solo serviria para squashfs.
-    local img dst destino nombre raiz need
+    local img dst destino nombre raiz need gid upper con_partidas=0
     img="$(browse_for_path "Que wsquashfs quieres convertir a carpeta" "$(browse_start "$GAMES_PATH")" play)" || return 0
     [ -f "$img" ] || { ui_error "Eso no es un fichero."; return 1; }
     if ! imagen_valida "$img"; then
@@ -29067,6 +33668,30 @@ archivos_extraer() {
   $destino
 
 Se borra y se extrae encima?" || return 0
+    fi
+
+    # LAS PARTIDAS DEL OVERLAY.
+    #
+    # Un juego empaquetado guarda las partidas en overlays/<juego>/upper, al
+    # lado del archivo pero fuera de el. Al extraer solo el archivo se iban
+    # perdiendo sin decir nada, y eso le pasa justo a quien convierte el juego
+    # a carpeta para que cargue mejor.
+    #
+    # SE PREGUNTA en vez de hacerlo siempre: esta opcion tambien se usa para
+    # mirar que trae un paquete, y ahi lo que se quiere es el archivo tal cual.
+    gid="$(game_id "$img")"
+    upper="$OVERLAY_BASE/$gid/upper"
+    if overlay_hay_partidas "$upper"; then
+        if ui_ask "'$nombre' tiene partidas guardadas en su superposicion
+($(human_size "$(dir_bytes "$upper")")), que estan fuera del archivo.
+
+¿Incluirlas en la carpeta?
+
+  Si = la carpeta queda como lo veias al jugar (recomendado)
+  No = se extrae solo el contenido del archivo"; then
+            con_partidas=1
+        fi
+        log "extraer: '$nombre' tiene partidas en el overlay; incluirlas = $con_partidas"
     fi
 
     # El montaje lo hace acquire_game_root, el mismo que al jugar: sabe de
@@ -29092,10 +33717,16 @@ Se borra y se extrae encima?" || return 0
         return 1
     fi
     release_game_root
+    if [ "$con_partidas" = 1 ]; then
+        say "[+] Poniendo las partidas guardadas encima..."
+        overlay_copiar_encima "$upper" "$destino"
+    fi
     ui_info "Convertido a carpeta en:
   $destino
 
-  $(human_size "$(dir_bytes "$destino")")"
+  $(human_size "$(dir_bytes "$destino")")$([ "$con_partidas" = 1 ] && printf '\n\n  Incluye tus partidas guardadas.
+  Las originales NO se han tocado: siguen en
+  %s' "$upper")"
     return 0
 }
 
@@ -29113,9 +33744,9 @@ actualizar_runners_menu() {
 
 Se consulta GitHub y solo se descarga si hay una mas nueva que
 la que ya tienes." \
-            "GE-Proton    (el runner por defecto)   [$(runner_etiqueta_instalada ge)]" \
-            "Wine         (Kron4ek staging wow64)   [$(runner_etiqueta_instalada wine)]" \
-            "UMU-Proton   (Open Wine Components)    [$(runner_etiqueta_instalada umu)]" \
+            "GE-Proton    (el runner por defecto)   [$(runner_etiqueta_instalada ge)]$(runner_marca ge)" \
+            "Wine         (Kron4ek staging wow64)   [$(runner_etiqueta_instalada wine)]$(runner_marca wine)" \
+            "UMU-Proton   (Open Wine Components)    [$(runner_etiqueta_instalada umu)]$(runner_marca umu)" \
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
@@ -29126,10 +33757,116 @@ la que ya tienes." \
     done
 }
 
+runner_remoto_fich() {
+    # Donde se apunta el ultimo publicado de esa familia. $1 = ge | umu | wine.
+    printf '%s' "$CACHE_DIR/runner_remoto_${1:-ge}"
+}
+
+runner_familia_repo() {
+    # Familia -> repositorio y patron del fichero. LOS MISMOS que usa
+    # setup_runner_ultimo, a proposito: si el aviso mirara otro sitio que la
+    # descarga, podria avisar de algo que luego no se baja.
+    case "${1:-}" in
+        ge)   printf '%s\t%s' "GloriousEggroll/proton-ge-custom" 'GE-Proton.*\.tar\.gz$' ;;
+        umu)  printf '%s\t%s' "Open-Wine-Components/umu-proton" 'UMU-Proton-.*\.tar\.gz$' ;;
+        wine) printf '%s\t%s' "$K4_REPO" 'wine-.*-staging-amd64-wow64\.tar\.xz$' ;;
+        *)    return 1 ;;
+    esac
+}
+
+runner_comprobar_fondo() {
+    # Mira si hay runners nuevos SIN que nadie espere, igual que el aviso de
+    # WProton. Una vez por arranque y en segundo plano.
+    #
+    # POR QUE SE GUARDA EL NOMBRE DE LA CARPETA Y NO UN NUMERO DE VERSION
+    #
+    # Porque es lo que ya sabe hacer el programa y no hay que inventar nada.
+    # setup_runner_ultimo saca el nombre de la carpeta del propio fichero
+    # publicado -quitandole la extension- y luego mira si esa carpeta existe.
+    # El aviso hace EXACTAMENTE esa comparacion, asi que lo que avisa y lo que
+    # se descarga no pueden desviarse: si el aviso dice que hay una nueva, al
+    # pulsar se baja esa.
+    #
+    # Comparar numeros de version habria sido inventar un segundo criterio
+    # -y con "GE-Proton11-7" frente a "GE-Proton9-27" hay que acordarse de que
+    # el orden alfabetico miente-.
+    local f fam
+    mkdir -p "$CACHE_DIR" 2>/dev/null || return 0
+    (
+        for fam in ge umu wine; do
+            # Solo se pregunta por lo que esta instalado: a quien no usa Wine
+            # no hay que avisarle de que hay un Wine nuevo, ni gastarle una
+            # consulta en ello.
+            [ -n "$(runner_ultimo_de "$fam")" ] || continue
+            local datos repo patron url name
+            datos="$(runner_familia_repo "$fam")" || continue
+            repo="${datos%%	*}"; patron="${datos##*	}"
+            f="$(runner_remoto_fich "$fam")"
+            url="$(curl -fsSL --max-time 8 \
+                "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+                | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+                | filter_assets | grep -iE "$patron" | head -n1)"
+            name="$(basename "$url" 2>/dev/null)"
+            name="${name%.tar.gz}"; name="${name%.tar.xz}"; name="${name%.tar.zst}"
+            # Solo se guarda si parece el nombre de una carpeta de runner. Lo
+            # escribe otro proceso y acaba PINTADO EN UN MENU y usado en una
+            # ruta: una respuesta rara de GitHub -o una pagina de error- no
+            # puede acabar ahi.
+            if printf '%s' "$name" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]{2,80}$'; then
+                printf '%s' "$name" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null
+            else
+                # Se toca igual para no reintentar en cada menu cuando GitHub
+                # no contesta.
+                : > "$f" 2>/dev/null
+            fi
+        done
+    ) >/dev/null 2>&1 &
+    return 0
+}
+
+runner_hay_nuevo() {
+    # Imprime el nombre del runner publicado si NO lo tenemos. $1 = familia.
+    # Lee del fichero: no toca la red.
+    local fam="${1:-}" f rem
+    [ -n "$fam" ] || return 1
+    # SI NO HAY NINGUNO INSTALADO, NO SE AVISA DE NADA.
+    #
+    # Ahi no hay "version nueva": hay "no instalado", que es lo que ya dice la
+    # fila. Avisar de una actualizacion de algo que no tienes confunde.
+    [ -n "$(runner_ultimo_de "$fam")" ] || return 1
+    f="$(runner_remoto_fich "$fam")"
+    [ -f "$f" ] || return 1
+    rem="$(cat "$f" 2>/dev/null)"
+    [ -n "$rem" ] || return 1
+    printf '%s' "$rem" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._+-]{2,80}$' || return 1
+    # La MISMA comprobacion que hace la descarga: si esa carpeta ya esta, no
+    # hay nada nuevo.
+    [ -d "$RUNNERS_DIR/$rem" ] && return 1
+    printf '%s' "$rem"
+    return 0
+}
+
+runner_aviso_alguno() {
+    # ¿Hay algo nuevo en cualquiera de las tres familias? Para marcar la fila
+    # que lleva al submenu, que es donde se mira primero.
+    local fam
+    for fam in ge umu wine; do
+        runner_hay_nuevo "$fam" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
 runner_etiqueta_instalada() {
     # Que version de esa familia hay ya, o "no instalado".
     local d; d="$(runner_ultimo_de "${1:-}")"
     if [ -n "$d" ]; then basename "$d"; else printf 'no instalado'; fi
+}
+
+runner_marca() {
+    # El aviso que se pega detras de la fila, si hay una version nueva.
+    local n; n="$(runner_hay_nuevo "${1:-}")" || return 0
+    printf '  *** NUEVA: %s ***' "$n"
+    return 0
 }
 
 componentes_menu() {
@@ -29182,15 +33919,20 @@ tools_menu() {
         # significa submenu y quien la usa ya lo tiene aprendido.
         sel="$(menu "Runners y herramientas" \
             "Descargar runners (Proton / Wine) [$nrunners instalados]" \
-            "Actualizar a la última versión >>" \
+            "$(if _n="$(runner_hay_nuevo ge)"; then \
+                 printf '*** RUNNER NUEVO: %s *** >>' "$_n"; \
+               elif runner_aviso_alguno; then \
+                 printf '*** HAY UN RUNNER NUEVO *** >>'; \
+               else printf 'Actualizar a la última versión >>'; fi)" \
             "Borrar un runner" \
             "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
-            "Convertir carpeta a $(printf '%s' "${PACK_FORMAT:-wsquashfs}")" \
+            "Convertir carpeta a $(pack_formato_archivo)" \
             "Convertir wsquashfs a carpeta" \
             "Añadir WProton a Steam (con su imagen)" \
             "Cambiar las imágenes de WProton en Steam" \
             "Probar el mando (ver que botones llegan)" \
+            "$(es_steam_deck && printf 'Trackpads de la Deck: %s' "$(trackpad_label)")" \
             "Arreglar permisos del mando (hidraw)" \
             "Comprobar lo descargado (huellas SHA-256)" \
             "<< Volver")" || return
@@ -29543,10 +34285,110 @@ case "${1:-}" in
     --version) printf 'WProton v%s\n' "$WPROTON_VERSION"; exit 0 ;;
 esac
 
+logs_conservar_motivo() {
+    # Si hay algun motivo para conservar el registro de ESTA sesion, se
+    # imprime; si no, no se imprime nada.
+    #
+    # Son todos casos en los que el registro es justo lo que alguien va a
+    # querer leer, asi que se decide ANTES de mirar si hubo errores.
+    if [ "${BORRAR_LOGS_OK:-1}" != 1 ]; then
+        printf 'BORRAR_LOGS_OK=0 (conservarlos todos)'; return 0
+    fi
+    # Un cierre que no fue una salida normal: ahi el registro es lo unico que
+    # queda para saber que paso.
+    case "${WP_CIERRE_MOTIVO:-salida normal}" in
+        "salida normal") ;;
+        *) printf 'el cierre fue "%s"' "${WP_CIERRE_MOTIVO}"; return 0 ;;
+    esac
+    # Diagnosticos encendidos: su UNICO producto es el registro. Borrarlo
+    # seria tirar lo que el usuario acaba de pedir expresamente.
+    local d
+    for d in DIAG_MANDO DIAG_CIERRE DIAG_DLL DIAG_VIDEO DIAG_TIEMPOS DIAG_RUTAS; do
+        if [ "$(eval printf '%s' "\${$d:-0}")" = 1 ]; then
+            printf '%s=1' "$d"; return 0
+        fi
+    done
+    [ "${DEV_MODE:-0}" = 1 ] && { printf 'DEV_MODE=1'; return 0; }
+    # La primera puesta en marcha descarga medio mundo: ese registro es el que
+    # se pide siempre cuando algo no cuadra en una instalacion nueva.
+    [ "${WP_PRIMERA_VEZ:-0}" = 1 ] && { printf 'primera puesta en marcha'; return 0; }
+    [ -s "${LOG_MARCA_ERR:-}" ] && { printf 'hubo avisos o errores'; return 0; }
+    return 0
+}
+
+logs_cerrar() {
+    # LO ULTIMO DEL CIERRE: decidir si este registro se queda o se va.
+    #
+    # Lo pidio Dani: si la sesion fue bien, el registro no le interesa a nadie
+    # y la carpeta se llena -en DeckStation cada juego lanza su propio
+    # wproton.sh, asi que una tarde de pruebas son decenas de ficheros-. Si
+    # hubo algo, se queda.
+    #
+    # VA AL FINAL DE cleanup_all Y NO ESCRIBE NADA DESPUES.
+    #
+    # Cualquier cosa que escriba en el registro despues de borrarlo lo
+    # resucitaria vacio -el descriptor sigue abierto-, y en la carpeta
+    # quedarian ficheros de cero bytes que no sirven para nada y encima
+    # parecen un fallo.
+    [ -d "${LOG_DIR:-}" ] || return 0
+    # UNA SOLA VEZ POR SESION.
+    #
+    # cleanup_all cuelga de un trap y puede llegar por mas de un camino. Si
+    # esto corriera dos veces con LOGS_OK_GUARDAR=0, la segunda escribiria su
+    # linea en un fichero ya borrado y lo resucitaria: en la carpeta quedaria
+    # un registro de una linea, que es basura con pinta de fallo.
+    [ "${WP_LOGS_CERRADOS:-0}" = 1 ] && return 0
+    WP_LOGS_CERRADOS=1
+    local motivo; motivo="$(logs_conservar_motivo)"
+    if [ -n "$motivo" ]; then
+        log "Registro: se conserva ($motivo)"
+        rm -f "$LOG_MARCA_OK" 2>/dev/null
+        return 0
+    fi
+    # Este fue limpio: se marca como tal. La marca es lo que permite distinguir
+    # mas adelante un registro "bueno" de uno que nadie reviso -los de
+    # versiones anteriores, o los de una sesion que murio de golpe-, y a esos
+    # NO se les toca aqui: de ellos se encarga rotate_logs por antiguedad.
+    : > "$LOG_MARCA_OK" 2>/dev/null
+    rm -f "$LOG_MARCA_ERR" 2>/dev/null
+    local guardar="${LOGS_OK_GUARDAR:-1}"
+    case "$guardar" in ''|*[!0-9]*) guardar=1 ;; esac
+    log "Registro: la sesion fue limpia; se conservan los $guardar mas recientes"
+    # Se recorren los registros marcados como limpios, del mas nuevo al mas
+    # viejo, y se borran los que pasen de la cuenta. El de esta sesion es el
+    # mas nuevo, asi que con guardar=1 se queda este y se va el anterior.
+    local n=0 marca base lg
+    while IFS= read -r marca; do
+        [ -n "$marca" ] || continue
+        base="$(basename "$marca")"; base="${base#.}"; base="${base%.ok}"
+        lg="$LOG_DIR/$base"
+        n=$((n+1))
+        [ "$n" -le "$guardar" ] && continue
+        rm -f "$lg" "$marca" 2>/dev/null
+    done <<EOFLOGS
+$(find "$LOG_DIR" -maxdepth 1 -type f -name '.wproton_*.log.ok' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | cut -d' ' -f2-)
+EOFLOGS
+    return 0
+}
+
 rotate_logs() {
     # Conservar solo los logs de los últimos 2 dias (y 40 como maximo)
     [ -d "$LOG_DIR" ] || return 0
     find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' -mtime +2 -delete 2>/dev/null
+    # Y LAS MARCAS HUERFANAS.
+    #
+    # Cada registro puede tener su ".err" o su ".ok" al lado. Cuando el
+    # registro se va -por antiguedad, por el tope de 40 o borrado a mano-, su
+    # marca se quedaria ahi para siempre: ficheros ocultos que no sirven para
+    # nada y que, peor, harian creer que existe un registro limpio que ya no
+    # esta.
+    local marca base
+    for marca in "$LOG_DIR"/.wproton_*.log.ok "$LOG_DIR"/.wproton_*.log.err; do
+        [ -f "$marca" ] || continue
+        base="$(basename "$marca")"; base="${base#.}"; base="${base%.*}"
+        [ -f "$LOG_DIR/$base" ] || rm -f "$marca" 2>/dev/null
+    done
     local n old
     n="$(find "$LOG_DIR" -maxdepth 1 -type f -name 'wproton_*.log' 2>/dev/null | wc -l)"
     if [ "$n" -gt 40 ]; then
@@ -29562,6 +34404,7 @@ export WP_THEME="${THEME:-moderno}"
 export WP_GRID_COLS="${GRID_COLS:-0}"
 export WP_LANG="${LANGUAGE:-es}"
 export WP_FONT_SCALE="${FONT_SCALE:-1.0}"
+export WP_MENU_AUTO_SCALE="${MENU_AUTO_ESCALA:-1}"
 
 # ¿Primera puesta en marcha? Se decide ANTES de tocar nada, porque check_deps
 # ya se pone a descargar las herramientas de montaje y el usuario no puede
@@ -29591,6 +34434,16 @@ datos_preparar          # crea metadata/ y trae lo que hubiera de antes
 rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
 perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
 update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
+runner_comprobar_fondo   # y si hay runners nuevos, igual: en segundo plano
+repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
+# EL TRACKPAD COMO RATON, SI ESTA PEDIDO.
+#
+# Va aqui y no en los menus para que este listo desde el primer momento, y
+# porque los menus son varios procesos distintos: si lo arrancara cada uno,
+# habria varios leyendo el mando a la vez.
+if [ "${TRACKPAD_RATON:-no}" != no ]; then
+    trackpad_raton_start "$TRACKPAD_RATON" || true
+fi
 # Una marca de "volver al inicio" que sobreviviera a un cierre brusco
 # cerraria todos los menus nada mas abrirlos. Se limpia al arrancar.
 rm -f "${WP_MARCA_INICIO:-/nonexistent}" 2>/dev/null
@@ -29606,6 +34459,13 @@ winebus_reparar_compartido
 # se quedo reescrito y no valdria en Batocera. Se devuelve a su sitio.
 teknoparrot_restaurar_pendientes
 check_deps
+# El driver rapido para montar imagenes, si todavia no esta. Va DESPUES de
+# check_deps porque hasta aqui no se sabe si hay squashfuse ni cual, y en
+# segundo plano para que no retrase el arranque.
+squashfuse_ll_al_arrancar
+# Como llegan los trackpads de la Deck ANTES de que WProton abra un solo menu:
+# es la referencia con la que se compara despues.
+trackpad_lagarto_log arranque
 rotate_logs          # no acumular cientos de logs antiguos
 sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
 # Restos de una sesion anterior que no se cerrara bien: si quedo un servidor

@@ -32,6 +32,48 @@ if os.path.isdir(LIBS):
     sys.path.insert(0, LIBS)
 
 os.environ.setdefault('SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS', '1')
+# LOS TRACKPADS DE LA STEAM DECK: QUE NO LOS APAGUEMOS NOSOTROS.
+#
+# En la Deck, los trackpads NO son un raton para el kernel. Lo que los hace
+# mover el puntero es el "modo lagarto" (lizard mode), una emulacion de raton y
+# teclado que hace el propio mando mientras nadie le diga lo contrario.
+#
+# Y SDL se lo dice. En cuanto SDL abre el mando de la Deck por HIDAPI, manda un
+# ID_CLEAR_DIGITAL_MAPPINGS para apagar el modo lagarto -y lo reenvia cada pocos
+# ciclos, para que no vuelva solo-. Eso lo hace cualquier programa de SDL... y
+# estos menus son pygame, o sea SDL. Resultado: abrir WProton dejaba los
+# trackpads muertos, que es justo lo que contaban los testers.
+#
+# Con esta variable, SDL deja en paz el mando de la Deck por HIDAPI y lo lee por
+# evdev, que es de donde lo lee este menu de todas formas: el mando se maneja en
+# un hilo evdev aparte (ver evdev_thread) precisamente para que funcione sin
+# foco de ventana. O sea que no perdemos nada y el trackpad derecho vuelve a
+# mover el puntero, que estos menus ya soportan.
+#
+# POR QUE AHORA SE APAGA HIDAPI ENTERA, Y CON "=" EN VEZ DE setdefault.
+#
+# El primer intento fue solo la del mando de la Deck y con setdefault, y los
+# testers dijeron que NO FUNCIONABA. Tenia dos agujeros, y con cualquiera de
+# los dos no sirve de nada:
+#
+#   1. setdefault RESPETA lo que ya venga puesto. En el modo Juego de la Deck
+#      estos menus se lanzan desde Steam, que exporta variables SDL_* a lo que
+#      arranca: si esa venia puesta, nuestro "0" no se escribia y SDL seguia
+#      apagando el modo lagarto. Con "=" manda WProton, que es quien sabe que
+#      aqui el mando no se lee por SDL.
+#   2. SDL_JOYSTICK_HIDAPI_STEAMDECK nacio en SDL 3 y se porto despues. Con una
+#      SDL mas antigua esa variable NO EXISTE -no es que valga 0: es que nadie
+#      la mira- y el mando de la Deck lo abre otro driver, que tambien apaga el
+#      modo lagarto. Apagando HIDAPI entera da igual la version y da igual el
+#      driver.
+#
+# Y apagarla entera no cuesta nada AQUI: este menu lee el mando por evdev en un
+# hilo aparte (ver evdev_thread), precisamente para funcionar sin foco de
+# ventana. El subsistema de joystick de SDL no se usa para nada en estos menus,
+# asi que lo unico que hacia era abrir el mando y apagarle los trackpads.
+os.environ['SDL_JOYSTICK_HIDAPI'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAMDECK'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAM'] = '0'
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 os.environ.setdefault('SDL_VIDEO_CENTERED', '1')
 os.environ.setdefault('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS', '0')
@@ -259,6 +301,34 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
 RATON = os.environ.get('WP_RATON', '1') != '0'
 
 
+def _entero_env(nombre, defecto):
+    """Un entero de una variable de entorno, sin dejar que un valor raro mate
+    el menu: si no se puede leer, se usa el de siempre."""
+    try:
+        v = int(str(os.environ.get(nombre, '')).strip())
+        return v if v >= 0 else defecto
+    except (TypeError, ValueError):
+        return defecto
+
+
+# UMBRAL DEL PUNTERO: CUANTO HAY QUE MOVER PARA QUE LA SELECCION SIGA AL RATON.
+#
+# Antes la seguia SIN NINGUN UMBRAL: un pixel -o un golpe en la mesa, o el
+# puntero que ya estaba encima de otra fila cuando la lista se redibujaba- y
+# te cambiaba la seleccion, incluso navegando con el mando. En un sobremesa con
+# el raton quieto al lado del teclado eso es un sobresalto constante.
+#
+# Se cuenta desde la ULTIMA TECLA O BOTON DEL MANDO, no desde el ultimo
+# movimiento: asi un roce no hace nada, pero en cuanto de verdad estas usando
+# el raton la seleccion le sigue como siempre, sin retraso.
+RATON_UMBRAL = _entero_env('WP_RATON_UMBRAL', 12)
+# Filas por muesca de la rueda. 0 = un tercio de pantalla, como hacia antes.
+RATON_RUEDA = _entero_env('WP_RATON_RUEDA', 3)
+# Pixeles movidos desde la ultima tecla. Lista para poder tocarla desde
+# dentro de las funciones, igual que RATON_T0.
+RATON_MOV = [0.0]
+
+
 def fondo_cristal(W, H):
     """El fondo del tema cristal: dos focos de color y una vineta.
 
@@ -372,6 +442,19 @@ def fila_bajo_raton(mx, my, scroll, nvis, nitems):
     if i < scroll or i >= min(scroll + nvis, nitems):
         return None
     return i
+
+
+def paso_rueda():
+    """Cuantas filas mueve una muesca de la rueda.
+
+    De serie eran UN TERCIO DE PANTALLA. Se eligio asi pensando en recorrer
+    listas largas sin raton, y con la rueda de un raton de sobremesa resulta
+    brutal: una muesca y te has ido media biblioteca. Ahora son unas pocas
+    filas, y quien quiera el salto grande pone RATON_RUEDA=0.
+    """
+    if RATON_RUEDA > 0:
+        return RATON_RUEDA
+    return max(1, vis() // 3)
 
 
 def raton_tecla(key):
@@ -550,6 +633,29 @@ def init_video():
     return False
 
 pygame.init()          # el resto de subsistemas (no falla aunque el video si)
+# Y EL CINTURON, ADEMAS DEL TIRANTE: SE CIERRA EL JOYSTICK DE SDL.
+#
+# pygame.init() enciende TODOS los subsistemas, el de joystick incluido, y ese
+# es el que abre el mando. Las variables de arriba deberian evitar que lo abra
+# por HIDAPI, pero dependen de que esta SDL las conozca, y de eso ya nos hemos
+# llevado un chasco. Cerrarlo no depende de ninguna version: si SDL habia
+# abierto el mando, al cerrar el subsistema lo suelta, y el kernel vuelve a
+# encender el modo lagarto por su cuenta.
+#
+# No se pierde nada: el mando se lee por evdev en un hilo aparte.
+try:
+    pygame.joystick.quit()
+except Exception:
+    pass
+# Y SE DEJA DICHO QUE SDL HAY, que es el dato que faltaba para saber si las
+# variables de arriba las entiende alguien.
+try:
+    _sdlv = pygame.version.SDL
+    sys.stderr.write('menu_pygame: pygame %s con SDL %d.%d.%d, '
+                     'joystick de SDL cerrado (el mando se lee por evdev)\n'
+                     % (pygame.version.ver, _sdlv[0], _sdlv[1], _sdlv[2]))
+except Exception:
+    pass
 if not init_video():
     sys.stderr.write('menu_pygame: sin video utilizable; se usaran menus de texto\n')
     sys.exit(2)
@@ -638,7 +744,118 @@ def find_raw_pads():
 DEV = os.environ.get('WP_DEV') == '1'
 CAPT_DIR = os.environ.get('WP_CAPT_DIR', '')
 
-REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0}
+REC = {'hasta': 0.0, 'dir': '', 'n': 0, 'ultimo': 0.0, 'comprobado': 0.0,
+       'armado': '', 'desde': 0.0, 'poco_disco': False}
+
+# GRABAR UN TUTORIAL ENTERO, SIN RELOJ.
+#
+# La grabacion de siempre dura lo que se le diga y se para sola. Para hacer
+# videotutoriales eso no vale: no se sabe de antemano cuanto va a durar lo que
+# se quiere enseñar.
+#
+# Aqui se arma desde el menu de desarrollo y se maneja con el mando: L3 empieza
+# y R3 para. Mientras NO hay nada armado, L3 sigue haciendo la captura de
+# pantalla de siempre, asi que no se pisa nada de lo que ya estaba.
+REC_BTN_INICIO = 317      # BTN_THUMBL  (L3, pulsar el stick izquierdo)
+REC_BTN_PARO   = 318      # BTN_THUMBR  (R3, pulsar el stick derecho)
+# Un tutorial largo son muchos PNG. Si el disco se queda sin sitio, se para
+# sola antes de dejar el equipo inservible.
+REC_DISCO_MINIMO = 700 * 1024 * 1024      # 700 MB
+
+
+def rec_disco_libre(ruta):
+    try:
+        st = os.statvfs(ruta)
+        return st.f_bavail * st.f_frsize
+    except Exception:
+        return None
+
+
+def rec_marca(nombre):
+    return os.path.join(CAPT_DIR or '.', nombre)
+
+
+def rec_empezar():
+    """L3: arranca la grabacion que el menu de desarrollo dejo armada."""
+    if not REC['armado'] or REC['dir']:
+        return False
+    destino = REC['armado']
+    try:
+        os.makedirs(destino, exist_ok=True)
+        # hasta = 0 quiere decir "sin limite": lo para R3, no el reloj.
+        with open(rec_marca('.rec'), 'w') as fh:
+            fh.write('0\n%s\n' % destino)
+    except Exception:
+        return False
+    REC.update({'hasta': 0.0, 'dir': destino, 'n': 0, 'desde': time.time(),
+                'poco_disco': False})
+    sys.stderr.write('menu_pygame: grabando (sin limite) en %s\n' % destino)
+    return True
+
+
+def rec_parar(motivo='R3'):
+    """R3: para la grabacion y avisa al vigilante para que monte el video."""
+    if not REC['dir']:
+        return False
+    n, destino = REC['n'], REC['dir']
+    REC.update({'dir': '', 'armado': '', 'hasta': 0.0})
+    try:
+        os.remove(rec_marca('.rec'))
+    except Exception:
+        pass
+    try:
+        os.remove(rec_marca('.rec_armado'))
+    except Exception:
+        pass
+    try:
+        # El vigilante de bash espera ESTE fichero para montar el mp4.
+        with open(rec_marca('.rec_fin'), 'w') as fh:
+            fh.write('%d\n%s\n' % (n, destino))
+    except Exception:
+        pass
+    sys.stderr.write('menu_pygame: grabacion parada por %s (%d fotogramas)\n'
+                     % (motivo, n))
+    return True
+
+
+def rec_pintar_aviso():
+    """El punto rojo y el reloj, DESPUES de guardar el fotograma.
+
+    Se dibuja cuando el fotograma ya esta en disco, asi que sale en la pantalla
+    pero NO en el video: en un tutorial, un "REC" permanente en una esquina
+    seria justo lo que no se quiere ver.
+    """
+    if screen is None:
+        return
+    try:
+        if REC['dir']:
+            seg = int(time.time() - REC['desde'])
+            txt = 'REC  %d:%02d' % (seg // 60, seg % 60)
+            col = (255, 70, 70)
+            punto = (seg % 2 == 0)          # parpadea una vez por segundo
+        elif REC['armado']:
+            txt = 'L3 para empezar a grabar'
+            col = (255, 200, 80)
+            punto = False
+        else:
+            return
+        f = f_sm if f_sm is not None else pygame.font.Font(None, 20)
+        sf = f.render(txt, True, col)
+        x = W - sf.get_width() - FS(16)
+        y = FS(10)
+        fondo = pygame.Surface((sf.get_width() + FS(26), sf.get_height() + FS(8)),
+                               pygame.SRCALPHA)
+        fondo.fill((0, 0, 0, 170))
+        screen.blit(fondo, (x - FS(20), y - FS(4)))
+        if punto:
+            pygame.draw.circle(screen, col, (x - FS(10), y + sf.get_height() // 2),
+                               FS(5))
+        screen.blit(sf, (x, y))
+        pygame.display.update(pygame.Rect(x - FS(22), y - FS(6),
+                                          sf.get_width() + FS(30),
+                                          sf.get_height() + FS(12)))
+    except Exception:
+        pass
 
 def grabar_fotograma():
     # Graba los menus DESDE DENTRO, guardando fotogramas.
@@ -655,24 +872,50 @@ def grabar_fotograma():
     ahora = time.time()
     if ahora - REC['comprobado'] > 1.0:
         REC['comprobado'] = ahora
-        marca = os.path.join(CAPT_DIR or '.', '.rec')
         try:
+            marca = rec_marca('.rec')
             if os.path.isfile(marca):
                 with open(marca) as fh:
                     hasta, destino = fh.read().split('\n')[:2]
-                if float(hasta) > ahora and REC['dir'] != destino:
-                    REC.update({'hasta': float(hasta), 'dir': destino, 'n': 0})
+                hasta = float(hasta)
+                # hasta == 0 es "sin limite": esa la arranca y la para el
+                # mando, no el reloj, y no hay que volver a leerla de aqui.
+                if hasta > ahora and REC['dir'] != destino:
+                    REC.update({'hasta': hasta, 'dir': destino, 'n': 0,
+                                'desde': ahora})
                     os.makedirs(destino, exist_ok=True)
                     sys.stderr.write('menu_pygame: grabando menus en %s\n' % destino)
         except Exception:
             pass
-    if not REC['dir'] or ahora > REC['hasta']:
-        if REC['dir'] and ahora > REC['hasta']:
+        # ¿Hay una grabacion ARMADA esperando a que se pulse L3?
+        try:
+            arm = rec_marca('.rec_armado')
+            if os.path.isfile(arm):
+                if not REC['dir']:
+                    with open(arm) as fh:
+                        REC['armado'] = fh.read().split('\n')[0].strip()
+            elif not REC['dir']:
+                REC['armado'] = ''
+        except Exception:
+            pass
+        # El disco, mientras se graba sin limite: un tutorial largo son miles
+        # de PNG, y quedarse sin sitio a media faena se lleva por delante algo
+        # mas que la grabacion.
+        if REC['dir'] and REC['hasta'] == 0.0:
+            libre = rec_disco_libre(REC['dir'])
+            if libre is not None and libre < REC_DISCO_MINIMO:
+                REC['poco_disco'] = True
+                sys.stderr.write('menu_pygame: queda poco disco, paro de grabar\n')
+                rec_parar('falta de disco')
+    if not REC['dir'] or (REC['hasta'] and ahora > REC['hasta']):
+        if REC['dir'] and REC['hasta'] and ahora > REC['hasta']:
             sys.stderr.write('menu_pygame: grabacion terminada (%d fotogramas)\n'
                              % REC['n'])
             REC['dir'] = ''
+        rec_pintar_aviso()
         return
     if ahora - REC['ultimo'] < 0.1:      # 10 por segundo: suficiente y ligero
+        rec_pintar_aviso()
         return
     REC['ultimo'] = ahora
     try:
@@ -680,6 +923,8 @@ def grabar_fotograma():
         REC['n'] += 1
     except Exception:
         pass
+    # El aviso va DESPUES de guardar: se ve en pantalla y no en el video.
+    rec_pintar_aviso()
 
 def captura():
     # Guarda la pantalla actual del menu. Se hace desde pygame, asi que sale
@@ -718,8 +963,14 @@ def eventos():
         except Exception:
             pass
         try:
+            # SE CIERRA Y NO SE VUELVE A ABRIR.
+            #
+            # Antes se reiniciaba el subsistema, y eso era resucitar justo lo
+            # que apagamos al arrancar: SDL volvia a abrir el mando de la Deck
+            # y a dejar los trackpads muertos, sin que nada lo explicara. Este
+            # menu no usa el joystick de SDL -el mando entra por evdev-, asi
+            # que cerrarlo basta para que event.get() deje de reventar.
             pygame.joystick.quit()
-            pygame.joystick.init()
         except Exception:
             pass
         return []
@@ -813,8 +1064,21 @@ def evdev_thread():
                             # Con una bandera son cosas independientes y no
                             # hay tecla que se pueda pisar mañana.
                             home_req[0] = True
+                elif t == EV_KEY_RAW and c == REC_BTN_PARO and v == 1 and DEV \
+                        and REC['dir']:
+                    rec_parar()                 # R3: parar de grabar
                 elif t == EV_KEY_RAW and c == CAPTURA_BTN and v == 1 and DEV:
-                    post_key(pygame.K_F12)      # la misma via que F12
+                    # L3 HACE DOS COSAS, PERO NUNCA LAS DOS A LA VEZ.
+                    #
+                    # Si hay una grabacion armada desde el menu de desarrollo,
+                    # L3 la arranca. Si no hay ninguna -que es lo normal-, L3
+                    # sigue siendo la captura de pantalla de siempre. Asi no
+                    # hubo que mover la captura a otro boton ni inventar un
+                    # combo para algo que se usa a diario.
+                    if REC['armado'] and not REC['dir']:
+                        rec_empezar()
+                    else:
+                        post_key(pygame.K_F12)      # la misma via que F12
                 elif t == EV_KEY_RAW and c in RAW_BTN and v == 1:
                     if c == 304 and sel_held[0]:
                         sel_combo[0] = True
@@ -992,6 +1256,56 @@ try:
 except ValueError:
     FSCALE = 1.0
 FSCALE = max(0.8, min(2.0, FSCALE))
+# LA LETRA EN PANTALLAS DE MUCHA RESOLUCION (4K).
+#
+# El problema, contado por un tester: en una pantalla 4K las letras se ven
+# diminutas. No es cosa de la fuente, es aritmetica: los tamaños estan en
+# PIXELES, y un pixel de un 4K mide la cuarta parte que uno de un 1080p a
+# la misma distancia. Un titulo de 34 px que se lee comodo en 1080p es una
+# hormiga en 3840x2160.
+#
+# Asi que se mide la pantalla y se sube la letra en la misma proporcion. Un
+# 1080p da 1.0 y no cambia nada; un 1440p, 1.33; un 4K, 2.0.
+#
+# SE MIRA LA VENTANA, NO EL ESCRITORIO, y es a proposito:
+#
+#   - a pantalla completa en un 4K, la ventana ES de 3840x2160: se agranda,
+#     que es lo que se pide;
+#   - en una ventana pequeña dentro de un 4K, la letra tiene que ser la de esa
+#     ventana, no la del escritorio, o no cabria nada;
+#   - y con gamescope dibujando a 1280x800 para escupirlo a un televisor 4K,
+#     aqui se ven 1280x800 y NO se toca nada, que es lo correcto: de agrandarlo
+#     ya se encarga el escalado de gamescope, y hacerlo dos veces daria letras
+#     gigantes.
+#
+# Solo se SUBE, nunca se baja: en pantallas pequeñas manda lo que diga la
+# persona. Y multiplica a su ajuste en vez de sustituirlo, para que "grande"
+# siga siendo mas grande que "normal" tambien en un 4K.
+AUTO_ESCALA = 1.0
+# SE GUARDA LO QUE PIDIO LA PERSONA ANTES DE TOCARLO, y se usa ese numero en el
+# registro en vez de volver a leer la variable de entorno. Leerla otra vez
+# significaria convertirla a numero otra vez, y un valor raro en settings.conf
+# -una letra, un hueco- tumbaria el menu ENTERO por una linea de registro. Lo
+# de arriba ya se encarga de que esto sea un numero valido.
+FS_PERSONA = FSCALE
+if os.environ.get('WP_MENU_AUTO_SCALE', '1') != '0' and screen is not None:
+    try:
+        _aw, _ah = screen.get_size()
+        AUTO_ESCALA = max(1.0, min(2.0, min(_aw / 1920.0, _ah / 1080.0)))
+    except Exception as _e:
+        sys.stderr.write('menu_pygame: no se pudo medir la pantalla para la '
+                         'letra (%s)\n' % _e)
+if AUTO_ESCALA > 1.0:
+    FSCALE = max(0.8, min(3.0, FSCALE * AUTO_ESCALA))
+try:
+    _mw, _mh = screen.get_size() if screen is not None else (0, 0)
+except Exception:
+    _mw, _mh = 0, 0
+sys.stderr.write('menu_pygame: letra: ventana %dx%d | ajuste de la persona '
+                 '%.2f | por resolucion x%.2f | final %.2f%s\n'
+                 % (_mw, _mh, FS_PERSONA, AUTO_ESCALA, FSCALE,
+                    '' if AUTO_ESCALA > 1.0 else
+                    ' (sin subir: la pantalla no da para mas)'))
 def FS(px):
     return max(14, int(px * FSCALE))
 f_tit = pygame.font.Font(None, FS(34))
@@ -1938,8 +2252,20 @@ AYUDAS_ES = [
      'Que forma de caratula se enseña en el panel de la derecha.'),
     ('Carátulas por fila:',
      'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
-    ('Clic con:',
-     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Traer todas las carátulas del repositorio',
+     'Baja de golpe TODAS las 4:3 de covers_43, no solo las de tus juegos: '
+     'cuando añadas uno nuevo su carátula ya estara puesta. Dice cuantas son '
+     'y cuanto ocupan antes de empezar, y no pide clave ninguna.'),
+    ('Clic izquierdo con:',
+     'Que boton del mando hace el clic izquierdo mientras el stick mueve el raton.'),
+    ('Clic derecho con:',
+     'Que boton hace el clic derecho. Hace falta en los juegos que lo usan para '
+     'apuntar o recargar. Se puede dejar sin asignar.'),
+    ('Clic central con:',
+     'Que boton hace el clic de la rueda. Se puede dejar sin asignar.'),
+    ('Botones del ratón',
+     'Cuelga un clic del raton a este boton del mando. Sirve aunque el stick no '
+     'mueva el puntero: WProton crea el raton virtual el solo.'),
     ('Mover con:',
      'Que stick mueve el puntero del raton.'),
     ('Velocidad:',
@@ -3363,6 +3689,13 @@ def run_session():
                         cursor_morado()
                 except Exception:
                     pass
+                # EL UMBRAL: se suma lo movido y hasta llegar no se toca la
+                # seleccion. El cursor SI se enseña desde el primer pixel, que
+                # es lo que quiere quien acaba de coger el raton.
+                _rel = getattr(ev, 'rel', (0, 0))
+                RATON_MOV[0] += abs(_rel[0]) + abs(_rel[1])
+                if RATON_MOV[0] < RATON_UMBRAL:
+                    continue
                 if MODE != 'grid':
                     _i = fila_bajo_raton(ev.pos[0], ev.pos[1], scroll,
                                          vis(), len(view))
@@ -3442,7 +3775,7 @@ def run_session():
                 elif ev.button in (4, 5):
                     # Rueda en pygame antiguo: se mueve igual, sin teclas.
                     if MODE != 'grid':
-                        _paso = max(1, vis() // 3)
+                        _paso = paso_rueda()
                         mover_vista(-_paso if ev.button == 4 else _paso)
                     else:
                         grid_move(0, -1 if ev.button == 4 else 1)
@@ -3473,7 +3806,7 @@ def run_session():
                     # otro extremo de un golpe y se perdia el sitio. Un tercio
                     # deja siempre varias filas en comun entre antes y despues,
                     # que es lo que hace que la vista se siga con la mirada.
-                    _paso = max(1, vis() // 3) * min(abs(_y), 3)
+                    _paso = paso_rueda() * min(abs(_y), 3)
                     mover_vista(-_paso if _y > 0 else _paso)
                 elif _y:
                     grid_move(0, -1 if _y > 0 else 1)
@@ -3481,6 +3814,12 @@ def run_session():
                 if DEV and ev.key == pygame.K_F12:
                     captura()
                     continue
+                # CADA TECLA REINICIA EL CONTADOR DEL RATON.
+                #
+                # Asi el umbral se mide desde la ultima vez que usaste el mando
+                # o el teclado: en cuanto navegas con ellos, el raton tiene que
+                # moverse de verdad para volver a mandar.
+                RATON_MOV[0] = 0.0
                 t_now = time.time()
                 if ev.key == _last_key[0] and (t_now - _last_key[1]) < DEBOUNCE:
                     continue
@@ -4218,61 +4557,574 @@ def generar_imagenes(destino):
         print(r)
     return 0 if hechas else 1
 
-def ocultar_cursor():
-    # Esconde el puntero del raton mientras se juega.
-    #
-    # Al arrancar un juego se queda el puntero en medio de la pantalla hasta
-    # que lo mueves. Con la extension XFixes de las X se puede ocultar para
-    # toda la pantalla, y se restaura solo cuando este proceso termina, que es
-    # justo cuando acaba la partida.
-    #
-    # Se usa ctypes: nada que instalar. Si algo falla, se deja como estaba.
+# --- EL PUNTERO MIENTRAS SE JUEGA -------------------------------------------
+# Los tipos de ctypes van aqui arriba porque hay que guardarlos: si el
+# manejador de errores de X se lo lleva el recolector de basura, X llama a una
+# funcion que ya no existe y el proceso se cae.
+import ctypes as _ct_cursor
+
+CB_ERROR_X = _ct_cursor.CFUNCTYPE(_ct_cursor.c_int, _ct_cursor.c_void_p,
+                                  _ct_cursor.c_void_p)
+
+
+class XColor(_ct_cursor.Structure):
+    """El color de un cursor. Para uno transparente da igual lo que lleve."""
+    _fields_ = [('pixel', _ct_cursor.c_ulong),
+                ('red', _ct_cursor.c_ushort),
+                ('green', _ct_cursor.c_ushort),
+                ('blue', _ct_cursor.c_ushort),
+                ('flags', _ct_cursor.c_char),
+                ('pad', _ct_cursor.c_char)]
+
+
+def cursor_pantallas():
+    """Las pantallas X que hay en esta sesion, empezando por la nuestra.
+
+    POR QUE MAS DE UNA, QUE ES EL FALLO QUE ESTO ARREGLA
+    ===================================================
+    El vigilante hereda el DISPLAY del WProton que lo lanza, pero el juego no
+    siempre pinta ahi: con gamescope por medio, gamescope levanta su propio
+    XWayland -otra pantalla, normalmente :1- y es EL JUEGO el que se mueve
+    alli. Escondiendo el puntero solo en nuestro DISPLAY, el de la pantalla
+    donde esta el juego seguia a la vista. Eso es, palabra por palabra, lo que
+    se veia en la captura de Nine Sols.
+
+    Asi que se buscan todas: la de DISPLAY y las que tengan socket en
+    /tmp/.X11-unix, que es donde los servidores X los dejan. Se intenta abrir
+    cada una y nos quedamos con las que contesten.
+    """
+    nombres = []
+    propia = os.environ.get('DISPLAY')
+    if propia:
+        nombres.append(propia)
+    try:
+        for s in sorted(os.listdir('/tmp/.X11-unix')):
+            if s.startswith('X') and s[1:].isdigit():
+                n = ':' + s[1:]
+                if n not in nombres:
+                    nombres.append(n)
+    except OSError:
+        pass
+    return nombres
+
+
+def cursor_abrir():
+    """Prepara el escondido del puntero mientras se juega. Devuelve estado o None.
+
+    LA TERCERA, Y ESTA VEZ MIRANDO LO QUE PASA DE VERDAD
+    ====================================================
+    Van dos intentos fallidos y conviene dejarlos escritos, porque los dos
+    fallaron por dar algo por supuesto:
+
+      1. XFixesHideCursor a secas, para siempre. Ocultaba el puntero de TODA
+         la pantalla mientras la conexion siguiera abierta, asi que tambien
+         el del juego: en los menus de configuracion no habia con que pinchar.
+         Y encima solo tocaba NUESTRA pantalla, asi que con gamescope por
+         medio el puntero seguia viendose igual.
+
+      2. Un movimiento minimo del puntero, un pixel y vuelta, confiando en el
+         comentario antiguo que decia "se queda en medio de la pantalla hasta
+         que lo mueves". Eso no es cierto en un juego de Unity como Nine Sols:
+         el puntero no se esconde porque se mueva. Moverlo, si acaso, es lo
+         que lo hace aparecer.
+
+    LO QUE SI FUNCIONA, Y ES LO QUE HACE TODO EL MUNDO
+    ==================================================
+    Esconderlo POR INACTIVIDAD, como unclutter: si pasan unos segundos sin
+    que el raton se mueva -que es lo que pasa cuando juegas con el mando-, se
+    esconde; y en cuanto lo mueves, vuelve.
+
+    Eso arregla las dos quejas a la vez, y por eso es el buen camino:
+      - el puntero desaparece de verdad, no solo "se aparta";
+      - y el cursor del juego se puede usar: mueves el raton y esta ahi. En
+        los menus de configuracion no se pierde nada.
+
+    Si el juego captura el raton y lo deja clavado -los juegos en primera
+    persona lo hacen-, para nosotros es "no se mueve" y se queda escondido,
+    que es justo lo que se quiere ahi.
+
+    Y se hace en TODAS las pantallas de la sesion a la vez, por lo que cuenta
+    cursor_pantallas: con gamescope el juego vive en una pantalla distinta de
+    la nuestra y no se sabe de antemano cual de las dos se esta mirando.
+    """
     if os.environ.get('WP_OCULTAR_CURSOR') == '0':
         return None
-    if not os.environ.get('DISPLAY'):
+    try:
+        segundos = float(os.environ.get('WP_CURSOR_SEGUNDOS', '3') or 3)
+    except (TypeError, ValueError):
+        segundos = 3.0
+    if segundos < 0.5:
+        segundos = 0.5
+    # EL UMBRAL: cuanto hay que mover el raton para que cuente como que lo
+    # esta moviendo una persona. Sin esto, un equipo de juego nunca tiene el
+    # puntero del todo quieto -Steam Input, un trackpad haciendo de raton, un
+    # stick con deriva- y el puntero no se escondia nunca.
+    try:
+        umbral = int(os.environ.get('WP_CURSOR_UMBRAL', '8') or 8)
+    except (TypeError, ValueError):
+        umbral = 8
+    if umbral < 0:
+        umbral = 0
+    nombres = cursor_pantallas()
+    if not nombres:
         return None
     try:
         import ctypes, ctypes.util
         x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
         fixes = ctypes.CDLL(ctypes.util.find_library('Xfixes') or 'libXfixes.so.3')
         x11.XOpenDisplay.restype = ctypes.c_void_p
-        dpy = x11.XOpenDisplay(None)
-        if not dpy:
-            sys.stderr.write('menu_pygame: no se pudo abrir la pantalla para '
-                             'ocultar el cursor\n')
-            return None
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
         x11.XDefaultRootWindow.restype = ctypes.c_ulong
         x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
-        raiz = x11.XDefaultRootWindow(ctypes.c_void_p(dpy))
+        x11.XQueryPointer.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint)]
+        x11.XQueryPointer.restype = ctypes.c_int
         fixes.XFixesHideCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
-        fixes.XFixesHideCursor(ctypes.c_void_p(dpy), raiz)
-        # Ademas se aparta el puntero a la esquina inferior derecha. XFixes
-        # solo lo oculta mientras esta conexion siga abierta, y algunos juegos
-        # vuelven a mostrarlo por su cuenta; apartado, al menos no molesta en
-        # medio de la pantalla.
-        try:
-            x11.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
-                                         ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
-                                         ctypes.c_uint, ctypes.c_uint,
-                                         ctypes.c_int, ctypes.c_int]
-            x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            an = x11.XDisplayWidth(ctypes.c_void_p(dpy), 0)
-            al = x11.XDisplayHeight(ctypes.c_void_p(dpy), 0)
-            x11.XWarpPointer(ctypes.c_void_p(dpy), 0, raiz, 0, 0, 0, 0,
-                             int(an) - 1, int(al) - 1)
-        except Exception:
-            pass
-        x11.XFlush(ctypes.c_void_p(dpy))
-        sys.stderr.write('menu_pygame: cursor oculto en %s (si el juego corre en '
-                         'otra pantalla, p.ej. gamescope anidado, no le afecta)\n'
-                         % os.environ.get('DISPLAY'))
-        # se devuelve la conexion: mientras siga abierta, el cursor sigue
-        # oculto. Al morir este proceso, las X lo restauran solas.
-        return (x11, dpy)
+        fixes.XFixesShowCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        fixes.XFixesQueryVersion.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int)]
+        # EL SEGUNDO METODO: un cursor TRANSPARENTE puesto en la ventana.
+        #
+        # Hace falta porque XFixesHideCursor no siempre llega a la pantalla.
+        # En una sesion Wayland -lo normal en CachyOS con KDE- el puntero no
+        # lo dibuja X: lo dibuja el compositor, y el juego corre dentro de
+        # XWayland. Esconderlo "a lo X11" puede quedarse en nada, que es por
+        # lo que unclutter tampoco funciona en Wayland.
+        #
+        # Lo que SI cruza siempre es el cursor normal de una ventana, porque
+        # es como cualquier programa enseña el suyo: XWayland se lo pasa al
+        # compositor y el compositor lo pinta. Si ese cursor es transparente,
+        # no se ve nada. Asi que se hacen las dos cosas a la vez.
+        x11.XCreateBitmapFromData.restype = ctypes.c_ulong
+        x11.XCreateBitmapFromData.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_char_p,
+            ctypes.c_uint, ctypes.c_uint]
+        x11.XCreatePixmapCursor.restype = ctypes.c_ulong
+        x11.XCreatePixmapCursor.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        x11.XFreePixmap.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                      ctypes.c_ulong]
+        x11.XUndefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
     except Exception as e:
-        sys.stderr.write('menu_pygame: no se pudo ocultar el cursor (%s)\n' % e)
+        sys.stderr.write('menu_pygame: no se pudieron cargar las X para el '
+                         'puntero (%s)\n' % e)
         return None
+    # LOS ERRORES DE X NO PUEDEN MATAR AL VIGILANTE.
+    #
+    # Xlib, de serie, ante un error del protocolo IMPRIME Y SALE. Y aqui se
+    # tocan ventanas de otro programa -las del juego-, que pueden
+    # desaparecer entre que se miran y se tocan. Sin esto, un juego cerrando
+    # una ventana en el momento justo se llevaria por delante el vigilante, y
+    # con el, el cierre del juego con el mando. El puntero no vale eso.
+    fallos = [0]
+
+    def _callar(dpy, ev):
+        fallos[0] += 1
+        return 0
+    guardia_err = CB_ERROR_X(_callar)
+    try:
+        x11.XSetErrorHandler.argtypes = [CB_ERROR_X]
+        x11.XSetErrorHandler.restype = ctypes.c_void_p
+        x11.XSetErrorHandler(guardia_err)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: puntero: no se pudo callar los errores '
+                         'de X (%s); se seguira sin tocar ventanas\n' % e)
+        guardia_err = None
+    sesion = (os.environ.get('XDG_SESSION_TYPE') or '').lower()
+    wayland = bool(os.environ.get('WAYLAND_DISPLAY')) or sesion == 'wayland'
+    escritorio = os.environ.get('XDG_CURRENT_DESKTOP') or '?'
+    if wayland:
+        sys.stderr.write(
+            'menu_pygame: puntero: sesion WAYLAND (%s). Aqui el puntero lo '
+            'dibuja el compositor y el juego va por XWayland, asi que '
+            'esconderlo a lo X11 puede no servir de nada: se usara ademas un '
+            'cursor transparente en la ventana, que es lo que si cruza.\n'
+            % escritorio)
+    else:
+        sys.stderr.write('menu_pygame: puntero: sesion %s (%s)\n'
+                         % (sesion or 'x11', escritorio))
+    pantallas = []
+    for nombre in nombres:
+        try:
+            dpy = x11.XOpenDisplay(nombre.encode())
+        except Exception as e:
+            sys.stderr.write('menu_pygame: puntero: la pantalla %s no se pudo '
+                             'abrir (%s)\n' % (nombre, e))
+            continue
+        if not dpy:
+            sys.stderr.write('menu_pygame: puntero: la pantalla %s no '
+                             'contesta\n' % nombre)
+            continue
+        # SE PREGUNTA SI XFIXES ESTA DE VERDAD, y se apunta en el log.
+        #
+        # Esconder el puntero lo hace XFixes, no las X a secas. Si el servidor
+        # no la trae, las llamadas no dan error: simplemente no hacen nada, y
+        # el puntero se queda en pantalla sin que nada lo diga. Mejor que lo
+        # diga el log antes de empezar.
+        try:
+            fmay = ctypes.c_int(); fmen = ctypes.c_int()
+            hay = fixes.XFixesQueryVersion(ctypes.c_void_p(dpy),
+                                           ctypes.byref(fmay),
+                                           ctypes.byref(fmen))
+            version = ('XFixes %d.%d' % (fmay.value, fmen.value)) if hay \
+                else 'SIN XFixes'
+        except Exception as e:
+            hay, version = 0, 'no se pudo preguntar por XFixes (%s)' % e
+        if not hay:
+            sys.stderr.write('menu_pygame: puntero: en %s no hay XFixes (%s), '
+                             'ahi no se podra esconder\n' % (nombre, version))
+            continue
+        raiz = x11.XDefaultRootWindow(ctypes.c_void_p(dpy))
+        pantallas.append({'nombre': nombre, 'dpy': dpy, 'raiz': raiz,
+                          'version': version, 'vacio': 0, 'tapada': 0})
+    if not pantallas:
+        sys.stderr.write('menu_pygame: no hay ninguna pantalla donde esconder '
+                         'el puntero (se probaron: %s)\n' % ', '.join(nombres))
+        return None
+    sys.stderr.write('menu_pygame: el puntero se escondera tras %.1f s sin '
+                     'moverlo mas de %d px, y volvera en cuanto lo muevas; '
+                     'con el mando en la mano, a 1 s. En %d pantalla(s): %s\n'
+                     % (segundos, umbral, len(pantallas),
+                        '; '.join('%s [%s]' % (p['nombre'], p['version'])
+                                  for p in pantallas)))
+    return {'ctypes': ctypes, 'x11': x11, 'fixes': fixes,
+            'pantallas': pantallas, 'segundos': segundos, 'umbral': umbral,
+            'wayland': wayland, 'sesion': sesion or 'x11', 'err': guardia_err,
+            'fallos': fallos,
+            'pos': None, 'quieto_desde': None, 'oculto': False,
+            'mirado': None, 'mando': 0, 'mando_desde': None,
+            'movidas': 0, 'temblores': 0, 't0': 0.0,
+            'informes': 0, 'informado': None}
+
+
+def cursor_donde(estado):
+    """Donde esta el puntero en cada pantalla, o None si no se sabe en ninguna.
+
+    Devuelve una tupla con una posicion -o None- por pantalla, para poder
+    comparar de una vez: si cambia cualquiera de ellas, el raton se ha movido.
+    """
+    ctypes = estado['ctypes']
+    sitios = []
+    alguna = False
+    for p in estado['pantallas']:
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        try:
+            ok = estado['x11'].XQueryPointer(
+                ctypes.c_void_p(p['dpy']), p['raiz'],
+                ctypes.byref(rr), ctypes.byref(cr),
+                ctypes.byref(rx), ctypes.byref(ry),
+                ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mk))
+        except Exception:
+            sitios.append(None)
+            continue
+        if not ok:
+            # El puntero no esta en esta pantalla: ahi no hay nada que mirar.
+            sitios.append(None)
+            continue
+        alguna = True
+        sitios.append((rx.value, ry.value))
+    return tuple(sitios) if alguna else None
+
+
+def cursor_salto(antes, ahora_pos):
+    """Cuantos pixeles se ha movido el puntero, mirando la pantalla que mas.
+
+    Se usa la distancia mas grande de las dos coordenadas (no la diagonal)
+    porque lo unico que se quiere saber es si ha habido movimiento DE VERDAD,
+    y asi un numero sale igual de claro en el registro.
+    """
+    if antes is None or ahora_pos is None:
+        return 0
+    lejos = 0
+    for a, b in zip(antes, ahora_pos):
+        if a is None or b is None:
+            continue
+        lejos = max(lejos, abs(a[0] - b[0]), abs(a[1] - b[1]))
+    return lejos
+
+
+def cursor_vacio(estado, p):
+    """Un cursor totalmente transparente para esa pantalla. Se hace una vez.
+
+    Es la receta de siempre: un mapa de bits de 1x1 apagado sirve de dibujo y
+    de mascara, y con la mascara a cero no se pinta ni un pixel.
+    """
+    if p.get('vacio'):
+        return p['vacio']
+    ctypes = estado['ctypes']
+    x11 = estado['x11']
+    try:
+        pix = x11.XCreateBitmapFromData(ctypes.c_void_p(p['dpy']), p['raiz'],
+                                        b'\x00', 1, 1)
+        if not pix:
+            return 0
+        col = XColor()
+        cur = x11.XCreatePixmapCursor(ctypes.c_void_p(p['dpy']), pix, pix,
+                                      ctypes.byref(col), ctypes.byref(col),
+                                      0, 0)
+        x11.XFreePixmap(ctypes.c_void_p(p['dpy']), pix)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: puntero: no se pudo hacer el cursor '
+                         'transparente en %s (%s)\n' % (p['nombre'], e))
+        return 0
+    p['vacio'] = cur or 0
+    return p['vacio']
+
+
+def cursor_hoja(estado, p):
+    """La ventana mas honda que hay debajo del puntero, o 0.
+
+    Se baja hasta el fondo porque X busca el cursor empezando por la ventana
+    donde esta el puntero y subiendo: poniendolo en la mas honda, es el que
+    manda. Esa suele ser la ventana del juego.
+    """
+    ctypes = estado['ctypes']
+    win = p['raiz']
+    for _ in range(16):          # tope: un arbol de ventanas no es infinito
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        try:
+            ok = estado['x11'].XQueryPointer(
+                ctypes.c_void_p(p['dpy']), win,
+                ctypes.byref(rr), ctypes.byref(cr),
+                ctypes.byref(rx), ctypes.byref(ry),
+                ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mk))
+        except Exception:
+            return 0
+        if not ok or not cr.value:
+            break
+        win = cr.value
+    return win
+
+
+def cursor_tapar(estado, p):
+    """Pone el cursor transparente en la ventana que hay bajo el puntero.
+
+    Se vuelve a llamar en cada vuelta mientras esta escondido, porque el juego
+    pone el suyo cada vez que le apetece -Wine lo hace con cada WM_SETCURSOR-
+    y si no se repite, el puntero vuelve a aparecer solo.
+    """
+    vacio = cursor_vacio(estado, p)
+    if not vacio:
+        return False
+    win = cursor_hoja(estado, p)
+    if not win:
+        return False
+    ctypes = estado['ctypes']
+    try:
+        if p.get('tapada') and p['tapada'] != win:
+            estado['x11'].XUndefineCursor(ctypes.c_void_p(p['dpy']),
+                                          p['tapada'])
+        estado['x11'].XDefineCursor(ctypes.c_void_p(p['dpy']), win, vacio)
+        estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+    except Exception:
+        return False
+    p['tapada'] = win
+    return True
+
+
+def cursor_destapar(estado, p):
+    """Quita el cursor transparente para que el juego vuelva a poner el suyo."""
+    if not p.get('tapada'):
+        return
+    ctypes = estado['ctypes']
+    try:
+        estado['x11'].XUndefineCursor(ctypes.c_void_p(p['dpy']), p['tapada'])
+        estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+    except Exception:
+        pass
+    p['tapada'] = 0
+
+
+def cursor_poner(estado, oculto):
+    """Esconde o ensena el puntero en todas las pantallas. True si hubo cambio."""
+    if estado['oculto'] == oculto:
+        return False
+    ctypes = estado['ctypes']
+    hechas = 0
+    tapadas = 0
+    for p in estado['pantallas']:
+        try:
+            if oculto:
+                estado['fixes'].XFixesHideCursor(ctypes.c_void_p(p['dpy']),
+                                                 p['raiz'])
+            else:
+                estado['fixes'].XFixesShowCursor(ctypes.c_void_p(p['dpy']),
+                                                 p['raiz'])
+            estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+            hechas += 1
+        except Exception as e:
+            sys.stderr.write('menu_pygame: no se pudo %s el puntero en %s '
+                             '(%s)\n' % ('esconder' if oculto else 'ensenar',
+                                         p['nombre'], e))
+        # Y EL SEGUNDO METODO, siempre: en Wayland el de arriba puede no
+        # servir de nada y este es el que llega.
+        if oculto:
+            if cursor_tapar(estado, p):
+                tapadas += 1
+        else:
+            cursor_destapar(estado, p)
+    if not hechas and not tapadas:
+        return False
+    estado['oculto'] = oculto
+    if oculto:
+        estado['tapadas'] = tapadas
+    return True
+
+
+def cursor_informe(estado, ahora, pos):
+    """Cada cierto tiempo, POR QUE el puntero sigue a la vista.
+
+    ESTO ES LO QUE FALTABA EN LOS DOS INTENTOS ANTERIORES: cuando no
+    funcionaba, el registro no decia nada y habia que adivinar. Si el puntero
+    sigue en pantalla, aqui queda escrito cuanto se esta moviendo, cuando fue
+    la ultima vez que se movio de verdad y si el mando esta mandando eventos.
+    Con eso se distingue "no se intenta esconder" de "se esconde y algo lo
+    vuelve a pintar", que son dos averias distintas.
+    """
+    if estado['oculto']:
+        return
+    if ahora - estado['t0'] < 10:
+        return
+    if estado['informes'] >= 20:
+        return
+    if estado['informado'] is not None and ahora - estado['informado'] < 60:
+        return
+    estado['informado'] = ahora
+    estado['informes'] += 1
+    sys.stderr.write(
+        'menu_pygame: puntero: SIGUE A LA VISTA tras %.0f s. '
+        'Sesion %s. Ultimo movimiento de verdad hace %.1f s (hacen falta '
+        '%.1f s quieto); se ha movido %d veces mas del umbral (%d px) y %d '
+        'veces menos; ahora esta en %s; eventos de mando: %d; errores de X: '
+        '%d. Si los movimientos no paran de subir, algo mueve el raton solo '
+        '(Steam Input, un trackpad haciendo de raton o un stick que deriva) y '
+        'por eso no se esconde: sube CURSOR_UMBRAL. Si NO suben, es que se '
+        'manda esconder y algo lo vuelve a pintar.\n'
+        % (ahora - estado['t0'], estado['sesion'],
+           ahora - estado['quieto_desde'],
+           estado['segundos'], estado['movidas'], estado['umbral'],
+           estado['temblores'],
+           ', '.join('%s=%s' % (p['nombre'], q)
+                     for p, q in zip(estado['pantallas'], pos or ())),
+           estado['mando'], estado['fallos'][0]))
+
+
+def cursor_vigilar(estado, ahora, mando=0):
+    """Esconde el puntero si lleva quieto, y lo ensena en cuanto se mueve.
+
+    Se llama desde el bucle del guardia, que ya da vueltas cada 50 ms. Mirar
+    donde esta el puntero es una pregunta al servidor X, asi que se hace cada
+    200 ms y no en cada vuelta: con eso el puntero reaparece al instante para
+    quien lo mueve y no se le da trabajo de mas a nadie.
+
+    - mando: cuantas veces ha llegado algo de un mando. Solo importa que
+      CAMBIE: si cambia, quien juega esta con el mando y no con el raton.
+
+    POR QUE NO VALE COMPARAR LOS PIXELES EXACTOS
+    ============================================
+    La primera version de esto pedia que el puntero estuviera EXACTAMENTE en
+    el mismo pixel. Y resulta que en un equipo de juego el puntero casi nunca
+    esta exactamente quieto: Steam Input puede estar emulando un raton, un
+    trackpad haciendo de raton manda movimiento con solo apoyar el dedo, y un
+    stick con deriva empuja un pixel cada tanto. Con cualquiera de esas tres
+    cosas el puntero nunca llegaba a estar "quieto" y NO SE ESCONDIA NUNCA,
+    que es exactamente lo que se seguia viendo en pantalla.
+
+    Asi que ahora se pide que se mueva MAS DE UN UMBRAL (CURSOR_UMBRAL, 8 px
+    por omision) para contarlo como "el usuario esta usando el raton". Un
+    temblor de uno o dos pixeles ya no cuenta, y mover el raton de verdad
+    sigue devolviendo el puntero al instante.
+
+    Y ADEMAS SE MIRA EL MANDO, que es algo que unclutter no tiene y nosotros
+    si: si estan llegando eventos del mando, quien juega NO esta en el raton,
+    asi que con un segundo quieto basta para esconderlo.
+    """
+    if not estado:
+        return
+    # La primera mirada no se salta nunca: 'mirado' empieza sin valor en vez
+    # de en cero porque el reloj que entra aqui es time.time(), pero el que
+    # entra en las pruebas empieza en cero y ahi un cero inicial se comia la
+    # primera mirada.
+    if estado['mirado'] is not None and ahora - estado['mirado'] < 0.2:
+        return
+    estado['mirado'] = ahora
+    pos = cursor_donde(estado)
+    if pos is None:
+        return
+    if estado['pos'] is None:
+        estado['pos'] = pos
+        estado['quieto_desde'] = ahora
+        estado['mando'] = mando
+        estado['t0'] = ahora
+        return
+    if mando != estado['mando']:
+        # Ha llegado algo de un mando: se esta jugando con el, no con el raton.
+        estado['mando'] = mando
+        estado['mando_desde'] = ahora
+    salto = cursor_salto(estado['pos'], pos)
+    if salto > estado['umbral']:
+        # SE HA MOVIDO DE VERDAD: vuelve, y se empieza a contar otra vez.
+        estado['pos'] = pos
+        estado['quieto_desde'] = ahora
+        estado['movidas'] += 1
+        if cursor_poner(estado, False):
+            sys.stderr.write('menu_pygame: el raton se movio %d px: puntero '
+                             'visible\n' % salto)
+        return
+    if salto:
+        # Tiembla, pero no es el usuario. No se actualiza la posicion de
+        # referencia: asi un temblor lento acaba sumando y contando como
+        # movimiento de verdad, en vez de reiniciar la cuenta cada vez.
+        estado['temblores'] += 1
+    espera = estado['segundos']
+    if estado['mando_desde'] is not None and ahora - estado['mando_desde'] < 5:
+        # Con el mando en la mano no hay que esperar tanto.
+        espera = min(espera, 1.0)
+    if not estado['oculto'] and ahora - estado['quieto_desde'] >= espera:
+        if cursor_poner(estado, True):
+            sys.stderr.write('menu_pygame: %.1f s sin mover el raton%s: '
+                             'puntero escondido (XFixes en %d pantalla(s), '
+                             'cursor transparente en %d)\n'
+                             % (espera, ' (jugando con el mando)'
+                                if espera < estado['segundos'] else '',
+                                len(estado['pantallas']),
+                                estado.get('tapadas', 0)))
+    elif estado['oculto']:
+        # SE VUELVE A PONER EL CURSOR TRANSPARENTE EN CADA VUELTA.
+        #
+        # El juego pone el suyo cuando quiere -Wine lo hace cada vez que la
+        # ventana pide un cursor- y entonces el nuestro se pierde y el puntero
+        # reaparece sin que nadie lo haya movido. Repetirlo cuesta una llamada
+        # cada 200 ms y evita justo eso.
+        for p in estado['pantallas']:
+            cursor_tapar(estado, p)
+    cursor_informe(estado, ahora, pos)
+
+
+def cursor_cerrar(estado):
+    """Deja el puntero visible al acabar la partida. Se llama siempre."""
+    if not estado:
+        return
+    cursor_poner(estado, False)
+    # Y por si acaso: ninguna ventana se queda con nuestro cursor transparente
+    # aunque el estado diga que ya estaba visible.
+    for p in estado.get('pantallas', ()):
+        cursor_destapar(estado, p)
+
 
 def reloj_salida(desde, pulsado, soltado, ahora, segundos):
     """Decide si toca cerrar el juego. Devuelve (nuevo_desde, cerrar).
@@ -4348,14 +5200,14 @@ def guardia(marca, segundos=5.0, combo='select'):
     ultimo_escaneo = 0.0
     sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para cerrar)\n'
                      % (nombre_combo, segundos))
-    # El cursor se oculta aqui y se restaura solo al terminar este proceso,
-    # que es cuando acaba la partida.
+    # EL PUNTERO: un movimiento minimo, repartido en los primeros segundos.
+    #
     # El cursor es lo MENOS importante del guardia: si algo va mal ahi, no
     # puede llevarse por delante el cierre del juego.
     try:
-        _cursor = ocultar_cursor()
+        _cursor = cursor_abrir()
     except Exception as e:
-        sys.stderr.write('menu_pygame: fallo ocultando el cursor (%s)\n' % e)
+        sys.stderr.write('menu_pygame: fallo preparando el puntero (%s)\n' % e)
         _cursor = None
     _t0 = time.time()
     _vistos = [0]
@@ -4485,6 +5337,22 @@ def guardia(marca, segundos=5.0, combo='select'):
                             del _desde[c]
         # Si a los 60 segundos no ha llegado NI UN evento, es que no se puede
         # leer el mando (permisos), no que el usuario no pulse nada.
+        # EL PUNTERO, DESDE EL BUCLE.
+        #
+        # Aqui y no en un hilo: este bucle ya da vueltas cada 50 ms, asi que
+        # mirar un reloj es gratis, y un hilo mas en el guardia es una cosa
+        # mas que puede fallar justo donde no queremos -el cierre del juego-.
+        #
+        # Y envuelto, porque el puntero es lo MENOS importante de este
+        # proceso: si las X se van -gamescope reinicia su XWayland al cerrar
+        # un juego- esto no puede llevarse por delante el cierre con el mando.
+        if _cursor:
+            try:
+                cursor_vigilar(_cursor, ahora, _vistos[0])
+            except Exception as _e:
+                sys.stderr.write('menu_pygame: se deja de vigilar el puntero '
+                                 '(%s)\n' % _e)
+                _cursor = None
         if _vistos[0] == 0 and 'mudo' not in avisado and time.time() - _t0 > 60:
             avisado.add('mudo')
             sys.stderr.write('menu_pygame: guardia: 60s sin recibir NADA de %d '
@@ -4513,6 +5381,12 @@ def guardia(marca, segundos=5.0, combo='select'):
                 pass
             sys.stderr.write('menu_pygame: %s mantenido en %s -> cerrar el juego\n'
                              % (nombre_combo, cual))
+            # EL PUNTERO VISIBLE ANTES DE IRSE.
+            #
+            # Al cerrar nuestra conexion las X lo restauran solas, pero si el
+            # guardia sale por aqui y el proceso tarda en morir, el usuario se
+            # queda unos segundos sin puntero en el escritorio. Se enseña y ya.
+            cursor_cerrar(_cursor)
             return 0
         if cual is None:
             # Diagnostico: si se mantiene algo mucho rato y NO es la

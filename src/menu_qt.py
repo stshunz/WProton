@@ -1030,8 +1030,20 @@ AYUDAS_ES = [
      'Que forma de caratula se enseña en el panel de la derecha.'),
     ('Carátulas por fila:',
      'Cuantas caben en la rejilla. Menos por fila, mas grandes.'),
-    ('Clic con:',
-     'Que boton hace de clic cuando el mando mueve el raton.'),
+    ('Traer todas las carátulas del repositorio',
+     'Baja de golpe TODAS las 4:3 de covers_43, no solo las de tus juegos: '
+     'cuando añadas uno nuevo su carátula ya estara puesta. Dice cuantas son '
+     'y cuanto ocupan antes de empezar, y no pide clave ninguna.'),
+    ('Clic izquierdo con:',
+     'Que boton del mando hace el clic izquierdo mientras el stick mueve el raton.'),
+    ('Clic derecho con:',
+     'Que boton hace el clic derecho. Hace falta en los juegos que lo usan para '
+     'apuntar o recargar. Se puede dejar sin asignar.'),
+    ('Clic central con:',
+     'Que boton hace el clic de la rueda. Se puede dejar sin asignar.'),
+    ('Botones del ratón',
+     'Cuelga un clic del raton a este boton del mando. Sirve aunque el stick no '
+     'mueva el puntero: WProton crea el raton virtual el solo.'),
     ('Mover con:',
      'Que stick mueve el puntero del raton.'),
     ('Velocidad:',

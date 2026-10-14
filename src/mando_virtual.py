@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# WProton - mando virtual (presenta al juego un mando distinto del tuyo)
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
 """Mando virtual: presenta al juego un mando distinto del que tienes.
 
 QUE PROBLEMA RESUELVE
@@ -29,6 +38,11 @@ USO
 
         modo         cruceta_stick | copia
         dispositivo  /dev/input/eventN (si no, se busca solo)
+        sticks       1 = intercambia el stick izquierdo con el derecho
+
+    mando_virtual.py mandos [segundos]
+
+        No crea ningun mando: lista los que hay y dice cual manda eventos.
 
 Se para con SIGTERM, y al hacerlo suelta el mando fisico.
 """
@@ -311,6 +325,166 @@ def buscar_mando():
     return None
 
 
+# ---------------------------------------------------------------------------
+# QUE MANDOS HAY Y CUAL SE ESTA USANDO DE VERDAD
+# ---------------------------------------------------------------------------
+# POR QUE HACE FALTA
+#
+# WProton ya apuntaba en el registro los mandos que ve el sistema, pero eso es
+# una LISTA, no una respuesta. En una Steam Deck, o en un escritorio con Steam
+# abierto, lo normal es ver DOS: el fisico y el "Microsoft X-Box 360 pad 0",
+# que es el virtual que ofrece Steam Input. Y los ajustes del juego -el puente
+# de Steam Input, el arreglo de los mandos Sony- dependen de cual de los dos
+# va a usar el juego, no de cuantos hay.
+#
+# Adivinarlo por el nombre no vale: el virtual de Steam SE HACE PASAR por un
+# Xbox 360, asi que por nombre y por fabricante/modelo son indistinguibles de
+# uno de verdad. Lo que si distingue:
+#
+#   - El sysfs: los virtuales cuelgan de /devices/virtual/.
+#   - La lista de Steam: cuando Steam esconde el fisico, mete su
+#     fabricante:modelo en SDL_GAMECONTROLLER_IGNORE_DEVICES.
+#   - Y sobre todo: CUAL MANDA EVENTOS cuando mueves el stick. Eso no se
+#     deduce, se mide.
+VENDOR_VALVE = 0x28DE
+VENDOR_SONY  = 0x054C
+VENDOR_MS    = 0x045E
+
+
+def _sysfs_de(dev):
+    """La ruta en sysfs del dispositivo, o "" si no se puede saber."""
+    try:
+        base = os.path.basename(dev.path)          # eventN
+        return os.path.realpath('/sys/class/input/%s' % base)
+    except Exception:
+        return ''
+
+
+def _ignorados_por_steam():
+    """Los "fabricante:modelo" que Steam pide ignorar, en minusculas.
+
+    EL FORMATO NO ES UNO, SON VARIOS. Steam escribe estas listas como
+    "0x045e/0x028e,0x054c/0x0ce6" -con 0x y con barra-, pero por ahi se ven
+    tambien escritas con dos puntos y sin prefijo. Un primer intento partia
+    por comas y le quitaba el "0x" con lstrip('0x'), y eso estaba mal dos
+    veces: lstrip quita TODOS los ceros y equis del principio, asi que
+    "045e:028e" se quedaba en "45e:028e", y las barras no se partian.
+    Resultado: la lista nunca casaba con nada.
+
+    Asi que no se parsea un formato concreto: se sacan todos los grupos de
+    cuatro digitos hexadecimales y se emparejan de dos en dos, que es lo que
+    son -fabricante y modelo-, venga escrito como venga.
+    """
+    import re
+    bruto = (os.environ.get('SDL_GAMECONTROLLER_IGNORE_DEVICES', '') + ',' +
+             os.environ.get('SDL_JOYSTICK_HIDAPI_IGNORE_DEVICES', ''))
+    grupos = [t.lower() for t in re.split(r'[^0-9a-fA-F]+', bruto)
+              if len(t) == 4]
+    return {'%s:%s' % (grupos[i], grupos[i + 1])
+            for i in range(0, len(grupos) - 1, 2)}
+
+
+def _clase_de(dev, sysfs, ignorados):
+    """Que clase de mando es: lo que de verdad cambia los ajustes del juego."""
+    try:
+        vid = dev.info.vendor
+        pid = dev.info.product
+    except Exception:
+        vid = pid = 0
+    if dev.name in NOMBRES_VIRTUALES:
+        return 'virtual_wproton'
+    # Los nuestros y los de Steam cuelgan los dos de /devices/virtual, asi que
+    # el orden importa: primero se descarta el nuestro por el nombre.
+    if '/devices/virtual/' in sysfs:
+        return 'virtual_steam'
+    if vid == VENDOR_VALVE:
+        return 'valve'
+    if vid == VENDOR_SONY:
+        return 'sony'
+    if ('%04x:%04x' % (vid, pid)) in ignorados:
+        return 'escondido_por_steam'
+    return 'fisico'
+
+
+def mandos(segundos=6):
+    """Lista los mandos y marca el que manda eventos. Una linea por mando:
+
+        MANDO <TAB> ruta <TAB> vvvv:pppp <TAB> clase <TAB> eventos <TAB> nombre
+
+    y al final, si alguno se movio:
+
+        ACTIVO <TAB> ruta <TAB> vvvv:pppp <TAB> clase <TAB> eventos <TAB> nombre
+
+    Lo lee el lanzador. Si nadie toca nada en esos segundos no hay ACTIVO: es
+    una respuesta valida y quien llama decide que hacer, mejor que inventarse
+    un ganador.
+    """
+    import select as _sel
+    ignorados = _ignorados_por_steam()
+    encontrados = []
+    for ruta in sorted(evdev.list_devices()):
+        try:
+            d = evdev.InputDevice(ruta)
+        except (OSError, IOError):
+            continue
+        if not es_mando(d):
+            d.close()
+            continue
+        sysfs = _sysfs_de(d)
+        encontrados.append({'dev': d, 'ruta': ruta, 'n': 0,
+                            'clase': _clase_de(d, sysfs, ignorados)})
+    if not encontrados:
+        sys.stderr.write('mandos: el sistema no tiene ningun mando\n')
+        return 1
+    sys.stderr.write('mandos: %d mando(s); escuchando %d s, MUEVE EL STICK del '
+                     'que quieras usar\n' % (len(encontrados), segundos))
+    fin = time.time() + segundos
+    fds = {m['dev'].fd: m for m in encontrados}
+    try:
+        while time.time() < fin:
+            r, _, _ = _sel.select(list(fds), [], [], 0.3)
+            for fd in r:
+                m = fds[fd]
+                try:
+                    for ev in m['dev'].read():
+                        # SOLO BOTONES Y MOVIMIENTOS DE VERDAD.
+                        #
+                        # Un mando quieto manda igualmente sincronizaciones y
+                        # ejes en reposo; contarlas daria "activo" al primero
+                        # de la lista, que es justo lo que queremos evitar.
+                        if ev.type == ecodes.EV_KEY and ev.value == 1:
+                            m['n'] += 1
+                        elif ev.type == ecodes.EV_ABS and abs(ev.value) > 8000:
+                            m['n'] += 1
+                except (OSError, IOError):
+                    pass
+    except KeyboardInterrupt:
+        pass
+    activo = None
+    for m in encontrados:
+        d = m['dev']
+        try:
+            ident = '%04x:%04x' % (d.info.vendor, d.info.product)
+        except Exception:
+            ident = '0000:0000'
+        print('MANDO\t%s\t%s\t%s\t%d\t%s'
+              % (m['ruta'], ident, m['clase'], m['n'], d.name), flush=True)
+        if m['n'] > 0 and (activo is None or m['n'] > activo['n']):
+            activo = dict(m, ident=ident, nombre=d.name)
+        try:
+            d.close()
+        except Exception:
+            pass
+    if activo is not None:
+        print('ACTIVO\t%s\t%s\t%s\t%d\t%s'
+              % (activo['ruta'], activo['ident'], activo['clase'],
+                 activo['n'], activo['nombre']), flush=True)
+        return 0
+    sys.stderr.write('mandos: nadie movio nada; no se puede decir cual esta '
+                     'activo\n')
+    return 2
+
+
 def cruceta_a_stick(valor_hat, eje_actual):
     """El valor de stick que corresponde a una cruceta pulsada.
 
@@ -372,6 +546,13 @@ def traducir_escritorio(virtual, teclados):
 
 def main():
     modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
+    # MODO "mandos": no crea nada, solo mira y dice cual se esta usando.
+    if modo == "mandos":
+        try:
+            seg = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+        except ValueError:
+            seg = 6
+        return mandos(seg)
     # El modo clasico lleva sufijo, para poder combinarlo:
     #   cruceta_stick            mando moderno, cruceta al stick
     #   clasico                  mando de los de antes, tal cual
@@ -385,6 +566,18 @@ def main():
     tipo = "ds4" if "ds4" in modo else "xbox"
     nombre, vendor, product, version = MANDOS[tipo]
     ruta = sys.argv[2] if len(sys.argv) > 2 else ""
+    # INTERCAMBIAR LOS STICKS.
+    #
+    # Lo pidieron para un juego que apunta con el stick derecho y se maneja
+    # mucho mejor apuntando con el izquierdo. Esto NO se puede hacer desde el
+    # mapeador de teclas: aquel convierte el mando en teclas, y para que el
+    # juego vea los sticks al reves hay que presentarle OTRO MANDO, que es
+    # justo lo que hace este modulo.
+    #
+    # Va como tercer argumento y no como sufijo del modo porque se combina con
+    # TODOS los modos: xbox, ds4, clasico y la cruceta al stick.
+    cambiar_sticks = str(sys.argv[3] if len(sys.argv) > 3 else "").strip() in (
+        "1", "si", "true", "on")
 
     # MODO ESCRITORIO: se leen los teclados virtuales de Steam, no un mando.
     if modo.startswith("escritorio"):
@@ -473,8 +666,49 @@ def main():
     except (OSError, IOError) as e:
         sys.stderr.write("mando_virtual: no se pudo capturar el mando (%s);"
                          " el juego puede ver los dos\n" % e)
+        # CON LOS STICKS AL REVES, NO CAPTURAR NO ES UN AVISO: ES UN FALLO.
+        #
+        # Si el mando fisico sigue a la vista, el juego lee los DOS: el virtual
+        # con los sticks cambiados y el fisico con los de siempre. Y como el
+        # fisico sigue mandando, desde fuera el intercambio "no funciona" sin
+        # que nada lo explique. Se dice con todas las letras y se apunta el
+        # motivo mas probable, que es el otro que captura: el mapeador .keys
+        # cuando ese .keys mapea el movimiento.
+        if cambiar_sticks:
+            sys.stderr.write(
+                "mando_virtual: LOS STICKS INTERCAMBIADOS NO VAN A FUNCIONAR.\n"
+                "mando_virtual: el juego seguira viendo tambien el mando fisico,\n"
+                "mando_virtual: con los sticks en su sitio, y ese manda.\n"
+                "mando_virtual: suele ser que ya lo tiene cogido el mapeador\n"
+                "mando_virtual: .keys (pasa cuando ese .keys mapea el movimiento).\n")
 
-    print('[mando] "%s" -> %s (%s)' % (fisico.name, nombre, modo), flush=True)
+    print('[mando] "%s" -> %s (%s)%s'
+          % (fisico.name, nombre, modo,
+             "  [sticks intercambiados]" if cambiar_sticks else ""), flush=True)
+
+    # LA TRADUCCION DEL INTERCAMBIO.
+    #
+    # Se aplica UNA SOLA VEZ y arriba del bucle: el codigo del eje FISICO se
+    # convierte en el que vera el juego, y de ahi para abajo todo el bucle
+    # trabaja ya con el eje virtual. Asi lo demas -la cruceta al stick, el
+    # volver al centro, el modo clasico- sigue valiendo sin tocar nada: cada
+    # cosa pregunta por el eje que el juego va a ver, que es lo que importa.
+    #
+    # Si se hiciera al escribir, en vez de al leer, habria que acordarse del
+    # cambio en los cinco sitios donde se escribe un eje, y el primero que se
+    # olvidara dejaria el intercambio a medias.
+    CAMBIO_EJES = {}
+    CAMBIO_BOTONES = {}
+    if cambiar_sticks:
+        CAMBIO_EJES = {ecodes.ABS_X:  ecodes.ABS_RX, ecodes.ABS_RX: ecodes.ABS_X,
+                       ecodes.ABS_Y:  ecodes.ABS_RY, ecodes.ABS_RY: ecodes.ABS_Y}
+        # Y EL CLIC DEL STICK CON EL STICK.
+        #
+        # Si apuntas con el izquierdo, el boton de "apuntar pulsando el stick"
+        # -melee, correr, centrar la camara- tiene que irse con el: dejarlo en
+        # su sitio es dejar la mitad del cambio hecha.
+        CAMBIO_BOTONES = {ecodes.BTN_THUMBL: ecodes.BTN_THUMBR,
+                          ecodes.BTN_THUMBR: ecodes.BTN_THUMBL}
 
     def soltar(*_):
         try:
@@ -500,7 +734,8 @@ def main():
     try:
         for ev in fisico.read_loop():
             if ev.type == ecodes.EV_KEY:
-                virtual.write(ecodes.EV_KEY, ev.code, ev.value)
+                virtual.write(ecodes.EV_KEY,
+                              CAMBIO_BOTONES.get(ev.code, ev.code), ev.value)
                 # LA CRUCETA QUE LLEGA COMO BOTON.
                 #
                 # En la Steam Deck y las Anbernic la cruceta no es un eje: son
@@ -534,24 +769,27 @@ def main():
             if ev.type != ecodes.EV_ABS:
                 continue
 
-            if ev.code in (ecodes.ABS_X, ecodes.ABS_Y):
-                ejes[ev.code] = ev.value
+            # De aqui para abajo, "code" es el eje QUE VERA EL JUEGO.
+            code = CAMBIO_EJES.get(ev.code, ev.code)
 
-            if ev.code in hat:
-                hat[ev.code] = ev.value
-                virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+            if code in (ecodes.ABS_X, ecodes.ABS_Y):
+                ejes[code] = ev.value
+
+            if code in hat:
+                hat[code] = ev.value
+                virtual.write(ecodes.EV_ABS, code, ev.value)
                 # Y TAMBIEN COMO BOTONES, que es la otra forma de leerla.
                 #
                 # Un mando manda la cruceta de una forma u otra, pero el juego
                 # puede esperar cualquiera de las dos. Emular el mando bien es
                 # ofrecer las dos y que el juego coja la que entienda.
                 for _btn, (_eje, _dir) in DPAD_BOTON.items():
-                    if _eje != ev.code:
+                    if _eje != code:
                         continue
                     virtual.write(ecodes.EV_KEY, _btn,
                                   1 if ev.value == _dir else 0)
                 if cruceta_al_stick:
-                    destino = (ecodes.ABS_X if ev.code == ecodes.ABS_HAT0X
+                    destino = (ecodes.ABS_X if code == ecodes.ABS_HAT0X
                                else ecodes.ABS_Y)
                     virtual.write(ecodes.EV_ABS, destino,
                                   cruceta_a_stick(ev.value,
@@ -564,8 +802,8 @@ def main():
             # En un mando de aquella epoca los gatillos eran botones. Si se
             # mandan como eje, el juego ve uno que en reposo esta en un
             # extremo y cree que lo estas empujando: se acelera solo.
-            if clasico and ev.code in (ecodes.ABS_Z, ecodes.ABS_RZ):
-                boton = (ecodes.BTN_TL2 if ev.code == ecodes.ABS_Z
+            if clasico and code in (ecodes.ABS_Z, ecodes.ABS_RZ):
+                boton = (ecodes.BTN_TL2 if code == ecodes.ABS_Z
                          else ecodes.BTN_TR2)
                 virtual.write(ecodes.EV_KEY, boton,
                               1 if ev.value > GATILLO_UMBRAL else 0)
@@ -573,21 +811,22 @@ def main():
                 continue
             # Y un eje que este mando no declara no se manda: el kernel lo
             # descartaria igualmente, pero asi queda dicho.
-            if clasico and ev.code not in [c for c, _ in EJES_CLASICO]:
+            if clasico and code not in [c for c, _ in EJES_CLASICO]:
                 continue
 
-            # Cualquier otro eje se copia tal cual.
-            virtual.write(ecodes.EV_ABS, ev.code, ev.value)
+            # Cualquier otro eje se copia tal cual (ya traducido si se han
+            # pedido los sticks al reves).
+            virtual.write(ecodes.EV_ABS, code, ev.value)
             # Si el stick vuelve al centro pero la cruceta sigue pulsada, se
             # mantiene la direccion de la cruceta: si no, soltar el stick
             # anularia la cruceta.
             if (cruceta_al_stick
-                    and ev.code in (ecodes.ABS_X, ecodes.ABS_Y)
+                    and code in (ecodes.ABS_X, ecodes.ABS_Y)
                     and abs(ev.value) <= 8000):
-                origen = (ecodes.ABS_HAT0X if ev.code == ecodes.ABS_X
+                origen = (ecodes.ABS_HAT0X if code == ecodes.ABS_X
                           else ecodes.ABS_HAT0Y)
                 if hat.get(origen):
-                    virtual.write(ecodes.EV_ABS, ev.code,
+                    virtual.write(ecodes.EV_ABS, code,
                                   cruceta_a_stick(hat[origen], 0))
             virtual.syn()
     except (OSError, IOError) as e:

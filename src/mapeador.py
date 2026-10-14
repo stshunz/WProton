@@ -10,6 +10,21 @@
 # WPROTON_MAPEADOR_V60 (fusionado desde mapeador-60.py de DeckStation)
 # Rutas dinamicas: libs_pyX.Y del runtime de WProton + evmapy/ (raiz o runtime)
 import sys, os
+# Lo mismo que en menu_pygame: que SDL no apague el modo lagarto de la Deck.
+#
+# El teclado virtual de este mapeador usa pygame, o sea SDL, y SDL manda apagar
+# la emulacion de raton y teclado del mando en cuanto lo abre por HIDAPI. Si se
+# abre el teclado en pantalla una sola vez, los trackpads se quedan muertos a
+# partir de ahi. Este mapeador lee el mando por evdev, asi que no necesita el
+# camino HIDAPI para nada.
+# HIDAPI ENTERA Y CON "=", no solo la de la Deck y con setdefault: lo primero
+# no funciono y en menu_pygame.py esta explicado por que (setdefault respeta lo
+# que exporte Steam, y la variable de la Deck no existe en las SDL antiguas).
+# Aqui tampoco se pierde nada: el mando se lee por evdev, y pygame solo pinta
+# el teclado en pantalla.
+os.environ['SDL_JOYSTICK_HIDAPI'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAMDECK'] = '0'
+os.environ['SDL_JOYSTICK_HIDAPI_STEAM'] = '0'
 _RT = os.path.dirname(os.path.abspath(__file__))          # runtime/
 _BASE_DIR = os.path.dirname(_RT)                          # raiz de WProton
 sys.path.insert(0, os.path.join(_RT, 'libs_py%d.%d' % sys.version_info[:2]))
@@ -340,6 +355,13 @@ def _run_teclado(gamepad_device, ids=None, ui_kb=None):
     _os.environ['SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN'] = '1'
     _os.environ['SDL_VIDEO_FOREIGN_WINDOW_OPENGL'] = '0'
     pygame.init()
+    # EL JOYSTICK DE SDL, CERRADO. Es el que abre el mando de la Deck y le
+    # apaga los trackpads, y aqui no se usa: el mando se lee por evdev. No
+    # depende de que esta SDL conozca las variables de arriba.
+    try:
+        pygame.joystick.quit()
+    except Exception:
+        pass
     info = pygame.display.Info()
     # DONDE SE PONE EL TECLADO.
     #
@@ -989,15 +1011,46 @@ def main():
     _meje = _mouse_eje or _mcfg.get("axis", "joystick2")
     _mabs_x,_mabs_y=_MAXIS.get(_meje,(ecodes.ABS_RX,ecodes.ABS_RY))
     _mouse_activo = bool(_mouse_eje) or bool(_mcfg)
-    _mclick=ids.get(_mcfg.get("click_left","r2")) if _mcfg else None
     _mspeed=float(_mcfg.get("speed",900))
     # Mapa de triggers analógicos: en Xbox 360/One el R2 es ABS_RZ, no un botón digital
     _TRIG_ABS = {
         ids.get("r2"): (ecodes.ABS_RZ, ecodes.ABS_GAS),
         ids.get("l2"): (ecodes.ABS_Z,  ecodes.ABS_BRAKE),
     }
-    _mclick_abs = _TRIG_ABS.get(_mclick, ()) if _mclick else ()
-    _mclick_pressed = False  # Estado previo del trigger analógico
+
+    # LOS TRES BOTONES DEL RATON, NO SOLO EL IZQUIERDO.
+    #
+    # Antes solo se leia "click_left". Un tester lo conto con un juego en el
+    # que recargar es el boton derecho: podia mover el puntero con el stick y
+    # disparar con el izquierdo, pero no habia forma de recargar.
+    #
+    # Los tres van por la misma tabla para que el derecho y el central hereden
+    # sin copiar nada el manejo del gatillo analogico, que es lo que de verdad
+    # tiene miga: en casi todos los mandos R2 y L2 no mandan una pulsacion sino
+    # un eje, y hay que traducirlo con un umbral.
+    _RATON_NOMBRE = {ecodes.BTN_LEFT: "clic izquierdo",
+                     ecodes.BTN_RIGHT: "clic derecho",
+                     ecodes.BTN_MIDDLE: "clic central"}
+    _MCLICK_CAMPOS = (("click_left",   ecodes.BTN_LEFT,   "r2"),
+                      ("click_right",  ecodes.BTN_RIGHT,  None),
+                      ("click_middle", ecodes.BTN_MIDDLE, None))
+    _mclicks = {}        # codigo del boton del mando -> boton del raton
+    _mclicks_abs = {}    # codigo del eje del gatillo -> (boton del raton, estado)
+    if _mcfg:
+        for _campo, _btn, _porDefecto in _MCLICK_CAMPOS:
+            _val = _mcfg.get(_campo, _porDefecto)
+            if not _val:
+                continue
+            _cod = ids.get(_val)
+            if _cod is None:
+                continue
+            _ejes = _TRIG_ABS.get(_cod, ())
+            if _ejes:
+                for _e in _ejes:
+                    _mclicks_abs[_e] = _btn
+            else:
+                _mclicks[_cod] = _btn
+    _mclick_pressed = {}   # estado previo de cada gatillo analogico
 
     # Gatillos L2/R2 como EJE, no como boton.
     #
@@ -1287,10 +1340,17 @@ def main():
                                                   ecodes.BTN_MIDDLE]},
                                   name="Mapeador_Mouse_Portable")
             if _mouse_activo:
+                # El registro dice QUE BOTON HACE QUE CLIC, los tres.
+                # Con solo "hace clic" no habia forma de saber, leyendo el log
+                # de un tester, si el derecho estaba puesto o no.
+                _detalle = []
+                for _campo, _btn, _porDefecto in _MCLICK_CAMPOS:
+                    _v = _mcfg.get(_campo, _porDefecto)
+                    if _v:
+                        _detalle.append("%s = %s" % (_v, _RATON_NOMBRE.get(_btn, _btn)))
                 print("[keys] Raton virtual: %s mueve el puntero%s"
-                      % (_meje,
-                         (" | %s hace clic" % _mcfg.get('click_left', 'r2'))
-                         if _mclick else ""), flush=True)
+                      % (_meje, (" | " + ", ".join(_detalle)) if _detalle else ""),
+                      flush=True)
             else:
                 print("[keys] Raton virtual creado solo para los clics "
                       "(el puntero no se mueve)", flush=True)
@@ -1526,8 +1586,9 @@ def main():
                                 pendiente.discard(event.code)
 
                             # Click digital (PS4, bumpers, botones)
-                            if ui_mouse and _mclick and not _mclick_abs and event.code == _mclick:
-                                ui_mouse.write(ecodes.EV_KEY,ecodes.BTN_LEFT,event.value)
+                            if ui_mouse and event.code in _mclicks:
+                                ui_mouse.write(ecodes.EV_KEY, _mclicks[event.code],
+                                               event.value)
                                 ui_mouse.syn()
                             ui.syn()
 
@@ -1536,11 +1597,12 @@ def main():
                             if event.code == _mabs_x: _msx = event.value
                             elif event.code == _mabs_y: _msy = event.value
                             # Click analógico: R2/L2 Xbox 360 mandan ABS_RZ/ABS_Z
-                            elif ui_mouse and _mclick_abs and event.code in _mclick_abs:
+                            elif ui_mouse and event.code in _mclicks_abs:
+                                _btn = _mclicks_abs[event.code]
                                 _now_pressed = event.value > 64  # umbral: trigger > 25% de recorrido
-                                if _now_pressed != _mclick_pressed:
-                                    _mclick_pressed = _now_pressed
-                                    ui_mouse.write(ecodes.EV_KEY, ecodes.BTN_LEFT,
+                                if _now_pressed != _mclick_pressed.get(_btn, False):
+                                    _mclick_pressed[_btn] = _now_pressed
+                                    ui_mouse.write(ecodes.EV_KEY, _btn,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
                             # Los gatillos YA NO tienen camino propio: van
