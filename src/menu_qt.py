@@ -342,9 +342,17 @@ EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
                '.appimage', '.AppImage')
 # Al IMPORTAR no se enseñan los ya empaquetados (.wsquashfs, .dwarfs): esos ya
 # salen solos en la biblioteca y verlos aqui solo confunde.
+#
+# LAS IMAGENES DE DISCO (.iso y compañia) SI: una ISO de instalacion se elige
+# aqui y WProton la abre, busca su setup.exe y la instala.
+#
+# ESTA LISTA TIENE QUE SER LA MISMA QUE LA DE menu_pygame.py. WProton elige el
+# motor de menus solo (MENU_UI=auto), asi que si cada uno enseña unos ficheros,
+# el mismo juego se puede importar o no segun el equipo. Lo vigila prueba_iso.sh.
 EXTS_IMPORTAR = ('.zip', '.7z', '.rar', '.001', '.z01',
                  '.exe', '.bat', '.cmd', '.wtgz', '.sh',
-                 '.appimage', '.AppImage')
+                 '.appimage', '.AppImage',
+                 '.iso', '.ISO', '.img', '.mdf', '.nrg', '.udf')
 
 # ---------------------------------------------------------------------------
 # 4. LECTURA DE DATOS
@@ -1320,9 +1328,41 @@ class Mando(QtCore.QObject):
 K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
 HEADER_KINDS = (K_HDR, K_UP2, K_CANCEL)
 
+# EL TECLADO DE BUSCAR: solo letras y numeros, que es lo que hay en el nombre
+# de un juego. Asi cada tecla esta a un paso del mando.
 TECLADO = [
     'ABCDEFGHIJ', 'KLMNOPQRST', 'UVWXYZ0123', '456789 .-_',
 ]
+
+# EL TECLADO DE ESCRIBIR TEXTO: OTRO, Y CON SIMBOLOS.
+#
+# EL FALLO QUE ARREGLA: el editor de texto usaba el de arriba, el de buscar. Y
+# ahi no hay un triste "=". Un tester se quedo plantado intentando escribir
+#
+#     SDL_VIDEODRIVER=x11
+#
+# en "Argumentos de lanzamiento", que es un campo donde lo normal es pegar una
+# linea de ProtonDB: necesita "=", "%" para %command%, ":" y "/" para rutas y
+# minusculas. Con el teclado de buscar no se podia escribir NINGUNA de esas
+# cosas, y el campo quedaba inservible con el mando.
+#
+# Es la misma distribucion que usa el motor pygame para este mismo campo. Que
+# los dos motores ofrezcan las mismas teclas no es un capricho: WProton elige
+# el motor solo (MENU_UI=auto), asi que si no, el mismo campo se podria
+# escribir o no segun el equipo.
+SHIFT_CH = '\x01'          # la tecla de mayusculas, dentro de la rejilla
+TECLADO_TEXTO = [
+    '1234567890-=',
+    'qwertyuiop[]',
+    'asdfghjkl;\'',
+    'zxcvbnm,./\\',
+    ' _:"|+*@#$%&' + SHIFT_CH,
+]
+
+
+def teclado_de(pet):
+    """Que teclado toca: el de escribir texto o el de buscar."""
+    return TECLADO_TEXTO if getattr(pet, 'modo', '') == 'text' else TECLADO
 
 
 class Peticion(object):
@@ -1347,6 +1387,7 @@ class Peticion(object):
         self.filtro = ''
         self.kb_open = False
         self.kb_r = self.kb_c = 0
+        self.shift = False      # mayusculas del teclado de escribir
         self.texto = ''
         self.done = False
 
@@ -1396,12 +1437,14 @@ class Peticion(object):
                     campos = linea.rstrip('\n').split('|')
                     if not campos or not campos[0].strip():
                         continue
-                    while len(campos) < 9:
+                    # 10 campos: el ultimo es el formato. Un manifiesto de 9
+                    # se sigue leyendo; el relleno deja el formato vacio.
+                    while len(campos) < 10:
                         campos.append('')
                     d = {'cov': campos[1], 'fav': campos[2], 'veces': campos[3],
                          'segs': campos[4], 'ficha': campos[5],
                          'hltb': campos[6], 'completado': campos[7],
-                         'rawg': campos[8]}
+                         'rawg': campos[8], 'formato': campos[9]}
                     d.update(leer_ficha(campos[5]))
                     # RAWG solo RELLENA: lo de Steam manda (sinopsis en
                     # español y datos mas completos).
@@ -2707,6 +2750,7 @@ class Pantalla(QtWidgets.QWidget):
              (L('%s veces', '%s times') % veces) if veces != '0'
              else L('nunca', 'never')),
             (L('Tiempo', 'Time'), fmt_horas(datos.get('segs')) or SIN),
+            (L('Formato', 'Format'), datos.get('formato') or SIN),
         ]
         if datos.get('completado') == '1':
             filas.append((L('Estado', 'Status'), L('COMPLETADO', 'COMPLETED')))
@@ -2830,10 +2874,11 @@ class Pantalla(QtWidgets.QWidget):
     def pintar_teclado(self, p):
         pet = self.pet
         W, H = self.width(), self.height()
+        kb = teclado_de(pet)
         kw, kh, gap = FS(52), FS(42), 6
-        cols = max(len(f) for f in TECLADO)
+        cols = max(len(f) for f in kb)
         tw = cols * (kw + gap)
-        th = len(TECLADO) * (kh + gap) + 60
+        th = len(kb) * (kh + gap) + 60
         x0 = (W - tw) // 2
         y0 = H - th - 40
         marco = QRect(x0 - 16, y0 - 46, tw + 32, th + 46)
@@ -2849,23 +2894,45 @@ class Pantalla(QtWidgets.QWidget):
         p.setPen(C(ACC))
         p.drawText(QPoint(marco.x() + 16, marco.y() + 8 + self.fm_it.ascent()),
                    (pet.texto if pet.modo == 'text' else pet.filtro) or '_')
-        for r, fila in enumerate(TECLADO):
+        for r, fila in enumerate(kb):
             for c, ch in enumerate(fila):
                 rect = QRect(x0 + c * (kw + gap), y0 + r * (kh + gap), kw, kh)
                 activo = (r == pet.kb_r and c == pet.kb_c)
+                # La tecla de mayusculas se queda encendida mientras lo esta,
+                # porque si no no hay forma de saber que vas a escribir.
+                pulsada = (ch == SHIFT_CH and getattr(pet, 'shift', False))
                 if activo:
                     self.seleccion(p, rect)
+                elif pulsada:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(C(ACC))
+                    p.drawRoundedRect(QRectF(rect), RAD, RAD)
                 else:
                     p.setPen(Qt.PenStyle.NoPen)
                     p.setBrush(C(TH['card']))
                     p.drawRoundedRect(QRectF(rect), RAD, RAD)
                 p.setFont(self.f_kb)
-                p.setPen(C(TH['sel_fg'] if activo else FG))
-                p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter),
-                           ch if ch != ' ' else '\u2423')
-        self.pintar_pie(p, [('A', L('escribir', 'type')),
-                            ('B', L('borrar', 'delete')),
-                            ('Y', L('cerrar', 'close'))])
+                p.setPen(C(TH['sel_fg'] if (activo or pulsada) else FG))
+                if ch == SHIFT_CH:
+                    texto = '\u21e7'          # la flecha de mayusculas
+                elif ch == ' ':
+                    texto = '\u2423'          # el simbolo de espacio
+                else:
+                    texto = ch.upper() if getattr(pet, 'shift', False) else ch
+                p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), texto)
+        # EL PIE DICE LO QUE HACE CADA BOTON *EN ESTE MODO*.
+        #
+        # Escribiendo texto, la Y no cierra el teclado: acepta lo escrito y
+        # termina. Poniendo "cerrar" en los dos casos, quien escribe unos
+        # argumentos no sabe con que los guarda.
+        if pet.modo == 'text':
+            self.pintar_pie(p, [('A', L('escribir', 'type')),
+                                ('B', L('borrar', 'delete')),
+                                ('Y', L('aceptar', 'accept'))])
+        else:
+            self.pintar_pie(p, [('A', L('escribir', 'type')),
+                                ('B', L('borrar', 'delete')),
+                                ('Y', L('cerrar', 'close'))])
 
     # -- editor de texto ---------------------------------------------------
     def pintar_texto(self, p):
@@ -3108,18 +3175,25 @@ class Pantalla(QtWidgets.QWidget):
 
     def tecla_teclado(self, k):
         pet = self.pet
+        kb = teclado_de(pet)
+        # La fila puede cambiar de ancho al movernos, asi que la columna se
+        # recorta SIEMPRE contra la fila en la que estamos ahora.
+        pet.kb_r = min(pet.kb_r, len(kb) - 1)
+        pet.kb_c = min(pet.kb_c, len(kb[pet.kb_r]) - 1)
         if k == K_UP:
-            pet.kb_r = (pet.kb_r - 1) % len(TECLADO)
+            pet.kb_r = (pet.kb_r - 1) % len(kb)
         elif k == K_DOWN:
-            pet.kb_r = (pet.kb_r + 1) % len(TECLADO)
+            pet.kb_r = (pet.kb_r + 1) % len(kb)
         elif k == K_LEFT:
-            pet.kb_c = (pet.kb_c - 1) % len(TECLADO[pet.kb_r])
+            pet.kb_c = (pet.kb_c - 1) % len(kb[pet.kb_r])
         elif k == K_RIGHT:
-            pet.kb_c = (pet.kb_c + 1) % len(TECLADO[pet.kb_r])
+            pet.kb_c = (pet.kb_c + 1) % len(kb[pet.kb_r])
         elif k == K_RETURN:
-            ch = TECLADO[pet.kb_r][min(pet.kb_c, len(TECLADO[pet.kb_r]) - 1)]
-            if pet.modo == 'text':
-                pet.texto += ch
+            ch = kb[pet.kb_r][min(pet.kb_c, len(kb[pet.kb_r]) - 1)]
+            if ch == SHIFT_CH:
+                pet.shift = not pet.shift
+            elif pet.modo == 'text':
+                pet.texto += ch.upper() if pet.shift else ch
             else:
                 pet.filtro += ch
                 pet.aplicar_filtro()
@@ -3135,7 +3209,7 @@ class Pantalla(QtWidgets.QWidget):
                 self.terminar(0)
                 return True
             pet.kb_open = False
-        pet.kb_c = min(pet.kb_c, len(TECLADO[pet.kb_r]) - 1)
+        pet.kb_c = min(pet.kb_c, len(teclado_de(pet)[pet.kb_r]) - 1)
         self.update()
         return True
 

@@ -73,13 +73,18 @@ Esos archivos son la forma en que WProton guarda los juegos: **un solo fichero c
 | Un `.wsquashfs`, `.squashfs` o `.dwarfs` | Nada: se juega tal cual (basta con copiarlo a `games/`) |
 | Un `.zip`, `.rar` o `.7z` | Lo descomprime y lo convierte en un archivo de juego |
 | Un instalador de GOG (`setup_*.exe`) | Lo instala solo, sin ventanas, y lo empaqueta |
+| Una **imagen de disco** (`.iso`, `.img`, `.mdf`, `.nrg`, `.udf`) | La abre, busca su `setup.exe` y te guía por la instalación (ver abajo) |
 | Una carpeta con el juego ya instalado | Te deja probarlo y luego empaquetarlo |
 | Un `.exe` suelto | Igual, tomando su carpeta como raíz |
 | Un `.bat` o `.cmd` | Igual: algunos juegos arrancan con un script en vez de un ejecutable |
 
 > Las carpetas que estén **dentro de tu carpeta de juegos** salen solas en la lista, sin tener que añadirlas: basta con que tengan un ejecutable, un `autorun.cmd`, un `drive_c` o que acaben en `.pc`.
 
+> **Una carpeta puede ser una estantería y no un juego.** Si tienes una carpeta `Lucha` con *Street Fighter*, *Mortal Kombat* y *Guilty Gear* dentro, al darle se abre y te deja elegir cuál de los tres. Se reconoce porque **no tiene ningún fichero suyo** en el primer nivel, sólo carpetas (o `.wsquashfs`), y porque dentro hay **dos juegos o más**: un juego de verdad siempre tiene algo en su raíz, aunque el ejecutable esté tres niveles más abajo. La carátula y los textos sueltos no cuentan. Funciona igual al jugar que al abrir los ajustes con X.
+
 > Empaquetar no es obligatorio: una carpeta o un `.exe` se pueden jugar tal cual, sin convertir nada. Empaquetar solo sirve para tenerlo todo en un fichero, que ocupa menos y es más cómodo de mover.
+
+> **El nombre se limpia solo.** Una carpeta llamada `rune-the.last.guardian` o `Doom_Eternal_v1.2_[2020]-CPY` da un juego llamado `The Last Guardian` y `Doom Eternal`: se quita la etiqueta del grupo —esté delante o detrás—, la versión, el *build* y el año, y los puntos y guiones bajos pasan a espacios. Lo que escribiste tú no se toca: si el nombre ya lleva espacios o mayúsculas, se respeta tal cual, y `S.T.A.L.K.E.R.` no se desmonta. Ese nombre es el que se usa para el perfil, la carátula y el `.wsquashfs`, y puedes cambiarlo cuando te lo pregunte. En el registro queda apuntado (`nombre: 'rune-Halo' -> 'Halo'`).
 
 Cuando el juego esté en una carpeta, aparece este menú:
 
@@ -88,6 +93,28 @@ Cuando el juego esté en una carpeta, aparece este menú:
 - **Empaquetar a wsquashfs** — cuando funcione, comprímelo en un solo archivo.
 
 Puedes probar y ajustar tantas veces como quieras antes de empaquetar. **La configuración que hagas durante las pruebas se conserva** en el juego final.
+
+### Instalar un juego desde una ISO
+
+Elige la imagen en **Añadir un juego** y WProton hace el camino completo.
+
+1. **La monta, sin copiar nada.** Una ISO de DVD son 4-8 GB; montada se lee donde está, así que tarda cero y no ocupa espacio. Prueba `fuseiso` si lo tienes, luego **udisks** —que monta el kernel y entiende también UDF, los DVD modernos—, luego `fuseiso` bajándolo (te avisa antes, porque es el único paso que tarda, y solo ocurre la primera vez), y **solo si nada de eso funciona la extrae** al disco. Siempre de **solo lectura**: la imagen es tu original. Si hay que extraer, comprueba antes que hay sitio y te lo dice con los números, y mira dentro de la imagen sin abrirla para no gastar varios GB si ese disco no trae instalador.
+2. **Busca el instalador preguntándoselo al disco**, en su `autorun.inf`, que es donde el disco dice qué ejecuta Windows al meterlo. Si no lo dice, busca `setup`, `install`, `instalar`, `autoplay` y `autorun`. **Si hay varios te pregunta cuál** — en muchos discos uno de ellos es el de DirectX.
+3. **Crea un perfil solo para la instalación**, con prefijo propio, el disco en la unidad **D: declarada CD-ROM** (muchos instaladores la comprueban antes de empezar) y **el mando como ratón**: stick **derecho** mueve el puntero, **A** o **R2** hacen el clic izquierdo y **B** el derecho. El puntero va **más lento que en un juego** (450 px/s en vez de 900): aquí hay que acertar en un *Siguiente* de treinta píxeles, no mirar alrededor. Así se puede instalar en el modo Juego sin teclado ni ratón.
+4. **Abre el instalador.** Acepta las rutas que te ofrezca (`C:\...`); si te pide el disco, está en `D:`.
+5. **Te dice dónde ha quedado el juego**: mira *Program Files*, *Program Files (x86)*, *GOG Games* y la raíz de `C:` y te ofrece las carpetas, sin mezclar las de Windows. También puedes buscarla a mano.
+6. **Le pone tu nombre y tu idioma al crack.** Lo que viene en la carpeta `Crack` de la imagen es un emulador de la API de Steam con su configuración al lado, y ahí está escrito el nombre del jugador —el del grupo que hizo el release— y el idioma. Sin tocarlo, el juego arranca saludando a *RUNE* y en inglés. WProton busca esa configuración **por el contenido y no por el nombre del fichero** (cada emulador llama al suyo de una forma: `steam_emu.ini`, `ALI213.ini`, `SteamConfig.ini`, `OnlineFix.ini`…) y cambia `UserName`/`PlayerName` por el usuario de tu equipo y `Language` por tu idioma. Goldberg es la excepción: no usa un `.ini` sino un fichero por ajuste en `steam_settings/`, y esos se buscan por nombre. **Guarda copia de cada original** (`*.wproton.bak`), respeta los finales de línea de Windows y **no toca** un `Language=3` —hay emuladores que guardan ahí un número de su propia tabla—. Si la imagen trae el crack y el juego instalado no lo tiene, te ofrece copiarlo encima; eso sí se pregunta, porque sobrescribe ficheros del juego. Se puede repetir después desde *Ajustes del juego → Casos especiales → Nombre e idioma del juego instalado*, mientras el juego siga siendo una carpeta.
+7. **Y pregunta cómo empaquetar:**
+
+| Opción | Para qué |
+|---|---|
+| **Con el prefijo Y el juego** | Archivo autosuficiente: lleva dentro lo que el instalador dejó en Windows (DirectX, VC++, el registro). Funciona en otro equipo sin instalar nada; ocupa más |
+| **Solo el juego** | Solo su carpeta. Se saca del prefijo antes de comprimir |
+| **Nada por ahora** | Se queda en su prefijo; lo empaquetas cuando quieras desde *Ajustes del juego → Empaquetar con su prefijo* |
+
+Al terminar, si la imagen estaba **montada** se desmonta sola —insistiendo y, si hace falta, forzando: hay instaladores que dejan algún fichero abierto un rato después de terminar— y se suelta su dispositivo de loop. Si WProton no llegara a cerrarla (un corte, un cierre a lo bruto), **la cierra en el siguiente arranque**; si hubo que **extraerla**, se ofrece borrar lo extraído, que son varios GB. **La imagen original no se toca nunca**, y si la instalación se quedó a medias puedes decir que no y repetirla sin volver a abrirla.
+
+> Un `.bin` de GOG (`setup-juego-1.bin`) **no** se trata como imagen: esos los recompone el propio instalador de GOG. Lo mismo con un `.cue`, que es el índice y no la imagen — usa el `.iso`.
 
 ### Prefijos que vienen de Batocera
 
@@ -1132,7 +1159,7 @@ juega una vez y el resultado queda en el registro:
 | Ajuste | Qué apunta |
 |---|---|
 | `DIAG_DLL=1` | Qué DLL carga el juego, y si un override se aplicó de verdad |
-| `DIAG_VIDEO=1` | Todo lo del vídeo; al salir resume las cuatro causas de que no se vea |
+| `DIAG_VIDEO=1` | Todo lo del vídeo (incluido Media Foundation); al salir resume las cinco causas de que no se vea |
 | `DIAG_CIERRE=1` | Qué queda vivo al cerrar |
 
 Acuérdate de volver a ponerlos a `0`: el registro crece bastante.
@@ -1191,6 +1218,8 @@ cada uno sale el tiempo jugado y cuándo fue la última vez:
 - **Tema**: *moderno* (paneles y acento neón, el que viene puesto), *clásico* (sobrio) o *arcade* (synthwave con efecto CRT).
 - **Tamaño de la letra**: normal, grande o muy grande. En consolas portátiles se agradece "grande".
 - **Ordenar juegos por**: nombre, últimos jugados o más jugados. Los favoritos van siempre primero.
+- **Extensión en la lista**: apagada de fábrica. Encendida, la lista muestra `Halo.wsquashfs` en vez de `Halo` — útil cuando tienes la biblioteca a medio convertir y quieres distinguir de un vistazo lo que está en `.wsquashfs` y lo que está en `.dwarfs`. Solo afecta a la **lista**: en la rejilla no se ve nunca. El panel de la derecha tiene además una fila **Formato** que lo dice siempre, encendido o no.
+- **Usuario instalación ISO**: el nombre que se le pone a la configuración que trae el juego al instalarlo desde una imagen (`UserName`/`PlayerName`). De fábrica **Deck** — ese nombre sale en la pantalla del juego, así que lo suyo es el nombre de la máquina y no tu cuenta de Linux. Si lo dejas vacío, se usa el usuario del sistema.
 - **Idioma**: castellano o inglés.
 - **Copia de tu configuración**: exporta perfiles, ajustes y carátulas a un zip para llevarlos a otro equipo.
 
@@ -1820,7 +1849,117 @@ respuesta, no avisa y ya lo hará en el siguiente arranque.
 
 ---
 
-## 15. Dónde está cada cosa
+**Un juego se cierra al cargar un vídeo (intro, presentación…).**
+
+Casi siempre es que falta el descodificador. WProton le presta al juego los plugins de GStreamer de un Proton que los traiga completos —`libgstlibav` es el que sabe de WMV, H.264 y compañía— y le presta **las dos arquitecturas del mismo paquete**, 32 bits primero.
+
+**Y hay una cosa que conviene saber, porque explica casi todos estos casos: Proton no trae descodificador de H.264.** Valve no distribuye descodificadores de formatos con patentes; en Proton, FFmpeg va compilado con todo desactivado y el H.264 lo aporta **el propio Steam**. Fuera de Steam no hay quien lo ponga, así que tiene que venir **del sistema** (el paquete `gst-libav`) o **de un pack de códecs** tuyo. Por eso **el Proton que elijas no cambia nada**: ninguno lo trae. Y que el runner tenga el fichero `libgstlibav.so` tampoco significa que sepa descodificar: puede estar ahí y venir vacío.
+
+WProton lo comprueba de verdad y lo dice en el registro:
+
+| Línea del registro | Qué significa |
+|---|---|
+| `Video H.264: disponible, lo aporta …` | Hay descodificador. Si el vídeo falla, no es por falta de códec |
+| `Video H.264: NO HAY DESCODIFICADOR…` | **Es esto.** Un vídeo H.264 no se va a poder cargar |
+| `H.264: NO en … (libavcodec… compilada sin H.264)` | Ese paquete tiene el fichero pero viene sin el códec dentro |
+| `conversor de Proton apartado` | Normal y bueno: ver abajo |
+
+Entre varios paquetes, WProton **prefiere el que sí sabe de H.264**, y si ninguno sabe elige el mismo de siempre. Busca también en el **Steam Linux Runtime**, que en una Steam Deck está instalado siempre y es un contenedor completo: muchas veces el descodificador que falta ya está en el disco.
+
+**El conversor de Proton.** Dentro de Steam, los formatos con patentes no se descodifican: el cliente baja una versión **ya convertida** del vídeo y un conversor (`protonvideoconverter`) la sirve, con prioridad por delante de los descodificadores de verdad. Fuera de Steam ese conversor no puede funcionar —no hay vídeo convertido— pero sigue yendo primero y **tapa al bueno**. WProton lo aparta solo cuando lo encuentra. Si quieres decidir tú, pon `GST_PLUGIN_FEATURE_RANK` en los argumentos de lanzamiento y WProton respeta lo tuyo.
+
+Si esto te pasa **en una Steam Deck pero no en un PC de escritorio**, el motivo es ese: en una distro de escritorio el sistema suele tener `gst-libav`, y en SteamOS el GStreamer del sistema es mucho más corto.
+
+En el registro, la línea `GST_PLUGIN_PATH=` dice exactamente qué carpetas se van a usar, y justo después si **el runner aporta las suyas** o solo hay las del sistema. Si ves muchas líneas de `wrong ELF class: ELFCLASS32`, son plugins de 32 que el juego de 64 no puede usar: es ruido, no la avería, siempre que la carpeta de 64 también esté en la lista.
+
+**Si el juego es de Unity y se cierra solo, no hace falta activar nada.** WProton busca el `Player.log` que el juego escribe dentro del prefijo, pega sus últimas líneas en el registro y, si ahí dentro pone que no pudo descodificar el vídeo, lo traduce al salir: la línea del juego, el formato (`H264`, `WMV`…) y si en ese arranque había descodificador o no. Con `DIAG_VIDEO=1` en `settings.conf` queda además todo el camino apuntado y al salir se resumen las cinco causas de que un vídeo no se vea, incluida la de **Media Foundation**, que es por donde van los vídeos de Unity y Unreal.
+
+**Un juego de Linux (nativo) no llega a arrancar.**
+
+El registro lo cuenta solo. Para un juego nativo, WProton apunta ahora **lo que escribió el juego** (su salida y sus errores, en un bloque aparte), **el código de salida del lanzador y cuánto vivió**, y su **`Player.log`** si es de Unity —que en Linux va a `$XDG_CONFIG_HOME/unity3d/<empresa>/<juego>/`, dentro de la carpeta portátil que le da WProton—.
+
+Lo primero que hay que mirar, por este orden:
+
+| Línea del registro | Qué significa |
+|---|---|
+| `el lanzador salio con codigo 0 tras 0s` + `procesos usando la carpeta al empezar: 0` | El lanzador no arrancó nada. Sigue leyendo su salida |
+| `el juego no escribio NADA por su salida ni por sus errores` | Se murió sin hablar: mira el `Player.log` y las variables de Steam |
+| `AL JUEGO LE FALTA UNA LIBRERIA DEL SISTEMA: …` | Copia ese `.so` a una carpeta `lib/` dentro del juego y vuelve a empaquetarlo |
+| `el juego declara SteamAppId=…` | El juego espera que **Steam esté en marcha** |
+| `heredado de Steam -> SteamAppId=…` | El identificador que le llega de fuera |
+| `…NO es de este juego; se le pone el suyo` | WProton lo ha corregido: ver abajo |
+
+**El identificador de Steam que no era suyo.** Esta era la causa de un cuelgue que costó lo suyo encontrar, y conviene entenderla. Si añades WProton a Steam, en el modo Juego lo arranca Steam, y sus variables —`SteamAppId`, `SteamOverlayGameId`, `LD_PRELOAD` con su capa de superposición— **las hereda el juego que lances**. Un juego nativo comprado en Steam lee justo `SteamAppId` para inicializar Steamworks: si le llega el identificador del **atajo de WProton** en lugar del suyo, responde `Invalid APPID`, Steamworks no arranca y el juego se cae con un SIGSEGV. El mismo juego lanzado desde Steam ve su identificador de verdad y funciona.
+
+WProton lo corrige solo: compara lo que hereda con lo que el juego declara —en su lanzador o en su `steam_appid.txt`— y le pone el suyo; si no se sabe cuál es, le quita el ajeno y el juego se apaña con su `steam_appid.txt`, que es de donde debería haberlo sacado. **No hay nada que configurar.** Lo que no se toca es la superposición (`SteamOverlayGameId` y `LD_PRELOAD`), que son otras variables y siguen funcionando. Para quitarlo todo está *Casos especiales → Superposición de Steam → oculto*.
+
+**La carpeta personal de un juego de Linux.** Un juego nativo no usa prefijo de Wine, pero sus ajustes y sus partidas tienen que ir a alguna parte, y van a una carpeta de WProton, no a la tuya. En **Ajustes del juego → Carpeta personal del juego** eliges `compartida` (`WProton.home`, para todos) o `propia` (`<juego>.home`, aislada). Si el juego trae su propia carpeta `.home` al lado del lanzador, manda esa y este ajuste no se usa.
+
+**Un juego con un lanzador que hay que pulsar con el ratón.** En el modo Juego no hay ratón ni teclado, así que un lanzador con un botón *Play* no se puede usar. La solución está en **Ajustes del juego → Casos especiales → El mando como ratón (lanzadores)**: el stick **derecho** mueve el puntero, **A** o **R2** hacen el clic izquierdo y **B** el derecho (los dos, para no tener que acordarse de cuál).
+
+> Ojo, que se parecen y no son lo mismo: el **mando virtual** crea un *mando*, para juegos que no ven el de la Deck. Esto crea un *puntero*. Si lo que no puedes es pulsar un botón en pantalla, lo que necesitas es esto.
+
+Si el juego ya tenía teclas configuradas, se le añade solo el ratón y las teclas se conservan. Para afinarlo —cambiar de stick, la velocidad o los botones de clic— está *Teclas del mando → Ratón con el mando*.
+
+> **En el modo Juego el puntero no sale de donde crees, y conviene saberlo.** Con **Steam Input activo** —que es lo normal para un atajo lanzado desde el modo Juego— los trackpads **no son un ratón**: los coge Steam y los reparte según la disposición del mando del atajo, que de fábrica es *Gamepad* y no trae puntero. En el escritorio sí lo son, por el modo lagarto, y por eso el mismo lanzador se deja pulsar allí y aquí no. Las dos salidas: usar el **stick como ratón** (*Casos especiales → El mando como ratón*), o cambiar la disposición del mando en Steam por una que ponga el ratón en el trackpad derecho. WProton lo apunta en el registro al lanzar, para no tener que compararlo a mano.
+
+> **Si el puntero se va solo a una esquina**, es que ese mando no descansa en cero. WProton le pregunta al mando su zona muerta y aprende el reposo del primer valor que manda el stick, así que no debería pasar; si pasa, el registro lo dice con todas las letras: `[keys] Raton ABS_RX: reposo 9257, recorrido 32767, zona muerta 3932` y, cada dos segundos, cuánto se ha movido el puntero y con qué valores del stick.
+
+**Y lo primero que hay que probar si en Steam arranca y aquí no:**
+
+**Ajustes del juego → Casos especiales → Runtime de Steam (juegos de Linux)**
+
+Un juego nativo moderno puede pedir librerías más nuevas que las del sistema, y en SteamOS no se puede instalar nada en la imagen base. Steam lo resuelve lanzando el juego **dentro de un contenedor** —el *Steam Linux Runtime*—, con su propio juego de librerías. Eso es lo que hace que el mismo juego vaya en Steam y no lanzado directamente. Las opciones son `no` (como siempre), `automático` (el más nuevo instalado) o una versión: **4.0** (la más nueva, Debian 13), 3.0 (*sniper*), 2.0 (*soldier*), 1.0 (*scout*).
+
+Si la fila dice **`NO está instalado`**, se instala desde Steam: en la Biblioteca, busca *Steam Linux Runtime* y dale a instalar. El juego se lanzaría igual, pero sin contenedor, y el registro lo avisa. Si tu juego está **fuera de tu carpeta personal** —en la tarjeta SD, por ejemplo— WProton lo monta dentro del contenedor solo; sin eso, ahí dentro el juego no existiría.
+
+WProton también lo sugiere por su cuenta: si un juego de Linux dura menos de doce segundos, no se estaba usando contenedor y hay uno instalado, lo dice al salir.
+
+Esa última fila de la tabla es la que conviene entender. Si añades WProton a Steam, en el modo Juego lo arranca Steam, y sus variables (`SteamAppId`, `SteamOverlayGameId`, `LD_PRELOAD` con su capa de superposición) **las hereda el juego que lances**. Un juego nativo comprado en Steam mira justo esas: si le llega el identificador del atajo de WProton en lugar del suyo, su `steam_api` se inicializa contra el juego equivocado. WProton no cambia ninguna —solo las escribe, al lado de lo que el lanzador declara, para que se puedan comparar—.
+
+**El teclado en pantalla tiene dos distribuciones.** Para **buscar** un juego salen solo letras y números: son menos teclas y cada una está a un paso del mando. Para **escribir texto** —argumentos de lanzamiento, DLL overrides, notas— sale un teclado completo con minúsculas, símbolos (`= % : / \ " | + * @ # $ &`) y una tecla de **mayúsculas** que se queda encendida mientras lo está. Así se puede pegar una línea de ProtonDB tal cual, con su `%command%` incluido. Escribiendo texto, la **Y** acepta lo escrito; buscando, cierra el teclado.
+
+## 15. Llamar a WProton desde la línea de órdenes
+
+Está pensado para frontends —DeckStation lo usa así— y para automatizar cosas.
+Todas las rutas admiten **espacios sin comillas internas**: WProton junta los
+argumentos que le llegan.
+
+| Orden | Qué hace |
+|---|---|
+| `./wproton.sh` | Abre el menú normal |
+| `./wproton.sh <juego>` | Lanza ese juego: `.wsquashfs`, carpeta, `.exe`, `.sh`, `.AppImage`, `.zip`/`.7z`/`.rar` |
+| `./wproton.sh --config <juego>` | Abre *Ajustes del juego* para ese juego |
+| `./wproton.sh --exe <juego.wsquashfs>` | Lanza eligiendo el ejecutable a mano |
+| `./wproton.sh --saves <juego>` | Abre el gestor de **partidas guardadas** de ese juego, sin lanzarlo |
+| `./wproton.sh --keys <juego>` | Abre el **editor de teclas del mando** de ese juego, sin lanzarlo |
+| `./wproton.sh --import <exe\|carpeta\|zip>` | Fuerza el flujo de importar/empaquetar |
+| `./wproton.sh --play` | Modo "solo jugar" |
+| `./wproton.sh --menu` | Menú completo (salida de emergencia del modo solo-jugar) |
+| `./wproton.sh --update` | Busca e instala una versión nueva de WProton |
+| `./wproton.sh --kill` | Cierra todo lo de WProton |
+| `./wproton.sh --version` | Dice la versión |
+
+**Un juego puede ser un fichero o una carpeta**, y eso vale en todas partes:
+`--config` acepta igual un `.wsquashfs` que un directorio `.pc` de los de
+Batocera. Si una ruta no existe, el error lo dice y no se abre nada.
+
+**Desde un frontend (ES-DE, DeckStation).** `--saves` está pensado para ser un
+lanzador más en ES-DE, junto a los dos que ya se usan para jugar:
+
+```xml
+<command label="WProton (Launch Direct)">./Apps/WProton/wproton.sh %ROM%</command>
+<command label="WProton (Launch WithMenu)">./Apps/WProton/wproton.sh --config %ROM%</command>
+<command label="WProton (Saved Games)">./Apps/WProton/wproton.sh --saves %ROM%</command>
+<command label="WProton (Keys Games)">./Apps/WProton/wproton.sh --keys %ROM%</command>
+```
+
+El juego no se nombra en ningún sitio: `%ROM%` es el marcador de ES-DE, así que
+la misma línea vale para todos los juegos y la carpeta se puede mover sin
+tocar nada. No es un menú nuevo, es el mismo *Partidas guardadas de [juego]*
+que ya está en *Ajustes del juego*.
+
+## 16. Dónde está cada cosa
 
 | Carpeta | Contiene |
 |---|---|

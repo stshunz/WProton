@@ -77,7 +77,12 @@ FIJA = {"trigger": ["hotkey", "start"], "type": "key",
         "target": ["KEY_LEFTALT", "KEY_F4"]}
 
 # Valores de partida de la seccion "mouse", los mismos que tenia keys_raton_poner.
-RATON_DEFECTO = {"axis": "joystick2", "click_left": "r2", "speed": 900}
+# El clic izquierdo, en DOS botones. Era solo "r2", y en el registro del caso
+# del lanzador no salia ni un clic: lo natural delante de un boton "Play" es
+# pulsar la A. Con los dos puestos da igual cual se pulse; el mapeador admite
+# la lista separada por comas.
+RATON_DEFECTO = {"axis": "joystick2", "click_left": "a,r2",
+                 "click_right": "b", "speed": 900}
 
 EJEMPLO = {
     "_comentario": "Ejemplo de WProton. Copialo junto a un juego como <juego>.wsquashfs.keys",

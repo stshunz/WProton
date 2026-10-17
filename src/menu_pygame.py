@@ -215,9 +215,17 @@ EXTS_NORMAL = ('.wsquashfs', '.squashfs', '.dwarfs', '.zip', '.7z', '.rar',
 # .dwarfs): esos ya salen solos en la biblioteca, y verlos aqui solo confunde
 # —parece que hay que añadirlos otra vez—. Quedan los formatos que si hay que
 # importar: comprimidos, ejecutables y carpetas.
+#
+# LAS IMAGENES DE DISCO (.iso y compañia) SI: una ISO de instalacion se elige
+# aqui y WProton la abre, busca su setup.exe y la instala. Sin tenerlas en esta
+# lista no aparecian en el navegador y no habia forma de elegirlas.
+#
+# NO va ".bin": los instaladores de GOG vienen troceados en "setup-1.bin" y
+# esos los recompone el propio instalador, no nosotros.
 EXTS_IMPORTAR = ('.zip', '.7z', '.rar', '.001', '.z01',
                  '.exe', '.bat', '.cmd', '.wtgz', '.sh',
-                 '.appimage', '.AppImage')
+                 '.appimage', '.AppImage',
+                 '.iso', '.ISO', '.img', '.mdf', '.nrg', '.udf')
 
 def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=None,
                 manifiesto=None, preseleccion=None, fav_file=None, aspecto=None):
@@ -247,12 +255,17 @@ def set_request(mode, title, outfile, arg4=None, browse_kind='file', action_x=No
                     campos = linea.rstrip('\n').split('|')
                     if not campos or not campos[0].strip():
                         continue
-                    while len(campos) < 9:
+                    # 10 campos desde que el panel enseña el formato. El
+                    # relleno con '' es lo que permite leer un manifiesto
+                    # viejo de 9 sin romper nada: el formato sale vacio y el
+                    # panel pone SIN, como con cualquier otro dato que falte.
+                    while len(campos) < 10:
                         campos.append('')
                     d = {'cov': campos[1], 'fav': campos[2],
                          'veces': campos[3], 'segs': campos[4],
                          'ficha': campos[5], 'hltb': campos[6],
-                         'completado': campos[7], 'rawg': campos[8]}
+                         'completado': campos[7], 'rawg': campos[8],
+                         'formato': campos[9]}
                     d.update(leer_ficha(campos[5]))
                     # RAWG solo RELLENA: lo de Steam manda, porque trae la
                     # sinopsis en español y datos mas completos.
@@ -2415,6 +2428,11 @@ def draw_side_panel():
                           L('%s veces', '%s times') % _veces if _veces != '0'
                           else L('nunca', 'never')))
             filas.append((L('Tiempo', 'Time'), fmt_horas(datos.get('segs')) or SIN))
+            # EL FORMATO: .wsquashfs, .squashfs, .dwarfs, .pc o Carpeta.
+            # Va en el panel y NO en la lista de la izquierda: ahi el nombre
+            # se queda como esta (y si se quiere ver la extension tambien
+            # alli, se enciende en Biblioteca y preferencias).
+            filas.append((L('Formato', 'Format'), datos.get('formato') or SIN))
             if datos.get('completado') == '1':
                 filas.append((L('Estado', 'Status'), L('COMPLETADO', 'COMPLETED')))
             for etiqueta, valor in filas:

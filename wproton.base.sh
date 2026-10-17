@@ -38,6 +38,8 @@
 #     ./wproton.sh --setup                 -> descargar/actualizar umu + Proton
 #     ./wproton.sh --kill                  -> desmontar todo y matar wine
 #     ./wproton.sh --config [juego]        -> menu de configuración
+#     ./wproton.sh --saves juego.wsquashfs -> menu de partidas guardadas, directo
+#     ./wproton.sh --keys juego.wsquashfs  -> editor de teclas del mando, directo
 #     ./wproton.sh                         -> menu principal
 # ============================================================================
 
@@ -52,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.04"
+WPROTON_VERSION="2.10"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -178,6 +180,16 @@ GAMES_VIEW="list"                        # list | grid | banner (panorámica) | 
 # de que el usuario se saque una API key de SteamGridDB, asi que de fabrica
 # la vista de lista se queda sin carátula para casi todo el mundo.
 LIST_COVER=43                            # forma de la carátula en la vista de lista
+LISTA_EXTENSION=0                        # 1 = mostrar la extension en la lista
+ISO_USUARIO="Deck"                       # usuario para la instalacion desde ISO (vacio = el del sistema)
+# LA VELOCIDAD DEL PUNTERO EN EL INSTALADOR DE UNA IMAGEN.
+#
+# Menos que en un juego (900), y lo pidio Dani tras instalar uno de verdad:
+# "podrias bajar un poco la sensibilidad del stick derecho en el instalador".
+# En un juego el puntero sirve para mirar alrededor y cuanto mas suelto
+# mejor; en un instalador hay que acertar en un "Siguiente" de treinta
+# pixeles, y a 900 px/s se pasa de largo una y otra vez.
+WP_RATON_VEL_INSTALADOR=450
 LAST_BROWSE=""                           # última carpeta visitada en el navegador
 THEME="moderno"                          # menus: clasico | moderno | arcade | cristal (Qt)
 DIRECT_PLAY=0                            # 1 = arrancar directo en la lista de juegos
@@ -370,6 +382,16 @@ GAMES_VIEW="$GAMES_VIEW"
 # Forma de la caratula que se enseña en el panel de la vista de lista:
 #   vertical | wide (panoramica) | 43
 LIST_COVER="$LIST_COVER"
+# Mostrar la extension (.wsquashfs, .dwarfs...) en la lista de juegos:
+#   0 = no (de fabrica)  |  1 = si
+# Solo en la vista de LISTA; la rejilla nunca la enseña. El panel de la
+# derecha tiene una fila "Formato" que la dice siempre, encendido o no.
+LISTA_EXTENSION="$LISTA_EXTENSION"
+# Usuario para la instalación desde ISO: el nombre que se le pone a la
+# configuración que trae el juego (UserName/PlayerName de steam_emu.ini y
+# compañía). Es el que verás dentro del juego.
+# Vacío = el usuario del sistema.
+ISO_USUARIO="$ISO_USUARIO"
 # Última carpeta usada en el navegador de ficheros:
 LAST_BROWSE="$LAST_BROWSE"
 # Aspecto de los menus: clasico | moderno | arcade | cristal
@@ -767,6 +789,20 @@ load_settings() {
     # shellcheck disable=SC1090
     [ -f "$SETTINGS_FILE" ] && . "$SETTINGS_FILE"
     [ -f "$SETTINGS_FILE" ] || save_settings   # crear el fichero la primera vez
+    # EL AJUSTE QUE CAMBIO DE NOMBRE.
+    #
+    # Hasta la 2.10 se llamaba CRACK_NOMBRE; ahora es ISO_USUARIO, que es como
+    # se ve en el menu ("Usuario instalación ISO"). Un settings.conf de antes
+    # trae el viejo, y el nuevo se queda con el valor de fabrica: sin esto, a
+    # quien lo hubiera cambiado se le perdia su nombre sin decir nada.
+    #
+    # Se mira que el fichero NO declare ya el nuevo: solo asi se sabe que el
+    # valor que hay es el de fabrica y no una eleccion del usuario.
+    if [ -n "${CRACK_NOMBRE:-}" ] && [ -f "$SETTINGS_FILE" ] \
+       && ! grep -q '^ISO_USUARIO=' "$SETTINGS_FILE" 2>/dev/null; then
+        ISO_USUARIO="$CRACK_NOMBRE"
+        log "ajustes: CRACK_NOMBRE se llama ahora ISO_USUARIO; se conserva '$CRACK_NOMBRE'"
+    fi
     GAMES_PATH="$(abs_path "$GAMES_PATH")"
     LAST_GAME="$(abs_path "${LAST_GAME:-}")"
     LAST_BROWSE="$(abs_path "${LAST_BROWSE:-}")"
@@ -1184,7 +1220,7 @@ setup_dwarfs_tools() {
     mkdir -p "$RUNTIME_DIR/tools"
     local urls url tmp
     say "[dwarfs] buscando el binario universal..."
-    urls="$(curl -fsSL "https://api.github.com/repos/mhx/dwarfs/releases/latest" 2>/dev/null \
+    urls="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/mhx/dwarfs/releases/latest" 2>/dev/null \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
         | grep -i 'universal' | grep -i "linux" | grep -i "$a")"
     [ -z "$urls" ] && {
@@ -1236,7 +1272,7 @@ try_wproton_repo_tool() {
     urls="https://raw.githubusercontent.com/$WPROTON_REPO/main/tools/$a/$name
 https://raw.githubusercontent.com/$WPROTON_REPO/main/tools/$name"
     urls="$urls
-$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases" 2>/dev/null \
+$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$WPROTON_REPO/releases" 2>/dev/null \
     | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
     | grep -i "/$name" | head -n 4)"
     # shellcheck disable=SC2086
@@ -1393,7 +1429,7 @@ build_squashfuse_src() {
     local tmp url src
     tmp="$(mktemp -d)"
     # el tarball de distribucion de la ultima release (nombre squashfuse-X.Y.Z.tar.gz)
-    url="$(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
+    url="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
         | grep -iE 'squashfuse-[0-9].*\.tar\.(gz|xz)$' | head -n1)"
     if [ -n "$url" ]; then
@@ -1465,7 +1501,7 @@ setup_squashfuse_ll() {
     local a; a="$(arch_tag)"
     local ll_urls="https://bin.pkgforge.dev/$a/squashfuse_ll"
     ll_urls="$ll_urls
-$(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
+$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
     | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
     | grep -i 'squashfuse_ll' | grep -i "$a")"
     # Por orden: nuestro repositorio -> binarios estaticos -> el paquete de
@@ -1565,7 +1601,7 @@ setup_fuse_tools() {
     if ! tool_is_ours "$OVERLAYFS_BIN"; then
         # fuse-overlayfs publica binarios ESTATICOS oficiales por arquitectura
         local ovl_urls
-        ovl_urls="$(curl -fsSL "https://api.github.com/repos/containers/fuse-overlayfs/releases/latest" 2>/dev/null \
+        ovl_urls="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/containers/fuse-overlayfs/releases/latest" 2>/dev/null \
             | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i "$a")"
         # shellcheck disable=SC2086
         if try_wproton_repo_tool fuse-overlayfs; then
@@ -1580,10 +1616,10 @@ setup_fuse_tools() {
         # squashfuse no publica binarios: probamos fuentes de builds estaticos
         local sq_urls="https://bin.pkgforge.dev/$a/squashfuse"
         sq_urls="$sq_urls
-$(curl -fsSL "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
+$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
     | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i 'squashfuse' | grep -i "$a")"
         sq_urls="$sq_urls
-$(curl -fsSL "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
+$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/vasi/squashfuse/releases/latest" 2>/dev/null \
     | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
     | grep -iv 'sig\|asc' | grep -iv 'squashfuse-[0-9]' | grep -i "$a")"
         # Por orden: nuestro repositorio -> binarios estaticos -> paquete de
@@ -1668,6 +1704,7 @@ Instalalas con el gestor de paquetes de tu distribucion."
         WP_SIN_FUSE="$falta"
     fi
     log "Este equipo tiene glibc $(glibc_de_este_equipo) (GLIBC_OBJETIVO=${GLIBC_OBJETIVO:-2.36} en settings.conf)"
+    log "Diagnosticos: $(diag_activos)"
     log "Herramientas: squashfuse=$SQUASHFUSE_BIN$(tool_is_ours "$SQUASHFUSE_BIN" && printf ' [portable]' || printf ' [sistema]') | overlayfs=$OVERLAYFS_BIN$(tool_is_ours "$OVERLAYFS_BIN" && printf ' [portable]' || printf ' [sistema]') | fusermount=$FUSERMOUNT_BIN"
     # Con que driver se montaran las imagenes, que no es lo mismo que el
     # squashfuse de arriba: si hay squashfuse_ll se usa ese. Importa tenerlo
@@ -3652,20 +3689,20 @@ filter_assets() {
 
 gh_latest_asset() {
     # $1 = repo, $2 = patron grep -> imprime URL del asset (x86_64)
-    curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
+    curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$1/releases/latest" \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
         | filter_assets | grep -iE "$2" | head -n1
 }
 
 gh_release_tags() {
     # $1 = repo, $2 = cuantos (def. 12) -> lista de tags recientes
-    curl -fsSL "https://api.github.com/repos/$1/releases?per_page=${2:-12}" \
+    curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$1/releases?per_page=${2:-12}" \
         | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4
 }
 
 gh_tag_assets() {
     # $1 = repo, $2 = tag -> URLs de paquetes x86_64 de esa release
-    curl -fsSL "https://api.github.com/repos/$1/releases/tags/$2" \
+    curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$1/releases/tags/$2" \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
         | filter_assets | grep -iE '\.(tar\.(gz|xz|zst)|tgz|zip|7z)$'
 }
@@ -3861,7 +3898,7 @@ gh_pagina_tags() {
         cat "$f"
         return 0
     fi
-    t="$(curl -fsSL "https://api.github.com/repos/$repo/releases?per_page=100&page=$p" \
+    t="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$repo/releases?per_page=100&page=$p" \
         | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
     if [ -n "$t" ]; then
         printf '%s\n' "$t" > "$f" 2>/dev/null
@@ -4017,6 +4054,38 @@ dl() {
     return 0
 }
 
+# LIMITES DE TODAS LAS DESCARGAS.
+#
+# Sin esto, un espejo que ACEPTA la conexion y luego no manda nada deja a curl
+# esperando para siempre; y con "--retry 3", tres veces seguidas. Le paso
+# exactamente eso a Dani bajando fuseiso para montar una ISO: "se ha pegado
+# mucho rato". La descarga no fallaba: es que nunca se rendia.
+#
+# NO es un tiempo maximo de descarga. Un runner de 400 MB por una linea lenta
+# tarda lo que tarda y eso es legitimo. Lo que se exige es un MINIMO DE
+# CAUDAL: si durante 30 s no llegan ni 2 KB/s, se da ese espejo por muerto y
+# se prueba el siguiente. Un enlace que avanza, aunque sea despacio, no se
+# corta nunca.
+#
+#   --connect-timeout   20 s para que el servidor conteste siquiera
+#   --speed-limit/-time el minimo de caudal de arriba
+#   --retry-max-time    tope para los REINTENTOS (no para la transferencia:
+#                       curl solo mira este reloj antes de empezar otro
+#                       intento, nunca corta uno en marcha)
+DL_LIMITES=(--connect-timeout 20 --speed-limit 2048 --speed-time 30
+            --retry 3 --retry-delay 2 --retry-max-time 180)
+
+# Y LO MISMO PARA LAS CONSULTAS DE METADATOS.
+#
+# Son las listas de releases de GitHub y los indices de los repositorios:
+# cuatro kilobytes de JSON que nunca deberian tardar, y que se piden ANTES de
+# cada descarga para averiguar la URL. Se quedaban colgadas igual, y ahi no se
+# veia ni una barra de progreso: la pantalla parada y nada mas.
+#
+# Aqui SI vale un tope de tiempo total, al reves que arriba: no hay nada
+# grande que traer, asi que 45 s es de sobra para cualquier respuesta sana.
+DL_META=(--connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2)
+
 dl_bruto() {
     # $1 = url, $2 = destino.
     #
@@ -4027,7 +4096,7 @@ dl_bruto() {
     local _sha_esperada="${3:-}"
     # Si ya hay una ventana en pantalla, NO abrir otra encima: se solapaban.
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
-        curl -fL --retry 3 -s -o "$2" "$1"
+        curl -fL "${DL_LIMITES[@]}" -s -o "$2" "$1"
     elif pygame_available; then
         progress_start "Descargando $nombre"
         # Tamaño total, para que la barra avance de verdad. Si el servidor no
@@ -4035,7 +4104,7 @@ dl_bruto() {
         local total; total="$(curl -fsIL --max-time 15 "$1" 2>/dev/null \
             | grep -i '^content-length:' | tail -n1 \
             | tr -dc '0-9')"
-        curl -fL --retry 3 -s -o "$2" "$1" &
+        curl -fL "${DL_LIMITES[@]}" -s -o "$2" "$1" &
         local pid=$! pct=0 hechos=0
         while kill -0 $pid 2>/dev/null; do
             sleep 1
@@ -4075,14 +4144,14 @@ dl_bruto() {
         progress_stop
         return $rc
     elif [ "$HAS_ZENITY" = 1 ]; then
-        curl -fL --retry 3 -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
+        curl -fL "${DL_LIMITES[@]}" -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
         local pid=$!
         ( while kill -0 $pid 2>/dev/null; do echo 50; sleep 1; done; echo 100 ) \
             | zenity --progress --title="WProton" --text="Descargando $(basename "$2")..." \
                      --pulsate --auto-close --no-cancel 2>/dev/null
         wait $pid
     else
-        curl -fL --retry 3 -o "$2" "$1"
+        curl -fL "${DL_LIMITES[@]}" -o "$2" "$1"
     fi
 }
 
@@ -4208,11 +4277,11 @@ pbs_latest_url() {
     # 1) tag desde latest-release.json (raw.githubusercontent, sin limite)
     # 2) asset desde la pagina expanded_assets (HTML, sin limite)
     local tag page url
-    tag="$(curl -fsSL "https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json" \
+    tag="$(curl -fsSL "${DL_META[@]}" "https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json" \
         | grep -o '"tag": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
     if [ -n "$tag" ]; then
         page="https://github.com/astral-sh/python-build-standalone/releases/expanded_assets/$tag"
-        url="$(curl -fsSL "$page" \
+        url="$(curl -fsSL "${DL_META[@]}" "$page" \
             | grep -o 'href="[^"]*cpython-3\.12\.[0-9]*[^"]*x86_64-unknown-linux-gnu-install_only\.tar\.gz"' \
             | head -n1 | cut -d'"' -f2)"
         if [ -n "$url" ]; then
@@ -4227,10 +4296,10 @@ pbs_latest_url() {
     # Fallback: API clasica con paginacion de assets
     local api="https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
     local assets_url p
-    assets_url="$(curl -fsSL "$api" | grep -o '"assets_url": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
+    assets_url="$(curl -fsSL "${DL_META[@]}" "$api" | grep -o '"assets_url": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
     [ -z "$assets_url" ] && { log "API de GitHub sin respuesta (rate limit?)" WARN; return 1; }
     for p in 1 2 3 4 5 6; do
-        url="$(curl -fsSL "${assets_url}?per_page=100&page=$p" \
+        url="$(curl -fsSL "${DL_META[@]}" "${assets_url}?per_page=100&page=$p" \
             | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
             | grep -E 'cpython-3\.12\.[0-9]+\+[0-9]+-x86_64-unknown-linux-gnu-install_only\.tar\.gz$' \
             | head -n1)"
@@ -6027,6 +6096,109 @@ diag_cuelgue_sistema() {
     return 0
 }
 
+diag_log_del_juego() {
+    # EL REGISTRO QUE ESCRIBE EL PROPIO JUEGO. $1 = rc, $2 = duracion.
+    #
+    # POR QUE ESTO EXISTE, Y ME HA COSTADO CINCO TEORIAS APRENDERLO
+    #
+    # Un juego de Unity que se cierra solo no dice NADA por la salida estandar:
+    # imprime su configuracion de memoria y se acaba. Lo unico que aparece en
+    # nuestro registro es eso, y a partir de ahi solo quedan conjeturas: el
+    # codec, la superposicion, el HDR, el motor grafico... Se probaron las
+    # cinco y ninguna era, porque el dato no estaba en nuestro registro.
+    #
+    # Y SI ESTABA EN EL SUYO. Unity escribe un Player.log con el motivo exacto
+    # -una excepcion, un fichero que falta, un shader que no compila- dentro
+    # del prefijo:
+    #
+    #   drive_c/users/<usuario>/AppData/LocalLow/<empresa>/<juego>/Player.log
+    #
+    # Los de Unity viejos lo llaman output_log.txt, y algunos juegos dejan
+    # ademas un volcado en Crashes/. Aqui se buscan los tres y se pega lo
+    # ultimo en NUESTRO registro, que es el que se nos manda cuando algo falla.
+    #
+    # SOLO SI ES DE ESTA PARTIDA: un Player.log de hace tres dias confundiria
+    # mas que ayudar. Se mira la fecha del fichero contra lo que duro la
+    # partida, con dos minutos de margen.
+    local rc="${1:-0}" dur="${2:-0}" pfx="${WINEPREFIX:-}"
+    [ -n "$pfx" ] || return 0
+    [ -d "$pfx" ] || return 0
+    if [ "$rc" = 0 ] && [ "$dur" -ge 600 ]; then
+        return 0
+    fi
+    local minutos=$(( dur / 60 + 2 ))
+    local f encontrados=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -s "$f" ] || continue
+        encontrados=$((encontrados + 1))
+        log "---- registro del propio juego: ${f#"$pfx"/} ----"
+        tail -n 40 "$f" 2>/dev/null | tr -d '\r' >> "$LOG_FILE" 2>/dev/null
+        log "---- fin del registro del propio juego ----"
+        [ "$encontrados" -ge 2 ] && break
+    done <<EOFJLOG
+$(find "$pfx/drive_c/users" -maxdepth 7 \( -name 'Player.log' -o -name 'output_log.txt' \) \
+    -mmin "-$minutos" 2>/dev/null | sort)
+EOFJLOG
+    if [ "$encontrados" = 0 ]; then
+        # Que se sepa que se ha mirado: si no, parece que nadie lo comprobo.
+        log "No hay Player.log ni output_log.txt recientes en el prefijo (el juego no es de Unity, o no llego a escribirlo)"
+    fi
+    return 0
+}
+
+diag_video_del_juego() {
+    # ¿SE CERRO EL JUEGO EN UN VIDEO? Lo dice su propio registro, que
+    # diag_log_del_juego acaba de pegar en el nuestro. $1 = rc, $2 = duracion.
+    #
+    # POR QUE SALE SIEMPRE Y NO DETRAS DE UN DIAG_*
+    #
+    # Porque cuando pasa, esto ES la respuesta, y no tiene sentido que haya que
+    # pedirla. El caso que lo motivo tardo seis teorias y cuatro registros en
+    # llegar a una linea que el juego llevaba escribiendo desde el principio:
+    #
+    #   Error details: Codec was not found.
+    #   Video Track [3840 x 1920], type: H264
+    #
+    # SOLO SE MIRA LA COLA DEL REGISTRO. WProton es un solo proceso que lanza
+    # varios juegos seguidos y escribe en el mismo fichero, asi que buscar en
+    # todo el registro sacaria el fallo del juego ANTERIOR. Se mira el tramo
+    # que acaba de escribirse.
+    local rc="${1:-0}" dur="${2:-0}"
+    [ -s "${LOG_FILE:-}" ] || return 0
+    if [ "$rc" = 0 ] && [ "$dur" -ge 600 ]; then
+        return 0
+    fi
+    local cola linea fmt
+    cola="$(tail -n 250 "$LOG_FILE" 2>/dev/null)"
+    [ -n "$cola" ] || return 0
+    linea="$(printf '%s\n' "$cola" | grep -a -m1 -E \
+        'WindowsVideoMedia error|Codec was not found|Missing decoder|missing a plug-in|Failed to find any element factory' \
+        2>/dev/null)"
+    [ -n "$linea" ] || return 0
+    say "--- El juego se cerro en un video ---"
+    say "  Su propio registro dice:"
+    say "    $(printf '%s' "$linea" | cut -c1-110)"
+    # El formato, si el juego lo listo: "Video Track [3840 x 1920], type: H264"
+    fmt="$(printf '%s\n' "$cola" \
+        | grep -a -o -E 'type: (H264|H265|HEVC|WMV[0-9]?|VC1|MPEG4|AV1)' 2>/dev/null \
+        | sed 's/type: //' | sort -u | head -3 | tr '\n' ' ')"
+    [ -n "$fmt" ] && say "  Formato del video: ${fmt% }"
+    # Y EL VEREDICTO DE ESTE MISMO ARRANQUE, que ya esta en el registro. Con
+    # las dos mitades juntas, la conclusion no hay que deducirla.
+    if grep -a -F -q 'Video H.264: NO HAY DESCODIFICADOR' "$LOG_FILE" 2>/dev/null; then
+        say "  Y en este arranque NO habia descodificador de H.264: es eso."
+        say "  Arch/CachyOS: gst-libav y lib32-gst-libav."
+        say "  Deck/SteamOS: Ajustes del juego -> Casos especiales -> Codecs de video"
+        log "Resumen: el juego murio en el video y no habia descodificador de H.264" WARN
+    else
+        say "  Habia descodificador, asi que no es que falte. Manda este"
+        say "  registro: ya trae el motivo escrito por el propio juego."
+        log "Resumen: el juego murio en el video: $linea" WARN
+    fi
+    return 0
+}
+
 diag_ultimas_del_juego() {
     # LO ULTIMO QUE ESCRIBIO EL JUEGO ANTES DE IRSE.
     #
@@ -7203,6 +7375,49 @@ perfiles_limpiar_mscoree() {
     # vuelve a escribir de forma atomica, asi que no hay nada que preservar a
     # mano: o se escribe el fichero completo o se queda el de antes.
     perfil_py mscoree "$PROFILE_DIR" 2>>"$LOG_FILE"
+    return 0
+}
+
+ultimo_juego_recordar() {
+    # RECUERDA ESTE JUEGO COMO "EL ULTIMO JUGADO". $1 = ruta, $2 = gid (opcional).
+    #
+    # POR QUE ESTO ES UNA FUNCION Y NO CUATRO TROZOS IGUALES
+    #
+    # Lo apuntaban launch_game -las imagenes- y launch_loose_exe -los exe
+    # sueltos-, cada uno con su copia. Pero un juego de LINUX en carpeta no
+    # pasa por ninguno de los dos: va por lanzar_script_si_existe o por
+    # lanzar_nativo_suelto, y ahi no lo apuntaba nadie. Lo conto Dani: "al
+    # ejecutar el juego en sh no aparece como ultimo juego despues de
+    # ejecutarlo".
+    #
+    # Es EXACTAMENTE el descuido de siempre en este programa -hay varios
+    # caminos de lanzamiento y el recado vive en unos pocos-, el mismo que
+    # dejo sin vigilante de salida a los juegos de Linux y sin estadisticas a
+    # los lanzados a mano. Asi que ahora hay UN SOLO SITIO que lo hace y los
+    # cuatro caminos lo llaman.
+    #
+    # SE GUARDA LA CARPETA, NO EL EJECUTABLE, cuando se puede saber cual es.
+    # "Jugar al ultimo" le pasa esto a play_any, y una carpeta vuelve por
+    # play_folder, que es quien sabe encontrar el lanzador otra vez. Con la
+    # ruta del .sh tambien arrancaria, pero el nombre del menu saldria con su
+    # extension detras.
+    local ruta="${1:-}" gid="${2:-}" abs d
+    [ -n "$ruta" ] || return 0
+    abs="$(readlink -f "$ruta" 2>/dev/null || printf '%s' "$ruta")"
+    # Con un fichero y un identificador, se sube hasta la carpeta que produce
+    # ese identificador: es la misma regla que ya usaba launch_loose_exe, y
+    # esta aqui para que la usen todos.
+    if [ -n "$gid" ] && [ ! -d "$abs" ]; then
+        d="$(dirname "$abs")"
+        while [ -n "$d" ] && [ "$d" != "/" ]; do
+            if [ "$(game_id "$d")" = "$gid" ]; then abs="$d"; break; fi
+            d="$(dirname "$d")"
+        done
+    fi
+    [ "$abs" != "${LAST_GAME:-}" ] || return 0
+    LAST_GAME="$abs"
+    save_settings
+    log "ultimo juego jugado: $abs"
     return 0
 }
 
@@ -9081,8 +9296,202 @@ gst_nombre_paquete() {
     basename "$n"
 }
 
+gst_arch_plugin() {
+    # 32, 64 o vacio. $1 = un .so de GStreamer.
+    [ -f "${1:-}" ] || return 1
+    case "$(file -b "$1" 2>/dev/null)" in
+        *32-bit*|*80386*) printf '32' ;;
+        *64-bit*|*x86-64*) printf '64' ;;
+        *) return 1 ;;
+    esac
+}
+
+gst_h264_capaz() {
+    # ¿Este paquete de GStreamer sabe descodificar H.264 DE VERDAD?
+    #
+    # DE DONDE SALE LA PREGUNTA
+    #
+    # Un tester: un juego se cierra al cargar el video de presentacion en
+    # SteamOS -modo juego y escritorio-, "da igual el Proton que ponga", y en
+    # CachyOS va bien. Se probaron seis causas y ninguna era. La contesto el
+    # Player.log del propio juego, el que escribe Unity DENTRO del prefijo:
+    #
+    #   WindowsVideoMedia error 0xc00d5212 ...
+    #   Context: Setting media type for first video stream
+    #   Error details: Codec was not found.
+    #   Video Track [3840 x 1920], type: H264
+    #
+    # No era el motor grafico, ni el HDR, ni la familia del runner: no habia
+    # con que descodificar un H.264.
+    #
+    # Y AQUI ESTABA LO QUE NO SE VEIA. Que el runner traiga libgstlibav.so NO
+    # quiere decir que sepa de H.264. Valve no distribuye descodificadores de
+    # formatos con patentes: en Proton, FFmpeg va compilado con todo
+    # desactivado, y el H.264 lo aporta el PROPIO STEAM -steam://unlockh264- o
+    # su conversor, que fuera de Steam no puede funcionar. O sea que el fichero
+    # esta, la comprobacion de "existe libgstlibav" pasaba, y el
+    # descodificador seguia sin aparecer.
+    #
+    # ESO EXPLICA LAS DOS COSAS QUE NO ENCAJABAN, y las dos las dijo el tester:
+    # "da igual el Proton que ponga" -ninguno lo trae, no es cosa de uno- y
+    # "en CachyOS si va" -alli el descodificador lo pone el sistema, que tiene
+    # gst-libav con FFmpeg completo; en SteamOS no-.
+    #
+    # COMO SE PREGUNTA, SIN EJECUTAR NADA
+    #
+    # Se le pregunta a la libavcodec que respalda al plugin, que es quien tiene
+    # -o no- el descodificador dentro. Cada descriptor de codec lleva su nombre
+    # largo escrito en el binario, asi que se ve leyendolo.
+    #
+    # NO se usa gst-inspect-1.0, que seria lo definitivo: el del sistema es de
+    # otra version que los plugins del runner y los rechaza, asi que diria "no"
+    # en casos en los que si. Preguntar mal es peor que no preguntar.
+    #
+    # ESTO SOLO INFORMA Y ORDENA PREFERENCIAS.
+    #
+    # Un "no" NUNCA descarta un paquete ni cambia el entorno: decide a quien se
+    # prefiere y escribe el motivo en el registro. Si la sonda se equivocara en
+    # algun equipo raro, lo unico que pasa es que sale un aviso de mas; no se
+    # deja de usar nada que hoy funcione.
+    #
+    # $1 = carpeta de plugins.  0 = si, 1 = no, 2 = no se puede saber.
+    # Imprime en que se ha basado, para que el registro lo diga.
+    local pd="${1:-}" libs lac
+    [ -n "$pd" ] || return 2
+    # openh264 es un descodificador de H.264 completo y se basta solo.
+    if [ -f "$pd/libgstopenh264.so" ]; then
+        printf 'openh264'
+        return 0
+    fi
+    # La libavcodec vive junto a la carpeta de plugins: en un Proton es
+    # files/lib/<arch>-linux-gnu/, y la carpeta de plugins es su gstreamer-1.0.
+    # En una distro, /usr/lib/<arch>-linux-gnu/ con gstreamer-1.0 dentro. El
+    # padre vale para las dos.
+    libs="$(dirname "$pd")"
+    lac=""
+    for lac in "$libs"/libavcodec.so.* "$libs"/libavcodec.so \
+               "$pd"/libavcodec.so.* "$pd"/libavcodec.so; do
+        [ -f "$lac" ] && break
+        lac=""
+    done
+    [ -n "$lac" ] || { printf 'sin libavcodec al lado'; return 2; }
+    if grep -a -q -m1 'H.264 / AVC' "$lac" 2>/dev/null; then
+        printf '%s' "$(basename "$lac")"
+        return 0
+    fi
+    printf '%s compilada sin H.264' "$(basename "$lac")"
+    return 1
+}
+
+gst_prestar_paquete() {
+    # Las carpetas de plugins de UN paquete, 32 BITS PRIMERO.
+    # $1 = carpeta raiz del paquete. Imprime "plugins<TAB>librerias" por linea.
+    #
+    # Se emiten LAS DOS ARQUITECTURAS del MISMO paquete. No rompe la regla de
+    # "una sola fuente": sigue siendo un unico paquete usado entero, que es lo
+    # que evita mezclar plugins de uno con el nucleo de otro.
+    local raiz="${1:-}" p a p32="" p64=""
+    [ -n "$raiz" ] || return 1
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        [ -f "$p/libgstlibav.so" ] || continue
+        a="$(gst_arch_plugin "$p/libgstlibav.so")" || continue
+        case "$a" in
+            32) [ -n "$p32" ] || p32="$p" ;;
+            64) [ -n "$p64" ] || p64="$p" ;;
+        esac
+    done <<EOFGSTA
+$(find "$raiz" -maxdepth 6 -type d -name 'gstreamer-1.0' -path '*/lib*' 2>/dev/null | sort)
+EOFGSTA
+    [ -n "$p32" ] || [ -n "$p64" ] || return 1
+    # 32 primero, como hace Batocera: un juego de 32 bits descodifica en su
+    # proceso de 32 y tiene que encontrar los suyos antes.
+    [ -n "$p32" ] && printf '%s\t%s\n' "$p32" "$(dirname "$p32")"
+    [ -n "$p64" ] && printf '%s\t%s\n' "$p64" "$(dirname "$p64")"
+    return 0
+}
+
+gst_raices() {
+    # Las raices donde puede haber un paquete con descodificadores, de lo mas
+    # especifico a lo mas general. Una por linea.
+    #
+    # EL STEAM LINUX RUNTIME, QUE EN UNA DECK ESTA SIEMPRE.
+    #
+    # Es la pieza que faltaba para SteamOS. Alli el GStreamer del sistema es
+    # minimo -de ahi que el video fuera en CachyOS y no en la Deck-, pero el
+    # Steam Linux Runtime esta instalado en todas las Deck, es un contenedor
+    # Debian completo y trae sus plugins con su FFmpeg. O sea que el
+    # descodificador que falta puede estar YA en el disco, sin descargar nada.
+    #
+    # Se nombran las carpetas del runtime una por una en vez de rastrear
+    # steamapps/common entero: en una biblioteca con cien juegos, un find por
+    # todo "common" cuesta segundos en cada lanzamiento. Asi es inmediato.
+    #
+    # Se incluyen la tarjeta SD y el Steam de Flatpak, que son los dos sitios
+    # donde esto vive cuando no esta en el sitio de siempre.
+    local b
+    for b in "$RUNNERS_DIR" \
+             "$HOME/.steam/root/compatibilitytools.d" \
+             "$HOME/.local/share/Steam/compatibilitytools.d" \
+             "$HOME/.steam/steam/compatibilitytools.d" \
+             /usr/share/steam/compatibilitytools.d \
+             "$HOME"/.steam/steam/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.steam/root/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.local/share/Steam/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/SteamLinuxRuntime* \
+             /run/media/*/steamapps/common/SteamLinuxRuntime* \
+             /run/media/*/*/steamapps/common/SteamLinuxRuntime* \
+             "$HOME/.local/share/Steam/steamapps/common" \
+             /usr/share /opt; do
+        # Un comodin que no encaja con nada se queda tal cual, y -d lo tira.
+        [ -d "$b" ] && printf '%s\n' "$b"
+    done
+    return 0
+}
+
+gst_paquetes_de() {
+    # Las raices de paquete con descodificador que haya bajo $1, una por linea.
+    #
+    # SOLO SI TRAE EL DESCODIFICADOR. Una carpeta con los plugins de base no
+    # resuelve nada; lo que hace falta es libgstlibav, que es quien sabe de
+    # WMV, H.264 y compañia.
+    local bd="${1:-}" p _raiz
+    [ -d "$bd" ] || return 0
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        [ -f "$p/libgstlibav.so" ] || continue
+        # La raiz del paquete: subir hasta salir de lib*/<arch>/gstreamer-1.0
+        _raiz="$p"
+        while :; do
+            case "$(basename "$_raiz")" in
+                gstreamer-1.0|lib|lib64|lib32|*-linux-gnu) _raiz="$(dirname "$_raiz")" ;;
+                *) break ;;
+            esac
+            [ "$_raiz" = "/" ] && break
+        done
+        printf '%s\n' "$_raiz"
+    done <<EOFGSTQ
+$(find "$bd" -maxdepth 6 -type d -name 'gstreamer-1.0' -path '*/lib*' 2>/dev/null | sort)
+EOFGSTQ
+    return 0
+}
+
+gst_paquete_h264() {
+    # 0 si alguna de las carpetas de este paquete sabe de H.264.
+    # $1 = raiz del paquete.
+    local raiz="${1:-}" d
+    [ -n "$raiz" ] || return 1
+    while IFS="$(printf '\t')" read -r d _; do
+        [ -n "$d" ] || continue
+        gst_h264_capaz "$d" >/dev/null 2>&1 && return 0
+    done <<EOFGSTH
+$(gst_prestar_paquete "$raiz" 2>/dev/null)
+EOFGSTH
+    return 1
+}
+
 gst_buscar_prestado() {
-    # UNA sola fuente de plugins de GStreamer de 32 bits, la mejor disponible.
+    # UNA sola fuente de plugins de GStreamer, la mejor disponible.
     # Imprime "carpeta_de_plugins<TAB>carpeta_de_librerias" y para.
     #
     # POR QUE UNA Y NO TODAS
@@ -9098,49 +9507,207 @@ gst_buscar_prestado() {
     #
     # EL ORDEN DE PREFERENCIA
     #
-    #   1. el runner que se va a usar, si los trae: es el que mejor encaja con
-    #      su propio Wine
-    #   2. el primero de la lista de rutas, que va de lo mas especifico
-    #      (nuestros runners) a lo mas general (/opt)
+    #   1. uno que SEPA DE H.264, empezando por el runner en uso
+    #   2. si ninguno sabe, el de antes: el runner, y si no el primero de la
+    #      lista de rutas, de lo mas especifico (nuestros runners) a lo mas
+    #      general (/opt)
+    #
+    # POR QUE SE MIRA PRIMERO SI SABE DE H.264
+    #
+    # Porque traer libgstlibav.so no significa saber descodificar. Valve
+    # compila su FFmpeg con todo desactivado -el H.264 tiene patentes-, asi
+    # que el runner pasaba la comprobacion de "existe el fichero" y el juego se
+    # quedaba igual sin descodificador. Ver gst_h264_capaz, que es donde esta
+    # contado el caso entero.
+    #
+    # La regla de "UN SOLO PAQUETE, USADO ENTERO" no se toca: lo unico que
+    # cambia es a cual se le pregunta primero. Y si ninguno sabe de H.264 se
+    # elige exactamente el que se elegia antes, asi que nada que funcione hoy
+    # se queda sin su paquete.
     #
     # $1 = carpeta del runner en uso (opcional)
-    local rdir="${1:-}" _bd p
+    local rdir="${1:-}" pasada _bd _raiz
 
     # --- 1) el runner en uso
-    if [ -n "$rdir" ]; then
-        while IFS= read -r p; do
-            [ -n "$p" ] || continue
-            [ -f "$p/libgstlibav.so" ] || continue
-            case "$(file -b "$p/libgstlibav.so" 2>/dev/null)" in
-                *32-bit*|*80386*) printf '%s\t%s\n' "$p" "$(dirname "$p")"; return 0 ;;
-            esac
-        done <<EOFGSTR
-$(find "$rdir" -maxdepth 5 -type d -name 'gstreamer-1.0' -path '*/lib*' 2>/dev/null | sort)
-EOFGSTR
-    fi
-
-    # --- 2) el primero que aparezca en el resto del sistema
-    for _bd in "$RUNNERS_DIR" \
-               "$HOME/.steam/root/compatibilitytools.d" \
-               "$HOME/.local/share/Steam/compatibilitytools.d" \
-               "$HOME/.steam/steam/compatibilitytools.d" \
-               /usr/share/steam/compatibilitytools.d \
-               "$HOME/.local/share/Steam/steamapps/common" \
-               /usr/share /opt; do
-        [ -d "$_bd" ] || continue
-        while IFS= read -r p; do
-            [ -n "$p" ] || continue
-            # SOLO SI TRAE EL DESCODIFICADOR Y ES DE 32 BITS. Una carpeta con
-            # los plugins de base no resuelve nada, y una de 64 tampoco: el
-            # problema es justo que faltan los de 32.
-            [ -f "$p/libgstlibav.so" ] || continue
-            case "$(file -b "$p/libgstlibav.so" 2>/dev/null)" in
-                *32-bit*|*80386*) printf '%s\t%s\n' "$p" "$(dirname "$p")"; return 0 ;;
-            esac
-        done <<EOFGSTP
-$(find "$_bd" -maxdepth 6 -type d -name 'gstreamer-1.0' -path '*/lib*' 2>/dev/null | sort)
+    #
+    # LAS DOS ARQUITECTURAS, Y ESTE ERA EL FALLO.
+    #
+    # Antes aqui solo se aceptaba una carpeta de 32 BITS, porque esto nacio
+    # para los videos WMV de juegos de 32. El efecto en un juego de 64 -Valheim
+    # en el registro de un tester- era el peor posible: se le ponia delante la
+    # carpeta de 32, su Wine de 64 intentaba cargar DOSCIENTOS plugins que no
+    # podia ("wrong ELF class: ELFCLASS32") y la carpeta de 64 del propio
+    # runner NO se añadia nunca. El juego se quedaba con los plugins del
+    # sistema y nada mas.
+    #
+    # Y de ahi que el mismo juego fuera en CachyOS y no en SteamOS: en CachyOS
+    # el GStreamer del sistema esta completo y el descodificador aparece igual;
+    # en SteamOS no, asi que al llegar al video de presentacion no habia con
+    # que descodificarlo y el juego se cerraba. "Da igual el Proton que pongas"
+    # encaja: el Proton no era el problema.
+    # DOS PASADAS SOBRE LA MISMA LISTA.
+    #
+    #   pasada 1 (h264)       solo se acepta un paquete que sepa de H.264
+    #   pasada 2 (cualquiera) se acepta el primero, como se hacia antes
+    #
+    # Asi, cuando hay un descodificador de verdad en el equipo se usa ese, y
+    # cuando no lo hay el resultado es identico al de siempre. La segunda
+    # pasada no suele costar nada: el runner se mira sin rastrear el disco y
+    # casi siempre trae su libgstlibav, con lo que acaba en la primera linea.
+    for pasada in h264 cualquiera; do
+        # --- 1) el runner en uso, en las dos pasadas
+        if [ -n "$rdir" ]; then
+            if [ "$pasada" = cualquiera ] || gst_paquete_h264 "$rdir"; then
+                gst_prestar_paquete "$rdir" && return 0
+            fi
+        fi
+        # --- 2) el resto del sistema
+        while IFS= read -r _bd; do
+            [ -n "$_bd" ] || continue
+            while IFS= read -r _raiz; do
+                [ -n "$_raiz" ] || continue
+                if [ "$pasada" = cualquiera ] || gst_paquete_h264 "$_raiz"; then
+                    gst_prestar_paquete "$_raiz" && return 0
+                fi
+            done <<EOFGSTP
+$(gst_paquetes_de "$_bd")
 EOFGSTP
+        done <<EOFGSTR
+$(gst_raices)
+EOFGSTR
     done
+    return 1
+}
+
+gst_registro_preparar() {
+    # El indice de plugins de GStreamer, en una carpeta escribible y SIN
+    # RESTOS DE LA VEZ ANTERIOR.
+    #
+    # El registro de plugins necesita una carpeta escribible. Sin ella
+    # GStreamer no indexa nada, no encuentra ningun plugin, y NO SE QUEJA.
+    #
+    # Y hay una segunda parte, que es la que explica un sintoma que traia loco:
+    # ese indice es una CACHE, y sobrevive al cambio de runner. Si se indexo
+    # una vez con una lista de carpetas -o con un Proton que no tenia
+    # descodificadores-, cambiar de Proton no rehace el indice, y el usuario
+    # prueba runner tras runner con el mismo resultado. Es literalmente "da
+    # igual el Proton que ponga".
+    #
+    # La propia gente de Proton lo dice al cambiar de version: borrar la
+    # carpeta gstreamer-1.0 del prefijo, que es la cache de plugins.
+    #
+    # Aqui se guarda una firma de la lista de plugins y del runner. Si cambia
+    # cualquiera de las dos, el indice se tira y se rehace. Cuesta una decima
+    # de segundo en el siguiente arranque.
+    #
+    # $1 = lista de carpetas de plugins   $2 = carpeta del runner
+    local dir="$RUNTIME_DIR/gst-registry" firma antes
+    mkdir -p "$dir" 2>/dev/null
+    firma="$(printf '%s|%s' "${1:-}" "${2:-}" | cksum 2>/dev/null | cut -d' ' -f1)"
+    antes="$(cat "$dir/.firma" 2>/dev/null || printf '')"
+    if [ -n "$firma" ] && [ "$firma" != "$antes" ]; then
+        rm -f "$dir"/registry.*.bin "$dir"/registry.* 2>/dev/null
+        printf '%s' "$firma" > "$dir/.firma" 2>/dev/null
+        [ -n "$antes" ] && log "GStreamer: cambio la lista de plugins o el runner; se rehace el indice"
+    fi
+    export WINE_GST_REGISTRY_DIR="$dir"
+    return 0
+}
+
+gst_conversor_apartar() {
+    # El conversor de video de Proton, apartado. $1 = lista de plugins.
+    #
+    # QUE ES Y POR QUE ESTORBA FUERA DE STEAM
+    #
+    # Proton no descodifica los formatos con patentes: los TRANSCODIFICA. El
+    # cliente de Steam baja una version ya convertida del video y el conversor
+    # -protonvideoconverter, protonaudioconverter- la sirve. El conversor se
+    # registra con PRIORIDAD POR ENCIMA de los descodificadores de verdad.
+    #
+    # Fuera de Steam no hay video convertido ni variables MEDIACONV_*, asi que
+    # el conversor no puede funcionar... y aun asi se queda con el trabajo,
+    # porque va delante. Y Wine no vuelve atras para probar el descodificador
+    # bueno. Resultado: hay un descodificador valido en el equipo y no se usa.
+    #
+    # Eso es exactamente el segundo registro del tester, que fallaba DISTINTO
+    # al primero: alli algo si acepto el video -llego a listar los formatos de
+    # salida: I420, NV12, YV12, YUY2- y se rompio despues, pidiendo un atributo
+    # que no estaba ("Get video transform output sample count", 0xc00d36e6).
+    # No era "falta un codec": era alguien cogiendo el trabajo sin poder
+    # terminarlo.
+    #
+    # GST_PLUGIN_FEATURE_RANK deja un elemento con prioridad NONE (GStreamer
+    # 1.18 y posteriores). Se apartan SOLO los elementos del conversor, no el
+    # plugin entero, para no tocar nada mas que traiga dentro.
+    #
+    # Y SOLO SI EL CONVERSOR ESTA. Si no aparece en ninguna carpeta no se
+    # exporta nada: ni una variable de mas en el entorno.
+    local lista="${1:-}" d f hallado=""
+    # Si el usuario ya decidio sobre esto, manda el usuario.
+    case "${GST_PLUGIN_FEATURE_RANK:-}" in
+        *proton*) log "GStreamer: GST_PLUGIN_FEATURE_RANK ya venia puesto; se respeta"
+                  return 0 ;;
+    esac
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        for f in "$d"/libgstproton*.so; do
+            [ -f "$f" ] && { hallado="$f"; break; }
+        done
+        [ -n "$hallado" ] && break
+    done <<EOFGSTC
+$(printf '%s\n' "$lista" | tr ':' '\n')
+EOFGSTC
+    if [ -z "$hallado" ]; then
+        log "GStreamer: el conversor de Proton no esta en la lista; no hay nada que apartar"
+        return 1
+    fi
+    export GST_PLUGIN_FEATURE_RANK="protonvideoconverter:NONE,protonvideoconverterbin:NONE,protonaudioconverter:NONE,protonaudioconverterbin:NONE"
+    log "GStreamer: conversor de Proton apartado ($(basename "$hallado")): fuera de Steam no puede servir video y tapa al descodificador bueno"
+    return 0
+}
+
+gst_h264_informe() {
+    # EL VEREDICTO QUE FALTABA EN EL REGISTRO: ¿hay H.264 en esta maquina?
+    #
+    # Hasta ahora, cuando un video de presentacion no cargaba, el registro de
+    # WProton no tenia ni una linea que lo dijera: habia que pedirle al tester
+    # el Player.log del juego, dentro del prefijo, y leerlo a mano. Se tardaron
+    # seis teorias en llegar ahi. Esto lo contesta en el propio arranque.
+    #
+    # $1 = lista de carpetas de plugins.
+    local lista="${1:-}" d cap rc quien="" hay=1
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        [ -f "$d/libgstlibav.so" ] || [ -f "$d/libgstopenh264.so" ] || continue
+        cap="$(gst_h264_capaz "$d")"; rc=$?
+        case "$rc" in
+            0) log "H.264: SI en $d ($cap)"
+               [ -n "$quien" ] || quien="$d"
+               hay=0 ;;
+            1) log "H.264: NO en $d ($cap)" ;;
+            *) log "H.264: no se puede saber en $d ($cap)" ;;
+        esac
+    done <<EOFGSTI
+$(printf '%s\n' "$lista" | tr ':' '\n')
+EOFGSTI
+    if [ "$hay" = 0 ]; then
+        log "Video H.264: disponible, lo aporta $quien"
+        return 0
+    fi
+    # NI UN DESCODIFICADOR DE H.264 EN TODA LA LISTA.
+    #
+    # Casi todos los videos de presentacion de los juegos modernos son H.264.
+    # Si no hay con que descodificarlo, el juego no se queda a medias: muchos
+    # motores -Unity entre ellos- se cierran al llegar ahi.
+    log "Video H.264: NO HAY DESCODIFICADOR en ninguna carpeta de la lista." WARN
+    log "   Es la causa tipica de que un juego se cierre o se cuelgue al cargar" WARN
+    log "   el video de presentacion. Proton no lo trae: Valve no distribuye" WARN
+    log "   descodificadores de formatos con patentes, los pone Steam." WARN
+    log "   Lo aporta el sistema (gst-libav) o un pack en $GST_DIR." WARN
+    say "[!] No hay descodificador de H.264 en este equipo."
+    say "    Si el juego se cierra al cargar el video de presentacion, es esto."
+    say "    Arch/CachyOS: gst-libav y lib32-gst-libav."
+    say "    Deck/SteamOS: Ajustes del juego -> Casos especiales -> Codecs de video"
     return 1
 }
 
@@ -9260,17 +9827,50 @@ entorno_batocera() {
         # i386-linux-gnu- y el numero cambia. Con tres dirname el mensaje decia
         # "prestado de: files" en la multiarch. Cortando por /files/ funciona en
         # las dos, y si no hay "files" se cae al nombre de la carpeta padre.
-        say "[+] GStreamer de: $(gst_nombre_paquete "$_pd")"
+        # SE DICE LA ARQUITECTURA. Con las dos carpetas prestadas, saber cual
+        # entro -y cual no- es lo primero que hace falta si un video no va.
+        say "[+] GStreamer de: $(gst_nombre_paquete "$_pd") [$(gst_arch_plugin "$_pd/libgstlibav.so" 2>/dev/null || printf '?') bits]"
     done <<EOFGSTB
 $(gst_buscar_prestado "$rdir")
 EOFGSTB
     fi
 
     # --- 3) el runner en uso y el sistema
+    #
+    # EL DISEÑO MULTIARCH DEL RUNNER FALTABA, Y ERA TODO EL PROBLEMA.
+    #
+    # Esta lista miraba lib/ y lib64/ del runner... y ya. Pero TODOS los Proton
+    # -GE, CachyOS, el de Valve- usan el diseño del Steam Linux Runtime:
+    #
+    #   <runner>/files/lib/i386-linux-gnu/gstreamer-1.0
+    #   <runner>/files/lib/x86_64-linux-gnu/gstreamer-1.0
+    #
+    # Asi que los plugins DEL PROPIO RUNNER no entraban nunca en
+    # GST_PLUGIN_PATH. Con un Proton 11, que ademas no recibe prestamo -usa
+    # winedmo/ffmpeg-, la lista se quedaba literalmente en lo del sistema:
+    #
+    #   GST_PLUGIN_PATH=/usr/lib/gstreamer-1.0:/usr/lib64/gstreamer-1.0
+    #
+    # En un escritorio eso basta, porque el GStreamer del sistema esta
+    # completo. En SteamOS no: ahi es minimo, y al llegar al video de
+    # presentacion no habia con que descodificarlo y el juego se cerraba.
+    #
+    # ESO EXPLICA LAS DOS COSAS QUE PARECIAN NO ENCAJAR, y las dos las dijo el
+    # tester: que "da igual el Proton que pongas" -ninguno aportaba los suyos,
+    # porque todos usan este diseño- y que "en CachyOS si va" -alli el sistema
+    # los tiene, y encima estaba usando un runner Wine, que si usa lib/ y
+    # lib64/ y por tanto si entraba en esta lista-.
+    #
+    # El comentario de la cabecera de esta funcion YA nombraba el diseño
+    # multiarch. La lista no lo incluia. Son dos lineas.
     for d in "$rdir/files/lib/gstreamer-1.0" "$rdir/dist/lib/gstreamer-1.0" \
              "$rdir/lib/gstreamer-1.0" \
+             "$rdir/files/lib/i386-linux-gnu/gstreamer-1.0" \
+             "$rdir/dist/lib/i386-linux-gnu/gstreamer-1.0" \
              "$rdir/files/lib64/gstreamer-1.0" "$rdir/dist/lib64/gstreamer-1.0" \
              "$rdir/lib64/gstreamer-1.0" \
+             "$rdir/files/lib/x86_64-linux-gnu/gstreamer-1.0" \
+             "$rdir/dist/lib/x86_64-linux-gnu/gstreamer-1.0" \
              /usr/lib32/gstreamer-1.0 /lib32/gstreamer-1.0 \
              /usr/lib/i386-linux-gnu/gstreamer-1.0 \
              /usr/lib/gstreamer-1.0 /usr/lib64/gstreamer-1.0 \
@@ -9298,14 +9898,25 @@ EOFGSTB
     if [ -n "$gst" ]; then
         export GST_PLUGIN_PATH="$gst"
         export GST_PLUGIN_SYSTEM_PATH_1_0="$gst"
-        # El registro de plugins necesita una carpeta ESCRIBIBLE. Sin ella
-        # GStreamer no indexa nada, no encuentra ningun plugin, y NO SE QUEJA.
-        mkdir -p "$RUNTIME_DIR/gst-registry" 2>/dev/null
-        export WINE_GST_REGISTRY_DIR="$RUNTIME_DIR/gst-registry"
+        # La carpeta escribible del indice, y el indice tirado si cambio algo.
+        gst_registro_preparar "$gst" "$rdir"
         log "GST_PLUGIN_PATH=$gst"
+        # ¿APORTO ALGO EL RUNNER? Es la pregunta que hubo que contestar a mano
+        # leyendo dos registros enteros. Que la conteste el propio registro.
+        case ":$gst:" in
+            *":$rdir/"*) log "GStreamer: el runner aporta sus propios plugins" ;;
+            *) log "GStreamer: el runner NO aporta plugins; solo hay los del sistema. Si un video falla, es por aqui" WARN
+               say "[i] Este runner no trae plugins de GStreamer propios: se usaran"
+               say "    los del sistema. En SteamOS son pocos y algun video puede fallar." ;;
+        esac
         # printf '%s' SIN salto final hace que wc -l cuente uno menos: con una
         # sola carpeta decia "0 carpetas" justo despues de encontrarla.
-        say "[+] GStreamer: $(printf '%s\n' "$gst" | tr ':' '\n' | wc -l) carpeta(s), 32 bits primero"
+        say "[+] GStreamer: $(printf '%s\n' "$gst" | tr ':' '\n' | wc -l) carpeta(s), 32 bits primero (32 y 64 del mismo paquete)"
+        # El conversor de Proton fuera del camino, y el veredicto de H.264.
+        # En este orden: primero se aparta a quien no puede servir el video,
+        # despues se dice si queda alguien que si pueda.
+        gst_conversor_apartar "$gst"
+        gst_h264_informe "$gst"
     else
         say "AVISO: no hay plugins de GStreamer ni en el runner ni en el sistema."
         say "       Sin ellos no se descodifican los videos WMV/WMA."
@@ -9399,6 +10010,7 @@ export_game_env() {
           PROTON_FORCE_LARGE_ADDRESS_AWARE WINE_LARGE_ADDRESS_AWARE \
           PROTON_NO_ESYNC PROTON_USE_NTSYNC WINEESYNC WINEFSYNC \
           WINE_GRAPHICS_DRIVER GST_PLUGIN_PATH GST_PLUGIN_SYSTEM_PATH_1_0 \
+          GST_PLUGIN_FEATURE_RANK \
           WINE_GST_REGISTRY_DIR STEAM_COMPAT_LIBRARY_PATHS STEAM_COMPAT_MOUNTS \
           2>/dev/null || true
 
@@ -11456,12 +12068,16 @@ launch_game() {
     # del repositorio va con tiempo limite.
     covers43_offer_for "$gid" || true
 
-    # Recordar como "último juego jugado"
+    # LA RUTA ABSOLUTA DE LA IMAGEN. Se usa aqui y en once sitios mas de esta
+    # funcion -el montaje, los .keys, el asistente-, asi que se define una vez.
+    #
+    # Al simplificar el bloque de "ultimo juego" se quedo fuera por un
+    # descuido, y con "set -u" once usos sin variable MATAN el script. Lo cazo
+    # la auditoria antes de salir de aqui.
     local abs_squash; abs_squash="$(readlink -f "$squash" 2>/dev/null || printf '%s' "$squash")"
-    if [ "$abs_squash" != "$LAST_GAME" ]; then
-        LAST_GAME="$abs_squash"
-        save_settings
-    fi
+    # Recordar como "último juego jugado". Sin gid: una imagen se guarda tal
+    # cual, que es lo que play_any sabe volver a montar.
+    ultimo_juego_recordar "$abs_squash"
 
     # Comprobacion rapida de integridad antes de montar (cabecera squashfs)
     if [ -f "$abs_squash" ]; then
@@ -12187,6 +12803,8 @@ $(tail -n 8 "$LOG_FILE")"
         wineserver_cerrar_prefijo "$rdir" "${RUNNER_KIND:-}"
     fi
     diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
+    diag_log_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
+    diag_video_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     say "El juego termino (rc=$rc). Saves conservados en wsquashfs/overlays/$gid/upper/"
     cleanup_mount
     return $rc
@@ -12197,13 +12815,13 @@ fecha_remota() {
     # ha vuelto a subir la MISMA version con correcciones: mirando solo el
     # numero, esa republicacion pasaria desapercibida.
     local cab fecha
-    fecha="$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
+    fecha="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
         | grep -o '"published_at": *"[^"]*"' | head -n1 | cut -d'"' -f4)"
     if [ -n "$fecha" ]; then
         date -d "$fecha" +%s 2>/dev/null && return 0
     fi
     # sin release: la cabecera del fichero en la rama principal
-    cab="$(curl -fsSLI "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
+    cab="$(curl -fsSLI "${DL_META[@]}" "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
         | grep -i '^last-modified:' | head -n1 | cut -d' ' -f2-)"
     [ -n "$cab" ] || return 1
     date -d "$cab" +%s 2>/dev/null || return 1
@@ -12389,12 +13007,12 @@ del script (formato usuario/repo)."
     # puede venir como "v1.02", "V1.02" o "1.02": si se le quita solo la "v"
     # minuscula, awk convierte "V1.02" a 0 y WProton cree que esta al dia.
     local remote="" tag=""
-    tag="$(curl -fsSL "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
+    tag="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$WPROTON_REPO/releases/latest" 2>/dev/null \
         | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
     remote="$(printf '%s' "$tag" | sed 's/^[vV]//')"
     if [ -z "$remote" ]; then
         # sin releases: leer la versión de la rama main
-        remote="$(curl -fsSL "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
+        remote="$(curl -fsSL "${DL_META[@]}" "https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh" 2>/dev/null \
             | grep -m1 '^WPROTON_VERSION=' | cut -d'"' -f2)"
         tag="v$remote"
     fi
@@ -12439,8 +13057,8 @@ Descargar y actualizar ahora?" || return 0
     local url_rel="https://github.com/$WPROTON_REPO/releases/download/$tag/wproton.sh"
     local url_tag="https://raw.githubusercontent.com/$WPROTON_REPO/$tag/wproton.sh"
     local url_main="https://raw.githubusercontent.com/$WPROTON_REPO/main/wproton.sh"
-    if ! curl -fsSL "$url_rel" -o "$tmp" 2>/dev/null; then
-        curl -fsSL "$url_tag" -o "$tmp" 2>/dev/null || curl -fsSL "$url_main" -o "$tmp" 2>/dev/null \
+    if ! curl -fsSL "${DL_LIMITES[@]}" "$url_rel" -o "$tmp" 2>/dev/null; then
+        curl -fsSL "${DL_LIMITES[@]}" "$url_tag" -o "$tmp" 2>/dev/null || curl -fsSL "${DL_LIMITES[@]}" "$url_main" -o "$tmp" 2>/dev/null \
             || { rm -f "$tmp"; ui_error "Fallo la descarga de v$remote"; return 1; }
     fi
     # Validar antes de tocar nada: sintaxis + que es WProton de verdad
@@ -16065,20 +16683,77 @@ EOFOPQ
     return 0
 }
 
+diag_activos() {
+    # Que diagnosticos estan encendidos, para que se vea EN EL REGISTRO.
+    #
+    # POR QUE HACE FALTA, Y SALIO DE COMPARAR DOS REGISTROS A MANO.
+    #
+    # Dos equipos, el mismo juego: en uno iba y en otro no. Al compararlos, en
+    # el que iba aparecian mil lineas de "trace:loaddll" y en el otro ninguna,
+    # y eso parecia una diferencia del juego. No lo era: uno tenia DIAG_DLL
+    # encendido y el otro no. Dos registros que no se pueden comparar porque no
+    # llevan lo mismo, y nada en ellos lo decia.
+    #
+    # Una linea al principio lo arregla: se ve de un vistazo si dos registros
+    # son comparables, y si falta informacion, que hay que encender.
+    local d salida=""
+    for d in DIAG_MANDO DIAG_CIERRE DIAG_DLL DIAG_VIDEO DIAG_TIEMPOS DIAG_RUTAS; do
+        [ "$(eval printf '%s' "\${$d:-0}")" = 1 ] && salida="${salida:+$salida }$d"
+    done
+    [ "${DEV_MODE:-0}" = 1 ] && salida="${salida:+$salida }DEV_MODE"
+    if [ -n "$salida" ]; then
+        printf '%s' "$salida"
+    else
+        printf 'ninguno (DIAG_DLL=1 y DIAG_VIDEO=1 en settings.conf para un registro completo)'
+    fi
+}
+
 overlay_opacos_avisar() {
     # Avisa si hay carpetas opacas que tapen contenido del archivo. $1 = upper
+    #
+    # LAS DEL JUEGO PRIMERO, Y DICIENDO CUANTAS SON.
+    #
+    # Antes se enseñaban las CINCO PRIMERAS de la lista, sin ordenar. Y la
+    # lista empieza por el prefijo de Windows, asi que el aviso salia lleno de
+    # "Program Files (x86)/Common Files/Microsoft Shared" -que no le importa a
+    # nadie- mientras las que de verdad rompen el juego, las de DENTRO de su
+    # carpeta, se quedaban entre las otras treinta y tres sin verse.
+    #
+    # En un registro real salia "38 carpeta(s) ... tapan" y las cinco que
+    # enseñaba eran todas del prefijo. Con eso no se puede saber si el juego se
+    # cierra porque no encuentra sus propios ficheros, que es justo la pregunta.
     local upper="$1" lista n
     lista="$(overlay_opacos_listar "$upper")"
     n="$(printf '%s' "$lista" | grep -c . || true)"
     [ "${n:-0}" -gt 0 ] || return 0
+    # Lo que cuelga de drive_c/Games es el juego; el resto es el prefijo.
+    local dentro fuera ndentro
+    dentro="$(printf '%s\n' "$lista" | grep -F '/drive_c/Games/' || true)"
+    fuera="$(printf '%s\n' "$lista" | grep -vF '/drive_c/Games/' || true)"
+    ndentro="$(printf '%s' "$dentro" | grep -c . || true)"
     say "AVISO: $n carpeta(s) de la superposicion tapan lo que trae el archivo."
     say "       El juego NO vera sus propios ficheros ahi dentro (idiomas,"
     say "       configuracion, datos). Se arregla en:"
     say "       Gestion de archivos -> Reparar carpetas tapadas"
     local d
-    printf '%s\n' "$lista" | head -n 5 | while IFS= read -r d; do
-        [ -n "$d" ] && say "         ${d#"$upper"}"
-    done
+    if [ "${ndentro:-0}" -gt 0 ]; then
+        say "       De esas, $ndentro estan DENTRO DE LA CARPETA DEL JUEGO."
+        say "       Eso puede hacer que no arranque, que falte el video de"
+        say "       presentacion o que se cierre al cargar. Son estas:"
+        printf '%s\n' "$dentro" | head -n 12 | while IFS= read -r d; do
+            [ -n "$d" ] && say "         ${d#"$upper"}"
+        done
+        [ "$ndentro" -gt 12 ] && say "         ... y $((ndentro - 12)) mas"
+        log "overlay: $ndentro carpeta(s) opacas DENTRO del juego; es la primera sospecha si el juego se cierra al cargar" WARN
+    else
+        log "overlay: ninguna carpeta opaca dentro del juego (las $n son del prefijo)"
+    fi
+    if [ -n "$fuera" ]; then
+        say "       Las demas son del prefijo de Windows, por ejemplo:"
+        printf '%s\n' "$fuera" | head -n 3 | while IFS= read -r d; do
+            [ -n "$d" ] && say "         ${d#"$upper"}"
+        done
+    fi
     return 0
 }
 
@@ -19008,12 +19683,17 @@ diag_video_preparar() {
     #   +quartz    el grafo de DirectShow: que filtros conecta y cual rechaza.
     #   +winegstreamer  el puente a GStreamer, que es quien descodifica de
     #              verdad WMV y WMA en Wine. Aqui sale el "Missing decoder".
+    #   +mfplat    Media Foundation, que es por donde van los videos de los
+    #              motores modernos. FALTABA, y es justo el camino del caso
+    #              que trajo todo esto: un Unity que no descodificaba su intro
+    #              en H.264 no pasa por quartz, pasa por aqui. Con los otros
+    #              tres canales ese fallo no se veia.
     #
     # NO SE PONE +ntdll NI +relay: multiplican el registro por cien y hacen el
     # juego injugable, con lo que el fallo cambia de sitio.
-    export WINEDEBUG="${WINEDEBUG:+$WINEDEBUG,}+file,+quartz,+winegstreamer"
+    export WINEDEBUG="${WINEDEBUG:+$WINEDEBUG,}+file,+quartz,+winegstreamer,+mfplat"
     say "[+] Diagnostico de video activo"
-    say "    (WINEDEBUG=+file,+quartz,+winegstreamer)"
+    say "    (WINEDEBUG=+file,+quartz,+winegstreamer,+mfplat)"
     say "    El registro va a crecer bastante; al salir se resume."
     return 0
 }
@@ -19077,8 +19757,31 @@ diag_video_informe() {
         say "  version del plugin, no su ausencia."
     fi
 
+    # 5. ¿ES POR MEDIA FOUNDATION? Es el camino de los motores modernos
+    #    -Unity, Unreal- y no pasa por quartz, asi que las cuatro
+    #    comprobaciones de arriba no lo veian. Aqui estaba el caso que motivo
+    #    todo esto: un intro en H.264 que no se podia descodificar.
+    if grep -a -q 'Codec was not found\|MF_E_TOPO_CODEC\|0xc00d5212' "$LOG_FILE" 2>/dev/null; then
+        hubo=1
+        say "  MEDIA FOUNDATION NO ENCONTRO DESCODIFICADOR."
+        say "  Proton no trae los de formatos con patentes -H.264 entre ellos-:"
+        say "  los pone Steam, y fuera de Steam tienen que venir del sistema"
+        say "  (gst-libav) o de un pack de codecs."
+    fi
+    if grep -a -q 'Failed to find any element factory' "$LOG_FILE" 2>/dev/null; then
+        hubo=1
+        say "  GStreamer no tiene ningun elemento para ese formato."
+    fi
+    if grep -a -q 'MEDIACONV_\|protonmediaconverter\|protonvideoconverter' "$LOG_FILE" 2>/dev/null; then
+        hubo=1
+        say "  Aparece el CONVERSOR de Proton, que fuera de Steam no puede"
+        say "  servir video: necesita el video ya convertido por el cliente."
+        say "  WProton lo aparta solo; si sale aqui, mira la linea 'conversor"
+        say "  de Proton apartado' del arranque."
+    fi
+
     [ "$hubo" = 0 ] && say "  Nada llamativo. Si el video tampoco se vio, pasa el"
-    [ "$hubo" = 0 ] && say "  registro entero: el fallo no esta en estos cuatro sitios."
+    [ "$hubo" = 0 ] && say "  registro entero: el fallo no esta en estos cinco sitios."
     return 0
 }
 
@@ -19700,17 +20403,104 @@ need_mksquashfs() {
 CachyOS: sudo pacman -S squashfs-tools"
 }
 
+# LOS GRUPOS DE RELEASE, EN UN SOLO SITIO.
+#
+# Se usa en clean_game_name por los dos lados -delante y detras-, asi que la
+# lista no puede estar escrita dos veces: anadir uno nuevo tiene que ser
+# tocar UNA linea.
+WP_GRUPOS_RELEASE='RUNE|CODEX|SKIDROW|PLAZA|CPY|EMPRESS|FLT|TENOKE|RAZOR1911|RAZOR|HOODLUM|PROPHET|RELOADED|DARKSiDERS|TiNYiSO|GOG|FitGirl|DODI|ElAmigos|KaOs|DAZA|P2P|REPACK|ALI213|3DM|SteamPunks|SiMPLEX|Unleashed|DEVIANCE|FAIRLIGHT|ANOMALY|DINOByTES|GOLDBERG|MKDEV|xatab|qoob|Seyter|Masquerade|OUTLAWS|Johncena141|M4CKD0GE|Chronos|VACE'
+
 clean_game_name() {
     # Limpieza de nombres de release (v1.2, builds, grupos, [2020]...)
-    printf '%s' "$1" \
+    #
+    # EL GRUPO VA DELANTE TAMBIEN, NO SOLO DETRAS.
+    #
+    # Lo pidio Dani: "podrias hacer que al crear el wsquashfs quite la cadena
+    # rune- por ejemplo". Un release se nombra de las dos formas:
+    #
+    #     rune-the.last.guardian      el grupo DELANTE, pegado con guion
+    #     The.Last.Guardian-RUNE      el grupo DETRAS
+    #
+    # Lo que habia quitaba el nombre del grupo estuviera donde estuviera, pero
+    # NO el guion: con "rune-Halo" habria quedado "-Halo" (y encima RUNE no
+    # estaba en la lista). Por eso ahora hay dos pasadas propias, delante y
+    # detras, que se llevan el separador con el grupo.
+    #
+    # Y DESPUES, LOS PUNTOS. "The.Last.Guardian" es un nombre de escena: ahi
+    # los puntos son espacios. Pero S.T.A.L.K.E.R. tambien lleva puntos y ahi
+    # son del titulo, y "Half-Life 2.0" ni te cuento. La senal que los separa
+    # es que el de escena NO TIENE NI UN ESPACIO: en cuanto el nombre trae
+    # alguno, los puntos se dejan como estan.
+    local n="$1"
+    # 1) el grupo delante y el grupo detras, con su separador
+    n="$(printf '%s' "$n" | sed -E "s/^($WP_GRUPOS_RELEASE)[-_. ]+//I")"
+    n="$(printf '%s' "$n" | sed -E "s/[-_. ]+($WP_GRUPOS_RELEASE)[-_. ]*$//I")"
+    # 2) lo de siempre: versiones, builds, grupos sueltos, anos entre parentesis
+    n="$(printf '%s' "$n" \
         | sed 's/\.part[0-9][0-9]*$//; s/\.r[0-9][0-9]$//' \
         | sed 's/[-_ ]*[vV][0-9][0-9]*\(\.[0-9][0-9]*\)*[[:alnum:]_.]*//g' \
         | sed 's/[-_ ]*[Bb]uild[0-9][0-9]*\(\.[0-9][0-9]*\)*[[:alnum:]_.]*//g' \
-        | sed 's/[-_ ]*\(P2P\|CODEX\|SKIDROW\|REPACK\|FitGirl\|GOG\|DODI\|KaOs\|RAZOR\|CPY\|PLAZA\|FLT\|TENOKE\|TiNYiSO\|EMPRESS\|ElAmigos\|DAZA\|DARKSiDERS\)//gi' \
+        | sed -E "s/[-_ ]*($WP_GRUPOS_RELEASE)//Ig" \
         | sed 's/[-_ ]*\[[0-9]\{4\}\][-_ ]*/ /g' \
         | sed 's/[-_ ]*([0-9]\{4\})[-_ ]*/ /g' \
         | sed 's/[-_.]*$//' \
-        | sed 's/  */ /g; s/^ //; s/ $//'
+        | sed 's/  */ /g; s/^ //; s/ $//' \
+        | sed 's/^[-_. ]*//; s/[-_. ]*$//')"
+    # 3) los puntos y los guiones bajos, SOLO si no hay ningun espacio
+    local _tr _resto _largo
+    case "$n" in
+        *" "*) ;;
+        *)  n="${n//_/ }"
+            # EL PUNTO, CON MAS CUIDADO QUE EL GUION BAJO.
+            #
+            # "S.T.A.L.K.E.R." se quedaba en "S T A L K E R". La diferencia
+            # con "the.last.guardian" se ve sola: en un acronimo TODOS los
+            # trozos entre puntos son de una sola letra. Si hay aunque sea
+            # uno de dos o mas, los puntos estan haciendo de espacios.
+            case "$n" in
+                *.*)
+                    _largo=0; _resto="$n"
+                    while [ -n "$_resto" ]; do
+                        _tr="${_resto%%.*}"
+                        [ "${#_tr}" -ge 2 ] && _largo=1
+                        [ "$_resto" = "${_resto#*.}" ] && break
+                        _resto="${_resto#*.}"
+                    done
+                    [ "$_largo" = 1 ] && n="${n//./ }" ;;
+            esac
+            n="$(printf '%s' "$n" | sed 's/  */ /g; s/^ //; s/ $//')"
+            # Y ya puestos, las mayusculas: "the last guardian" escrito todo
+            # en minusculas es un nombre de fichero, no un titulo. Solo se
+            # toca si NO habia ni una mayuscula, para no estropear el nombre
+            # a quien lo haya escrito a mano.
+            case "$n" in
+                *[A-Z]*) ;;
+                *) n="$(printf '%s' "$n" | sed 's/\(^\| \)\([a-z]\)/\1\u\2/g')" ;;
+            esac ;;
+    esac
+    printf '%s' "$n"
+}
+
+nombre_para_empaquetar() {
+    # El nombre que se le propone al usuario, ya limpio. $1 = nombre crudo.
+    #
+    # ES UNA ENVOLTURA, Y TIENE DOS MOTIVOS PARA EXISTIR:
+    #
+    #   1. SI LA LIMPIEZA SE LO COME TODO, se devuelve el nombre crudo. Una
+    #      carpeta llamada "CODEX" a secas quedaria vacia, y de ahi sale un
+    #      .wsquashfs sin nombre.
+    #   2. SE ESCRIBE EN EL REGISTRO lo que se cambio. Cuando dentro de tres
+    #      meses alguien pregunte por que su juego se llama distinto a la
+    #      carpeta, la respuesta esta en el log y no hay que adivinarla.
+    local crudo="${1:-}" limpio
+    limpio="$(clean_game_name "$crudo")"
+    if [ -z "$limpio" ]; then
+        log "nombre: '$crudo' se quedaria vacio al limpiarlo; se deja tal cual"
+        printf '%s' "$crudo"
+        return 0
+    fi
+    [ "$limpio" != "$crudo" ] && log "nombre: '$crudo' -> '$limpio'"
+    printf '%s' "$limpio"
 }
 
 prefijo_limpiar() {
@@ -20407,7 +21197,7 @@ setup_innoextract() {
     rm -rf "$tmp"; mkdir -p "$tmp"
     local urls url tgz=""
     say "[innoextract] buscando binario estatico..."
-    urls="$(curl -fsSL "https://api.github.com/repos/dscharrer/innoextract/releases/latest" 2>/dev/null \
+    urls="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/dscharrer/innoextract/releases/latest" 2>/dev/null \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 | grep -i 'linux' | grep -iE '\.tar\.(xz|gz|bz2)$')"
     urls="$urls
 https://constexpr.org/innoextract/files/innoextract-1.9-linux.tar.xz"
@@ -20468,13 +21258,13 @@ setup_innounp() {
     local urls url ok=1
     say "[innounp] buscando descarga en GitHub..."
     # 1) assets de la última release
-    urls="$(curl -fsSL "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/releases/latest" 2>/dev/null \
+    urls="$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/releases/latest" 2>/dev/null \
         | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4)"
     # 2) ficheros sueltos del repo (carpetas distribution/ e innounp-2/)
     local d
     for d in distribution innounp-2; do
         urls="$urls
-$(curl -fsSL "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/contents/$d" 2>/dev/null \
+$(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/jrathlev/InnoUnpacker-Windows-GUI/contents/$d" 2>/dev/null \
             | grep -o '"download_url": *"[^"]*"' | cut -d'"' -f4 | grep -iE '\.(zip|exe)$')"
     done
     urls="$(printf '%s\n' "$urls" | grep -iE '\.(zip|exe)$' | grep -viE 'source' | awk 'NF')"
@@ -20579,6 +21369,1182 @@ install_exe_silent_wine() {
     GOG_ROOT="$dest"
     GOG_EXE="$(find_game_exe "$dest")"
     [ -n "$GOG_EXE" ]
+}
+
+iso_es_imagen() {
+    # ¿Es una imagen de disco? Se mira la EXTENSION, que es lo que se tiene
+    # cuando el usuario la elige en el navegador.
+    #
+    # NO se acepta .bin A PROPOSITO. Los instaladores de GOG vienen troceados
+    # en "setup-juego-1.bin", y esos los recompone el propio instalador: si se
+    # tomaran por imagenes, importar un juego de GOG se iria por el camino
+    # equivocado. Lo mismo con .cue, que no es la imagen sino su indice.
+    case "$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')" in
+        *.iso|*.img|*.mdf|*.nrg|*.udf) return 0 ;;
+    esac
+    return 1
+}
+
+iso_instalador_de_autorun() {
+    # EL INSTALADOR QUE DICE EL PROPIO DISCO. $1 = carpeta de la imagen.
+    #
+    # Un CD de juego trae un autorun.inf con la orden que Windows ejecuta al
+    # meterlo:
+    #
+    #   [autorun]
+    #   open=setup.exe
+    #   shellexecute=Autorun\Autorun.exe
+    #
+    # Preguntarselo al disco es MEJOR QUE ADIVINAR POR NOMBRES: hay discos
+    # donde setup.exe es el de DirectX y el del juego se llama de otra forma,
+    # y discos con tres setup.exe en carpetas distintas.
+    local raiz="${1:-}" inf linea rel hall
+    [ -d "$raiz" ] || return 1
+    inf="$(find "$raiz" -maxdepth 1 -iname 'autorun.inf' -print -quit 2>/dev/null)"
+    [ -n "$inf" ] || return 1
+    # Viene de Windows: finales de linea CRLF. Se quitan o la ruta se lleva
+    # dentro un retorno de carro invisible y no se encuentra el fichero.
+    linea="$(tr -d '\r' < "$inf" 2>/dev/null \
+             | grep -a -i -m1 -E '^[[:space:]]*(open|shellexecute)[[:space:]]*=' \
+             | cut -d= -f2-)"
+    [ -n "$linea" ] || return 1
+    # "open=setup.exe /autorun" lleva argumentos detras: se queda el primero.
+    linea="$(printf '%s' "$linea" | sed 's/^[[:space:]]*//; s/[[:space:]].*$//')"
+    rel="$(printf '%s' "$linea" | tr '\\' '/')"
+    [ -n "$rel" ] || return 1
+    # SE BUSCA SIN DISTINGUIR MAYUSCULAS. En el disco puede estar como
+    # "SETUP.EXE" -los CD viejos van en mayusculas- y en el autorun.inf
+    # escrito "Setup.exe". En Windows da igual; aqui no.
+    hall="$(find "$raiz" -maxdepth 5 -type f -ipath "$raiz/$rel" -print -quit 2>/dev/null)"
+    [ -n "$hall" ] || return 1
+    printf '%s' "$hall"
+    return 0
+}
+
+iso_instaladores() {
+    # Los candidatos a instalador de la imagen, uno por linea y en ORDEN.
+    #
+    # Primero la raiz, que es donde esta el de verdad en casi todos los discos;
+    # despues dos niveles mas, para los discos que lo meten en una carpeta.
+    # "autorun.exe" va al final: a veces es solo el menu del disco.
+    local raiz="${1:-}" n
+    [ -d "$raiz" ] || return 0
+    for n in setup install instalar autoplay autorun; do
+        find "$raiz" -maxdepth 1 -type f -iname "$n.exe" 2>/dev/null
+    done
+    for n in setup install instalar; do
+        find "$raiz" -mindepth 2 -maxdepth 3 -type f -iname "$n.exe" 2>/dev/null
+    done
+    return 0
+}
+
+iso_buscar_instalador() {
+    # Deja en WP_ISO_EXE el instalador que se va a ejecutar.
+    # $1 = carpeta de la imagen.
+    WP_ISO_EXE=""
+    local raiz="${1:-}" c n=0 uno="" lista=""
+    # 1) lo que diga el disco
+    if c="$(iso_instalador_de_autorun "$raiz")" && [ -n "$c" ]; then
+        WP_ISO_EXE="$c"
+        log "iso: el autorun.inf del disco manda ejecutar ${c#"$raiz"/}"
+        say "[+] El disco dice que su instalador es: $(basename "$c")"
+        return 0
+    fi
+    # 2) por nombre, sin repetir
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        case "
+$lista" in *"
+$c") continue ;; esac
+        lista="$lista
+$c"
+        n=$((n + 1)); uno="$c"
+    done <<EOFISOI
+$(iso_instaladores "$raiz")
+EOFISOI
+    if [ "$n" = 0 ]; then
+        log "iso: no hay setup/install en la imagen" WARN
+        return 1
+    fi
+    if [ "$n" = 1 ]; then
+        WP_ISO_EXE="$uno"
+        log "iso: un solo instalador, ${uno#"$raiz"/}"
+        return 0
+    fi
+    # VARIOS: NO SE ADIVINA. Elegir a boleo entre el instalador del juego y el
+    # de DirectX es justo el acierto que sale caro.
+    local sel
+    sel="$(menu "Cual es el instalador del juego?
+
+En el disco hay $n ejecutables que lo parecen. Los de DirectX o
+los de los codecs tambien se llaman asi." \
+        $(printf '%s\n' "$lista" | sed '/^$/d' | while IFS= read -r c; do printf '%s\n' "${c#"$raiz"/}"; done) \
+        "<< Cancelar")" || return 1
+    case "$sel" in "<< Cancelar"|"") return 1 ;; esac
+    WP_ISO_EXE="$raiz/$sel"
+    [ -f "$WP_ISO_EXE" ] || return 1
+    log "iso: instalador elegido a mano, $sel"
+    return 0
+}
+
+setup_fuseiso() {
+    # CONSIGUE fuseiso, para MONTAR la imagen en vez de copiarla.
+    #
+    # Mismo camino que squashfuse_ll: lo nuestro primero, luego un binario
+    # estatico, luego el paquete de la distribucion. Si no hay manera se monta
+    # por otra via o, en ultimo caso, se extrae.
+    [ -n "$(resolve_tool fuseiso)" ] && return 0
+    local a; a="$(arch_tag)"
+    if try_wproton_repo_tool fuseiso; then
+        return 0
+    elif try_static_tool fuseiso "https://bin.pkgforge.dev/$a/fuseiso"; then
+        return 0
+    elif try_arch_package fuseiso; then
+        return 0
+    fi
+    log "[fuseiso] no se ha encontrado en ninguna fuente"
+    return 1
+}
+
+iso_montar_fuseiso() {
+    # Monta la imagen con fuseiso. $1 = imagen, $2 = punto de montaje.
+    local img="${1:-}" pm="${2:-}" bin
+    bin="$(resolve_tool fuseiso)"
+    [ -n "$bin" ] || return 1
+    mkdir -p "$pm" 2>/dev/null || return 1
+    if "$bin" "$img" "$pm" >>"$LOG_FILE" 2>&1 && is_mounted "$pm"; then
+        # Montado y CON CONTENIDO. fuseiso entiende ISO9660 con Joliet y Rock
+        # Ridge, que es lo que lleva un CD de juego; con una imagen UDF pura
+        # -DVD modernos- puede montar y quedarse vacia, y eso hay que notarlo
+        # aqui y no tres pasos despues buscando un setup.exe en la nada.
+        if [ -n "$(find "$pm" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            log "iso: montada con fuseiso en $pm"
+            return 0
+        fi
+        log "iso: fuseiso la monto VACIA (¿UDF?); se prueba otra via" WARN
+        umount_dir "$pm"
+    fi
+    rmdir "$pm" 2>/dev/null
+    return 1
+}
+
+iso_montar_udisks() {
+    # Monta la imagen con udisks, que es el kernel quien lo hace.
+    # $1 = imagen. Imprime "loop|punto de montaje".
+    #
+    # IMPRIME LAS DOS COSAS, Y NO ES UN CAPRICHO.
+    #
+    # Antes dejaba el dispositivo de loop en WP_ISO_LOOP y solo imprimia el
+    # punto de montaje. Pero a esta funcion se la llama DENTRO DE $( ), o sea
+    # en una subshell: la variable se ponia alli y se perdia al volver. Al
+    # cerrar, WP_ISO_LOOP estaba vacio, no se llamaba a udisksctl y la imagen
+    # SE QUEDABA MONTADA en /run/media. Lo conto Dani: "veo que se queda la
+    # imagen montada en el sistema".
+    #
+    # Por la salida estandar si vuelve todo. WP_ISO_LOOP se sigue poniendo
+    # por si alguien la llama sin subshell, pero quien manda es lo impreso.
+    #
+    # POR QUE ESTA VIA ADEMAS DE fuseiso
+    #
+    # Aqui monta EL KERNEL, asi que entiende todo lo que entienda el sistema:
+    # ISO9660 y tambien UDF, que es donde fuseiso se queda corto. Y no hace
+    # falta ser root: udisks lo permite al usuario de la sesion.
+    #
+    # El "-r" NO ES OPCIONAL: monta de solo lectura. Una imagen es el original
+    # del juego y un instalador no tiene por que poder tocarla.
+    WP_ISO_LOOP=""
+    local img="${1:-}" sal loop pm
+    command -v udisksctl >/dev/null 2>&1 || return 1
+    sal="$(udisksctl loop-setup -r -f "$img" 2>&1)" || {
+        log "iso: udisks no pudo preparar el loop: $sal"
+        return 1; }
+    # "Mapped file X as /dev/loop0." -> el punto final hay que quitarlo, o la
+    # ruta del dispositivo sale con un punto pegado y nada funciona.
+    loop="$(printf '%s' "$sal" | sed -n 's/.* as \(\/dev\/loop[0-9]*\)\.*$/\1/p' | head -1)"
+    [ -n "$loop" ] || { log "iso: no se entendio la respuesta de udisks: $sal" WARN; return 1; }
+    WP_ISO_LOOP="$loop"
+    sal="$(udisksctl mount -b "$loop" 2>&1)" || {
+        log "iso: udisks no pudo montar $loop: $sal"
+        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
+        WP_ISO_LOOP=""
+        return 1; }
+    # "Mounted /dev/loop0 at /run/media/deck/ETIQUETA." -> igual, sin el punto.
+    pm="$(printf '%s' "$sal" | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//' | head -1)"
+    if [ -z "$pm" ] || [ ! -d "$pm" ]; then
+        log "iso: udisks dijo que la monto pero no se encuentra donde: $sal" WARN
+        udisksctl unmount -b "$loop" >>"$LOG_FILE" 2>&1
+        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
+        WP_ISO_LOOP=""
+        return 1
+    fi
+    log "iso: montada con udisks en $pm ($loop, solo lectura)"
+    printf '%s|%s' "$loop" "$pm"
+    return 0
+}
+
+iso_hay_instalador_dentro() {
+    # ¿LA IMAGEN TRAE UN INSTALADOR? Mirando dentro SIN EXTRAER NADA.
+    # $1 = imagen.
+    #
+    # Solo hace falta en el camino de extraer: sacar cuatro gigas al disco
+    # para descubrir despues que el disco no es de instalacion es la clase de
+    # espera que no se le hace a nadie. 7zz sabe listar sin extraer.
+    local img="${1:-}"
+    [ -n "${SEVENZIP_BIN:-}" ] || return 0     # sin 7z no se puede saber: no se estorba
+    "$SEVENZIP_BIN" l -slt "$img" 2>/dev/null \
+        | sed -n 's/^Path = //p' \
+        | grep -q -i -E '(^|[\\/])(setup|install|instalar|autoplay|autorun)\.exe$'
+}
+
+iso_extraer() {
+    # Saca el contenido de la imagen a una carpeta. Deja la ruta en WP_ISO_DIR.
+    # $1 = imagen, $2 = nombre del juego.
+    #
+    # ES EL ULTIMO RECURSO, no la primera opcion: copia la imagen entera al
+    # disco. Se llega aqui solo si no se ha podido MONTAR (ver iso_abrir), que
+    # es instantaneo y no ocupa nada.
+    #
+    # EL SITIO SE COMPRUEBA ANTES. Una ISO de DVD son 4-8 GB y la copia ocupa
+    # otro tanto: quedarse sin espacio a mitad deja la carpeta a medias y el
+    # usuario sin saber que ha pasado.
+    WP_ISO_DIR=""
+    local img="${1:-}" name="${2:-juego}" dest tam libre
+    [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
+    if ! setup_sevenzip; then
+        ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
+preparar. Mira el registro."
+        return 1
+    fi
+    tam="$(du -b "$img" 2>/dev/null | awk '{print $1}')"
+    [ -n "$tam" ] || tam=0
+    libre="$(free_bytes "$GAMES_PATH")"
+    [ -n "$libre" ] || libre=0
+    # Un 10% de margen: lo extraido de una ISO ocupa practicamente lo mismo.
+    if [ "$libre" -gt 0 ] 2>/dev/null && [ "$tam" -gt 0 ] 2>/dev/null \
+       && [ "$libre" -lt $(( tam + tam / 10 )) ] 2>/dev/null; then
+        ui_error "No hay sitio para abrir la imagen.
+
+Hacen falta $(human_size $(( tam + tam / 10 ))) y en
+$GAMES_PATH quedan $(human_size "$libre").
+
+Lo extraido se borra al terminar la instalacion."
+        return 1
+    fi
+    dest="$GAMES_PATH/.iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
+    rm -rf "$dest"; mkdir -p "$dest" || { ui_error "No se pudo crear $dest"; return 1; }
+    log "iso: extrayendo $img ($(human_size "$tam")) en $dest"
+    # -bsp1: 7z escribe el porcentaje, y la barra lo lee.
+    if ! run_con_porcentaje "Abriendo la imagen $(basename "$img")..." \
+            "$SEVENZIP_BIN" x "$img" -o"$dest" -y -bsp1; then
+        rm -rf "$dest"
+        fallo "No se ha podido abrir la imagen. Se conserva el fichero original."
+        return 1
+    fi
+    # Una imagen vacia -o que 7zz no ha entendido- no se nota hasta aqui.
+    if [ -z "$(find "$dest" -mindepth 1 -maxdepth 2 -print -quit 2>/dev/null)" ]; then
+        rm -rf "$dest"
+        ui_error "La imagen se ha abierto pero esta vacia.
+
+Si es un .cue o un .bin de varias partes, usa el .iso."
+        return 1
+    fi
+    WP_ISO_DIR="$dest"
+    WP_ISO_MONTADA=0
+    WP_ISO_COMO="extraida"
+    say "[+] Imagen extraida en: $(basename "$dest")"
+    return 0
+}
+
+# ===========================================================================
+# EL NOMBRE Y EL IDIOMA QUE DEJA PUESTOS EL CRACK
+# ===========================================================================
+#
+# DE DONDE SALE
+#
+# Dani, sobre la instalacion desde imagen: "que examines la carpeta crack y
+# mires en que fichero guarda la informacion del username y lenguaje y los
+# cambies, por ejemplo Rune por Deck y english por spanish".
+#
+# Lo que hay dentro de esa carpeta es un emulador de la API de Steam, y lleva
+# su configuracion al lado. Ahi esta escrito el nombre del jugador -que de
+# fabrica es el del grupo que hizo el release- y el idioma que se le pide al
+# juego. Al arrancar, el juego saluda con "Hola, RUNE" y se pone en ingles.
+#
+# POR EL NOMBRE DEL FICHERO NO SE PUEDE IR: cada emulador llama al suyo de una
+# forma -steam_emu.ini, ALI213.ini, SteamConfig.ini, OnlineFix.ini,
+# SmartSteamEmu.ini...- y la lista siempre se queda corta. Lo que no cambia es
+# que DENTRO hay una clave de nombre y otra de idioma. Asi que se busca por el
+# contenido y no por el nombre.
+#
+# La excepcion es Goldberg, que no usa un .ini: usa un fichero por ajuste
+# dentro de steam_settings/ (force_account_name.txt, force_language.txt). Esos
+# si se buscan por nombre, porque es lo unico que tienen.
+#
+# Comprobado en la documentacion de cada uno, no a ojo:
+#   steam_emu.ini (CODEX y companía)  [Settings] UserName= / Language=
+#   ALI213.ini / SteamConfig.ini      [Settings] PlayerName= / Language=
+#   Goldberg                          steam_settings/force_account_name.txt
+#                                     steam_settings/force_language.txt
+CRACK_CLAVES_NOMBRE='UserName|PlayerName|AccountName|PersonaName|Nickname|account_name'
+CRACK_CLAVES_IDIOMA='Language|language'
+# Los nombres de idioma que entiende Steam -y por tanto estos emuladores-.
+# Sirve para dos cosas: traducir el idioma del equipo, y NO TOCAR un
+# "Language=3" que sea un numero de una tabla propia.
+CRACK_IDIOMAS='english spanish latam french german italian portuguese brazilian russian polish dutch danish finnish norwegian swedish czech hungarian romanian turkish greek bulgarian ukrainian japanese koreana schinese tchinese thai vietnamese arabic'
+
+crack_idioma_steam() {
+    # El idioma del equipo, con el nombre que usan estos ficheros.
+    #
+    # MANDA EL IDIOMA DE WProton, no el del sistema: quien pone los menus en
+    # castellano quiere el juego en castellano, aunque el sistema este en
+    # ingles -que en una Deck recien puesta pasa mas de lo que parece-.
+    case "${LANGUAGE:-}" in
+        es*) printf 'spanish'; return 0 ;;
+        en*) printf 'english'; return 0 ;;
+    esac
+    local l="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+    case "${l%%.*}" in
+        es_419|es_MX|es_AR|es_CO|es_CL|es_PE|es_VE) printf 'latam' ;;
+        es*)         printf 'spanish' ;;
+        pt_BR)       printf 'brazilian' ;;
+        pt*)         printf 'portuguese' ;;
+        fr*)         printf 'french' ;;
+        de*)         printf 'german' ;;
+        it*)         printf 'italian' ;;
+        ru*)         printf 'russian' ;;
+        pl*)         printf 'polish' ;;
+        nl*)         printf 'dutch' ;;
+        ja*)         printf 'japanese' ;;
+        ko*)         printf 'koreana' ;;
+        zh_TW|zh_HK) printf 'tchinese' ;;
+        zh*)         printf 'schinese' ;;
+        tr*)         printf 'turkish' ;;
+        cs*)         printf 'czech' ;;
+        hu*)         printf 'hungarian' ;;
+        sv*)         printf 'swedish' ;;
+        da*)         printf 'danish' ;;
+        fi*)         printf 'finnish' ;;
+        nb*|nn*|no*) printf 'norwegian' ;;
+        uk*)         printf 'ukrainian' ;;
+        el*)         printf 'greek' ;;
+        ro*)         printf 'romanian' ;;
+        bg*)         printf 'bulgarian' ;;
+        th*)         printf 'thai' ;;
+        vi*)         printf 'vietnamese' ;;
+        ar*)         printf 'arabic' ;;
+        *)           printf 'english' ;;
+    esac
+}
+
+crack_idioma_conocido() {
+    # ¿"$1" es un nombre de idioma de los de Steam?
+    local v; v="$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z' | tr -d ' \r')"
+    [ -n "$v" ] || return 1
+    case " $CRACK_IDIOMAS " in *" $v "*) return 0 ;; esac
+    return 1
+}
+
+crack_nombre_sugerido() {
+    # Como se va a llamar el jugador.
+    #
+    # DE FABRICA, "Deck". Antes se cogia el usuario del sistema, y en la
+    # primera instalacion de verdad eso puso "UserName=Dani". Dani lo vio y
+    # lo dijo: queria "Deck". Y tiene razon, porque ese nombre sale en la
+    # pantalla del juego, no en el sistema: ahi uno quiere el nombre de la
+    # maquina con la que juega, no su cuenta de Linux.
+    #
+    # Se cambia en Biblioteca y preferencias. Si se deja VACIO a proposito,
+    # se vuelve a lo de antes: el usuario del equipo.
+    # ISO_USUARIO es como se llama desde la 2.10. El nombre viejo
+    # (CRACK_NOMBRE) lo adopta load_settings al arrancar, asi que aqui ya no
+    # hay que mirarlo: si alguien lo pone a mano en el entorno, tambien vale.
+    local n="${ISO_USUARIO:-${CRACK_NOMBRE:-}}"
+    if [ -z "$n" ]; then
+        n="${USER:-}"
+        [ -n "$n" ] || n="$(id -un 2>/dev/null)" || n=""
+        [ -n "$n" ] || n="Player"
+    fi
+    # Con la inicial en mayuscula: en la pantalla de un juego, "deck" en
+    # minuscula canta.
+    printf '%s' "$n" | sed 's/^\(.\)/\u\1/'
+}
+
+crack_carpeta_de() {
+    # La carpeta del crack dentro de la imagen, si la trae. $1 = raiz.
+    #
+    # Casi siempre se llama "Crack", y algunas veces con el nombre del grupo.
+    # No se recorre mas de tres niveles: son imagenes de varios gigas.
+    local dir="${1:-}"
+    [ -d "$dir" ] || return 1
+    find "$dir" -maxdepth 3 -type d \
+        \( -iname 'crack' -o -iname 'crack*' -o -iname '*crack' \
+           -o -iname 'codex' -o -iname 'plaza' -o -iname 'rune' \
+           -o -iname 'skidrow' -o -iname 'reloaded' -o -iname 'razor1911' \
+           -o -iname 'fix' -o -iname 'nodvd' -o -iname 'no-dvd' \) \
+        2>/dev/null | head -n1
+}
+
+crack_ficheros() {
+    # Las configuraciones de crack que haya en $1, una por linea.
+    local dir="${1:-}" f
+    [ -d "$dir" ] || return 0
+    # Los .ini, POR EL CONTENIDO. -size -256k descarta de paso cualquier .ini
+    # gigante del propio juego: estas configuraciones son de unas pocas
+    # lineas y asi no se lee medio disco.
+    find "$dir" -maxdepth 4 -type f -iname '*.ini' -size -256k 2>/dev/null \
+    | while IFS= read -r f; do
+        if grep -q -i -E "^[[:space:]]*($CRACK_CLAVES_NOMBRE|$CRACK_CLAVES_IDIOMA)[[:space:]]*=" "$f" 2>/dev/null; then
+            printf '%s\n' "$f"
+        fi
+      done
+    # Goldberg: un fichero por ajuste. Se exige que la ruta lleve
+    # "steam_settings" o que el nombre empiece por "force_", porque un
+    # "language.txt" suelto puede ser perfectamente del juego.
+    find "$dir" -maxdepth 6 -type f \
+         \( -iname 'force_account_name.txt' -o -iname 'force_language.txt' \) \
+         2>/dev/null
+    find "$dir" -maxdepth 6 -type f -ipath '*steam_settings*' \
+         \( -iname 'account_name.txt' -o -iname 'language.txt' \) 2>/dev/null
+}
+
+crack_valor_ini() {
+    # El valor que tiene ahora. $1 = fichero, $2 = claves (regex).
+    grep -i -m1 -E "^[[:space:]]*($2)[[:space:]]*=" "$1" 2>/dev/null \
+        | sed -E 's/^[^=]*=[[:space:]]*//' | tr -d '\r'
+}
+
+crack_poner_ini() {
+    # Cambia el valor conservando la clave tal como este escrita.
+    # $1 = fichero, $2 = claves (regex), $3 = valor nuevo.
+    local f="$1" claves="$2" val="$3" crlf=0 esc
+    grep -q -i -E "^[[:space:]]*($claves)[[:space:]]*=" "$f" 2>/dev/null || return 1
+    # En el lado derecho de un sed, "&" repite lo encontrado y la barra es el
+    # separador. Un nombre de usuario puede traer cualquiera de los dos.
+    esc="$(printf '%s' "$val" | sed 's/[&/\]/\\&/g')"
+    # EL CRLF: SE QUITA, SE EDITA Y SE VUELVE A PONER.
+    #
+    # Estos ficheros vienen de Windows y casi todos traen CRLF. Editando con
+    # el \r dentro, el ".*" del sed se lo lleva por delante y esa linea se
+    # queda en LF mientras el resto del fichero sigue en CRLF. Un fichero a
+    # medias lo lee mal cualquiera, y encima solo falla la linea que hemos
+    # tocado: el peor fallo posible de encontrar.
+    if LC_ALL=C grep -q "$(printf '\r')" "$f" 2>/dev/null; then crlf=1; fi
+    [ "$crlf" = 1 ] && sed -i 's/\r$//' "$f"
+    sed -i -E "s/^([[:space:]]*)($claves)([[:space:]]*=[[:space:]]*).*\$/\1\2\3$esc/I" "$f"
+    [ "$crlf" = 1 ] && sed -i 's/$/\r/' "$f"
+    return 0
+}
+
+crack_ajustar() {
+    # Pone tu nombre y tu idioma en la configuracion del crack.
+    # $1 = carpeta del juego, $2 = nombre (opcional), $3 = idioma (opcional).
+    #
+    # Deja en WP_CRACK_CAMBIOS cuantos valores se han cambiado y devuelve 0
+    # si ha cambiado alguno.
+    WP_CRACK_CAMBIOS=0
+    local dir="${1:-}" nombre="${2:-}" idioma="${3:-}" f antes lista n=0
+    [ -d "$dir" ] || return 1
+    [ -n "$nombre" ] || nombre="$(crack_nombre_sugerido)"
+    [ -n "$idioma" ] || idioma="$(crack_idioma_steam)"
+    lista="$(crack_ficheros "$dir")"
+    if [ -z "$lista" ]; then
+        log "crack: no hay ninguna configuracion de crack en $dir"
+        return 1
+    fi
+    log "crack: se pondra nombre='$nombre' idioma='$idioma'"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -w "$f" ] || { log "crack: $f es de solo lectura; no se toca" WARN; continue; }
+        # UNA COPIA ANTES DE TOCAR NADA, y solo la primera vez: si se vuelve a
+        # pasar por aqui, la copia buena es la original, no la de la pasada
+        # anterior.
+        [ -f "$f.wproton.bak" ] || cp -p "$f" "$f.wproton.bak" 2>/dev/null
+        case "$(printf '%s' "${f##*/}" | tr 'A-Z' 'a-z')" in
+            *account_name.txt)
+                antes="$(head -c 200 "$f" 2>/dev/null | tr -d '\r\n')"
+                printf '%s\n' "$nombre" > "$f"
+                log "crack: ${f##*/}: nombre '$antes' -> '$nombre'"
+                n=$((n+1)) ;;
+            *language.txt)
+                antes="$(head -c 200 "$f" 2>/dev/null | tr -d '\r\n')"
+                printf '%s\n' "$idioma" > "$f"
+                log "crack: ${f##*/}: idioma '$antes' -> '$idioma'"
+                n=$((n+1)) ;;
+            *)
+                antes="$(crack_valor_ini "$f" "$CRACK_CLAVES_NOMBRE")"
+                if [ -n "$antes" ] && crack_poner_ini "$f" "$CRACK_CLAVES_NOMBRE" "$nombre"; then
+                    log "crack: $f: nombre '$antes' -> '$nombre'"
+                    n=$((n+1))
+                fi
+                antes="$(crack_valor_ini "$f" "$CRACK_CLAVES_IDIOMA")"
+                if [ -n "$antes" ]; then
+                    # SOLO SI LO QUE HAY ES UN NOMBRE DE IDIOMA. Hay
+                    # emuladores que guardan ahi un numero de su propia
+                    # tabla; ponerles "spanish" los dejaria sin idioma.
+                    if crack_idioma_conocido "$antes"; then
+                        if crack_poner_ini "$f" "$CRACK_CLAVES_IDIOMA" "$idioma"; then
+                            log "crack: $f: idioma '$antes' -> '$idioma'"
+                            n=$((n+1))
+                        fi
+                    else
+                        log "crack: $f: el idioma pone '$antes', que no es un nombre de idioma; se deja" WARN
+                    fi
+                fi ;;
+        esac
+    done <<EOFCRACK
+$lista
+EOFCRACK
+    WP_CRACK_CAMBIOS="$n"
+    [ "$n" -gt 0 ]
+}
+
+crack_tras_instalar() {
+    # Lo que se hace al acabar una instalacion desde imagen.
+    # $1 = carpeta del juego instalado, $2 = raiz de la imagen (para el crack).
+    #
+    # DOS PASOS, Y EL PRIMERO NO ES AUTOMATICO:
+    #
+    #   1. Si la imagen trae carpeta de crack y el juego instalado no tiene
+    #      todavia esos ficheros, se OFRECE copiarlos encima. Es lo que haria
+    #      el usuario a mano, pero sobrescribe ficheros del juego y eso no se
+    #      hace sin preguntar.
+    #   2. Ya con la configuracion delante, se le pone su nombre y su idioma.
+    #      Eso si va solo: no destruye nada, deja copia y queda en el registro.
+    local juego="${1:-}" imagen="${2:-}" cr orig dest
+    [ -d "$juego" ] || return 1
+
+    if [ -n "$imagen" ] && cr="$(crack_carpeta_de "$imagen")" && [ -n "$cr" ]; then
+        say "[crack] La imagen trae una carpeta de crack: $(basename "$cr")"
+        log "crack: carpeta encontrada en la imagen: $cr"
+        # ¿Esta ya aplicado? Se mira si el juego tiene los mismos ficheros.
+        local faltan=0
+        while IFS= read -r orig; do
+            [ -n "$orig" ] || continue
+            [ -e "$juego/${orig##*/}" ] || faltan=1
+        done <<EOFCR
+$(find "$cr" -maxdepth 1 -type f ! -iname '*.nfo' ! -iname '*.txt' ! -iname '*.diz' 2>/dev/null)
+EOFCR
+        if [ "$faltan" = 1 ] && ui_ask "La imagen trae el crack en '$(basename "$cr")' y el juego
+instalado no lo tiene.
+
+Copiarlo encima del juego?
+(Es lo que habria que hacer a mano; se sobrescriben
+ficheros del juego.)"; then
+            local copiados=0
+            while IFS= read -r orig; do
+                [ -n "$orig" ] || continue
+                dest="$juego/${orig##*/}"
+                if cp -f "$orig" "$dest" 2>/dev/null; then
+                    log "crack: copiado $(basename "$orig") -> $dest"
+                    copiados=$((copiados+1))
+                else
+                    log "crack: NO se pudo copiar $orig" WARN
+                fi
+            done <<EOFCR2
+$(find "$cr" -maxdepth 1 -type f ! -iname '*.nfo' ! -iname '*.diz' 2>/dev/null)
+EOFCR2
+            # Las subcarpetas del crack (steam_settings y similares) van
+            # enteras: ahi es donde guarda Goldberg sus ajustes.
+            while IFS= read -r orig; do
+                [ -n "$orig" ] || continue
+                cp -rf "$orig" "$juego/" 2>/dev/null \
+                    && log "crack: copiada la carpeta $(basename "$orig")"
+            done <<EOFCR3
+$(find "$cr" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+EOFCR3
+            say "[crack] $copiados fichero(s) copiados sobre el juego."
+        fi
+    fi
+
+    # Y ahora el nombre y el idioma, en el juego instalado.
+    if crack_ajustar "$juego"; then
+        say "[crack] Puesto tu nombre ($(crack_nombre_sugerido)) y tu idioma ($(crack_idioma_steam))."
+        say "        $WP_CRACK_CAMBIOS valor(es) cambiados. Copia de los originales: *.wproton.bak"
+    else
+        log "crack: nada que ajustar en $juego"
+    fi
+    return 0
+}
+
+iso_abrir() {
+    # ABRE LA IMAGEN DE LA MEJOR FORMA QUE SE PUEDA. $1 = imagen, $2 = nombre.
+    #
+    # Deja la carpeta en WP_ISO_DIR y como se abrio en WP_ISO_COMO.
+    #
+    # EL ORDEN, Y POR QUE ES ESTE
+    #
+    # Lo dijo Dani: montar en vez de extraer "nos ahorra muchos gigas por el
+    # camino y ganamos tiempo". Tiene razon, y de sobra: una ISO de DVD son
+    # 4-8 GB que se copiaban al disco para borrarlos media hora despues.
+    # Montada, la imagen se lee donde esta, tarda cero y no ocupa nada.
+    #
+    #   1. fuseiso SI YA ESTA         sin red, instantaneo
+    #   2. udisks                     lo monta el KERNEL, asi que entiende
+    #                                 tambien UDF -los DVD modernos-, y no
+    #                                 hace falta ser root. Casi siempre esta
+    #                                 en SteamOS y en CachyOS
+    #   3. fuseiso, descargandolo     por si no hay udisks
+    #   4. extraer con 7zz            siempre funciona; es lo unico que cuesta
+    #                                 espacio y tiempo
+    #
+    # fuseiso va antes que udisks SOLO SI YA ESTA: montar con lo que tenemos no
+    # pide nada a nadie. Si hay que bajarlo, se prueba antes udisks, que no
+    # necesita descargar nada.
+    #
+    # NO SE USA pycdlib, que tambien se propuso: lee ISO en Python puro, pero
+    # NO ES UN SISTEMA DE FICHEROS, asi que Wine no puede leer el disco a
+    # traves de el y habria que extraer igual. No ahorraria ni un byte. Para
+    # mirar dentro sin extraer ya vale 7zz (ver iso_hay_instalador_dentro).
+    WP_ISO_DIR=""; WP_ISO_MONTADA=0; WP_ISO_COMO=""; WP_ISO_LOOP=""
+    local img="${1:-}" name="${2:-juego}" pm pmu
+    [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
+    pm="$MOUNT_BASE/iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
+
+    # 1) fuseiso, si ya lo tenemos
+    if [ -n "$(resolve_tool fuseiso)" ] && iso_montar_fuseiso "$img" "$pm"; then
+        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
+        say "[+] Imagen montada (fuseiso): no se copia nada al disco."
+        return 0
+    fi
+    # 2) udisks: lo monta el kernel
+    if pmu="$(iso_montar_udisks "$img")" && [ -n "$pmu" ]; then
+        # "loop|punto": las dos cosas vuelven por la salida estandar porque la
+        # llamada va en $( ) y lo que se ponga en una variable alli dentro se
+        # pierde. Ver iso_montar_udisks.
+        WP_ISO_LOOP="${pmu%%|*}"
+        pmu="${pmu#*|}"
+        WP_ISO_DIR="$pmu"; WP_ISO_MONTADA=1; WP_ISO_COMO="udisks"
+        log "iso: loop apuntado para el cierre: ${WP_ISO_LOOP:-(ninguno)}"
+        iso_apuntar_abierta
+        say "[+] Imagen montada (udisks, solo lectura): no se copia nada."
+        # UDISKS MONTA EN /run/media, QUE ESTA FUERA DE $HOME.
+        #
+        # Y pressure-vessel expone $HOME entero pero de /run/media no expone
+        # nada. WProton ya sabe abrirle esa ruta al contenedor cuando la
+        # carpeta del juego esta fuera -lo hace con STEAM_COMPAT_LIBRARY_PATHS,
+        # y le pasa el punto de montaje-, y aqui la carpeta del juego ES la
+        # imagen montada, asi que entra por ese mismo camino.
+        #
+        # Queda escrito porque, si algun dia un instalador no ve su propio
+        # disco, esta linea dice por donde empezar a mirar. fuseiso no tiene
+        # este problema: monta bajo $HOME, que es lo mismo que hace que un
+        # .wsquashfs funcione desde una tarjeta SD.
+        case "$pmu" in
+            "$HOME"/*) ;;
+            *) log "iso: el montaje ($pmu) esta fuera de \$HOME; Proton lo recibe por STEAM_COMPAT_LIBRARY_PATHS" ;;
+        esac
+        return 0
+    fi
+    # 3) fuseiso, bajandolo
+    #
+    # SE AVISA ANTES DE EMPEZAR. Aqui es donde se va el tiempo de todo el
+    # asistente -no hay nada instalado que monte, asi que hay que traerlo- y
+    # sin este aviso la pantalla se queda quieta sin decir por que. Dani lo
+    # vio: "descargando fuseiso se ha pegado mucho rato".
+    #
+    # Lo que de verdad lo arreglo esta en dl_bruto (DL_LIMITES): un espejo
+    # muerto se descarta en 30 s en vez de esperar sin fin. Esto es solo
+    # contarlo mientras pasa, y dejar en el registro cuanto costo.
+    local _t0_fuse; _t0_fuse="$(date +%s)"
+    say "[i] En este equipo no hay nada instalado que monte imagenes."
+    say "    Se intenta traer fuseiso (una sola vez; luego ya se queda)."
+    if setup_fuseiso && iso_montar_fuseiso "$img" "$pm"; then
+        log "iso: fuseiso conseguido y montado en $(( $(date +%s) - _t0_fuse ))s"
+        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
+        say "[+] Imagen montada (fuseiso): no se copia nada al disco."
+        return 0
+    fi
+    log "iso: no se pudo conseguir fuseiso tras $(( $(date +%s) - _t0_fuse ))s" WARN
+    # 4) extraer, que es lo que siempre funciona
+    log "iso: no se ha podido montar de ninguna forma; se extrae" WARN
+    say "[i] No se ha podido montar la imagen en este equipo."
+    say "    Se extrae al disco, que ocupa espacio y tarda mas."
+    if ! setup_sevenzip; then
+        ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
+preparar. Mira el registro."
+        return 1
+    fi
+    # YA QUE HAY QUE EXTRAER, PRIMERO SE MIRA SI MERECE LA PENA.
+    if ! iso_hay_instalador_dentro "$img"; then
+        if ! ui_ask "En esta imagen no se ve ningun instalador
+(setup.exe, install.exe...).
+
+Puede que el disco no sea de instalacion: hay juegos que se
+juegan directamente desde el CD.
+
+Extraerla de todas formas? Son $(human_size "$(du -b "$img" 2>/dev/null | awk '{print $1}')")."; then
+            return 1
+        fi
+    fi
+    iso_extraer "$img" "$name"
+}
+
+keys_tiene_raton() {
+    # ¿Este .keys FINAL trae bloque de raton? $1 = el .keys de verdad.
+    #
+    # OJO CON keys_raton_leer, QUE PARECE LO MISMO Y NO LO ES: aquella lee el
+    # NIVEL SUPERIOR del fichero porque esta hecha para el TEMPORAL del editor
+    # ({"axis":"joystick2",...}). En el .keys final el raton vive bajo la clave
+    # "mouse", asi que preguntarselo a ella devuelve vacio SIEMPRE y parece que
+    # ningun juego tiene raton.
+    [ -f "${1:-}" ] || return 1
+    grep -q '"mouse"' "$1" 2>/dev/null
+}
+
+keys_raton_label() {
+    # La etiqueta de la fila del menu. $1 = ruta del juego, $2 = gid.
+    local f
+    if f="$(find_keys_file "${1:-}" "${2:-}" 2>/dev/null)" && [ -n "$f" ] \
+       && keys_tiene_raton "$f"; then
+        printf 'si (stick derecho)'
+    else
+        printf 'no'
+    fi
+}
+
+keys_raton_crear() {
+    # EL MANDO COMO RATON PARA LA INSTALACION. $1 = gid.
+    #
+    # Un instalador de Windows se maneja pulsando "Siguiente" con el puntero, y
+    # en una Deck en modo Juego no hay raton ni teclado. WProton ya sabe mover
+    # el puntero con el stick derecho: es el bloque "mouse" de un .keys, con
+    # joystick2 y un boton de clic. Aqui se escribe ese .keys solo, para el
+    # perfil de la instalacion y para nada mas.
+    #
+    # El clic izquierdo va en la A -que es el boton de "aceptar" en toda la
+    # interfaz, asi que no hay nada que aprender- y tambien en el R2; el
+    # derecho, en la B.
+    #
+    # $2 = velocidad del puntero, opcional. En el instalador va MAS LENTA que
+    # en un juego: lo pidio Dani despues de instalar uno de verdad. Y se
+    # entiende: en un juego el puntero sirve para mirar alrededor y cuanto
+    # mas suelto mejor; en un instalador hay que acertar en un boton de
+    # "Siguiente" de treinta pixeles, y a 900 px/s se pasa de largo.
+    local gid="${1:-}" vel="${2:-900}" dest tmp
+    [ -n "$gid" ] || return 1
+    dest="$PROFILE_DIR/$gid.keys"
+    # SI YA HAY UN .keys, NO SE PISA: puede traer teclas que costo configurar.
+    #
+    # Pero si ese .keys NO tiene raton, se le añade SOLO el bloque del raton,
+    # que es lo que hace falta y no toca nada de lo demas. Y si ya tiene uno
+    # -aunque sea con el stick izquierdo-, manda el del usuario: ahi decidio el.
+    if [ -f "$dest" ]; then
+        local _eje=""
+        keys_tiene_raton "$dest" && _eje="si"
+        if [ -n "$_eje" ]; then
+            log "keys: $gid.keys ya trae raton ($_eje); se respeta tal cual"
+            say "[i] Este juego ya tenia el mando como raton: se deja como estaba."
+            return 0
+        fi
+        # EL VIAJE DE IDA Y VUELTA, QUE ES EL UNICO QUE NO SE LLEVA NADA POR
+        # DELANTE: se descompone el .keys en sus cuatro trozos, se cambia SOLO
+        # el del raton y se vuelve a componer. Es lo que hace el editor.
+        #
+        # Las dos formas cortas que parecen valer NO valen, y las dos se
+        # probaron:
+        #
+        #   keys_raton_poner <final> axis ...   escribe en el NIVEL SUPERIOR
+        #       del fichero -esta hecha para el temporal del editor-, asi que
+        #       deja campos que no lee nadie y el raton sigue sin aparecer.
+        #   keys_componer <final> "" "" <raton> ""   mete el raton bien... y
+        #       DEJA LAS ACCIONES EN LAS DE FABRICA: las teclas que el usuario
+        #       hubiera configurado se pierden.
+        local _t _c _r _s
+        _t="$(mktemp)"; _c="$(mktemp)"; _r="$(mktemp)"; _s="$(mktemp)"
+        if teclas_py descomponer "$dest" "$_t" "$_c" "$_r" "$_s" >/dev/null 2>&1; then
+            printf '{"axis":"joystick2","click_left":"a,r2","click_right":"b","speed":%s}\n' "$vel" > "$_r"
+            if keys_componer "$dest" "$_t" "$_c" "$_r" "$_s"; then
+                keys_marcar "$dest" "$gid" >/dev/null 2>&1 || true
+                rm -f "$_t" "$_c" "$_r" "$_s"
+                log "keys: raton del mando añadido al $gid.keys que ya habia (sus teclas se conservan)"
+                say "[+] Mando como raton añadido a las teclas de este juego."
+                say "    Stick DERECHO mueve el puntero, A es el clic izquierdo."
+                return 0
+            fi
+        fi
+        rm -f "$_t" "$_c" "$_r" "$_s"
+        log "keys: no se pudo añadir el raton al $gid.keys que ya habia" WARN
+        say "AVISO: no se ha podido añadir el raton a las teclas de este juego."
+        say "       Hazlo desde Teclas del mando -> Raton con el mando."
+        return 1
+    fi
+    tmp="$(mktemp)" || return 1
+    printf '{"axis":"joystick2","click_left":"a,r2","click_right":"b","speed":%s}\n' "$vel" > "$tmp"
+    if keys_componer "$dest" "" "" "$tmp" ""; then
+        keys_marcar "$dest" "$gid" >/dev/null 2>&1 || true
+        rm -f "$tmp"
+        log "iso: raton del mando para la instalacion escrito en $dest"
+        say "[+] Durante la instalacion: stick DERECHO mueve el puntero,"
+        say "    A es el clic izquierdo y B el derecho."
+        return 0
+    fi
+    rm -f "$tmp"
+    log "iso: no se pudo escribir el .keys del raton" WARN
+    say "AVISO: no se ha podido poner el mando como raton. Si el instalador"
+    say "       no se puede manejar, conecta un raton USB."
+    return 1
+}
+
+iso_perfil_instalacion() {
+    # EL PERFIL EXCLUSIVO DE LA INSTALACION. $1 = gid, $2 = carpeta de la imagen.
+    #
+    # Es un perfil APARTE del juego a proposito: instalar no es jugar, y lo que
+    # hace falta para una cosa estorba en la otra. Lleva tres cosas:
+    #
+    #   prefijo PROPIO   un instalador escribe en el registro de Windows y deja
+    #                    dependencias; eso tiene que quedarse en un prefijo
+    #                    suyo y no en el compartido. Y es ademas lo que permite
+    #                    empaquetar despues "con el prefijo": package_con_prefijo
+    #                    rechaza el compartido, y con razon.
+    #   unidad D: CD-ROM muchos instaladores comprueban que el disco este
+    #                    puesto antes de empezar, y bastantes leen los datos
+    #                    de la unidad en vez de copiarlos.
+    #   raton del mando  ver keys_raton_crear.
+    local gid="${1:-}" raiz="${2:-}"
+    [ -n "$gid" ] || return 1
+    load_profile "$gid" >/dev/null 2>&1 || true
+    PREFIX_MODE="own"
+    UNIDAD_JUEGO="d"
+    UNIDAD_CD=1
+    # La instalacion no es una partida: que no cuente en las estadisticas ni
+    # salga como "ultimo juego jugado".
+    PLAY_COUNT=0; PLAY_SECONDS=0; LAST_PLAYED=""
+    write_full_profile "$gid"
+    log "iso: perfil de instalacion '$gid' -> prefijo propio, unidad D: como CD-ROM"
+    say "[+] Perfil de instalacion: $gid (prefijo propio, D: = el disco)"
+    # MAS LENTO QUE EN UN JUEGO: ver keys_raton_crear. En un instalador hay
+    # que acertar en botones pequeños, no mirar alrededor.
+    keys_raton_crear "$gid" "$WP_RATON_VEL_INSTALADOR"
+    return 0
+}
+
+iso_candidatos_instalados() {
+    # LAS CARPETAS QUE EL INSTALADOR ACABA DE CREAR. $1 = prefijo.
+    #
+    # Pedirle al usuario que navegue a ciegas por drive_c para encontrar su
+    # juego es lo que habia, y es lo peor: hay que saber si el instalador
+    # eligio "Program Files", "Program Files (x86)", "GOG Games" o la raiz.
+    # Aqui se miran los sitios donde instala Windows y se ofrecen los
+    # candidatos; navegar sigue estando, por si el juego fue a otra parte.
+    local pfx="${1:-}" dc base
+    dc="$pfx/drive_c"
+    [ -d "$dc" ] || dc="$pfx/pfx/drive_c"
+    [ -d "$dc" ] || return 0
+    for base in "$dc/Program Files (x86)" "$dc/Program Files" "$dc/GOG Games" \
+                "$dc/Games" "$dc/juegos" "$dc"; do
+        [ -d "$base" ] || continue
+        find "$base" -mindepth 1 -maxdepth 1 -type d 2>/dev/null
+    done
+    return 0
+}
+
+iso_elegir_instalado() {
+    # Deja en WP_ISO_JUEGO la carpeta del juego instalado. $1 = prefijo.
+    WP_ISO_JUEGO=""
+    local pfx="${1:-}" dc c lista="" n=0
+    dc="$pfx/drive_c"
+    [ -d "$dc" ] || dc="$pfx/pfx/drive_c"
+    # LAS CARPETAS DE WINDOWS NO SON EL JUEGO. Sin esto, la lista salia con
+    # "windows", "users" y "ProgramData" delante de lo que se busca.
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        case "$(basename "$c" | tr 'A-Z' 'a-z')" in
+            windows|users|programdata|'program files'|'program files (x86)'|\
+            'common files'|openal|temp|tmp|'internet explorer'|'windows nt') continue ;;
+        esac
+        lista="$lista
+$c"; n=$((n + 1))
+    done <<EOFISOC
+$(iso_candidatos_instalados "$pfx")
+EOFISOC
+    local sel
+    if [ "$n" -gt 0 ]; then
+        sel="$(menu "Donde ha quedado el juego?
+
+Estas son las carpetas que hay en el disco C: del prefijo de la
+instalacion. Elige la del juego." \
+            $(printf '%s\n' "$lista" | sed '/^$/d' | while IFS= read -r c; do
+                  printf '%s\n' "${c#"$dc"/}"; done) \
+            "Buscarla yo mismo >>" \
+            "<< Cancelar")" || return 1
+        case "$sel" in
+            "<< Cancelar"|"") return 1 ;;
+            "Buscarla yo mismo"*) : ;;
+            *) WP_ISO_JUEGO="$dc/$sel"
+               [ -d "$WP_ISO_JUEGO" ] && return 0
+               WP_ISO_JUEGO="" ;;
+        esac
+    else
+        ui_info "No se han encontrado carpetas nuevas en el disco C:.
+
+Si la instalacion termino bien, busca la carpeta del juego a
+mano en la pantalla siguiente."
+    fi
+    local dir
+    dir="$(browse_for_path "Carpeta del juego instalado" \
+          "$([ -d "$dc" ] && printf '%s' "$dc" || printf '%s' "$HOME")" "dir")" || return 1
+    [ -d "$dir" ] || return 1
+    WP_ISO_JUEGO="$dir"
+    return 0
+}
+
+install_from_iso() {
+    # INSTALAR UN JUEGO DESDE UNA IMAGEN DE DISCO, de principio a fin.
+    #
+    # DE DONDE SALE ESTO
+    #
+    # Lo pidieron asi: una opcion en "Añadir un juego" que monte una ISO y
+    # cargue su setup.exe, que en ese modo el stick derecho sea el raton con su
+    # clic, que la instalacion tenga un perfil exclusivo y que al acabar
+    # pregunte si se quiere el wsquashfs con el prefijo y el juego o solo el
+    # juego.
+    #
+    # Casi todo estaba ya hecho y suelto por el programa -7zz abre ISO, el
+    # bloque "mouse" de un .keys mueve el puntero con el stick, las unidades
+    # saben declararse CD-ROM, package_con_prefijo empaqueta prefijo y juego
+    # juntos-. Lo que no habia era el camino que lo encadena.
+    #
+    # $1 = imagen de disco.
+    local img="$1" name gid pfx exe
+    img="$(readlink -f "$img")"
+    name="$(basename "$img")"; name="${name%.*}"
+    name="$(nombre_para_empaquetar "$name")"
+    [ -z "$name" ] && name="juego"
+    gid="$(printf '%s' "instalador_$name" | tr ' /' '__')"
+
+    say "[ISO] '$name': instalacion desde imagen de disco"
+    iso_abrir "$img" "$name" || return 1
+
+    if ! iso_buscar_instalador "$WP_ISO_DIR"; then
+        if ui_ask "En la imagen no hay ningun setup.exe ni install.exe.
+
+Puede que el disco no sea de instalacion: hay juegos que se
+juegan directamente desde el CD.
+
+Quieres elegir a mano el ejecutable que hay que lanzar?"; then
+            exe="$(browse_for_path "Ejecutable de la imagen" "$WP_ISO_DIR" "importar")" || exe=""
+            [ -n "$exe" ] && [ -f "$exe" ] && WP_ISO_EXE="$exe"
+        fi
+        if [ -z "${WP_ISO_EXE:-}" ]; then
+            iso_cerrar "$WP_ISO_DIR"
+            return 1
+        fi
+    fi
+    exe="$WP_ISO_EXE"
+
+    iso_perfil_instalacion "$gid" "$WP_ISO_DIR" || { iso_cerrar "$WP_ISO_DIR"; return 1; }
+
+    ui_info "Se va a abrir el instalador de Windows.
+
+  Instalador:  $(basename "$exe")
+  Disco en:    D:  (declarada CD-ROM)
+  Puntero:     stick DERECHO, clic con A
+
+Acepta las rutas que te ofrezca por defecto (C:\\...). Si te
+pide el disco, esta en la unidad D:.
+
+Al terminar, WProton te deja elegir la carpeta instalada y
+empaquetarla."
+    # La carpeta de la imagen va como raiz: es la que se enlaza en D: y la que
+    # ancla las rutas relativas del instalador.
+    launch_loose_exe "$gid" "$exe" "$WP_ISO_DIR"
+    load_profile "$gid" >/dev/null 2>&1 || true
+    pfx="$(prefix_path "$gid")"
+    log "iso: instalacion terminada, prefijo $pfx"
+
+    if ! iso_elegir_instalado "$pfx"; then
+        say "[ISO] no se ha elegido ninguna carpeta: no se empaqueta nada."
+        iso_cerrar "$WP_ISO_DIR"
+        return 1
+    fi
+    local root="$WP_ISO_JUEGO" jexe
+    say "[+] Juego instalado en: $root"
+    jexe="$(find_game_exe "$root")" || jexe=""
+    if [ -n "$jexe" ]; then
+        say "[+] Ejecutable del juego: $(basename "$jexe")"
+    else
+        say "AVISO: no se ha reconocido el ejecutable del juego en esa carpeta."
+    fi
+
+    # EL CRACK, ANTES DE EMPAQUETAR Y NO DESPUES.
+    #
+    # Una vez dentro del .wsquashfs la carpeta es de SOLO LECTURA: el nombre y
+    # el idioma se quedarian para siempre como los dejo el grupo. Aqui todavia
+    # es una carpeta normal y se puede escribir.
+    crack_tras_instalar "$root" "$WP_ISO_DIR" || true
+
+    # LA PREGUNTA DEL FINAL, que es la que se pidio.
+    local sel
+    sel="$(menu "Empaquetar '$name'
+
+El prefijo de la instalacion lleva dentro lo que el instalador
+dejo en Windows: DirectX, VC++, el registro... Meterlo en el
+archivo hace que el juego funcione en cualquier equipo sin
+instalar nada, a cambio de tamaño." \
+        "Con el prefijo Y el juego (autosuficiente)" \
+        "Solo el juego" \
+        "Nada por ahora (dejarlo en el prefijo)" \
+        "<< Cancelar")" || sel=""
+    case "$sel" in
+        "Con el prefijo"*)
+            write_autorun "$root" "${jexe:-$root}"
+            package_con_prefijo "$root" "$gid" "${jexe:-}" ;;
+        "Solo el juego"*)
+            write_autorun "$root" "${jexe:-$root}"
+            # SE SACA DEL PREFIJO ANTES DE COMPRIMIR.
+            #
+            # El juego esta DENTRO de drive_c del prefijo de la instalacion.
+            # Comprimirlo ahi dejaria el .wsquashfs hecho y el original
+            # colgando de un prefijo que luego se borra. Se mueve a la carpeta
+            # de juegos, que es donde vive todo lo demas.
+            local dest="$GAMES_PATH/$(basename "$root")"
+            if [ -e "$dest" ] && [ "$dest" != "$root" ]; then
+                dest="$GAMES_PATH/$(basename "$root")_$$"
+            fi
+            if mv "$root" "$dest" 2>/dev/null; then
+                say "[+] Juego movido a: $(basename "$dest")"
+                root="$dest"
+            else
+                say "AVISO: no se ha podido mover el juego fuera del prefijo;"
+                say "       se empaqueta desde donde esta."
+            fi
+            do_pack_dir "$root" "$name" || true ;;
+        "Nada por ahora"*)
+            ui_info "El juego se queda instalado en el prefijo de '$gid'.
+
+Puedes empaquetarlo cuando quieras desde:
+Ajustes del juego -> Empaquetar con su prefijo" ;;
+        *) : ;;
+    esac
+
+    iso_cerrar "$WP_ISO_DIR"
+    return 0
+}
+
+ISO_ABIERTA_FICH() { printf '%s' "$RUNTIME_DIR/.iso_abierta"; }
+
+iso_apuntar_abierta() {
+    # Deja escrito que hay una imagen montada, por si WProton no llega a
+    # cerrarla. Un corte de luz, un cierre a lo bruto o un fallo a mitad de
+    # la instalacion dejaban la imagen montada hasta reiniciar, y encima sin
+    # que nadie lo dijera.
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    printf '%s\n%s\n' "${WP_ISO_LOOP:-}" "${WP_ISO_DIR:-}" > "$(ISO_ABIERTA_FICH)" 2>/dev/null
+}
+
+iso_olvidar_abierta() { rm -f "$(ISO_ABIERTA_FICH)" 2>/dev/null; return 0; }
+
+iso_rescatar_pendiente() {
+    # Al arrancar: si la vez anterior quedo una imagen montada, se cierra.
+    local f loop punto
+    f="$(ISO_ABIERTA_FICH)"
+    [ -f "$f" ] || return 0
+    loop="$(sed -n 1p "$f" 2>/dev/null)"
+    punto="$(sed -n 2p "$f" 2>/dev/null)"
+    rm -f "$f" 2>/dev/null
+    [ -n "$punto" ] || return 0
+    if is_mounted "$punto"; then
+        log "iso: quedo una imagen montada de la vez anterior ($punto); se cierra ahora" WARN
+        WP_ISO_MONTADA=1
+        WP_ISO_LOOP="$loop"
+        iso_cerrar "$punto"
+    elif [ -n "$loop" ] && [ -b "$loop" ]; then
+        # Desmontada pero con el loop vivo: tambien hay que soltarlo.
+        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1 \
+            && log "iso: se solto el loop $loop que quedo de la vez anterior"
+    fi
+    return 0
+}
+
+iso_cerrar() {
+    # CIERRA LA IMAGEN: desmontarla o borrar lo extraido, segun como se abrio.
+    # $1 = carpeta.
+    #
+    # AQUI NO PUEDE HABER UN DESCUIDO. Las dos formas de abrir una imagen se
+    # cierran de forma OPUESTA:
+    #
+    #   montada   se desmonta. Un "rm -rf" sobre un punto de montaje montado
+    #             borraria EL CONTENIDO DE LA IMAGEN... o del disco del
+    #             usuario si el montaje ya no estaba. Ni una sola orden de
+    #             borrado recursivo toca este camino.
+    #   extraida  se borra, preguntando, porque son varios GB.
+    #
+    # El punto de montaje se quita con rmdir, que falla si queda algo dentro.
+    # Es exactamente la garantia que hace falta: si el desmontaje no fue bien,
+    # no se borra nada.
+    local d="${1:-}"
+    [ -n "$d" ] || return 0
+    iso_olvidar_abierta
+    if [ "${WP_ISO_MONTADA:-0}" = 1 ]; then
+        say "[i] Desmontando la imagen..."
+        # EL LOOP, AUNQUE NO SE SEPA CUAL ES.
+        #
+        # Si por lo que sea no lo tenemos apuntado, se le pregunta a
+        # /proc/mounts: ahi esta el dispositivo que hay montado en esa
+        # carpeta. Asi el cierre no depende de que una variable haya
+        # sobrevivido al camino.
+        if [ -z "${WP_ISO_LOOP:-}" ] && [ -n "$d" ]; then
+            WP_ISO_LOOP="$(awk -v p="$d" '$2==p && $1 ~ /^\/dev\/loop/ {print $1; exit}' \
+                           /proc/mounts 2>/dev/null)"
+            [ -n "${WP_ISO_LOOP:-}" ] && log "iso: el loop se saco de /proc/mounts: $WP_ISO_LOOP"
+        fi
+        # CON udisks SE DESMONTA CON udisks, Y PRIMERO.
+        #
+        # umount_dir esta hecho para FUSE (fusermount -u). Sobre un montaje
+        # de udisks -que vive en /run/media y lo hizo el kernel- no puede
+        # hacer nada, asi que se gastaba cinco reintentos con su espera para
+        # nada antes de llegar a quien si puede.
+        local _i
+        if [ -n "${WP_ISO_LOOP:-}" ]; then
+            for _i in 1 2 3; do
+                udisksctl unmount -b "$WP_ISO_LOOP" >>"$LOG_FILE" 2>&1 && break
+                log "iso: udisks no pudo desmontar $WP_ISO_LOOP (intento $_i/3); se espera" WARN
+                sleep 1
+            done
+            # Y si sigue ahi, a la fuerza: hay instaladores que dejan algun
+            # fichero abierto un rato despues de terminar.
+            if is_mounted "$d"; then
+                udisksctl unmount -b "$WP_ISO_LOOP" --force >>"$LOG_FILE" 2>&1
+                log "iso: desmontaje forzado de $WP_ISO_LOOP" WARN
+            fi
+        fi
+        is_mounted "$d" && umount_dir "$d" 2>/dev/null
+        # El dispositivo de loop se suelta SIEMPRE que lo haya, aunque el
+        # desmontaje se haya torcido: si no, se queda ocupado hasta reiniciar.
+        if [ -n "${WP_ISO_LOOP:-}" ]; then
+            udisksctl loop-delete -b "$WP_ISO_LOOP" >>"$LOG_FILE" 2>&1
+            log "iso: loop $WP_ISO_LOOP soltado"
+            WP_ISO_LOOP=""
+        fi
+        if is_mounted "$d"; then
+            log "iso: $d sigue montada; NO se borra nada" WARN
+            say "AVISO: la imagen sigue montada en $d"
+            say "       (no pasa nada: se suelta al reiniciar)"
+        else
+            say "[+] Imagen desmontada."
+            # SOLO rmdir. Si quedara algo dentro, esto falla y se queda ahi,
+            # que es lo correcto.
+            rmdir "$d" 2>/dev/null
+            log "iso: imagen desmontada y punto de montaje retirado"
+        fi
+        WP_ISO_MONTADA=0
+        return 0
+    fi
+    # --- extraida: se borra, preguntando
+    case "$d" in *"/.iso_"*) ;; *) return 0 ;; esac   # solo lo nuestro
+    [ -d "$d" ] || return 0
+    if ui_ask "Borrar lo que se extrajo de la imagen?
+
+$(basename "$d")  [$(human_size "$(du -sb "$d" 2>/dev/null | awk '{print $1}')" 2>/dev/null)]
+
+La imagen original NO se toca. Si la instalacion se quedo a
+medias, decir NO te deja repetirla sin volver a abrirla."; then
+        rm -rf "$d"
+        say "[+] Borrado lo extraido de la imagen."
+    else
+        say "[i] Se conserva lo extraido en: $d"
+    fi
+    return 0
 }
 
 install_exe_with_wine() {
@@ -20710,7 +22676,7 @@ import_gog_exe() {
     local inst="$1" name root exe
     name="$(basename "$inst")"; name="${name%.*}"
     name="$(printf '%s' "$name" | sed -E 's/^setup_//; s/_\([^)]*\)//g; s/_[0-9]+(\.[0-9]+)+.*$//; s/_/ /g')"
-    name="$(clean_game_name "$name")"
+    name="$(nombre_para_empaquetar "$name")"
     [ -z "$name" ] && name="juego_gog"
     GOG_ROOT=""; GOG_EXE=""; GOG_GALAXY_SEEN=0
     local extract_dir="$GAMES_PATH/.gog_extract_$$"
@@ -20815,7 +22781,11 @@ Instalarlo (sin intervencion) y convertirlo a wsquashfs?"; then
     esac
     exe_dir="$(dirname "$exe_abs")"
     game_root="$(pick_game_root "$exe_dir")" || { say "Importacion cancelada"; return 1; }
-    name="$(basename "$game_root")"
+    # EL NOMBRE SALE DE LA CARPETA, Y LA CARPETA VIENE COMO VENGA.
+    # "rune-the.last.guardian" es un nombre de descarga, no de juego: de ahi
+    # salian el perfil, la caratula y el .wsquashfs. Se limpia aqui, en el
+    # origen, para que todo lo de abajo herede ya el nombre bueno.
+    name="$(nombre_para_empaquetar "$(basename "$game_root")")"
     say "Preparando ${name}..."
     write_autorun "$game_root" "$exe_abs"
     if offer_test_then_pack "$game_root" "$exe_abs" "$name"; then
@@ -20828,7 +22798,8 @@ package_dir() {
     # Carpeta -> .sh dentro se ejecuta; si no, empaquetar y lanzar
     local dir="$1" launcher name exe out
     lanzar_script_si_existe "$dir" && return 0
-    name="$(basename "$dir")"
+    # Igual que en import_exe: la carpeta puede llamarse "codex-loquesea".
+    name="$(nombre_para_empaquetar "$(basename "$dir")")"
     # OJO: aqui NO se puede usar "die", que cierra WProton entero. Esto
     # ocurre dentro de un menu: si la carpeta elegida no sirve, se avisa y se
     # vuelve al menu, como cualquier otro error recuperable.
@@ -20991,7 +22962,7 @@ import_archive() {
     game_name="${name_raw%.001}"
     game_name="${game_name%.zip}"; game_name="${game_name%.7z}"
     game_name="${game_name%.z01}"; game_name="${game_name%.rar}"
-    game_name="$(clean_game_name "$game_name")"
+    game_name="$(nombre_para_empaquetar "$game_name")"
     [ -z "$game_name" ] && game_name="juego_importado"
 
     extract_dir="$BUILD_BASE/${game_name}_extract"
@@ -21303,18 +23274,9 @@ launch_loose_exe() {
     #
     # Se sube carpeta a carpeta hasta encontrar la que da este identificador.
     # El tope es la raiz: si no aparece, se guarda el ejecutable como antes.
-    local _ultimo="$abs_exe" _d
-    _d="$(dirname "$abs_exe")"
-    while [ -n "$_d" ] && [ "$_d" != "/" ]; do
-        if [ "$(game_id "$_d")" = "$gid" ]; then
-            _ultimo="$_d"; break
-        fi
-        _d="$(dirname "$_d")"
-    done
-    if [ "$_ultimo" != "$LAST_GAME" ]; then
-        LAST_GAME="$_ultimo"
-        save_settings
-    fi
+    # Esa subida vive ahora DENTRO de ultimo_juego_recordar, para que la usen
+    # todos los caminos de lanzamiento y no solo este.
+    ultimo_juego_recordar "$abs_exe" "$gid"
     if [ "$IS_BATOCERA" = 1 ] && [ -n "$BATOCERA_WINE_BIN" ]; then
         load_profile "$gid"
         if [ "${USE_BATOCERA:-1}" = 1 ]; then
@@ -21835,6 +23797,8 @@ EOFRB
     # senales de cierre, como en launch_game.
     partida_fin                      # se vuelve a atender las senales
     diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
+    diag_log_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
+    diag_video_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     dll_informe
     mako_informe
     reshade_lx_informe
@@ -22515,6 +24479,473 @@ diag_libreria_que_falta() {
     return 0
 }
 
+slr_dirs() {
+    # LAS CARPETAS DE STEAM LINUX RUNTIME QUE HAYA INSTALADAS, una por linea.
+    #
+    # QUE ES ESTO Y PARA QUE SIRVE
+    #
+    # Un juego nativo moderno puede pedir librerias mas nuevas que las del
+    # sistema. En SteamOS pasa a menudo: la imagen base es corta y no se puede
+    # instalar nada en ella. Steam lo resuelve lanzando el juego DENTRO de un
+    # contenedor -el "Steam Linux Runtime"-, que trae su propio juego de
+    # librerias completo.
+    #
+    # Dani lo comprobo con Valheim nativo: con el runtime 4.0 arranca en el
+    # escritorio y en el modo juego; lanzado a pelo, no.
+    #
+    # NO SE BUSCAN NOMBRES CONCRETOS. El runtime se instala como una
+    # herramienta de compatibilidad mas, en steamapps/common, y las carpetas se
+    # llaman SteamLinuxRuntime, _soldier, _sniper... y la de la 4.0 con lo que
+    # Valve le haya puesto -esa version salio sin nombre en clave publicado-.
+    # Asi que se acepta cualquier SteamLinuxRuntime* que traiga su punto de
+    # entrada, y la version se averigua despues.
+    #
+    # Se mira tambien la tarjeta SD y el Steam de Flatpak, que son los dos
+    # sitios donde esto vive cuando no esta en el de siempre.
+    local b
+    for b in "$HOME"/.steam/steam/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.steam/root/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.local/share/Steam/steamapps/common/SteamLinuxRuntime* \
+             "$HOME"/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/SteamLinuxRuntime* \
+             /run/media/*/steamapps/common/SteamLinuxRuntime* \
+             /run/media/*/*/steamapps/common/SteamLinuxRuntime* \
+             "${RUNNERS_DIR:-/nada}"/SteamLinuxRuntime*; do
+        [ -d "$b" ] || continue
+        slr_entrada "$b" >/dev/null || continue
+        printf '%s\n' "$b"
+    done
+    return 0
+}
+
+slr_entrada() {
+    # EL PROGRAMA CON EL QUE SE ENTRA AL CONTENEDOR. $1 = carpeta.
+    #
+    # Es "_v2-entry-point", y se usa asi:
+    #
+    #   <runtime>/_v2-entry-point --verb=waitforexitandrun -- <orden>
+    #
+    # No es un invento: es lo que declara el propio toolmanifest.vdf del
+    # runtime y lo que hace SteamTinkerLaunch para lanzar fuera de Steam.
+    # "run" es el atajo equivalente de los runtimes mas antiguos.
+    local d="${1:-}"
+    [ -n "$d" ] || return 1
+    [ -x "$d/_v2-entry-point" ] && { printf '%s' "$d/_v2-entry-point"; return 0; }
+    [ -x "$d/run" ] && { printf '%s' "$d/run"; return 0; }
+    return 1
+}
+
+slr_version() {
+    # LA VERSION DE ESE RUNTIME: 1.0, 2.0, 3.0 o 4.0. $1 = carpeta.
+    #
+    # La correspondencia es la de Valve:
+    #
+    #   1.0 = scout     2.0 = soldier     3.0 = sniper     4.0 = steamrt4
+    #
+    # Se intenta por el nombre de la carpeta; y si no lo dice -la 4.0 puede no
+    # decirlo, porque salio sin nombre en clave-, se mira el VERSIONS.txt que
+    # trae dentro y la carpeta <suite>_platform_* del contenedor.
+    local d="${1:-}" n p
+    n="$(basename "${d:-/}")"
+    case "$n" in
+        *steamrt4*|*4.0*|*4_0*) printf '4.0'; return 0 ;;
+        *sniper*)               printf '3.0'; return 0 ;;
+        *soldier*)              printf '2.0'; return 0 ;;
+    esac
+    if [ -r "$d/VERSIONS.txt" ]; then
+        grep -q -i 'steamrt4\|steamrt-4' "$d/VERSIONS.txt" 2>/dev/null && { printf '4.0'; return 0; }
+        grep -q -i 'sniper'  "$d/VERSIONS.txt" 2>/dev/null && { printf '3.0'; return 0; }
+        grep -q -i 'soldier' "$d/VERSIONS.txt" 2>/dev/null && { printf '2.0'; return 0; }
+    fi
+    for p in "$d"/*_platform_*; do
+        [ -d "$p" ] || continue
+        case "$(basename "$p")" in
+            steamrt4*) printf '4.0'; return 0 ;;
+            sniper*)   printf '3.0'; return 0 ;;
+            soldier*)  printf '2.0'; return 0 ;;
+        esac
+    done
+    printf '1.0'
+    return 0
+}
+
+slr_elegir() {
+    # LA CARPETA DEL RUNTIME QUE SE VA A USAR. $1 = "auto" o "4.0".."1.0".
+    #
+    # Con una version concreta se exige ESA: si se pidio la 4.0 y no esta, no
+    # se cuela otra por detras. Que el registro diga "no esta" es mas util que
+    # un juego lanzado en un contenedor que no es el que se queria.
+    local pref="${1:-auto}" d v mejor="" mejor_v=""
+    [ -n "$pref" ] || pref=auto
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        v="$(slr_version "$d")"
+        if [ "$pref" != auto ]; then
+            [ "$v" = "$pref" ] && { printf '%s' "$d"; return 0; }
+            continue
+        fi
+        # "auto" = el mas nuevo de los instalados.
+        if [ -z "$mejor" ] || [ "${v%%.*}" -gt "${mejor_v%%.*}" ]; then
+            mejor="$d"; mejor_v="$v"
+        fi
+    done <<EOFSLR
+$(slr_dirs)
+EOFSLR
+    [ -n "$mejor" ] && { printf '%s' "$mejor"; return 0; }
+    return 1
+}
+
+slr_hay_alguno() {
+    # 0 si hay algun runtime instalado. Para poder sugerirlo cuando sirva.
+    [ -n "$(slr_dirs | head -1)" ]
+}
+
+home_juego_label() {
+    # La etiqueta de la carpeta personal de un juego de Linux.
+    #
+    # Se usa el MISMO ajuste que el prefijo (PREFIX_MODE), que es lo que ya lee
+    # home_portable: "compartido" -> WProton.home para todos, "propio" ->
+    # <juego>.home aislada. Asi un juego de Linux y uno de Windows se
+    # configuran con el mismo criterio y no hay dos ajustes que decir lo mismo.
+    case "${PREFIX_MODE:-shared}" in
+        own) printf 'propia (<juego>.home)' ;;
+        *)   printf 'compartida (WProton.home)' ;;
+    esac
+}
+
+runtime_steam_label() {
+    # La etiqueta de la fila del menu: que se ha pedido Y si se puede cumplir.
+    #
+    # Decir "4.0" cuando no esta instalado es una fila de menu que miente: el
+    # juego se lanzaria sin contenedor y el ajuste parece puesto. Asi que se
+    # comprueba aqui mismo.
+    local v="${RUNTIME_STEAM:-no}" d
+    case "$v" in
+        no) printf 'no (se lanza directo)' ;;
+        auto)
+            if d="$(slr_elegir auto)" && [ -n "$d" ]; then
+                printf 'automatico (hay el %s)' "$(slr_version "$d")"
+            else
+                printf 'automatico (no hay ninguno instalado)'
+            fi ;;
+        *)
+            if d="$(slr_elegir "$v")" && [ -n "$d" ]; then printf '%s' "$v"
+            else printf '%s (NO esta instalado)' "$v"; fi ;;
+    esac
+}
+
+nativo_prefijo_orden() {
+    # LO QUE VA DELANTE DEL LANZADOR: el runtime de Steam y, si el juego lo
+    # pide, quitarle la identidad de Steam. $1 = lanzador.
+    #
+    # Deja el resultado en WP_NAT_PRE, que puede quedar vacio: entonces el
+    # juego se lanza tal cual, como siempre.
+    WP_NAT_PRE=()
+    local exe="${1:-}" pref="${RUNTIME_STEAM:-no}" dir entrada
+
+    # --- 1) el contenedor
+    if [ "$pref" != no ] && [ -n "$pref" ]; then
+        # CUANTOS HAY, EN EL REGISTRO. Si se pidio uno y no esta, saber si hay
+        # OTROS instalados es la diferencia entre "instalalo" y "pusiste la
+        # version equivocada".
+        log "juego nativo: runtimes de Steam instalados: $(contar_lineas "$(slr_dirs)")"
+        if dir="$(slr_elegir "$pref")" && [ -n "$dir" ] \
+           && entrada="$(slr_entrada "$dir")"; then
+            WP_NAT_PRE+=("$entrada" "--verb=waitforexitandrun" "--")
+            log "juego nativo: dentro del Steam Linux Runtime $(slr_version "$dir") ($dir)"
+            say "[+] Runtime de Steam $(slr_version "$dir")"
+            # LO QUE EL CONTENEDOR NECESITA SABER.
+            #
+            # STEAM_COMPAT_CLIENT_INSTALL_PATH: donde esta Steam. El punto de
+            # entrada se queja si no la encuentra.
+            local _si
+            for _si in "$HOME/.steam/steam" "$HOME/.local/share/Steam" \
+                       "$HOME/.steam/root" "${dir%/steamapps/common/*}"; do
+                [ -d "$_si" ] || continue
+                export STEAM_COMPAT_CLIENT_INSTALL_PATH="$_si"
+                break
+            done
+            # Una carpeta propia para lo que el contenedor quiera dejar escrito.
+            export STEAM_COMPAT_DATA_PATH="${PREFIX_DIR:-${BASE_DIR:-$HOME}/prefixes}/.slr"
+            mkdir -p "$STEAM_COMPAT_DATA_PATH" 2>/dev/null
+            # EL JUEGO TIENE QUE VERSE DESDE DENTRO.
+            #
+            # pressure-vessel monta $HOME, pero NO lo que este fuera: un juego
+            # en la tarjeta SD -/run/media/...- no existiria dentro del
+            # contenedor. Se añade con STEAM_COMPAT_MOUNTS, que es el mismo
+            # mecanismo que ya usa WProton para MAKO y ReShade cuando caen
+            # fuera de $HOME. (PRESSURE_VESSEL_FILESYSTEMS_RW hace lo mismo a
+            # mas bajo nivel; se usa la de Steam por coherencia con el resto.)
+            local _gd; _gd="$(dirname "$exe")"
+            case "$_gd" in
+                "$HOME"/*) : ;;
+                *) export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$_gd"
+                   log "juego nativo: el juego esta fuera de \$HOME; se monta en el contenedor: $_gd" ;;
+            esac
+            log "juego nativo: STEAM_COMPAT_CLIENT_INSTALL_PATH=${STEAM_COMPAT_CLIENT_INSTALL_PATH:-(no se encontro Steam)}"
+        else
+            # NO SE ENCONTRO, Y SE DICE. El juego se lanza igual: dejar a
+            # alguien sin poder jugar por un ajuste que no se pudo cumplir
+            # seria peor que lanzarlo como antes.
+            log "juego nativo: se pidio el runtime de Steam $pref y no esta instalado; se lanza sin contenedor" WARN
+            say "[!] No hay Steam Linux Runtime $pref instalado."
+            say "    Instalalo desde Steam (Biblioteca -> Herramientas) y vuelve."
+            say "    Se lanza el juego sin contenedor, como antes."
+        fi
+    fi
+
+    # --- 2) la identidad de Steam, si este juego se oculta
+    #
+    # Es el mismo ajuste que ya existe para los juegos de Windows -Casos
+    # especiales -> Superposicion de Steam-, que en "oculto" le quita al juego
+    # las variables de identidad. En el camino nativo NO se aplicaba, y para un
+    # juego nativo DE STEAM es justo donde mas puede importar: si hereda el
+    # identificador del atajo de WProton, su steam_api se inicializa contra el
+    # juego equivocado.
+    #
+    # Va DESPUES del "--" del contenedor a proposito: se le quita al juego, no
+    # al punto de entrada, que usa sus propias STEAM_COMPAT_*.
+    if [ "${STEAM_OVERLAY:-auto}" = oculto ]; then
+        WP_NAT_PRE+=(env -u SteamAppId -u SteamGameId \
+                         -u SteamOverlayGameId -u SteamClientLaunch)
+        log "juego nativo: se le quita la identidad de Steam (STEAM_OVERLAY=oculto)"
+    fi
+    return 0
+}
+
+nativo_sugerir_runtime() {
+    # SI EL JUEGO SE MURIO EN EL SITIO Y HAY UN RUNTIME SIN USAR, DECIRLO.
+    #
+    # Es la pregunta que se hace cualquiera al ver un juego nativo que no
+    # arranca, y WProton puede contestarla sola: sabe cuanto duro, sabe si se
+    # uso contenedor y sabe si hay alguno instalado.
+    # $1 = codigo de salida, $2 = segundos.
+    local rc="${1:-0}" dur="${2:-0}"
+    [ "${RUNTIME_STEAM:-no}" = no ] || return 0
+    [ "$dur" -lt 12 ] || return 0
+    slr_hay_alguno || return 0
+    local v; v="$(slr_version "$(slr_elegir auto)")"
+    say "[i] El juego ha durado ${dur}s (codigo $rc)."
+    say "    Hay Steam Linux Runtime $v instalado y NO se esta usando."
+    say "    Si en Steam arranca y aqui no, casi seguro es eso:"
+    say "    Ajustes del juego -> Casos especiales -> Runtime de Steam"
+    log "juego nativo: duro ${dur}s sin contenedor y hay Steam Linux Runtime $v disponible: se sugiere" WARN
+    return 0
+}
+
+nativo_salida_fich() {
+    # El fichero donde se recoge lo que escribe un juego de Linux.
+    printf '%s' "${RUNTIME_DIR:-/tmp}/.salida_juego"
+}
+
+nativo_volcar_salida() {
+    # LO QUE EL JUEGO ESCRIBIO POR SU CUENTA, EN NUESTRO REGISTRO.
+    #
+    # POR QUE ESTO FALTABA Y CUANTO COSTABA
+    #
+    # Un juego de Linux se lanzaba con "setsid $exe &" SIN REDIRIGIR NADA. Su
+    # salida y sus errores se iban por donde fuera la salida de WProton, que en
+    # el modo Juego de SteamOS no va a ninguna parte. O sea que un juego podia
+    # decir exactamente por que no arrancaba y nosotros lo tirabamos.
+    #
+    # Y habia una consecuencia peor, de las de no verse nunca:
+    # diag_libreria_que_falta busca el "error while loading shared libraries"
+    # DENTRO DEL REGISTRO, y ese mensaje no llegaba ahi jamas. El diagnostico
+    # estaba escrito, probado y muerto.
+    #
+    # NO SE USA "tee" A PROPOSITO. Un tee seria un proceso hermano con el
+    # directorio de trabajo del juego, y la espera de salida cuenta a quien
+    # usa esa carpeta: se contaria a si mismo y la espera no terminaria nunca.
+    # Ese error ya se pago tres veces -la espera, su sleep y su grep-.
+    #
+    # $1 = fichero de salida.
+    local f="${1:-}" n
+    if [ ! -s "$f" ]; then
+        log "juego nativo: el juego no escribio NADA por su salida ni por sus errores"
+        return 0
+    fi
+    n="$(wc -l < "$f" 2>/dev/null || printf '0')"
+    log "---- salida del propio juego (${n:-?} linea(s), se pegan las ultimas 80) ----"
+    tail -n 80 "$f" 2>/dev/null | tr -d '\r' >> "$LOG_FILE" 2>/dev/null
+    log "---- fin de la salida del propio juego ----"
+    return 0
+}
+
+nativo_volcar_player_log() {
+    # EL Player.log DE UN UNITY NATIVO.
+    #
+    # Es el mismo hueco que se tapo para los juegos de Windows, una capa mas
+    # alla: alli el registro del juego esta en el prefijo, y se busca en
+    # drive_c/users. Un juego de Linux no tiene prefijo, asi que esa busqueda
+    # no encontraba nada y el camino nativo se quedaba igual de ciego.
+    #
+    # En Linux, Unity escribe en:
+    #
+    #   $XDG_CONFIG_HOME/unity3d/<empresa>/<juego>/Player.log
+    #
+    # Y aqui HOME y XDG_CONFIG_HOME ya son la CARPETA PORTATIL del juego
+    # -home_portable_exportar las pone antes de llamarnos-, asi que se busca
+    # justo donde el juego acaba de escribir.
+    #
+    # SOLO SI ES DE ESTA PARTIDA: uno de hace tres dias confundiria mas que
+    # ayudar. $1 = segundos que duro.
+    local dur="${1:-0}" base="${XDG_CONFIG_HOME:-$HOME/.config}/unity3d"
+    [ -d "$base" ] || return 0
+    local minutos=$(( dur / 60 + 2 )) f n=0
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        [ -s "$f" ] || continue
+        n=$((n + 1))
+        log "---- registro del propio juego: ${f#"$base"/} ----"
+        tail -n 40 "$f" 2>/dev/null | tr -d '\r' >> "$LOG_FILE" 2>/dev/null
+        log "---- fin del registro del propio juego ----"
+        [ "$n" -ge 2 ] && break
+    done <<EOFNPL
+$(find "$base" -maxdepth 4 \( -name 'Player.log' -o -name 'output_log.txt' \) \
+    -mmin "-$minutos" 2>/dev/null | sort)
+EOFNPL
+    if [ "$n" = 0 ]; then
+        # Que se sepa que se ha mirado, y donde.
+        log "juego nativo: no hay Player.log reciente en $base (no es de Unity, o no llego a escribirlo)"
+    fi
+    return 0
+}
+
+nativo_mira_steam() {
+    # ¿ESTE LANZADOR ESPERA QUE STEAM ESTE EN MARCHA?
+    #
+    # Un juego nativo comprado en Steam carga steamclient.so y exporta su
+    # SteamAppId. Si no encuentra a Steam, hay juegos que se cierran en un
+    # segundo y sin decir nada, que es exactamente la pinta que tiene un
+    # lanzador que "no llega a arrancar".
+    #
+    # Esto NO es una suposicion: se lee el propio lanzador, que es un .sh. Lo
+    # que se apunta es lo que el fichero dice de si mismo.
+    local exe="${1:-}" appid="" dir
+    WP_NAT_APPID=""
+    [ -r "$exe" ] || return 0
+    dir="$(dirname "$exe")"
+    # El steam_appid.txt se lee SIEMPRE, tambien para un AppImage: es un
+    # fichero de texto al lado del ejecutable, no hace falta mirar dentro.
+    case "$(file -b "$exe" 2>/dev/null)" in
+        *text*|*script*)
+            appid="$(grep -a -m1 -oE 'SteamAppId=[0-9]+' "$exe" 2>/dev/null | cut -d= -f2)" ;;
+    esac
+    if [ -z "$appid" ] && [ -r "$dir/steam_appid.txt" ]; then
+        appid="$(tr -dc '0-9' < "$dir/steam_appid.txt" 2>/dev/null | cut -c1-10)"
+    fi
+    if [ -n "$appid" ]; then
+        WP_NAT_APPID="$appid"
+        log "juego nativo: el juego declara SteamAppId=$appid; espera que Steam este en marcha"
+    fi
+    grep -a -q 'steamclient\.so\|steam_api\|steam-runtime' "$exe" 2>/dev/null && \
+        log "juego nativo: el lanzador usa las librerias de Steam (steamclient/steam_api/steam-runtime)"
+    return 0
+}
+
+nativo_identidad_corregir() {
+    # EL IDENTIFICADOR DE STEAM QUE SE LE PASA AL JUEGO.
+    #
+    # ESTE ES EL FALLO, Y LO DICE EL PROPIO JUEGO POR LAS DOS PUNTAS
+    #
+    # WProton se añade a Steam como juego ajeno, asi que en el modo Juego lo
+    # arranca Steam y le deja puesto SU identificador -el del atajo-. Un juego
+    # NATIVO de Steam lee esa misma variable para inicializar Steamworks, asi
+    # que recibe el identificador del atajo de WProton en vez del suyo.
+    #
+    # Comparando los dos registros del propio juego:
+    #
+    #   lanzado desde Steam:   Using environment steamid 892970      -> arranca
+    #   lanzado desde WProton: Using environment steamid 3975565157
+    #                          Using steam APPID:3975565157
+    #                          Invalid APPID
+    #                          InvalidOperationException: Steamworks is not
+    #                                                     initialized.
+    #                          Got a SIGSEGV while executing native code
+    #
+    # El 3975565157 es el atajo de WProton. El juego trae su 892970 en su
+    # steam_appid.txt, pero mira ANTES el entorno, asi que gana el heredado.
+    #
+    # LO QUE SE CORRIGE Y LO QUE NO. Son dos cosas distintas que se parecen:
+    #
+    #   SteamAppId / SteamGameId   las lee el JUEGO para su Steamworks:
+    #                              tienen que ser las SUYAS
+    #   SteamOverlayGameId         + LD_PRELOAD son de la SUPERPOSICION de
+    #                              Steam, no del juego: NO se tocan, asi la
+    #                              superposicion sigue funcionando
+    #
+    # Pasarle a un juego la identidad de OTRA aplicacion no es una opcion que
+    # se pueda preferir: es una fuga. Por eso esto se arregla solo.
+    local heredado="${SteamAppId:-}" propio="${WP_NAT_APPID:-}"
+    # Si no hay nada heredado, no hay nada que arreglar.
+    [ -n "$heredado" ] || return 0
+    # Si coinciden, tampoco.
+    [ "$heredado" != "$propio" ] || return 0
+    if [ -n "$propio" ]; then
+        export SteamAppId="$propio" SteamGameId="$propio"
+        log "juego nativo: el identificador heredado de Steam ($heredado) NO es de este juego; se le pone el suyo ($propio)" WARN
+        say "[i] Identificador de Steam corregido: $propio (llegaba $heredado)"
+    else
+        # No sabemos el suyo: al menos no se le miente. Muchos juegos tienen su
+        # steam_appid.txt y lo leen cuando el entorno no dice nada.
+        unset SteamAppId SteamGameId 2>/dev/null || true
+        log "juego nativo: se quita el identificador heredado de Steam ($heredado): no es de este juego" WARN
+    fi
+    return 0
+}
+
+nativo_entorno_steam() {
+    # EL ENTORNO DE STEAM QUE HEREDAMOS, APUNTADO.
+    #
+    # POR QUE IMPORTA
+    #
+    # WProton se añade a Steam como juego ajeno, asi que en el modo Juego lo
+    # arranca Steam a traves de reaper y steam-runtime-launcher. En el registro
+    # del 16/10 se veia al cerrar:
+    #
+    #   EN NUESTRO GRUPO (86310) quedan: 86310 bash 86470 steam
+    #                                    86708 steam-runtime-l 89337 reaper
+    #
+    # Y Steam deja puestas sus variables: SteamAppId, SteamGameId,
+    # SteamOverlayGameId, SteamEnv y un LD_PRELOAD con su capa de superposicion.
+    # Esas variables las HEREDA el juego que lancemos. Un juego NATIVO de Steam
+    # mira justo esas: si le llega el identificador del atajo de WProton en vez
+    # del suyo, su steam_api se inicializa contra el juego equivocado.
+    #
+    # Aqui NO se cambia ninguna: solo se escriben, al lado de lo que el propio
+    # lanzador declara, para poder comparar las dos cosas de un vistazo. Tocar
+    # el entorno heredado sin saber que esta pasando es como meter opciones a
+    # ciegas, y eso ya se ha visto en que acaba.
+    local v hay=0
+    for v in SteamAppId SteamGameId SteamOverlayGameId SteamEnv SteamClientLaunch \
+             SteamPath STEAM_COMPAT_APP_ID STEAM_COMPAT_CLIENT_INSTALL_PATH; do
+        if [ -n "$(eval "printf '%s' \"\${$v:-}\"")" ]; then
+            hay=1
+            log "juego nativo: heredado de Steam -> $v=$(eval "printf '%s' \"\${$v}\"")"
+        fi
+    done
+    # LD_PRELOAD APARTE, Y CON CUIDADO DE NO MENTIR.
+    #
+    # Es el que mete la superposicion de Steam. WProton se lo guarda y lo
+    # DESEXPORTA al arrancar (export -n), asi que la variable sigue en el
+    # shell pero NO la heredan ni nuestros procesos ni el juego: solo se le
+    # pone a mano, con "env", al lanzar uno de Windows.
+    #
+    # La primera version de esta linea miraba ${LD_PRELOAD:-} y lo cantaba como
+    # "heredado de Steam". Era falso -y justo del tipo de dato que luego se usa
+    # para diagnosticar-: en el registro del 17/10 salia como heredado cuando
+    # el juego no lo recibia. Ahora se mira si esta EXPORTADA de verdad.
+    if [ -n "${LD_PRELOAD:-}" ]; then
+        hay=1
+        if export -p 2>/dev/null | grep -q '^declare -x LD_PRELOAD=\|^export LD_PRELOAD='; then
+            log "juego nativo: heredado de Steam -> LD_PRELOAD=$LD_PRELOAD (SI lo recibe el juego)"
+        else
+            log "juego nativo: Steam puso LD_PRELOAD=$LD_PRELOAD, pero WProton lo desexporto: el juego NO lo recibe"
+        fi
+    fi
+    [ "$hay" = 0 ] && log "juego nativo: no se hereda ninguna variable de Steam"
+    return 0
+}
+
 ejecutar_nativo() {
     # Ejecuta el lanzador de un juego de Linux: $1 = ruta.
     #
@@ -22574,6 +25005,18 @@ ejecutar_nativo() {
         fi
     fi
     [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
+    # Donde se recoge lo que diga el juego, vaciado para esta partida, y el
+    # reloj para saber si murio en el sitio o jugo un rato.
+    local _sal_nat; _sal_nat="$(nativo_salida_fich)"
+    : > "$_sal_nat" 2>/dev/null
+    local _t0_nat; _t0_nat="$(date +%s)"
+    # Lo que el lanzador dice de si mismo, y lo que le llega de fuera.
+    nativo_mira_steam "$exe"
+    nativo_entorno_steam
+    # Y si lo que hereda no es suyo, se corrige ANTES de lanzar.
+    nativo_identidad_corregir
+    # Y con que se va a envolver: runtime de Steam, identidad, o nada.
+    nativo_prefijo_orden "$exe"
     if [ -x "$exe" ]; then
         # EN SU PROPIO GRUPO DE PROCESOS, PARA PODER SEGUIRLE LA PISTA.
         #
@@ -22589,14 +25032,46 @@ ejecutar_nativo() {
         # Con setsid, el lanzador y todo lo que cuelgue de el quedan en un GRUPO
         # propio, y un grupo se puede mirar y cerrar entero aunque los procesos
         # se hayan ido a otra carpeta o los haya adoptado init.
-        setsid "$exe" &
+        # Y SU SALIDA, A UN FICHERO NUESTRO. Ver nativo_volcar_salida: sin
+        # esto, lo que el juego dijera al morir se perdia entero.
+        #
+        # WP_NAT_PRE puede traer delante el punto de entrada del Steam Linux
+        # Runtime y/o el "env -u" que le quita la identidad de Steam. Si esta
+        # vacio, esta linea es EXACTAMENTE la de siempre: el lanzador y nada
+        # mas. La expansion con "+" es la que deja usar un array vacio con
+        # "set -u" puesto.
+        setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" >>"$_sal_nat" 2>&1 &
         local _pg=$!
         printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
         wait "$_pg" 2>/dev/null
         local _rc=$?
+        # EL CODIGO DE SALIDA, ESCRITO.
+        #
+        # Se recogia en _rc y se devolvia... y no se apuntaba en ningun sitio.
+        # En el registro de un juego que no arrancaba no habia ni el codigo ni
+        # el tiempo: solo "el lanzador termino", que no distingue entre un
+        # lanzador que hizo su trabajo y uno que se murio en el sitio.
+        log "juego nativo: el lanzador salio con codigo $_rc tras $(( $(date +%s) - _t0_nat ))s"
         # EL LANZADOR HA TERMINADO, PERO EL JUEGO PUEDE SEGUIR.
         esperar_juego_nativo "$(dirname "$exe")" 0
+        # AHORA, CON EL JUEGO YA FUERA, TODO LO QUE DIJO.
+        #
+        # En este orden a proposito: diag_libreria_que_falta lee EL REGISTRO
+        # desde la marca que se tomo antes de lanzar, asi que la salida del
+        # juego tiene que estar pegada ANTES de llamarla. Por eso no encontraba
+        # nunca nada.
+        nativo_volcar_salida "$_sal_nat"
+        nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
         diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
+        # Y LA TRADUCCION DEL FALLO DE VIDEO, TAMBIEN AQUI.
+        #
+        # Los diagnosticos de salida solo se llamaban en los caminos de
+        # Windows, asi que un juego de Linux no pasaba por ninguno: ni el del
+        # registro del propio juego ni el del video.
+        diag_video_del_juego "$_rc" "$(( $(date +%s) - _t0_nat ))"
+        # Y LO ULTIMO, EL CONSEJO: si murio en el sitio y hay un contenedor
+        # instalado sin usar, se dice. Es la pregunta que se hace cualquiera.
+        nativo_sugerir_runtime "$_rc" "$(( $(date +%s) - _t0_nat ))"
         rm -f "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
         return $_rc
     fi
@@ -22610,9 +25085,20 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
             return 1 ;;
     esac
     # Un .sh sin permisos si se puede interpretar.
-    bash "$exe"
+    #
+    # Este camino llevaba el mismo descuido que el de arriba: ni salida, ni
+    # codigo, ni registro del juego. Se trata igual.
+    # El prefijo va DELANTE de bash, no detras: "bash <punto-de-entrada>" haria
+    # que bash interpretara el punto de entrada del contenedor en vez de
+    # entrar en el.
+    ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1
     local _rc2=$?
+    log "juego nativo: el lanzador (interpretado) salio con codigo $_rc2 tras $(( $(date +%s) - _t0_nat ))s"
     esperar_juego_nativo "$(dirname "$exe")" 0
+    nativo_volcar_salida "$_sal_nat"
+    nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
+    diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
+    diag_video_del_juego "$_rc2" "$(( $(date +%s) - _t0_nat ))"
     return $_rc2
 }
 
@@ -22645,10 +25131,22 @@ lanzar_nativo_suelto() {
     #
     # Se le pasa el lanzador porque aqui no existe $EXE_PATH.
     guardia_salida_start "$exe"
+    # Y QUE QUEDE COMO "EL ULTIMO JUGADO".
+    #
+    # Se guarda la CARPETA, que es la que play_folder sabe volver a lanzar.
+    # Faltaba: lo conto Dani -"al ejecutar el juego en sh no aparece como
+    # ultimo juego"-. Ver ultimo_juego_recordar.
+    ultimo_juego_recordar "$_raiz"
     # EL RELOJ DE LA PARTIDA, PARA LAS ESTADISTICAS.
     #
-    # Sin esto, un juego lanzado por este camino no contaba como jugado:
-    # no salia como "ultimo juego lanzado" ni sumaba tiempo ni partidas.
+    # Sin esto, un juego lanzado por este camino no sumaba tiempo ni partidas
+    # y no salia como "ultima vez jugado" en su ficha.
+    #
+    # OJO, QUE SON DOS COSAS DISTINTAS Y SE PARECEN MUCHO: esto escribe
+    # PLAY_COUNT y LAST_PLAYED en EL PERFIL del juego, y lo de arriba escribe
+    # LAST_GAME en los AJUSTES, que es lo que usa "Jugar al ultimo" del menu
+    # principal. El comentario que habia aqui daba por hecho que esto arreglaba
+    # las dos, y no: por eso el fallo del .sh sobrevivio a aquel arreglo.
     # Es el mismo olvido de siempre: estaba en los dos lanzadores grandes
     # y no en estos.
     local _st0; _st0="$(date +%s)"
@@ -22695,10 +25193,15 @@ lanzar_script_si_existe() {
     #
     # Se le pasa el lanzador porque aqui no existe $EXE_PATH.
     guardia_salida_start "$launcher"
+    # Y QUE QUEDE COMO "EL ULTIMO JUGADO". La carpeta, por lo mismo que en
+    # lanzar_nativo_suelto: es la que play_folder sabe volver a lanzar.
+    ultimo_juego_recordar "$dir"
     # EL RELOJ DE LA PARTIDA, PARA LAS ESTADISTICAS.
     #
-    # Sin esto, un juego lanzado por este camino no contaba como jugado:
-    # no salia como "ultimo juego lanzado" ni sumaba tiempo ni partidas.
+    # Sin esto, un juego lanzado por este camino no sumaba tiempo ni partidas
+    # y no salia como "ultima vez jugado" en su ficha. Son DOS cosas
+    # distintas: esto es el perfil del juego, lo de arriba es LAST_GAME en los
+    # ajustes. Ver la nota larga en lanzar_nativo_suelto.
     # Es el mismo olvido de siempre: estaba en los dos lanzadores grandes
     # y no en estos.
     local _st0; _st0="$(date +%s)"
@@ -22753,9 +25256,117 @@ resolver_exe_carpeta() {
     return 1
 }
 
+carpeta_hijos_juego() {
+    # Los juegos que hay DENTRO de esta carpeta, uno por linea. $1 = carpeta.
+    local d="${1:-}" h
+    [ -d "$d" ] || return 0
+    while IFS= read -r h; do
+        [ -n "$h" ] || continue
+        case "$h" in
+            *.wsquashfs|*.squashfs|*.dwarfs|*.WSQUASHFS|*.SQUASHFS|*.DWARFS)
+                printf '%s\n' "$h"; continue ;;
+        esac
+        [ -d "$h" ] || continue
+        es_juego_carpeta "$h" && printf '%s\n' "$h"
+    done <<EOFHIJOS
+$(find "$d" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | sort)
+EOFHIJOS
+    return 0
+}
+
+es_carpeta_de_juegos() {
+    # ¿Esta carpeta es una ESTANTERIA de juegos y no un juego?
+    #
+    # EL CASO, TAL COMO LLEGO
+    #
+    # Dani: "en la opcion jugar, cuando muestra un juego en carpeta, puede
+    # existir la posibilidad de que sea una carpeta con juegos dentro, por
+    # ejemplo Lucha y dentro esten Street Fighter, Mortal Kombat y Guilty
+    # Gear". Hasta ahora esa carpeta salia en la lista como un juego mas
+    # -es_juego_carpeta es generosa a proposito- y al darle no arrancaba nada.
+    #
+    # COMO SE DISTINGUE, QUE ES LO DELICADO
+    #
+    # Una estanteria no tiene NI UN FICHERO suyo en el primer nivel: solo
+    # carpetas. Un juego siempre tiene algo ahi -un .exe, un leeme, un .dll,
+    # un .ini-, aunque el ejecutable de verdad este tres niveles mas abajo.
+    # Esa es la linea, y es la unica que distingue bien los dos casos sin
+    # pedirle nada al usuario.
+    #
+    # Se exige ademas:
+    #   - DOS hijas o mas que sean juegos. Con una sola, lo mas probable es
+    #     que sea un juego que guarda todo en una subcarpeta, y convertirlo
+    #     en estanteria seria meter un paso de mas por el camino.
+    #   - que ella misma no tenga con que arrancar (autorun.cmd, drive_c, un
+    #     .exe o un .sh sueltos, o acabar en .pc).
+    local d="${1:-}" n
+    [ -d "$d" ] || return 1
+    case "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" in *.pc) return 1 ;; esac
+    [ -f "$d/autorun.cmd" ] && return 1
+    [ -d "$d/drive_c" ] && return 1
+    # Ficheros propios en el primer nivel: entonces es un juego. Se perdonan
+    # tres clases, que no son "suyas":
+    #   - la caratula y los textos, que no arrancan nada y es muy normal
+    #     dejarlos al lado de la categoria;
+    #   - los PAQUETES, que son los juegos de dentro: una carpeta con cuatro
+    #     .wsquashfs es justamente una estanteria.
+    if [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type f \
+                 ! -name '.*' ! -iname '*.png' ! -iname '*.jpg' ! -iname '*.jpeg' \
+                 ! -iname '*.webp' ! -iname '*.txt' ! -iname '*.md' ! -iname '*.nfo' \
+                 ! -iname '*.wsquashfs' ! -iname '*.squashfs' ! -iname '*.dwarfs' \
+                 -print -quit 2>/dev/null)" ]; then
+        return 1
+    fi
+    n="$(carpeta_hijos_juego "$d" | grep -c . || true)"
+    [ "${n:-0}" -ge 2 ] || return 1
+    return 0
+}
+
+carpeta_elegir_juego() {
+    # Si $1 es una estanteria, enseña lo que tiene dentro y devuelve el juego
+    # elegido por la salida estandar. Si no lo es, devuelve 1 y no hace nada.
+    local d="${1:-}" lista n sel ruta
+    es_carpeta_de_juegos "$d" || return 1
+    lista="$(carpeta_hijos_juego "$d")"
+    n="$(printf '%s\n' "$lista" | grep -c . || true)"
+    log "carpeta de juegos: '$d' trae $n juego(s) dentro"
+    local -a opciones=()
+    while IFS= read -r ruta; do
+        [ -n "$ruta" ] || continue
+        opciones+=("$(juego_etiqueta "$ruta")")
+    done <<EOFOPC
+$lista
+EOFOPC
+    sel="$(menu "$(basename "$d")
+
+Esta carpeta trae $n juegos dentro." "${opciones[@]}" "<< Volver")" || return 1
+    [ -n "$sel" ] && [ "$sel" != "<< Volver" ] || return 1
+    # De la etiqueta a la ruta: se busca la que da esa misma etiqueta. No se
+    # puede ir por el nombre a secas porque la etiqueta recorta la extension.
+    while IFS= read -r ruta; do
+        [ -n "$ruta" ] || continue
+        if [ "$(juego_etiqueta "$ruta")" = "$sel" ]; then
+            printf '%s' "$ruta"
+            return 0
+        fi
+    done <<EOFBUS
+$lista
+EOFBUS
+    return 1
+}
+
 play_folder() {
     # Jugar una carpeta suelta SIN empaquetar ni preguntas de compresion
     local dir="$1" launcher exe name
+    # UNA CARPETA PUEDE SER UNA ESTANTERIA, no un juego: "Lucha" con Street
+    # Fighter, Mortal Kombat y Guilty Gear dentro. En ese caso se enseña lo
+    # que tiene y se juega a lo que se elija.
+    local _dentro
+    if _dentro="$(carpeta_elegir_juego "$dir")" && [ -n "$_dentro" ]; then
+        play_any "$_dentro"
+        return $?
+    fi
+    es_carpeta_de_juegos "$dir" && return 0   # era estanteria y se cancelo
     lanzar_script_si_existe "$dir" && return 0
     name="$(game_id "$dir")"
     load_profile "$name"
@@ -23151,6 +25762,22 @@ avisar_estado_steam_input() {
     # saber si una prueba se hizo con Steam Input puesto o quitado.
     if steam_input_activo; then
         log "Steam Input: ACTIVO para este atajo (SDL_GAMECONTROLLER_USE_BUTTON_LABELS presente)"
+        # DE DONDE SALE EL PUNTERO, QUE NO ES LO MISMO EN LOS DOS SITIOS.
+        #
+        # Lo enseñaron dos registros del MISMO juego con siete minutos de
+        # diferencia, el 17/10:
+        #
+        #   18:50 escritorio  Steam Input NO activo   puntero en (349, 290)
+        #   18:57 modo Juego  Steam Input ACTIVO      puntero en (1279, 799)
+        #
+        # 1279x799 es la esquina de una pantalla de 1280x800: el puntero no
+        # se movia, se iba al borde y se quedaba. En el escritorio los
+        # trackpads son un raton (modo lagarto) y en el modo Juego los coge
+        # Steam y los reparte segun la disposicion del atajo, que de fabrica
+        # es "Gamepad" y no trae raton.
+        #
+        # Queda escrito en el registro para no volver a compararlo a mano.
+        log "puntero: con Steam Input activo los trackpads NO son un raton (los reparte Steam segun la disposicion del atajo); en el escritorio si lo son, por el modo lagarto. Si un lanzador necesita puntero, usa el stick como raton (Casos especiales) o cambia la disposicion del mando en Steam"
         if mando_solo_virtual_de_steam; then
             say "[i] Steam Input esta ACTIVO y el unico mando es el que el ofrece."
             say "    Hay juegos que asi no ven ningun mando. Si es tu caso, la"
@@ -28113,7 +30740,7 @@ un fichero de texto con la clave junto a wproton.sh."; return 1; }
 
     loading_say "Buscando \"$busca\"..."
     local q; q="$(urlencode_py "$busca")"
-    local gjson; gjson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+    local gjson; gjson="$(curl -fsSL "${DL_META[@]}" -H "Authorization: Bearer $SGDB_KEY" \
         "https://www.steamgriddb.com/api/v2/search/autocomplete/$q" 2>>"$LOG_FILE")"
     loading_clear
     # nombres e identificadores de los resultados, en paralelo
@@ -28142,7 +30769,7 @@ EOFN
 
     loading_say "Descargando carátula..."
     local ujson url ext
-    ujson="$(curl -fsSL -H "Authorization: Bearer $SGDB_KEY" \
+    ujson="$(curl -fsSL "${DL_META[@]}" -H "Authorization: Bearer $SGDB_KEY" \
         "https://www.steamgriddb.com/api/v2/grids/game/$gameid?dimensions=$dims&types=static" \
         2>>"$LOG_FILE")"
     url="$(printf '%s' "$ujson" | grep -o '"url": *"[^"]*"' | head -n1 | cut -d'"' -f4 | sed 's|\\/|/|g')"
@@ -28155,7 +30782,7 @@ Prueba con el otro tipo, o pon una imagen tuya desde
     mkdir -p "$destino" 2>/dev/null
     local e
     for e in png jpg jpeg webp; do rm -f "$destino/$gid.$e" 2>/dev/null; done
-    if curl -fsSL "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
+    if curl -fsSL "${DL_LIMITES[@]}" "$url" -o "$destino/$gid.$ext" 2>>"$LOG_FILE"; then
         say "[+] Caratula guardada: $(basename "$destino")/$gid.$ext"
         ui_info "Carátula guardada.
 
@@ -29284,14 +31911,23 @@ juego_etiqueta() {
     #
     # WP_N_RAICES lo calcula quien recorre la lista, UNA sola vez: antes se
     # contaban las carpetas por cada juego, con varios procesos cada vez.
-    local ruta="$1" nom raiz base
+    # $2 = "sin-extension" para forzarlo aunque el ajuste diga que si. Lo usa
+    # la rejilla (ver rejilla_lenta y etiqueta_rejilla en biblioteca.py).
+    local ruta="$1" forzar="${2:-}" nom raiz base
     nom="${ruta##*/}"
     # Sin la extension: al usuario le interesa el nombre del juego, no si es
     # un .wsquashfs o un .dwarfs. Las carpetas .pc se dejan como estan, que
     # ahi el ".pc" forma parte del nombre.
-    case "$nom" in
-        *.wsquashfs|*.squashfs|*.dwarfs) nom="${nom%.*}" ;;
-    esac
+    #
+    # Con LISTA_EXTENSION=1 se deja a la vista. Tiene que decidirse IGUAL que
+    # en biblioteca.py: las dos vias componen la misma lista y la rapida se
+    # compara contra esta, asi que si una recorta y la otra no, el aviso de
+    # "no coincide" saldria en cada arranque.
+    if [ "${LISTA_EXTENSION:-0}" != 1 ] || [ "$forzar" = "sin-extension" ]; then
+        case "$nom" in
+            *.wsquashfs|*.squashfs|*.dwarfs) nom="${nom%.*}" ;;
+        esac
+    fi
     if [ "${WP_N_RAICES:-$(games_paths | grep -c .)}" -gt 1 ]; then
         raiz="$(games_paths | while IFS= read -r r; do
                     case "$ruta/" in "$r"/*) printf '%s' "$r"; break ;; esac
@@ -29367,7 +32003,7 @@ biblioteca_lenta() {
     #   $4 lista de rutas, una por linea
     local mapa="$1" info="$2" salida="$3" juegos="$4"
     : > "$mapa"; : > "$info"; : > "$salida"
-    local rel3 etq gid3 cov3 mt3 fv3 sc3 pc3 cp3 fjson fhltb frawg
+    local rel3 etq gid3 cov3 mt3 fv3 sc3 pc3 cp3 fjson fhltb frawg formato3 ruta_low3
     while IFS= read -r rel3; do
         [ -n "$rel3" ] || continue
         etq="$(juego_etiqueta "$rel3")"
@@ -29390,9 +32026,21 @@ biblioteca_lenta() {
         fhltb="$DATOS_DIR/${gid3}.hltb";      [ -s "$fhltb" ] || fhltb=""
         cp3="$(profile_get "$gid3" COMPLETADO)" || cp3=""
         frawg="$DATOS_DIR/${gid3}.rawg.json"; [ -s "$frawg" ] || frawg=""
-        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        # El formato, de la RUTA y no de la etiqueta (ver biblioteca.py, que
+        # tiene el porque escrito). Las dos vias tienen que dar lo mismo o la
+        # comparacion de biblioteca_componer avisa de que no coinciden.
+        ruta_low3="${rel3%/}"
+        formato3=''
+        case "${ruta_low3,,}" in
+            *.wsquashfs) formato3='.wsquashfs' ;;
+            *.squashfs)  formato3='.squashfs' ;;
+            *.dwarfs)    formato3='.dwarfs' ;;
+            *.pc)        formato3='.pc' ;;
+        esac
+        if [ -z "$formato3" ] && [ -d "$rel3" ]; then formato3='Carpeta'; fi
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
             "$etq" "$cov3" "${fv3:-0}" "${pc3:-0}" "${sc3:-0}" "$fjson" "$fhltb" \
-            "${cp3:-0}" "$frawg" >> "$info"
+            "${cp3:-0}" "$frawg" "$formato3" >> "$info"
     done <<EOFINFO
 $juegos
 EOFINFO
@@ -29411,7 +32059,11 @@ rejilla_lenta() {
     while IFS= read -r rel; do
         [ -n "$rel" ] || continue
         gid2="$(game_id "$rel")"
-        t2="$(juego_etiqueta "$rel")"; t2="${t2%.wsquashfs*}"
+        # "sin-extension": en la rejilla no se enseña nunca, y ademas el
+        # recorte de aqui al lado es un "%.wsquashfs*" -corta todo lo que
+        # venga detras-, que con la extension puesta se llevaria el
+        # "   (carpeta)" de las bibliotecas con varias carpetas de juegos.
+        t2="$(juego_etiqueta "$rel" sin-extension)"; t2="${t2%.wsquashfs*}"
         t2="${t2%.squashfs}"; t2="${t2%.dwarfs}"
         # con la vista de caratulas anchas se pide la horizontal; si el
         # juego no la tiene, cover_for devuelve la vertical
@@ -29520,6 +32172,7 @@ biblioteca_rapida() {
         DATOS_DIR="$DATOS_DIR" \
         PROFILE_DIR="$PROFILE_DIR" \
         LIST_COVER="${LIST_COVER:-vertical}" \
+        LISTA_EXTENSION="${LISTA_EXTENSION:-0}" \
         WP_RAICES="$(games_paths)" \
         "$PY_BIN" "$BIBLIOTECA_PY" "$mapa" "$info" > "$salida" 2>>"$LOG_FILE"
 }
@@ -30130,19 +32783,59 @@ cfg_rarezas_menu() {
     local gid="$1" squash="${2:-}"
     while true; do
         local sel
+        # CADA TIPO DE JUEGO VE LO QUE LE APLICA.
+        #
+        # Este submenu era entero de Wine, asi que el menu de ajustes lo
+        # escondia del todo en los juegos de Linux. Pero ahora aqui vive el
+        # RUNTIME DE STEAM -que es SOLO para juegos de Linux- y la
+        # superposicion de Steam, que es lo que le quita a un juego nativo una
+        # identidad heredada que no es la suya.
+        #
+        # Esconder el submenu entero dejaba esas dos sin manera de llegar a
+        # ellas; enseñar las de Wine en un juego nativo prometia ajustes que no
+        # hacen nada -y eso ya lo conto un tester una vez-. Asi que se filtra
+        # fila a fila, con el mismo truco de siempre: la fila vacia no se
+        # enseña.
+        local w_unidad="" w_acomp="" w_enc="" w_win="" w_vd="" w_codecs="" w_mono=""
+        local n_runtime="" n_crack=""
+        # EL CRACK, SOLO EN JUEGOS EN CARPETA.
+        #
+        # Dentro de un .wsquashfs la carpeta es de solo lectura, asi que la
+        # fila prometeria algo que no puede hacer. Se enseña cuando todavia
+        # hay donde escribir: antes de empaquetar, o en un juego que se juega
+        # desde su carpeta.
+        if [ -n "$squash" ] && [ -d "$squash" ]; then
+            n_crack="Nombre e idioma del juego instalado: $(crack_nombre_sugerido) / $(crack_idioma_steam)"
+        fi
+        if juego_es_nativo "$squash" >/dev/null 2>&1; then
+            n_runtime="Runtime de Steam (juegos de Linux): $(runtime_steam_label)"
+        else
+            w_unidad="Unidades del juego: ${UNIDAD_JUEGO:-ninguna}$([ -n "${UNIDAD_JUEGO:-}" ] && [ "${UNIDAD_CD:-0}" = 1 ] && printf ' (CD-ROM)')"
+            w_acomp="Ejecutable acompañante: ${EXE_ACOMPANA:-ninguno}"
+            w_enc="El juego debe estar en C:\\ : $([ "${JUEGO_EN_C:-0}" = 1 ] && printf 'si' || printf 'no')"
+            w_win="Version de Windows: $(redist_juego_valor 'win' 'la del runner')"
+            w_vd="Escritorio virtual: $(redist_juego_valor 'vd=' 'no' | sed 's/^vd=//')"
+            w_codecs="Codecs de video de 32 bits: $([ -f "$RUNTIME_DIR/gstreamer/lib/gstreamer-1.0/libgstlibav.so" ] && printf 'instalados' || printf 'no')"
+            w_mono="Preguntar por Wine Mono (.NET): $([ "${MONO_PEDIR:-0}" = 1 ] && printf 'si' || printf 'NO (recomendado)')"
+        fi
+        # Las dos de Mesa y la superposicion valen para los dos: son del
+        # driver de video y del cliente de Steam, no de Wine.
         sel="$(menu "Casos especiales - $gid
 
 Cosas que necesitan MUY pocos juegos. Si el tuyo va bien,
 aqui no hay nada que tocar." \
-            "Unidades del juego: ${UNIDAD_JUEGO:-ninguna}$([ -n "${UNIDAD_JUEGO:-}" ] && [ "${UNIDAD_CD:-0}" = 1 ] && printf ' (CD-ROM)')" \
-            "Ejecutable acompañante: ${EXE_ACOMPANA:-ninguno}" \
-            "El juego debe estar en C:\\ : $([ "${JUEGO_EN_C:-0}" = 1 ] && printf 'si' || printf 'no')" \
+            "$w_unidad" \
+            "$w_acomp" \
+            "$w_enc" \
             "Menos memoria de video en juegos de 32 bits: $(case " ${EXTRA_ENV:-} " in *"AMD_DEBUG=nooptvariant"*) printf 'si' ;; *) printf 'no' ;; esac)" \
             "OpenGL por Vulkan (Zink): $(case " ${EXTRA_ENV:-} " in *"MESA_LOADER_DRIVER_OVERRIDE=zink"*) printf 'si' ;; *) printf 'no' ;; esac)" \
-            "Version de Windows: $(redist_juego_valor 'win' 'la del runner')" \
-            "Escritorio virtual: $(redist_juego_valor 'vd=' 'no' | sed 's/^vd=//')" \
-            "Codecs de video de 32 bits: $([ -f "$RUNTIME_DIR/gstreamer/lib/gstreamer-1.0/libgstlibav.so" ] && printf 'instalados' || printf 'no')" \
-            "Preguntar por Wine Mono (.NET): $([ "${MONO_PEDIR:-0}" = 1 ] && printf 'si' || printf 'NO (recomendado)')" \
+            "$w_win" \
+            "$w_vd" \
+            "$w_codecs" \
+            "$w_mono" \
+            "$n_runtime" \
+            "El mando como raton (lanzadores): $(keys_raton_label "$squash" "$gid")" \
+            "$n_crack" \
             "Superposicion de Steam: $(steam_overlay_texto)" \
             "<< Volver")" || return 0
         case "$sel" in
@@ -31167,6 +33860,169 @@ cfg_ap_mando() {
     # usa cfg_aplicar para pasar al siguiente manejador.
     local sel="$1" gid="$2" squash="${3:-}"
     case "$sel" in
+        "El mando como raton (lanzadores):"*)
+            # EL CASO QUE ESTO RESUELVE
+            #
+            # Dani: "este juego tiene un lanzador que hay que pulsar play con
+            # el raton, en el escritorio funciona sin problema pero en modo
+            # juego no nos deja. He probado a crear un raton virtual pero
+            # sigue igual".
+            #
+            # Y ahi esta la confusion, que es facil de tener: el "mando
+            # virtual" crea un MANDO, no un puntero. El puntero lo crea el
+            # mapeador a partir del bloque "mouse" de un .keys.
+            #
+            # AQUI ESTABA ESCRITO que ese puntero, al ir por uinput, valia
+            # igual en el modo Juego. NO ERA VERDAD, y costo otra vuelta
+            # descubrirlo: en el modo Juego el XWayland del juego no recibe
+            # nada de un raton de kernel. Esta contado entero en RatonXTest
+            # (mapeador.py), y desde entonces el puntero se mueve por XTEST
+            # dentro del servidor X del juego. Esta fila sigue siendo la que
+            # lo enciende; lo que cambio es por donde viaja.
+            #
+            # Se podia hacer ya, pero habia que entrar al editor de teclas y
+            # saber que ahi dentro hay un "Raton con el mando". Esto es el
+            # atajo: una fila que lo deja puesto.
+            if keys_raton_label "$squash" "$gid" | grep -q '^si'; then
+                ui_info "Este juego ya tiene el mando como raton.
+
+Para cambiarlo o quitarlo: Ajustes del juego -> Teclas del
+mando -> Raton con el mando."
+                return 0
+            fi
+            if ! ui_ask "Poner el mando como raton para este juego?
+
+  Stick DERECHO  ->  mueve el puntero
+  A              ->  clic izquierdo
+  B              ->  clic derecho
+
+Hace falta en los juegos con un lanzador que hay que pulsar
+con el raton: en el modo Juego no hay raton ni teclado.
+
+Se puede afinar despues en Teclas del mando -> Raton."; then
+                return 0
+            fi
+            keys_raton_crear "$gid"
+            ui_info "Listo. El mando como raton: $(keys_raton_label "$squash" "$gid")
+
+Hace efecto en el proximo lanzamiento de este juego."
+            return 0 ;;
+        "Nombre e idioma del juego instalado:"*)
+            # Lo mismo que se hace solo al instalar desde una imagen, por si
+            # el juego entro por otro camino -una carpeta ya instalada, un
+            # comprimido- o por si se quiere cambiar el nombre despues.
+            if [ -z "$squash" ] || [ ! -d "$squash" ]; then
+                ui_error "Esto solo se puede hacer con el juego en carpeta.
+Dentro de un .wsquashfs los ficheros son de solo lectura."
+                return 0
+            fi
+            local _cn _ci _lista
+            _cn="$(crack_nombre_sugerido)"; _ci="$(crack_idioma_steam)"
+            _lista="$(crack_ficheros "$squash")"
+            if [ -z "$_lista" ]; then
+                ui_info "No se ha encontrado ninguna configuracion de crack en:
+$squash
+
+Se buscan los .ini que lleven dentro una clave de nombre
+(UserName, PlayerName, AccountName...) o de idioma, y los
+ficheros de Goldberg (steam_settings/force_account_name.txt)."
+                return 0
+            fi
+            if ui_ask "Se han encontrado $(printf '%s\n' "$_lista" | grep -c .) fichero(s) de configuracion del crack.
+
+Poner tu nombre y tu idioma?
+
+  Nombre:  $_cn
+  Idioma:  $_ci
+
+De los originales se guarda copia (*.wproton.bak)."; then
+                if crack_ajustar "$squash" "$_cn" "$_ci"; then
+                    ui_info "Listo: $WP_CRACK_CAMBIOS valor(es) cambiados.
+
+El juego deberia saludarte por tu nombre y arrancar en tu
+idioma. Si algo no cuadra, los originales estan al lado con
+la extension .wproton.bak."
+                else
+                    ui_error "No se ha podido cambiar nada. Mira el registro."
+                fi
+            fi
+            return 0 ;;
+        "Carpeta personal del juego:"*)
+            # EL "PREFIJO" DE UN JUEGO DE LINUX.
+            #
+            # No hay prefijo de Wine, pero si mundo aparte: la carpeta donde el
+            # juego escribe sus ajustes y sus partidas. Compartida por defecto
+            # -un juego de Linux suele guardar cuatro ficheros, y mil carpetas
+            # casi vacias no aportan nada- y propia cuando interese aislarlo.
+            #
+            # Es el MISMO ajuste que el prefijo (PREFIX_MODE), que es lo que ya
+            # lee home_portable. Lo que faltaba era por donde tocarlo.
+            local _h
+            _h="$(menu "Carpeta personal de '$gid'
+
+Un juego de Linux no usa prefijo de Wine, pero sus ajustes y
+sus partidas tienen que ir a alguna parte. Van aqui, no a tu
+carpeta personal.
+
+Si el juego trae su propia carpeta .home al lado del lanzador,
+manda esa y esto no se usa." \
+                "Compartida con los demas juegos (WProton.home)" \
+                "Propia de este juego (aislada)" \
+                "<< Volver")" || return 0
+            case "$_h" in
+                "Compartida"*) PREFIX_MODE="shared" ;;
+                "Propia"*)     PREFIX_MODE="own" ;;
+                *) return 0 ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Carpeta personal de '$gid': $(home_juego_label)
+
+Se crea sola al lanzar el juego. Lo que ya hubiera guardado en
+la compartida NO se mueve: si quieres llevartelo, copialo de
+prefixes/WProton.home a prefixes/$gid.home."
+            return 0 ;;
+        "Runtime de Steam (juegos de Linux):"*)
+            # PARA QUE SIRVE ESTO
+            #
+            # Un juego nativo moderno puede pedir librerias mas nuevas que las
+            # del sistema, y en SteamOS no se puede instalar nada en la imagen
+            # base. Steam lo resuelve lanzandolo DENTRO de un contenedor con
+            # sus librerias. Esto hace lo mismo desde WProton.
+            #
+            # "No" es el valor de partida: un juego que hoy arranca lanzado
+            # directo se sigue lanzando igual.
+            local _r
+            _r="$(menu "Runtime de Steam para '$gid'
+
+Solo afecta a los juegos de LINUX. Si en Steam arranca y aqui
+no, es lo primero que hay que probar: el juego se lanza dentro
+del mismo contenedor que usa Steam, con sus librerias.
+
+Las versiones son las de Valve. La 4.0 es la mas nueva
+(Debian 13) y la que necesitan los juegos recientes." \
+                "No, lanzarlo directo (como siempre)" \
+                "Automatico: el mas nuevo instalado" \
+                "4.0 (la mas nueva)" \
+                "3.0 (sniper)" \
+                "2.0 (soldier)" \
+                "1.0 (scout)" \
+                "<< Volver")" || return 0
+            case "$_r" in
+                "No, lanzarlo"*) RUNTIME_STEAM="no" ;;
+                "Automatico"*)   RUNTIME_STEAM="auto" ;;
+                "4.0"*)          RUNTIME_STEAM="4.0" ;;
+                "3.0"*)          RUNTIME_STEAM="3.0" ;;
+                "2.0"*)          RUNTIME_STEAM="2.0" ;;
+                "1.0"*)          RUNTIME_STEAM="1.0" ;;
+                *) return 0 ;;
+            esac
+            write_full_profile "$gid"
+            ui_info "Runtime de Steam en '$gid': $(runtime_steam_label)
+
+Si dice que NO esta instalado, se instala desde Steam: en la
+Biblioteca, busca 'Steam Linux Runtime' y dale a instalar. El
+juego se lanzaria igual, pero sin contenedor."
+            return 0 ;;
         "Trackpad como raton en este juego:"*)
             # POR JUEGO, PORQUE LA MAYORIA NO LO QUIERE.
             #
@@ -32394,6 +35250,18 @@ game_config_menu() {
     # $1 = juego (wsquashfs o carpeta), $2 = gid explicito (opcional: al venir
     # del flujo de importacion, el perfil es el del nombre limpio del juego)
     local squash="$1"
+    # ESTANTERIA Y NO JUEGO: igual que en play_folder. Pulsar X sobre "Lucha"
+    # abriria los ajustes de una carpeta que no es ningun juego, y de ahi
+    # saldria un perfil llamado "Lucha" que no sirve para nada. Se pregunta
+    # primero cual de los de dentro.
+    if [ -z "${2:-}" ] && [ -d "$squash" ]; then
+        local _dentro
+        if _dentro="$(carpeta_elegir_juego "$squash")" && [ -n "$_dentro" ]; then
+            squash="$_dentro"
+        elif es_carpeta_de_juegos "$squash"; then
+            return 0
+        fi
+    fi
     local gid; gid="${2:-$(game_id "$squash")}"
 
     # Juego nuevo: mirar si la base de umu conoce este juego. Su identificador
@@ -32486,14 +35354,45 @@ game_config_menu() {
     [ "${JUEGO_EN_C:-0}" = 1 ] && _raro="$_raro en-C:"
     case " ${EXTRA_ENV:-} " in *"MESA_LOADER_DRIVER_OVERRIDE=zink"*) _raro="$_raro zink" ;; esac
             [ "${MONO_PEDIR:-0}" = 1 ] && _raro="$_raro mono"
+        # Y lo que puede estar puesto en un juego de LINUX, que ahora tambien
+        # vive ahi dentro: sin esto la fila diria "Casos especiales" a secas
+        # con un runtime de Steam configurado.
+        [ "${RUNTIME_STEAM:-no}" = no ] || _raro="$_raro runtime-steam"
+        [ "${STEAM_OVERLAY:-auto}" = oculto ] && _raro="$_raro oculto-a-steam"
         local r_rarezas="Casos especiales >>${_raro:+ ($(printf '%s' "$_raro" | sed 's/^ //'))}"
         local r_acomp="Ejecutable acompañante: ${EXE_ACOMPANA:-ninguno}"
         local r_gameid="GAMEID (protonfixes): $GAMEID"
         local r_umudb="Buscar en la base de umu (identificador automático)"
         local r_packpfx="Empaquetar con su prefijo (archivo autosuficiente)"
+        # LA CARPETA PERSONAL, QUE ES "EL PREFIJO" DE UN JUEGO DE LINUX.
+        #
+        # Un juego de Linux no tiene prefijo de Wine, pero si tiene su mundo
+        # aparte: la carpeta personal -<juego>.home- donde van sus ajustes y
+        # sus partidas. home_portable ya la elige con PREFIX_MODE, el MISMO
+        # ajuste que el prefijo... pero la fila del prefijo se vaciaba en los
+        # juegos nativos, asi que no habia por donde ponerlo.
+        #
+        # Dani: "tampoco puedo crear un prefijo propio para los juegos, solo
+        # con Appimage" -con un AppImage se puede por el convenio
+        # <lanzador>.home, creando la carpeta a mano; desde el menu no habia
+        # forma-.
+        local r_home="Carpeta personal del juego: $(home_juego_label)"
         if juego_es_nativo "$squash" >/dev/null 2>&1; then
             r_runner=""; r_prefijo=""; r_libs=""
-            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""; r_unidad=""; r_acomp=""; r_mono=""; r_rarezas=""
+            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""; r_unidad=""; r_acomp=""; r_mono=""
+            # CASOS ESPECIALES SI SE QUEDA.
+            #
+            # Se vaciaba tambien, y tenia sentido cuando dentro solo habia
+            # cosas de Wine. Ya no: ahi viven el RUNTIME DE STEAM -que es solo
+            # para juegos de Linux- y la superposicion de Steam, que es lo que
+            # le quita al juego una identidad heredada que no es la suya. Era
+            # justo el menu que un juego nativo necesita. El submenu se filtra
+            # por su cuenta y solo enseña lo que aplica.
+            :
+        else
+            # En un juego de Windows la carpeta personal no pinta nada: su
+            # mundo aparte es el prefijo, que tiene su propia fila.
+            r_home=""
         fi
         # LAS DEPENDENCIAS DEL JUEGO, SOLO SI LAS TRAE.
         #
@@ -32533,6 +35432,7 @@ game_config_menu() {
             "Argumentos: $(args_etiqueta "$squash")" \
             "$r_deps" \
             "$r_prefijo" \
+            "$r_home" \
             "$r_libs" \
             "$r_redist" \
             "$r_rarezas" \
@@ -32651,7 +35551,18 @@ main_dispatch() {
             if [ -n "$imp" ]; then
                 case "$imp" in
                     *.exe|*.EXE|*.bat|*.BAT|*.cmd|*.CMD|*.sh|*.AppImage|*.appimage) package_exe "$imp" ;;
-                    *) if [ -d "$imp" ]; then package_dir "$imp"; else import_input "$imp"; fi ;;
+                    *)
+                        # UNA IMAGEN DE DISCO VA AL ASISTENTE DE INSTALACION.
+                        #
+                        # Antes caia en import_input, que la abria con 7zz y
+                        # trataba lo extraido como si fuera el juego: el
+                        # resultado era un .wsquashfs con el INSTALADOR dentro,
+                        # no con el juego. Una ISO de instalacion hay que
+                        # instalarla.
+                        if iso_es_imagen "$imp" && [ -f "$imp" ]; then
+                            install_from_iso "$imp"
+                        elif [ -d "$imp" ]; then package_dir "$imp"
+                        else import_input "$imp"; fi ;;
                 esac
             fi ;;
         "Instalar librerias"*) redist_target_menu ;;
@@ -32937,6 +35848,40 @@ Los wsquashfs que ya tienes se siguen usando igual."
                 *)        LIST_COVER=vertical ;;
             esac
             save_settings ;;
+        "Usuario instalación ISO:"*)
+            # El nombre que se le pone a la configuracion que trae el juego
+            # al instalarlo desde una imagen. Sale EN LA PANTALLA DEL JUEGO,
+            # asi que lo suyo es el nombre de la maquina y no la cuenta de
+            # Linux.
+            local _cn
+            _cn="$(ask_text "Usuario para la instalación desde ISO
+
+Es el nombre que verás dentro del juego: se escribe en el
+UserName/PlayerName de la configuración que trae.
+Déjalo vacío para usar el usuario del sistema." \
+                   "${ISO_USUARIO:-Deck}")" || return 0
+            ISO_USUARIO="$_cn"
+            save_settings
+            ui_info "Usuario instalación ISO: $(crack_nombre_sugerido)
+
+Se usa en la proxima instalacion desde imagen, y tambien en
+Ajustes del juego -> Casos especiales -> Nombre e idioma
+del juego instalado." ;;
+        "Extensión en la lista:"*)
+            # DE FABRICA NO SE VE, y es lo razonable: al jugar interesa el
+            # nombre del juego. Pero quien tiene la biblioteca a medio
+            # convertir -unos en .wsquashfs y otros en .dwarfs- quiere
+            # distinguirlos de un vistazo sin abrir el panel.
+            #
+            # Solo la LISTA. La rejilla recorta las extensiones por su cuenta
+            # y ahi no cambia nada.
+            if [ "${LISTA_EXTENSION:-0}" = 1 ]; then LISTA_EXTENSION=0
+            else LISTA_EXTENSION=1; fi
+            save_settings
+            ui_info "Extensión en la lista: $(lista_extension_label)
+
+El panel de la derecha dice el formato siempre, esté
+encendido o no." ;;
         "Vista de juegos:"*)
             case "${GAMES_VIEW:-list}" in
                 list)   GAMES_VIEW=grid ;;
@@ -33039,6 +35984,11 @@ $(find_paquetes "$p" 3 | grep -c . || true) juego(s) empaquetado(s) encontrado(s
                 say "[+] Carpeta quitada de la lista: $p" ;;
         esac
     done
+}
+
+lista_extension_label() {
+    if [ "${LISTA_EXTENSION:-0}" = 1 ]; then printf 'sí'
+    else printf 'no'; fi
 }
 
 list_cover_label() {
@@ -33464,6 +36414,8 @@ library_menu() {
             "Expulsar un disco (para desconectarlo sin riesgo)" \
             "Vista de juegos: $(vista_label)" \
             "Carátula en la vista de lista: $(list_cover_label)" \
+            "Extensión en la lista: $(lista_extension_label)" \
+            "Usuario instalación ISO: $(crack_nombre_sugerido)" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Traer todas las carátulas del repositorio" \
             "Perfiles del repositorio (traer para tus juegos o todos)" \
@@ -33969,7 +36921,7 @@ main_menu() {
             local lg; lg="$(basename "$LAST_GAME")"; lg="${lg%.*}"
             opts+=("Jugar al último: $lg")
         fi
-        opts+=("Añadir un juego (zip, rar, exe o carpeta)" \
+        opts+=("Añadir un juego (zip, rar, iso, exe o carpeta)" \
                "Ajustes de un juego" \
                "Biblioteca y preferencias" \
                "Runners y herramientas [$nrunners runners]" \
@@ -34276,6 +37228,7 @@ bootstrap_if_needed() {
     # unidad): se ofrece montarlo sin salir de aqui.
     montar_discos_recordados || true    # los ya configurados, sin preguntar
     montar_discos_de_juegos || true     # y si aun falta alguno, se pregunta
+    iso_rescatar_pendiente || true      # una imagen que quedara montada
 }
 
 # ----------------------------------------------------------------------------
@@ -34562,12 +37515,61 @@ Mas runners: menu principal -> Descargar runners"
         main_menu
         exit 0 ;;
     --kill)   kill_all; exit 0 ;;
+    --saves)
+        # EL GESTOR DE PARTIDAS, DIRECTO, SIN PASAR POR NINGUN MENU.
+        #
+        # Lo pide DeckStation: en ES-DE cada sistema puede tener varios
+        # lanzadores, y los dos que ya hay llaman a WProton para JUGAR. Con
+        # este hay un tercero —"WProton (Saved Games)"— que abre el menu de
+        # copias del juego que este marcado, sin arrancarlo:
+        #
+        #   <command label="WProton (Saved Games)">./Apps/WProton/wproton.sh --saves %ROM%</command>
+        #
+        # El juego NO se nombra en ningun sitio: %ROM% es lo que ES-DE pone
+        # ahi, asi que esta entrada vale para todos y DeckStation se puede
+        # mover de carpeta sin tocar nada.
+        #
+        # NO HAY MENU NUEVO: backup_menu es el mismo de siempre, el que sale
+        # desde Ajustes del juego. Aqui solo se le abre la puerta de la calle.
+        [ -n "${2:-}" ] || die "Uso: $0 --saves juego.wsquashfs"
+        bootstrap_if_needed
+        shift
+        _wp_ruta="$(cli_ruta "$@")"
+        # -e, igual que en --config: un juego tambien puede ser una carpeta.
+        [ -e "$_wp_ruta" ] || die "No existe la ruta: $_wp_ruta"
+        _wp_gid="$(game_id "$_wp_ruta")"
+        # WP_HAY_MENU: al cerrar el gestor hay que volver a un menu, no a la
+        # nada. Es lo mismo que hace --config.
+        WP_HAY_MENU=1
+        load_profile "$_wp_gid"
+        log "--saves: gestor de partidas de '$_wp_gid' ($_wp_ruta)"
+        backup_menu "$_wp_gid"
+        exit 0 ;;
     --config)
         bootstrap_if_needed
         if [ -n "${2:-}" ]; then
             shift
             _wp_ruta="$(cli_ruta "$@")"
-            [ -f "$_wp_ruta" ] || die "No existe el fichero: $_wp_ruta"
+            # -e Y NO -f: UN JUEGO TAMBIEN PUEDE SER UNA CARPETA.
+            #
+            # Con -f solo pasaban los ficheros normales, asi que un juego en
+            # carpeta -un .pc de los de Batocera, por ejemplo- se rechazaba
+            # aqui con un "No existe el fichero" que ademas era mentira: la
+            # ruta existia, lo que pasaba es que era un directorio.
+            #
+            # Y era incoherente con el propio WProton, porque:
+            #   - lanzarlo sin --config, con la ruta suelta, YA funcionaba;
+            #   - y game_config_menu esta escrita para recibir las dos cosas
+            #     ("$1 = juego (wsquashfs o carpeta)"), hasta el punto de que
+            #     tiene una fila de empaquetar que solo sale con carpetas.
+            #
+            # O sea que la carpeta se rechazaba ANTES de llegar a la funcion
+            # que sabe tratarla. Lo encontro y lo probo un tester con un
+            # "Age of Empires Gold.pc" de verdad.
+            #
+            # NO SE VUELVA A PONER -f: el mensaje habla de "ruta" y no de
+            # "fichero" precisamente porque las dos cosas valen.
+            [ -e "$_wp_ruta" ] || die "No existe la ruta: $_wp_ruta"
             # Desde aqui SI se vuelve a un menu: el de ajustes del juego. Si
             # se prueba el juego desde dentro, al terminar hay que recuperar
             # la ventana, o el menu se quedaria sin nada donde dibujarse.
@@ -34576,6 +37578,26 @@ Mas runners: menu principal -> Descargar runners"
         else
             main_menu
         fi
+        exit 0 ;;
+    --keys)
+        # EL EDITOR DE TECLAS, DIRECTO. El cuarto lanzador de DeckStation:
+        #
+        #   <command label="WProton (Keys Games)">./Apps/WProton/wproton.sh --keys %ROM%</command>
+        #
+        # Igual que --saves: no hay menu nuevo, se abre el de siempre. Aqui si
+        # se arranca el servidor de menus a mano, porque el editor de teclas
+        # pinta lo suyo y conviene tener la ventana puesta desde el principio.
+        [ -n "${2:-}" ] || die "Uso: $0 --keys <ruta_del_juego>"
+        bootstrap_if_needed
+        shift
+        _wp_ruta="$(cli_ruta "$@")"
+        [ -e "$_wp_ruta" ] || die "No existe la ruta: $_wp_ruta"
+        _wp_gid="$(game_id "$_wp_ruta")"
+        WP_HAY_MENU=1
+        menu_server_start || canvas_start
+        load_profile "$_wp_gid"
+        log "--keys: editor de teclas de '$_wp_gid' ($_wp_ruta)"
+        cfg_ap_teclas "Mapeador .keys" "$_wp_gid" "$_wp_ruta"
         exit 0 ;;
     --version)
         printf 'WProton v%s\n' "$WPROTON_VERSION"; exit 0 ;;

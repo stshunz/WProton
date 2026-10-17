@@ -57,20 +57,36 @@ def game_id(ruta):
     return gid.replace(' ', '_').replace('/', '_')
 
 
-def etiqueta(ruta, raices):
+def etiqueta(ruta, raices, con_extension=None):
     """Como se ve el juego en la lista: sin la extension del empaquetado.
 
     Si hay varias carpetas de juegos, se anade de cual viene, para poder
     distinguir dos juegos con el mismo nombre.
+
+    con_extension: None = lo que diga el ajuste; True/False = forzado. La
+    rejilla lo fuerza a False, que es como estaba siempre.
     """
+    if con_extension is None:
+        con_extension = entorno('LISTA_EXTENSION', '0') == '1'
     nom = os.path.basename(ruta.rstrip('/'))
-    # Distinguiendo mayusculas, igual que el "case" de wproton.sh: un
-    # Juego.WSQUASHFS puesto a mano conserva su extension en los dos caminos.
-    # Si algun dia se acepta la mayuscula, hay que cambiarlo en los dos sitios.
-    for ext in EXTS_EMPAQUETADO:
-        if nom.endswith(ext):
-            nom = nom[:-len(ext)]
-            break
+    # LA EXTENSION SE PUEDE DEJAR A LA VISTA, SI EL USUARIO QUIERE.
+    #
+    # De fabrica no: al jugar interesa el nombre del juego, no si esta en
+    # .wsquashfs o en .dwarfs. Pero quien tiene la biblioteca en varios
+    # formatos -o esta convirtiendo de uno a otro- quiere verlo de un vistazo
+    # sin abrir el panel. Se enciende en Biblioteca y preferencias.
+    #
+    # SOLO AFECTA A LA LISTA. La rejilla recorta las extensiones por su
+    # cuenta en etiqueta_rejilla, asi que alli se siguen sin ver.
+    if not con_extension:
+        # Distinguiendo mayusculas, igual que el "case" de wproton.sh: un
+        # Juego.WSQUASHFS puesto a mano conserva su extension en los dos
+        # caminos. Si algun dia se acepta la mayuscula, hay que cambiarlo en
+        # los dos sitios.
+        for ext in EXTS_EMPAQUETADO:
+            if nom.endswith(ext):
+                nom = nom[:-len(ext)]
+                break
     if len(raices) > 1:
         for r in raices:
             if r and (ruta + '/').startswith(r.rstrip('/') + '/'):
@@ -243,8 +259,17 @@ def fmt_playtime(segundos):
 
 def etiqueta_rejilla(ruta, raices):
     """La etiqueta de la rejilla: como la de la lista y, ademas, los tres
-    recortes que hacia el bucle de bash por si la extension seguia ahi."""
-    t = etiqueta(ruta, raices)
+    recortes que hacia el bucle de bash por si la extension seguia ahi.
+
+    SIN EXTENSION SIEMPRE, aunque el ajuste de la lista la pida: en la
+    rejilla no cabe y ahi nunca se ha visto. Y ademas hay un motivo tecnico,
+    que es el que obliga a forzarlo aqui en vez de dejarlo al ajuste: el
+    recorte de abajo es un "corta todo lo que venga despues de .wsquashfs",
+    heredado del bash, asi que con la extension puesta se llevaria por
+    delante el "   (carpeta)" que se añade cuando hay varias carpetas de
+    juegos. El juego aparecia sin saber de cual venia.
+    """
+    t = etiqueta(ruta, raices, con_extension=False)
     corte = t.rfind('.wsquashfs')          # "${t2%.wsquashfs*}"
     if corte >= 0:
         t = t[:corte]
@@ -370,10 +395,27 @@ def main():
         rawg = rawg if (datos_dir and os.path.isfile(rawg)
                         and os.path.getsize(rawg) > 0) else ''
 
+        # EL FORMATO SALE DE LA RUTA REAL, NUNCA DE LA ETIQUETA.
+        #
+        # La etiqueta es lo que se VE, y puede llevar o no la extension
+        # segun LISTA_EXTENSION, llevar pegado el nombre de la carpeta de
+        # juegos, o ser el nombre completo de un juego repetido. Sacar el
+        # formato de ahi seria atarlo a como se dibuja la lista.
+        formato = ''
+        _ruta_low = ruta.rstrip('/').lower()
+        for _ext in ('.wsquashfs', '.squashfs', '.dwarfs', '.pc'):
+            if _ruta_low.endswith(_ext):
+                formato = _ext
+                break
+        # isdir y no "no tiene extension": un fichero sin extension no es una
+        # carpeta, y etiquetarlo como tal seria mentir en el panel.
+        if not formato and os.path.isdir(ruta):
+            formato = 'Carpeta'
+
         lineas_mapa.append('%s\t%s' % (etq, ruta))
-        lineas_info.append('%s|%s|%s|%s|%s|%s|%s|%s|%s'
+        lineas_info.append('%s|%s|%s|%s|%s|%s|%s|%s|%s|%s'
                            % (etq, cov, fav, veces, segs, ficha, dur,
-                              completado, rawg))
+                              completado, rawg, formato))
         etiquetas.append(etq)
 
     with open(f_mapa, 'w', encoding='utf-8') as fh:

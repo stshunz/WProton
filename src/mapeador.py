@@ -169,6 +169,340 @@ PERFILES = {
     }
 }
 
+# ===========================================================================
+# EL PUNTERO EN EL MODO JUEGO: XTEST
+# ===========================================================================
+#
+# EL CASO, TAL CUAL LLEGO
+#
+# Un juego con lanzador: hay que pulsar "Play" con el raton. En el escritorio
+# va bien. En el modo Juego de la Deck, no. Dani encendio "el mando como
+# raton" y siguio igual, y conto el detalle que lo resolvio todo: "el puntero
+# del raton aparece como una X".
+#
+# LO QUE DECIA EL REGISTRO
+#
+# En el modo Juego hay DOS servidores X, no uno. Lo pone WProton mismo:
+#
+#     -- display :0 <-- ESTE es el de gamescope
+#          GAMESCOPE_FOCUSED_APP(CARDINAL) = 3975565157
+#          ... Big Picture, steamwebhelper, mangoapp ...
+#     -- display :1 (no es el de gamescope)
+#          0x600065  "The Last Guardian - PC"       <-- EL LANZADOR
+#
+# Es como monta gamescope el modo Juego: un XWayland para Steam y OTRO para
+# el juego. Y el puntero de los dos estaba clavado en el mismo sitio:
+#
+#     ahora esta en :1=(1279, 799), :0=(1279, 799)
+#
+# 1279x799 es la esquina de abajo a la derecha de una pantalla de 1280x800.
+# El puntero no es que fuera mal: es que NUNCA SE HABIA MOVIDO de donde nacio.
+# Y encima explica la X: el puntero en forma de X es el cursor por defecto de
+# la VENTANA RAIZ de un servidor X. Se ve una X porque el puntero nunca ha
+# llegado a entrar en ninguna ventana. En la foto sale pegado al boton "Play"
+# por pura casualidad: "Play" esta tambien abajo a la derecha.
+#
+# POR QUE EL RATON VIRTUAL NO SERVIA
+#
+# El raton del mapeador es un aparato uinput: escribe en EL KERNEL. De ahi lo
+# recoge gamescope -el de fuera, el que lleva los mandos y la pantalla- y lo
+# reparte. A ese reparto el XWayland del juego no llega. El raton existia, se
+# movia, y movia un puntero que el lanzador no tenia delante.
+#
+# LO QUE SI FUNCIONA: ESCRIBIR DENTRO DEL SERVIDOR X
+#
+# XTEST es una extension del propio servidor X para inyectar eventos. No pasa
+# por el kernel ni por el compositor: entra por dentro, en la pantalla que se
+# le diga, y de ahi sale por el reparto normal de X hasta la ventana que haya
+# bajo el puntero. Es lo que hace xdotool, y por eso xdotool funciona dentro
+# de un XWayland donde un raton de kernel no llega.
+#
+# Dos detalles que importan:
+#
+#   - NO es XSendEvent. XSendEvent marca el evento como sintetico y media
+#     interfaz grafica lo descarta por eso. XTEST no: para el lanzador es un
+#     clic igual que el de un raton de verdad.
+#   - Hay que elegir PANTALLA, y la buena es la del juego. Mover el puntero
+#     en la de gamescope seria repartir clics por la interfaz de Steam que hay
+#     detras del juego. Por eso se descarta la que tiene GAMESCOPE_FOCUSED_APP
+#     en su ventana raiz, que es justo como las distingue WProton en el
+#     registro de arriba.
+#
+# EN EL ESCRITORIO NO SE TOCA NADA. Si no hay ninguna pantalla de gamescope,
+# se sigue usando el raton uinput de siempre, que lleva funcionando desde la
+# 2.01 y que ademas es el bueno para mover la camara en un juego (movimiento
+# relativo, que es lo que espera Wine cuando captura el puntero). Se puede
+# forzar una cosa u otra con WP_RATON_XTEST=si|no|auto.
+
+import ctypes
+import ctypes.util
+
+# Boton de raton de evdev -> numero de boton de X. En X el 1 es el izquierdo,
+# el 2 el central y el 3 el derecho (el 4 y el 5 son la rueda).
+_X_BOTON = {}
+for _nom, _nx in (("BTN_LEFT", 1), ("BTN_MIDDLE", 2), ("BTN_RIGHT", 3)):
+    _c = getattr(ecodes, _nom, None)
+    if _c is not None:
+        _X_BOTON[_c] = _nx
+
+
+def _raton_fraccion(valor, info, centro_por_defecto):
+    """De cuanto esta movido el stick a cuanto corre el puntero: -1.0 a 1.0.
+
+    info = (reposo, recorrido, zona muerta), aprendido del propio mando.
+
+    SE ESCALA DESDE EL BORDE DE LA ZONA MUERTA, no desde el centro. Si no, al
+    salir de la zona muerta el puntero pegaria un salto del tamaño de la zona
+    -con una zona del 12%, un 12% de la velocidad de golpe- y apuntar a un
+    boton seria imposible. Asi sale de cero y sube suave.
+    """
+    if not info:
+        # Todavia no ha llegado ningun evento de ese eje: quieto.
+        return 0.0
+    centro, recorrido, zona = info
+    if not recorrido:
+        return 0.0
+    v = valor - centro
+    if abs(v) <= zona:
+        return 0.0
+    util = recorrido - zona
+    if util <= 0:
+        return 0.0
+    f = (abs(v) - zona) / float(util)
+    if f > 1.0:
+        f = 1.0
+    return f if v > 0 else -f
+
+
+def _cargar_lib(*nombres):
+    """La primera de estas bibliotecas que se deje cargar."""
+    for n in nombres:
+        if not n:
+            continue
+        try:
+            return ctypes.CDLL(n)
+        except OSError:
+            continue
+    return None
+
+
+def _pantallas_candidatas():
+    """Las pantallas X donde mirar, la del entorno primero."""
+    v = []
+    d = (os.environ.get("DISPLAY") or "").strip()
+    if d:
+        v.append(d)
+    for n in (":0", ":1", ":2"):
+        if n not in v:
+            v.append(n)
+    return v
+
+
+def _tiene_atomo_gamescope(x11, dpy):
+    """¿La ventana raiz de esta pantalla lleva GAMESCOPE_FOCUSED_APP?
+
+    Es la misma pregunta que hace WProton al escribir el registro, y la que
+    separa la pantalla de Steam de la del juego.
+    """
+    try:
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        atomo = x11.XInternAtom(dpy, b"GAMESCOPE_FOCUSED_APP", 1)
+        if not atomo:
+            return False
+        x11.XDefaultRootWindow.restype = ctypes.c_ulong
+        x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+        raiz = x11.XDefaultRootWindow(dpy)
+        x11.XGetWindowProperty.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+            ctypes.c_long, ctypes.c_long, ctypes.c_int, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+        tipo = ctypes.c_ulong(); fmt = ctypes.c_int()
+        n = ctypes.c_ulong(); resto = ctypes.c_ulong()
+        datos = ctypes.POINTER(ctypes.c_ubyte)()
+        rc = x11.XGetWindowProperty(dpy, raiz, atomo, 0, 1, 0, 0,
+                                    ctypes.byref(tipo), ctypes.byref(fmt),
+                                    ctypes.byref(n), ctypes.byref(resto),
+                                    ctypes.byref(datos))
+        hay = (rc == 0 and n.value > 0)
+        if datos:
+            x11.XFree(datos)
+        return hay
+    except Exception:
+        return False
+
+
+class RatonXTest:
+    """Un raton que escribe DENTRO del servidor X con XTEST.
+
+    Imita a propósito a evdev.UInput -write(), syn(), close()- para que el
+    mapeador no tenga que saber cual de los dos le ha tocado: en todos los
+    sitios donde se mandaba un clic o un movimiento, el codigo es el mismo.
+    """
+
+    def __init__(self, display):
+        self.x11 = _cargar_lib("libX11.so.6", "libX11.so",
+                               ctypes.util.find_library("X11"))
+        self.xtst = _cargar_lib("libXtst.so.6", "libXtst.so",
+                                ctypes.util.find_library("Xtst"))
+        if not self.x11 or not self.xtst:
+            raise OSError("faltan libX11 o libXtst")
+        x11, xtst = self.x11, self.xtst
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XDefaultScreen.restype = ctypes.c_int
+        x11.XDefaultScreen.argtypes = [ctypes.c_void_p]
+        x11.XDisplayWidth.restype = ctypes.c_int
+        x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        x11.XDisplayHeight.restype = ctypes.c_int
+        x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        x11.XFlush.argtypes = [ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        xtst.XTestQueryExtension.argtypes = [
+            ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_int)] * 4
+        xtst.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                              ctypes.c_int, ctypes.c_int,
+                                              ctypes.c_ulong]
+        xtst.XTestFakeButtonEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                              ctypes.c_int, ctypes.c_ulong]
+        self.dpy = x11.XOpenDisplay(display.encode() if display else None)
+        if not self.dpy:
+            raise OSError("no se pudo abrir la pantalla %r" % display)
+        # XTEST se pregunta ANTES de usarlo: un servidor compilado sin la
+        # extension aceptaria la llamada y no haria nada, y eso es peor que
+        # un fallo porque no se nota hasta que el usuario dice que no va.
+        a = ctypes.c_int(); b = ctypes.c_int()
+        c = ctypes.c_int(); d = ctypes.c_int()
+        if not xtst.XTestQueryExtension(self.dpy, ctypes.byref(a), ctypes.byref(b),
+                                        ctypes.byref(c), ctypes.byref(d)):
+            x11.XCloseDisplay(self.dpy)
+            self.dpy = None
+            raise OSError("la pantalla %r no tiene XTEST" % display)
+        self.display = display
+        self.pantalla = x11.XDefaultScreen(self.dpy)
+        self.ancho = max(1, x11.XDisplayWidth(self.dpy, self.pantalla))
+        self.alto = max(1, x11.XDisplayHeight(self.dpy, self.pantalla))
+        # EL PUNTERO EMPIEZA EN EL CENTRO, Y NO ES UN CAPRICHO: donde estaba
+        # era la esquina de abajo a la derecha, que es donde nace y donde se
+        # queda si nadie lo mueve. Desde el centro se llega a cualquier boton
+        # de un instalador con medio empujon de stick.
+        self.x = self.ancho // 2
+        self.y = self.alto // 2
+        self._dx = 0.0
+        self._dy = 0.0
+        self._cola = []
+        self._colocar()
+
+    def _colocar(self):
+        self.xtst.XTestFakeMotionEvent(self.dpy, self.pantalla,
+                                       int(self.x), int(self.y), 0)
+        self.x11.XFlush(self.dpy)
+
+    def write(self, tipo, codigo, valor):
+        """Lo mismo que escribirle a un uinput, pero se apunta y no se manda.
+
+        Se manda en syn(), igual que un aparato de verdad: asi un clic que
+        venga con un movimiento en el mismo lote sale DESPUES del movimiento
+        y cae donde el usuario esta viendo el puntero, no donde estaba.
+        """
+        if tipo == ecodes.EV_REL:
+            if codigo == ecodes.REL_X:
+                self._dx += valor
+            elif codigo == ecodes.REL_Y:
+                self._dy += valor
+        elif tipo == ecodes.EV_KEY:
+            bot = _X_BOTON.get(codigo)
+            if bot:
+                self._cola.append((bot, 1 if valor else 0))
+
+    def syn(self):
+        if self._dx or self._dy:
+            self.x = min(self.ancho - 1, max(0, int(self.x + self._dx)))
+            self.y = min(self.alto - 1, max(0, int(self.y + self._dy)))
+            self._dx = 0.0
+            self._dy = 0.0
+            self.xtst.XTestFakeMotionEvent(self.dpy, self.pantalla,
+                                           int(self.x), int(self.y), 0)
+        for bot, val in self._cola:
+            self.xtst.XTestFakeButtonEvent(self.dpy, bot, val, 0)
+        self._cola = []
+        self.x11.XFlush(self.dpy)
+
+    def close(self):
+        try:
+            if self.dpy:
+                self.x11.XCloseDisplay(self.dpy)
+        except Exception:
+            pass
+        self.dpy = None
+
+
+def abrir_raton_xtest():
+    """Devuelve el raton XTEST si procede, o None para usar el de siempre.
+
+    Procede cuando hay una sesion gamescope -el modo Juego-, que es donde el
+    raton uinput no llega al juego. Con WP_RATON_XTEST se puede forzar:
+    "si" lo usa siempre que se pueda, "no" nunca, "auto" (lo normal) decide
+    como aqui.
+    """
+    # APAGADO DE SERIE, Y ESTO ES UNA MARCHA ATRAS.
+    #
+    # Se encendia solo en cuanto olia una sesion gamescope. Dani lo probo en
+    # su Deck: "con este cambio fue peor". Y tenia razon, porque la premisa
+    # estaba mal: el puntero que se VE en el modo Juego no es el del XWayland
+    # del juego, asi que moviendo ese por XTEST se mueve uno que no se ve,
+    # mientras el que se veia -el del raton uinput- deja de moverse.
+    #
+    # El codigo se queda porque sirve para probar (WP_RATON_XTEST=si), pero
+    # NO decide nada por su cuenta. La causa de verdad se busca por otro lado:
+    # comparando el registro del escritorio con el del modo Juego.
+    modo = (os.environ.get("WP_RATON_XTEST") or "no").strip().lower()
+    if modo not in ("si", "sí", "1", "on"):
+        return None
+    x11 = _cargar_lib("libX11.so.6", "libX11.so", ctypes.util.find_library("X11"))
+    if not x11:
+        return None
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    # Se mira CADA pantalla y se apunta si es la de gamescope. Se cierra
+    # enseguida: aqui solo se esta preguntando, no se toca el puntero.
+    vistas = []
+    for nombre in _pantallas_candidatas():
+        dpy = x11.XOpenDisplay(nombre.encode())
+        if not dpy:
+            continue
+        vistas.append((nombre, _tiene_atomo_gamescope(x11, dpy)))
+        x11.XCloseDisplay(dpy)
+    if not vistas:
+        print("[keys] Raton por XTEST: no hay ninguna pantalla X; "
+              "se usa el raton virtual de siempre", flush=True)
+        return None
+    hay_gamescope = any(g for _, g in vistas)
+    print("[keys] Pantallas X: %s"
+          % ", ".join("%s%s" % (n, " (gamescope)" if g else "")
+                      for n, g in vistas), flush=True)
+    # La del juego es la que NO es de gamescope. Si no hay ninguna asi -una
+    # sesion con un solo XWayland- se usa la que haya, que sera la del juego
+    # de todas formas.
+    orden = [n for n, g in vistas if not g] + [n for n, g in vistas if g]
+    for nombre in orden:
+        try:
+            raton = RatonXTest(nombre)
+        except Exception as e:
+            print("[keys] Raton por XTEST: %s no vale (%s)" % (nombre, e),
+                  flush=True)
+            continue
+        print("[keys] Raton por XTEST en la pantalla %s (%dx%d), puntero al "
+              "centro en (%d, %d). PEDIDO A MANO con WP_RATON_XTEST=si: no "
+              "se enciende solo, porque en una Deck en modo Juego salio peor."
+              % (nombre, raton.ancho, raton.alto, raton.x, raton.y), flush=True)
+        return raton
+    return None
+
+
 def get_perfil(dev_name):
     name = dev_name.lower()
     for p in PERFILES.values():
@@ -1031,7 +1365,17 @@ def main():
     _RATON_NOMBRE = {ecodes.BTN_LEFT: "clic izquierdo",
                      ecodes.BTN_RIGHT: "clic derecho",
                      ecodes.BTN_MIDDLE: "clic central"}
-    _MCLICK_CAMPOS = (("click_left",   ecodes.BTN_LEFT,   "r2"),
+    # EL CLIC IZQUIERDO, EN DOS BOTONES Y NO EN UNO.
+    #
+    # Era solo "r2". En el registro del 17/10 no aparece ni un clic: el
+    # puntero se movia y el boton no salia nunca. Puede que el gatillo no
+    # pasara el umbral -eso se arregla mas abajo, preguntandoselo al mando- o
+    # puede, sencillamente, que quien lo estaba probando pulsara la A, que es
+    # lo que hace cualquiera delante de un boton "Play". Con los dos puestos
+    # da igual cual se pulse.
+    #
+    # Se admite una lista separada por comas en cualquiera de los tres.
+    _MCLICK_CAMPOS = (("click_left",   ecodes.BTN_LEFT,   "a,r2"),
                       ("click_right",  ecodes.BTN_RIGHT,  None),
                       ("click_middle", ecodes.BTN_MIDDLE, None))
     _mclicks = {}        # codigo del boton del mando -> boton del raton
@@ -1041,15 +1385,21 @@ def main():
             _val = _mcfg.get(_campo, _porDefecto)
             if not _val:
                 continue
-            _cod = ids.get(_val)
-            if _cod is None:
-                continue
-            _ejes = _TRIG_ABS.get(_cod, ())
-            if _ejes:
-                for _e in _ejes:
-                    _mclicks_abs[_e] = _btn
-            else:
-                _mclicks[_cod] = _btn
+            for _uno in str(_val).split(','):
+                _uno = _uno.strip()
+                if not _uno:
+                    continue
+                _cod = ids.get(_uno)
+                if _cod is None:
+                    print("[keys] AVISO: el raton pide '%s' para el %s y este "
+                          "mando no tiene ese boton" % (_uno, _campo), flush=True)
+                    continue
+                _ejes = _TRIG_ABS.get(_cod, ())
+                if _ejes:
+                    for _e in _ejes:
+                        _mclicks_abs[_e] = _btn
+                else:
+                    _mclicks[_cod] = _btn
     _mclick_pressed = {}   # estado previo de cada gatillo analogico
 
     # Gatillos L2/R2 como EJE, no como boton.
@@ -1334,8 +1684,23 @@ def main():
         print("[keys] El .keys manda clics de raton: se crea el raton virtual "
               "aunque no haya modo raton", flush=True)
     if _mouse_activo or _keys_con_raton:
+        # PRIMERO XTEST, Y SOLO DONDE HACE FALTA.
+        #
+        # En el modo Juego el raton uinput no llega al juego (esta contado
+        # largo y tendido arriba, en RatonXTest). abrir_raton_xtest devuelve
+        # None en el escritorio, asi que ahi no cambia nada: sigue el uinput
+        # de siempre.
+        #
+        # Los dos saben write()/syn()/close(), asi que de aqui para abajo da
+        # igual cual sea: no hay ni un "if" mas en todo el bucle.
         try:
-            ui_mouse=evdev.UInput({ecodes.EV_REL:[ecodes.REL_X,ecodes.REL_Y],
+            ui_mouse = abrir_raton_xtest()
+        except Exception as e:
+            print("[keys] Raton por XTEST: no se pudo (%s)" % e, flush=True)
+            ui_mouse = None
+        try:
+            if ui_mouse is None:
+                ui_mouse=evdev.UInput({ecodes.EV_REL:[ecodes.REL_X,ecodes.REL_Y],
                                    ecodes.EV_KEY:[ecodes.BTN_LEFT,ecodes.BTN_RIGHT,
                                                   ecodes.BTN_MIDDLE]},
                                   name="Mapeador_Mouse_Portable")
@@ -1357,6 +1722,11 @@ def main():
         except Exception as e:
             print(f"[!] Sin ratón virtual: {e}"); ui_mouse=None
     _macc_x=0.0; _macc_y=0.0; _mlast=_tm.monotonic(); _msx=center; _msy=center
+    # Lo que se aprende del mando para el raton: por eje, (reposo, recorrido,
+    # zona muerta). Y el umbral de cada gatillo que haga de clic.
+    _mabs_info={}
+    _mclick_umbral={}
+    _mpx=0; _mpy=0; _mlog=_mlast     # cuanto se ha movido, para el registro
 
     # DOS controles pueden mandar la MISMA tecla. En el .keys de Need for
     # Speed, r2 y joystick1up mandan los dos KEY_UP. Antes cada uno escribia
@@ -1590,21 +1960,107 @@ def main():
                                 ui_mouse.write(ecodes.EV_KEY, _mclicks[event.code],
                                                event.value)
                                 ui_mouse.syn()
+                                # Igual que el analogico: que se vea en el
+                                # registro si el clic llego a salir.
+                                print("[keys] Raton: %s %s (boton %d del mando)"
+                                      % (_RATON_NOMBRE.get(_mclicks[event.code],
+                                                           _mclicks[event.code]),
+                                         "PULSADO" if event.value else "soltado",
+                                         event.code), flush=True)
                             ui.syn()
 
                         # ── Ejes analógicos ──────────────────────────────────
                         elif event.type == ecodes.EV_ABS:
-                            if event.code == _mabs_x: _msx = event.value
-                            elif event.code == _mabs_y: _msy = event.value
+                            if event.code in (_mabs_x, _mabs_y):
+                                # EL CENTRO Y LA ZONA MUERTA, PREGUNTANDOSELOS
+                                # AL MANDO, UNA VEZ POR EJE.
+                                #
+                                # Lo de antes era una zona muerta fija del 12%
+                                # sobre un centro supuesto. Y en el registro
+                                # del modo Juego de Dani el puntero acababa
+                                # SIEMPRE en (1279, 799) -la esquina de abajo
+                                # a la derecha de 1280x800- y ahi se quedaba:
+                                # la firma exacta de un stick que no reposa en
+                                # cero. Con el 12% fijo, cualquier mando que
+                                # descanse por encima empuja el puntero a una
+                                # esquina y ya no hay forma de apuntar a nada.
+                                #
+                                # Las direcciones ya se calculaban asi desde
+                                # hace tiempo ("Umbral de ABS_RX: 11468, el
+                                # perfil decia 16000"); el raton se habia
+                                # quedado atras.
+                                if event.code not in _mabs_info:
+                                    _c, _rec, _flat = center, 32767, None
+                                    try:
+                                        _ai = _dev.absinfo(event.code)
+                                        _rec = max(abs(_ai.max - center),
+                                                   abs(center - _ai.min)) or 32767
+                                        _flat = _ai.flat
+                                    except Exception:
+                                        pass
+                                    # flat es la zona muerta QUE DECLARA EL
+                                    # MANDO. Por tres, que es lo que ya se hace
+                                    # con las direcciones, y nunca por debajo
+                                    # del 12% de siempre.
+                                    _dz = max((_flat or 0) * 3, (_rec * 12) // 100)
+                                    # Y EL REPOSO DE VERDAD: el primer valor
+                                    # que manda el eje. Al arrancar el juego
+                                    # nadie esta tocando el stick, asi que ese
+                                    # es su cero aunque el mando diga otra cosa.
+                                    # Solo se acepta si cae dentro de media
+                                    # carrera: si alguien tuviera el stick a
+                                    # fondo justo al arrancar, no se le toma
+                                    # eso por centro.
+                                    if abs(event.value - center) < _rec // 2:
+                                        _c = event.value
+                                    _mabs_info[event.code] = (_c, _rec, _dz)
+                                    print("[keys] Raton %s: reposo %d, "
+                                          "recorrido %d, zona muerta %d "
+                                          "(el mando declara flat=%s)"
+                                          % (ecodes.ABS.get(event.code, event.code),
+                                             _c, _rec, _dz,
+                                             _flat if _flat is not None else '?'),
+                                          flush=True)
+                                if event.code == _mabs_x: _msx = event.value
+                                else: _msy = event.value
                             # Click analógico: R2/L2 Xbox 360 mandan ABS_RZ/ABS_Z
                             elif ui_mouse and event.code in _mclicks_abs:
                                 _btn = _mclicks_abs[event.code]
-                                _now_pressed = event.value > 64  # umbral: trigger > 25% de recorrido
+                                # EL UMBRAL DEL GATILLO, TAMBIEN DEL MANDO.
+                                #
+                                # Era "> 64" a pelo, que da el 25% en un
+                                # gatillo de 0-255. En uno de 0-32767 eso es
+                                # practicamente cero: el boton se quedaria
+                                # pulsado solo, y con el clic izquierdo
+                                # enganchado no se puede pulsar nada.
+                                _u = _mclick_umbral.get(event.code)
+                                if _u is None:
+                                    _u = 64
+                                    try:
+                                        _ai = _dev.absinfo(event.code)
+                                        _u = _ai.min + (abs(_ai.max - _ai.min) * 25) // 100
+                                    except Exception:
+                                        pass
+                                    _mclick_umbral[event.code] = _u
+                                    print("[keys] Clic con %s: se pulsa por "
+                                          "encima de %d"
+                                          % (ecodes.ABS.get(event.code, event.code), _u),
+                                          flush=True)
+                                _now_pressed = event.value > _u
                                 if _now_pressed != _mclick_pressed.get(_btn, False):
                                     _mclick_pressed[_btn] = _now_pressed
                                     ui_mouse.write(ecodes.EV_KEY, _btn,
                                                    1 if _now_pressed else 0)
                                     ui_mouse.syn()
+                                    # SE APUNTA CADA CLIC. En el registro del
+                                    # 17/10 no habia ni una linea de clic, y
+                                    # por eso no se pudo saber si el boton
+                                    # llegaba a pulsarse o no.
+                                    print("[keys] Raton: %s %s (%s = %d)"
+                                          % (_RATON_NOMBRE.get(_btn, _btn),
+                                             "PULSADO" if _now_pressed else "soltado",
+                                             ecodes.ABS.get(event.code, event.code),
+                                             event.value), flush=True)
                             # Los gatillos YA NO tienen camino propio: van
                             # por la tabla de direcciones de aqui abajo, como
                             # en Batocera. Solo queda la traza, para saber que
@@ -1742,16 +2198,30 @@ def main():
                     break
             if ui_mouse:
                 _n=_tm.monotonic(); _dt=min(_n-_mlast,0.05); _mlast=_n
-                _mr=32767.0 if center==0 else 127.0
-                _rx=max(-1.0,min(1.0,(_msx-center)/_mr))
-                _ry=max(-1.0,min(1.0,(_msy-center)/_mr))
-                if abs(_rx)<0.12: _rx=0.0
-                if abs(_ry)<0.12: _ry=0.0
+                _rx=_raton_fraccion(_msx, _mabs_info.get(_mabs_x), center)
+                _ry=_raton_fraccion(_msy, _mabs_info.get(_mabs_y), center)
                 _macc_x+=_rx*_mspeed*_dt; _macc_y+=_ry*_mspeed*_dt
                 _ix=int(_macc_x); _iy=int(_macc_y)
                 if _ix: ui_mouse.write(ecodes.EV_REL,ecodes.REL_X,_ix); _macc_x-=_ix
                 if _iy: ui_mouse.write(ecodes.EV_REL,ecodes.REL_Y,_iy); _macc_y-=_iy
-                if _ix or _iy: ui_mouse.syn()
+                if _ix or _iy:
+                    ui_mouse.syn()
+                    # EL PUNTERO, EN EL REGISTRO.
+                    #
+                    # Del caso de Dani solo se sabia que el puntero acababa
+                    # en la esquina; no POR QUE. Con esto el registro dice
+                    # cuanto se mueve y con que valores crudos del stick, asi
+                    # que un mando que no reposa en cero se ve a la primera.
+                    # Una linea cada dos segundos: ni una por evento.
+                    _mpx += _ix; _mpy += _iy
+                    if _n - _mlog >= 2.0:
+                        print("[keys] Raton: %+d,%+d px en %.1f s "
+                              "(stick en %d,%d; reposo %s,%s)"
+                              % (_mpx, _mpy, _n - _mlog, _msx, _msy,
+                                 _mabs_info.get(_mabs_x, ('?',))[0],
+                                 _mabs_info.get(_mabs_y, ('?',))[0]),
+                              flush=True)
+                        _mlog = _n; _mpx = 0; _mpy = 0
     finally:
         if ui_mouse:
             try: ui_mouse.close()

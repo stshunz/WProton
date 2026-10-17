@@ -185,6 +185,24 @@ ESQUEMA = [
     # "auto" = lo que diga TRACKPAD_RATON en settings.conf. Es el valor de
     # partida, asi que un perfil que ya existiera se comporta igual que antes.
     ("TRACKPAD",          "opcion", "auto",           ("auto", "no", "izquierdo", "derecho")),
+    # EL RUNTIME DE STEAM PARA JUEGOS DE LINUX, POR JUEGO.
+    #
+    # Un juego nativo moderno puede pedir librerias mas nuevas que las del
+    # sistema -en SteamOS eso pasa a menudo-, y en Steam se arregla eligiendole
+    # un "Steam Linux Runtime", que es un contenedor con todo dentro. Dani lo
+    # comprobo con Valheim nativo: con el runtime 4.0 arranca en el escritorio
+    # y en el modo juego, y lanzado a pelo no.
+    #
+    # Va por juego y no en settings.conf porque es cosa del juego, no del
+    # equipo: el mismo sistema tiene juegos que lo necesitan y juegos que no.
+    #
+    # "no" es el valor de partida A PROPOSITO: un juego que hoy funciona
+    # lanzado directamente se tiene que seguir lanzando igual. "auto" coge el
+    # runtime mas nuevo que haya instalado.
+    #
+    # Las versiones son las de Valve: 1.0 = scout, 2.0 = soldier,
+    # 3.0 = sniper, 4.0 = steamrt4 (Debian 13).
+    ("RUNTIME_STEAM",     "opcion", "no",             ("no", "auto", "4.0", "3.0", "2.0", "1.0")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
