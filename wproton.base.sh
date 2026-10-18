@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.10"
+WPROTON_VERSION="2.11"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -3320,6 +3320,15 @@ write_biblioteca() {
     cat > "$BIBLIOTECA_PY" <<'BIBEOF'
 @@INCLUIR:biblioteca.py@@
 BIBEOF
+}
+
+ISOFUSE_PY="$RUNTIME_DIR/isofuse.py"
+write_isofuse() {
+    grep -q "WPROTON_HELPER isofuse.py PENDIENTE" "$ISOFUSE_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$ISOFUSE_PY" <<'ISOEOF'
+@@INCLUIR:isofuse.py@@
+ISOEOF
 }
 
 # ----------------------------------------------------------------------------
@@ -21487,24 +21496,6 @@ los de los codecs tambien se llaman asi." \
     return 0
 }
 
-setup_fuseiso() {
-    # CONSIGUE fuseiso, para MONTAR la imagen en vez de copiarla.
-    #
-    # Mismo camino que squashfuse_ll: lo nuestro primero, luego un binario
-    # estatico, luego el paquete de la distribucion. Si no hay manera se monta
-    # por otra via o, en ultimo caso, se extrae.
-    [ -n "$(resolve_tool fuseiso)" ] && return 0
-    local a; a="$(arch_tag)"
-    if try_wproton_repo_tool fuseiso; then
-        return 0
-    elif try_static_tool fuseiso "https://bin.pkgforge.dev/$a/fuseiso"; then
-        return 0
-    elif try_arch_package fuseiso; then
-        return 0
-    fi
-    log "[fuseiso] no se ha encontrado en ninguna fuente"
-    return 1
-}
 
 iso_montar_fuseiso() {
     # Monta la imagen con fuseiso. $1 = imagen, $2 = punto de montaje.
@@ -21528,59 +21519,72 @@ iso_montar_fuseiso() {
     return 1
 }
 
-iso_montar_udisks() {
-    # Monta la imagen con udisks, que es el kernel quien lo hace.
-    # $1 = imagen. Imprime "loop|punto de montaje".
+iso_montar_propio() {
+    # MONTA LA IMAGEN CON LO NUESTRO. $1 = imagen, $2 = punto de montaje.
     #
-    # IMPRIME LAS DOS COSAS, Y NO ES UN CAPRICHO.
+    # POR QUE EXISTE, Y POR QUE VA LA PRIMERA
     #
-    # Antes dejaba el dispositivo de loop en WP_ISO_LOOP y solo imprimia el
-    # punto de montaje. Pero a esta funcion se la llama DENTRO DE $( ), o sea
-    # en una subshell: la variable se ponia alli y se perdia al volver. Al
-    # cerrar, WP_ISO_LOOP estaba vacio, no se llamaba a udisksctl y la imagen
-    # SE QUEDABA MONTADA en /run/media. Lo conto Dani: "veo que se queda la
-    # imagen montada en el sistema".
+    # Las otras dos formas tenian pegas y Dani se las encontro las dos:
+    # fuseiso hay que bajarlo -"descargando fuseiso se ha pegado mucho rato"-
+    # y udisks INTERFIERE CON EL SISTEMA -"sigue apareciendo en Dolphin,
+    # tendriamos que buscar una alternativa portable y que no interfiera en el
+    # sistema"-, porque crea un dispositivo de loop y registra el montaje en
+    # /run/media, donde lo ve cualquier gestor de archivos.
     #
-    # Por la salida estandar si vuelve todo. WP_ISO_LOOP se sigue poniendo
-    # por si alguien la llama sin subshell, pero quien manda es lo impreso.
-    #
-    # POR QUE ESTA VIA ADEMAS DE fuseiso
-    #
-    # Aqui monta EL KERNEL, asi que entiende todo lo que entienda el sistema:
-    # ISO9660 y tambien UDF, que es donde fuseiso se queda corto. Y no hace
-    # falta ser root: udisks lo permite al usuario de la sesion.
-    #
-    # El "-r" NO ES OPCIONAL: monta de solo lectura. Una imagen es el original
-    # del juego y un instalador no tiene por que poder tocarla.
-    WP_ISO_LOOP=""
-    local img="${1:-}" sal loop pm
-    command -v udisksctl >/dev/null 2>&1 || return 1
-    sal="$(udisksctl loop-setup -r -f "$img" 2>&1)" || {
-        log "iso: udisks no pudo preparar el loop: $sal"
+    # Esto no baja nada y no se entera nadie: es un sistema de ficheros de
+    # solo lectura escrito en el propio WProton (isofuse.py), que monta BAJO
+    # $HOME hablando el protocolo del kernel por /dev/fuse. Lo unico que usa
+    # de fuera es fusermount, que es quien tiene permiso para montar y que ya
+    # hace falta para los .wsquashfs: si no estuviera, no habria biblioteca.
+    local img="${1:-}" pm="${2:-}" sal linea
+    [ -f "$img" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || {
+        log "iso: sin python portable no se puede montar con lo nuestro" WARN
         return 1; }
-    # "Mapped file X as /dev/loop0." -> el punto final hay que quitarlo, o la
-    # ruta del dispositivo sale con un punto pegado y nada funciona.
-    loop="$(printf '%s' "$sal" | sed -n 's/.* as \(\/dev\/loop[0-9]*\)\.*$/\1/p' | head -1)"
-    [ -n "$loop" ] || { log "iso: no se entendio la respuesta de udisks: $sal" WARN; return 1; }
-    WP_ISO_LOOP="$loop"
-    sal="$(udisksctl mount -b "$loop" 2>&1)" || {
-        log "iso: udisks no pudo montar $loop: $sal"
-        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
-        WP_ISO_LOOP=""
-        return 1; }
-    # "Mounted /dev/loop0 at /run/media/deck/ETIQUETA." -> igual, sin el punto.
-    pm="$(printf '%s' "$sal" | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//' | head -1)"
-    if [ -z "$pm" ] || [ ! -d "$pm" ]; then
-        log "iso: udisks dijo que la monto pero no se encuentra donde: $sal" WARN
-        udisksctl unmount -b "$loop" >>"$LOG_FILE" 2>&1
-        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
-        WP_ISO_LOOP=""
-        return 1
-    fi
-    log "iso: montada con udisks en $pm ($loop, solo lectura)"
-    printf '%s|%s' "$loop" "$pm"
-    return 0
+    write_isofuse || return 1
+    [ -s "$ISOFUSE_PY" ] || return 1
+    mkdir -p "$pm" 2>/dev/null || return 1
+    sal="$(mktemp)"
+    # EN SEGUNDO PLANO Y CON setsid: el que monta se queda sirviendo hasta que
+    # se desmonte, asi que no puede ser hijo del menu ni morirse con el.
+    setsid "$PY_BIN" "$ISOFUSE_PY" montar "$img" "$pm" >"$sal" 2>&1 &
+    local pid=$!
+    # Se espera a que diga que ya esta, no un "sleep" a ojo. Diez segundos de
+    # tope: montar es instantaneo, asi que si no contesta es que algo va mal.
+    local i=0
+    while [ "$i" -lt 100 ]; do
+        if grep -q '^MONTADA ' "$sal" 2>/dev/null && is_mounted "$pm"; then
+            WP_ISO_SERVIDOR="$pid"
+            log "iso: montada con el montador propio en $pm (pid $pid)"
+            rm -f "$sal"
+            return 0
+        fi
+        kill -0 "$pid" 2>/dev/null || break     # se ha muerto: a mirar por que
+        sleep 0.1
+        i=$((i+1))
+    done
+    log "iso: el montador propio no pudo: $(head -c 400 "$sal" 2>/dev/null | tr '\n' ' ')" WARN
+    kill "$pid" 2>/dev/null
+    umount_dir "$pm" 2>/dev/null
+    rmdir "$pm" 2>/dev/null
+    rm -f "$sal"
+    return 1
 }
+
+iso_extraer_propio() {
+    # Saca el contenido SIN 7zz y sin nada instalado. $1 = imagen, $2 = dest.
+    #
+    # El mismo lector de isofuse.py, pero copiando en vez de montando. Esta
+    # por si en algun equipo no hubiera FUSE: asi abrir una imagen no depende
+    # de una sola cosa.
+    local img="${1:-}" dest="${2:-}"
+    [ -f "$img" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_isofuse || return 1
+    [ -s "$ISOFUSE_PY" ] || return 1
+    "$PY_BIN" "$ISOFUSE_PY" extraer "$img" "$dest" >>"$LOG_FILE" 2>&1
+}
+
 
 iso_hay_instalador_dentro() {
     # ¿LA IMAGEN TRAE UN INSTALADOR? Mirando dentro SIN EXTRAER NADA.
@@ -21590,6 +21594,18 @@ iso_hay_instalador_dentro() {
     # para descubrir despues que el disco no es de instalacion es la clase de
     # espera que no se le hace a nadie. 7zz sabe listar sin extraer.
     local img="${1:-}"
+    # PRIMERO CON NUESTRO LECTOR, que no necesita nada instalado: lista el
+    # contenido de la imagen sin montarla ni sacar un solo byte al disco.
+    if [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] && write_isofuse && [ -s "$ISOFUSE_PY" ]; then
+        if "$PY_BIN" "$ISOFUSE_PY" listar "$img" 2>/dev/null \
+            | grep -q -i -E '(^|/)(setup|install|instalar|autoplay|autorun)\.exe'; then
+            return 0
+        fi
+        # Si el lector entendio la imagen y NO vio instalador, es que no hay.
+        if "$PY_BIN" "$ISOFUSE_PY" listar "$img" >/dev/null 2>&1; then
+            return 1
+        fi
+    fi
     [ -n "${SEVENZIP_BIN:-}" ] || return 0     # sin 7z no se puede saber: no se estorba
     "$SEVENZIP_BIN" l -slt "$img" 2>/dev/null \
         | sed -n 's/^Path = //p' \
@@ -21610,6 +21626,52 @@ iso_extraer() {
     WP_ISO_DIR=""
     local img="${1:-}" name="${2:-juego}" dest tam libre
     [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
+    # PRIMERO CON LO NUESTRO, que no necesita nada instalado.
+    #
+    # Es el mismo lector del montador (isofuse.py) copiando en vez de
+    # montando. Si la imagen es ISO9660 -o sea, casi todas-, con esto basta y
+    # no hay que traerse 7-Zip. 7zz se queda para lo que nosotros no leemos,
+    # que es UDF puro.
+    dest="$GAMES_PATH/.iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
+    tam="$(du -b "$img" 2>/dev/null | awk '{print $1}')"; [ -n "$tam" ] || tam=0
+    libre="$(free_bytes "$GAMES_PATH")"; [ -n "$libre" ] || libre=0
+    if [ "$libre" -gt 0 ] 2>/dev/null && [ "$tam" -gt 0 ] 2>/dev/null \
+       && [ "$libre" -lt $(( tam + tam / 10 )) ] 2>/dev/null; then
+        ui_error "No hay sitio para abrir la imagen.
+
+Hacen falta $(human_size $(( tam + tam / 10 ))) y en
+$GAMES_PATH quedan $(human_size "$libre").
+
+Lo extraido se borra al terminar la instalacion."
+        return 1
+    fi
+    # YA QUE HAY QUE EXTRAER, PRIMERO SE MIRA SI MERECE LA PENA.
+    #
+    # Sacar cuatro gigas al disco para descubrir despues que el disco no es de
+    # instalacion es la clase de espera que no se le hace a nadie. Se mira
+    # dentro SIN extraer nada.
+    if ! iso_hay_instalador_dentro "$img"; then
+        if ! ui_ask "En esta imagen no se ve ningun instalador
+(setup.exe, install.exe...).
+
+Puede que el disco no sea de instalacion: hay juegos que se
+juegan directamente desde el CD.
+
+Extraerla de todas formas? Son $(human_size "$tam")."; then
+            return 1
+        fi
+    fi
+    rm -rf "$dest"; mkdir -p "$dest" 2>/dev/null || { ui_error "No se pudo crear $dest"; return 1; }
+    say "[i] Extrayendo la imagen..."
+    if iso_extraer_propio "$img" "$dest" \
+       && [ -n "$(find "$dest" -mindepth 1 -maxdepth 2 -print -quit 2>/dev/null)" ]; then
+        WP_ISO_DIR="$dest"; WP_ISO_MONTADA=0; WP_ISO_COMO="extraida"
+        log "iso: extraida con el lector propio en $dest"
+        say "[+] Imagen extraida en: $(basename "$dest")"
+        return 0
+    fi
+    rm -rf "$dest"
+    log "iso: el lector propio no pudo extraerla; se prueba con 7zz" WARN
     if ! setup_sevenzip; then
         ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
 preparar. Mira el registro."
@@ -21971,111 +22033,60 @@ iso_abrir() {
     #
     # Deja la carpeta en WP_ISO_DIR y como se abrio en WP_ISO_COMO.
     #
-    # EL ORDEN, Y POR QUE ES ESTE
+    # EL ORDEN, Y POR QUE CAMBIO
     #
-    # Lo dijo Dani: montar en vez de extraer "nos ahorra muchos gigas por el
-    # camino y ganamos tiempo". Tiene razon, y de sobra: una ISO de DVD son
-    # 4-8 GB que se copiaban al disco para borrarlos media hora despues.
-    # Montada, la imagen se lee donde esta, tarda cero y no ocupa nada.
+    # Lo dijo Dani al principio: montar en vez de extraer "nos ahorra muchos
+    # gigas por el camino y ganamos tiempo". Tiene razon, y de sobra: una ISO
+    # de DVD son 4-8 GB que se copiaban al disco para borrarlos media hora
+    # despues. Montada, la imagen se lee donde esta y no ocupa nada.
     #
-    #   1. fuseiso SI YA ESTA         sin red, instantaneo
-    #   2. udisks                     lo monta el KERNEL, asi que entiende
-    #                                 tambien UDF -los DVD modernos-, y no
-    #                                 hace falta ser root. Casi siempre esta
-    #                                 en SteamOS y en CachyOS
-    #   3. fuseiso, descargandolo     por si no hay udisks
-    #   4. extraer con 7zz            siempre funciona; es lo unico que cuesta
-    #                                 espacio y tiempo
+    # Lo que ha cambiado es QUIEN la monta. Habia tres candidatos y los dos
+    # primeros fallaron en su Deck:
     #
-    # fuseiso va antes que udisks SOLO SI YA ESTA: montar con lo que tenemos no
-    # pide nada a nadie. Si hay que bajarlo, se prueba antes udisks, que no
-    # necesita descargar nada.
+    #   fuseiso   hay que bajarlo: "descargando fuseiso se ha pegado mucho
+    #             rato". Si ya esta, perfecto; si no, es una espera.
+    #   udisks    INTERFIERE CON EL SISTEMA: crea un dispositivo de loop y
+    #             registra el montaje en /run/media, asi que la imagen sale
+    #             en Dolphin como un disco mas. "Sigue apareciendo en
+    #             Dolphin, tendriamos que buscar una alternativa portable y
+    #             que no interfiera en el sistema". SE HA QUITADO.
     #
-    # NO SE USA pycdlib, que tambien se propuso: lee ISO en Python puro, pero
-    # NO ES UN SISTEMA DE FICHEROS, asi que Wine no puede leer el disco a
-    # traves de el y habria que extraer igual. No ahorraria ni un byte. Para
-    # mirar dentro sin extraer ya vale 7zz (ver iso_hay_instalador_dentro).
+    # Asi que ahora el primero es EL NUESTRO (isofuse.py): no baja nada, no
+    # instala nada, monta bajo $HOME y no sale en ningun gestor de archivos.
+    #
+    #   1. el montador propio     sin red, sin permisos, sin rastro
+    #   2. fuseiso SI YA ESTA     segunda opinion, por si acaso
+    #   3. extraer                lo unico que cuesta espacio y tiempo:
+    #                             primero con lo nuestro -que tampoco
+    #                             necesita nada- y si no, con 7zz, que ademas
+    #                             entiende UDF
+    #
+    # Lo que NINGUNO de los dos montadores entiende es UDF puro (algunos DVD
+    # modernos). Se nota enseguida -la imagen monta vacia o no monta- y por
+    # eso el ultimo escalon sigue siendo 7zz, que si lo lee.
     WP_ISO_DIR=""; WP_ISO_MONTADA=0; WP_ISO_COMO=""; WP_ISO_LOOP=""
-    local img="${1:-}" name="${2:-juego}" pm pmu
+    WP_ISO_SERVIDOR=""
+    local img="${1:-}" name="${2:-juego}" pm
     [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
     pm="$MOUNT_BASE/iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
 
-    # 1) fuseiso, si ya lo tenemos
+    # 1) el montador propio: lo primero, porque siempre esta y no se nota
+    if iso_montar_propio "$img" "$pm"; then
+        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="propio"; iso_apuntar_abierta
+        say "[+] Imagen montada: no se copia nada al disco y no aparece"
+        say "    como un disco en el sistema."
+        return 0
+    fi
+    # 2) fuseiso, SOLO si ya esta: no se baja nada por esto
     if [ -n "$(resolve_tool fuseiso)" ] && iso_montar_fuseiso "$img" "$pm"; then
         WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
         say "[+] Imagen montada (fuseiso): no se copia nada al disco."
         return 0
     fi
-    # 2) udisks: lo monta el kernel
-    if pmu="$(iso_montar_udisks "$img")" && [ -n "$pmu" ]; then
-        # "loop|punto": las dos cosas vuelven por la salida estandar porque la
-        # llamada va en $( ) y lo que se ponga en una variable alli dentro se
-        # pierde. Ver iso_montar_udisks.
-        WP_ISO_LOOP="${pmu%%|*}"
-        pmu="${pmu#*|}"
-        WP_ISO_DIR="$pmu"; WP_ISO_MONTADA=1; WP_ISO_COMO="udisks"
-        log "iso: loop apuntado para el cierre: ${WP_ISO_LOOP:-(ninguno)}"
-        iso_apuntar_abierta
-        say "[+] Imagen montada (udisks, solo lectura): no se copia nada."
-        # UDISKS MONTA EN /run/media, QUE ESTA FUERA DE $HOME.
-        #
-        # Y pressure-vessel expone $HOME entero pero de /run/media no expone
-        # nada. WProton ya sabe abrirle esa ruta al contenedor cuando la
-        # carpeta del juego esta fuera -lo hace con STEAM_COMPAT_LIBRARY_PATHS,
-        # y le pasa el punto de montaje-, y aqui la carpeta del juego ES la
-        # imagen montada, asi que entra por ese mismo camino.
-        #
-        # Queda escrito porque, si algun dia un instalador no ve su propio
-        # disco, esta linea dice por donde empezar a mirar. fuseiso no tiene
-        # este problema: monta bajo $HOME, que es lo mismo que hace que un
-        # .wsquashfs funcione desde una tarjeta SD.
-        case "$pmu" in
-            "$HOME"/*) ;;
-            *) log "iso: el montaje ($pmu) esta fuera de \$HOME; Proton lo recibe por STEAM_COMPAT_LIBRARY_PATHS" ;;
-        esac
-        return 0
-    fi
-    # 3) fuseiso, bajandolo
-    #
-    # SE AVISA ANTES DE EMPEZAR. Aqui es donde se va el tiempo de todo el
-    # asistente -no hay nada instalado que monte, asi que hay que traerlo- y
-    # sin este aviso la pantalla se queda quieta sin decir por que. Dani lo
-    # vio: "descargando fuseiso se ha pegado mucho rato".
-    #
-    # Lo que de verdad lo arreglo esta en dl_bruto (DL_LIMITES): un espejo
-    # muerto se descarta en 30 s en vez de esperar sin fin. Esto es solo
-    # contarlo mientras pasa, y dejar en el registro cuanto costo.
-    local _t0_fuse; _t0_fuse="$(date +%s)"
-    say "[i] En este equipo no hay nada instalado que monte imagenes."
-    say "    Se intenta traer fuseiso (una sola vez; luego ya se queda)."
-    if setup_fuseiso && iso_montar_fuseiso "$img" "$pm"; then
-        log "iso: fuseiso conseguido y montado en $(( $(date +%s) - _t0_fuse ))s"
-        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
-        say "[+] Imagen montada (fuseiso): no se copia nada al disco."
-        return 0
-    fi
-    log "iso: no se pudo conseguir fuseiso tras $(( $(date +%s) - _t0_fuse ))s" WARN
-    # 4) extraer, que es lo que siempre funciona
+    # 3) extraer, que es lo que siempre funciona
     log "iso: no se ha podido montar de ninguna forma; se extrae" WARN
     say "[i] No se ha podido montar la imagen en este equipo."
     say "    Se extrae al disco, que ocupa espacio y tarda mas."
-    if ! setup_sevenzip; then
-        ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
-preparar. Mira el registro."
-        return 1
-    fi
-    # YA QUE HAY QUE EXTRAER, PRIMERO SE MIRA SI MERECE LA PENA.
-    if ! iso_hay_instalador_dentro "$img"; then
-        if ! ui_ask "En esta imagen no se ve ningun instalador
-(setup.exe, install.exe...).
-
-Puede que el disco no sea de instalacion: hay juegos que se
-juegan directamente desde el CD.
-
-Extraerla de todas formas? Son $(human_size "$(du -b "$img" 2>/dev/null | awk '{print $1}')")."; then
-            return 1
-        fi
-    fi
     iso_extraer "$img" "$name"
 }
 
@@ -22477,7 +22488,22 @@ iso_cerrar() {
     iso_olvidar_abierta
     if [ "${WP_ISO_MONTADA:-0}" = 1 ]; then
         say "[i] Desmontando la imagen..."
+        # EL SERVIDOR DEL MONTADOR PROPIO.
+        #
+        # Se cierra solo en cuanto el kernel le dice que se ha desmontado, asi
+        # que esto es el cinturon: si el desmontaje se hubiera torcido, no se
+        # queda un proceso vivo sirviendo una imagen que ya nadie mira.
+        if [ -n "${WP_ISO_SERVIDOR:-}" ]; then
+            kill "$WP_ISO_SERVIDOR" 2>/dev/null
+            WP_ISO_SERVIDOR=""
+        fi
         # EL LOOP, AUNQUE NO SE SEPA CUAL ES.
+        #
+        # OJO: WProton YA NO MONTA CON udisks -crea un dispositivo de loop y
+        # registra el montaje en /run/media, donde lo ve Dolphin, que es justo
+        # lo que se queria quitar-. Esto se queda para LIMPIAR lo que dejara
+        # montado una version anterior: quien actualice con una imagen abierta
+        # tiene que poder cerrarla desde aqui.
         #
         # Si por lo que sea no lo tenemos apuntado, se le pregunta a
         # /proc/mounts: ahi esta el dispositivo que hay montado en esa

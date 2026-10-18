@@ -4,7 +4,7 @@
 
 WProton monta, configura y lanza juegos de Windows —en formato `.wsquashfs`, `.dwarfs`, carpeta suelta o `.exe`— usando Proton o Wine, con menús que se manejan al 100% con el mando. Todo vive junto al script: runners, prefijos, Python, partidas y cachés. Cópialo a un pendrive y juega en otra máquina.
 
-> **Versión actual: 2.10** — probado en CachyOS (KDE), SteamOS (Steam Deck y Legion Go S) y Batocera.
+> **Versión actual: 2.11** — probado en CachyOS (KDE), SteamOS (Steam Deck, Steam Machine y Legion Go S) y Bazzite.
 
 ![WProton: la biblioteca, con la carátula, la ficha completa y la sinopsis del juego seleccionado](img/biblioteca-ficha.jpg)
 
@@ -14,7 +14,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 
 📖 **[Manual de uso](MANUAL.md)** — todo, apartado por apartado.
 
-📝 **[Novedades de la 2.10](NOVEDADES-2.10.md)** — qué trae esta versión.
+📝 **[Novedades de la 2.11](NOVEDADES-2.11.md)** — qué trae esta versión.
 
 ---
 
@@ -58,7 +58,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 - **Los Proton oficiales de Valve**, si tienes Steam: no se descargan (Valve no los publica fuera de Steam), se enlazan los que ya tengas instalados —también los de la tarjeta o de otro disco—, así que no ocupan sitio y se actualizan con Steam.
 - **Auto-descarga**: si el perfil de un juego pide un runner que no tienes, se descarga solo antes de lanzar.
 - **Cambiar de Proton a Wine (o al revés) en un mismo prefijo no lo rompe**: WProton cierra los procesos que queden en él y vuelve a registrar sus servicios con el runner nuevo. Tarda unos segundos, y solo la primera vez con cada runner.
-- En Batocera detecta los Wine del sistema y los de `/userdata/system/wine/custom`.
+- Detecta además los Wine que ya tenga el sistema, incluidos los de `/userdata/system/wine/custom`.
 
 ### Ajustes por juego
 Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).

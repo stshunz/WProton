@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.10"
+WPROTON_VERSION="2.11"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -17965,6 +17965,778 @@ def main():
 if __name__ == '__main__':
     sys.exit(main())
 BIBEOF
+}
+
+ISOFUSE_PY="$RUNTIME_DIR/isofuse.py"
+write_isofuse() {
+    grep -q "WPROTON_HELPER isofuse.py 0135417a9d73" "$ISOFUSE_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$ISOFUSE_PY" <<'ISOEOF'
+# WPROTON_HELPER isofuse.py 0135417a9d73
+# WProton - montar una imagen de disco SIN TOCAR EL SISTEMA
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo
+# los terminos de la Licencia Publica General GNU (GPL), version 3 o
+# posterior, publicada por la Free Software Foundation.
+#
+# Se distribuye SIN NINGUNA GARANTIA. Ver <https://www.gnu.org/licenses/>.
+#
+# ===========================================================================
+# POR QUE EXISTE ESTO
+# ===========================================================================
+#
+# Para instalar un juego desde una imagen hay que poder LEERLA. Habia tres
+# caminos y los tres tenian pegas:
+#
+#   fuseiso   bien: monta bajo $HOME y no se entera nadie.
+#             mal:  hay que tenerlo, y si no, bajarlo.
+#   udisks    bien: lo monta el kernel, entiende todo.
+#             mal:  INTERFIERE CON EL SISTEMA. Crea un dispositivo de loop,
+#                   registra el montaje en /run/media y la imagen APARECE EN
+#                   DOLPHIN como un disco mas. Dani lo vio: "sigue apareciendo
+#                   en Dolphin, tendriamos que buscar una alternativa portable
+#                   y que no interfiera en el sistema".
+#   extraer   bien: siempre funciona.
+#             mal:  cuatro u ocho gigas al disco y la espera.
+#
+# Esto es la alternativa portable: un sistema de ficheros de solo lectura,
+# escrito aqui, que monta la imagen BAJO $HOME y se desmonta con fusermount.
+# No instala nada, no necesita permisos, no crea dispositivos y no sale en
+# ningun gestor de archivos.
+#
+# ===========================================================================
+# COMO FUNCIONA, Y POR QUE NO USA libfuse
+# ===========================================================================
+#
+# Un sistema de ficheros FUSE es un programa que habla con el kernel por
+# /dev/fuse. Lo normal es hacerlo con libfuse, pero eso seria otra biblioteca
+# que tener -justo lo que se quiere evitar-. Aqui se habla el protocolo del
+# kernel directamente, que para una imagen de SOLO LECTURA son nueve
+# operaciones contadas.
+#
+# Lo unico que hace falta de fuera es "fusermount3" (o "fusermount"), que es
+# quien tiene permiso para montar. Esta en cualquier equipo que use FUSE, y
+# WProton ya depende de el para montar los .wsquashfs: si no estuviera, no
+# habria ni biblioteca de juegos.
+#
+# El reparto de trabajo con fusermount es el de siempre: se le pasa un extremo
+# de un socket, el monta y nos devuelve por ahi el descriptor de /dev/fuse.
+#
+# ===========================================================================
+# QUE ENTIENDE DE UNA IMAGEN
+# ===========================================================================
+#
+#   ISO9660        el formato de siempre, el que lleva todo CD.
+#   Joliet         los nombres largos y con acentos, de Windows. Si la imagen
+#                  lo trae, manda este: es el que vio quien la grabo.
+#   Rock Ridge     los nombres largos de Unix. Se usa si no hay Joliet.
+#
+# Lo que NO entiende es UDF puro -algunos DVD modernos-. Se nota enseguida
+# (la imagen monta vacia, o no monta) y ahi WProton tira de extraer con 7zz,
+# que si lo entiende. Lo mismo que se hacia con fuseiso, que tampoco lo lee.
+#
+# ===========================================================================
+# TRES MODOS, Y EL TERCERO SALVA LOS MUEBLES
+# ===========================================================================
+#
+#   listar <iso>            escribe el arbol. Sirve para mirar sin montar.
+#   extraer <iso> <dest>    saca el contenido SIN 7zz y sin nada instalado.
+#   montar <iso> <punto>    lo de arriba.
+#
+# "extraer" esta porque conviene no depender de una sola cosa: si FUSE no
+# estuviera disponible en algun equipo, sigue habiendo forma de abrir la
+# imagen sin pedirle nada al sistema.
+import os
+import sys
+import stat
+import errno
+import struct
+import socket
+import ctypes
+import threading
+
+SECTOR = 2048
+
+# --- Descriptores de volumen -------------------------------------------------
+VD_PRIMARIA = 1
+VD_SUPLEMENTARIA = 2
+VD_FIN = 255
+
+# Las tres secuencias de escape que declaran Joliet (UCS-2 niveles 1, 2 y 3).
+JOLIET_ESC = (b'%/@', b'%/C', b'%/E')
+
+
+class ErrorISO(Exception):
+    pass
+
+
+class Nodo(object):
+    """Un fichero o una carpeta de la imagen."""
+    __slots__ = ('nombre', 'lba', 'tam', 'es_dir', 'hijos', 'padre', 'ino')
+
+    def __init__(self, nombre, lba, tam, es_dir):
+        self.nombre = nombre
+        self.lba = lba
+        self.tam = tam
+        self.es_dir = es_dir
+        self.hijos = None      # se lee cuando hace falta, no al abrir
+        self.padre = None
+        self.ino = 0
+
+
+def _nombre_limpio(crudo, joliet):
+    """El nombre tal como lo vera el usuario."""
+    if joliet:
+        try:
+            n = crudo.decode('utf-16-be', 'replace')
+        except Exception:
+            n = crudo.decode('latin-1', 'replace')
+    else:
+        n = crudo.decode('latin-1', 'replace')
+    # "FICHERO.TXT;1" -> "FICHERO.TXT": el ";1" es el numero de version de
+    # ISO9660 y no lo quiere ver nadie.
+    pos = n.rfind(';')
+    if pos > 0:
+        n = n[:pos]
+    # "LEEME." -> "LEEME": un punto final suelto es relleno del formato.
+    if n.endswith('.'):
+        n = n[:-1]
+    return n
+
+
+def _rock_ridge_nombre(sistema):
+    """El nombre largo de Rock Ridge (entrada "NM"), si lo hay.
+
+    El area de uso del sistema va detras del nombre en cada registro. Rock
+    Ridge mete ahi entradas de dos letras con su longitud, y NM es el nombre
+    de verdad: sin el, un fichero llamado "Mi Juego.exe" se ve como
+    "MI_JUEGO.EXE" en mayusculas y con guiones bajos.
+    """
+    partes = []
+    i = 0
+    n = len(sistema)
+    while i + 4 <= n:
+        etiqueta = sistema[i:i + 2]
+        largo = sistema[i + 2]
+        if largo < 3 or i + largo > n:
+            break
+        if etiqueta == b'NM':
+            # byte de banderas: el bit 0 dice "sigue en la siguiente entrada"
+            banderas = sistema[i + 4] if largo > 4 else 0
+            partes.append(sistema[i + 5:i + largo])
+            if not (banderas & 0x01):
+                break
+        i += largo
+    if not partes:
+        return None
+    try:
+        return b''.join(partes).decode('utf-8', 'replace')
+    except Exception:
+        return None
+
+
+class ImagenISO(object):
+    """Lee una imagen ISO9660, con Joliet o Rock Ridge si los trae."""
+
+    def __init__(self, ruta):
+        self.ruta = ruta
+        self.fh = open(ruta, 'rb', buffering=0)
+        self.joliet = False
+        self.etiqueta = ''
+        self.raiz = None
+        self._lock = threading.Lock()
+        self._leer_descriptores()
+
+    # -- lectura cruda --------------------------------------------------------
+    def _leer(self, desplazamiento, cuantos):
+        with self._lock:
+            self.fh.seek(desplazamiento)
+            return self.fh.read(cuantos)
+
+    def _sector(self, n):
+        return self._leer(n * SECTOR, SECTOR)
+
+    def _leer_descriptores(self):
+        """Busca la descripcion del volumen y se queda con la mejor.
+
+        Se prefiere Joliet cuando esta: trae los nombres tal como se grabaron,
+        con sus mayusculas y sus acentos.
+        """
+        primaria = None
+        joliet = None
+        n = 16
+        while n < 512:                      # un tope: no se recorre la imagen
+            try:
+                d = self._sector(n)
+            except Exception:
+                break
+            if len(d) < SECTOR or d[1:6] != b'CD001':
+                break
+            tipo = d[0]
+            if tipo == VD_FIN:
+                break
+            if tipo == VD_PRIMARIA and primaria is None:
+                primaria = d
+            elif tipo == VD_SUPLEMENTARIA and joliet is None:
+                if d[88:91] in JOLIET_ESC:
+                    joliet = d
+            n += 1
+        descriptor = joliet if joliet is not None else primaria
+        if descriptor is None:
+            raise ErrorISO('no es una imagen ISO9660 (no aparece "CD001")')
+        self.joliet = joliet is not None
+        etq = descriptor[40:72]
+        if self.joliet:
+            self.etiqueta = etq.decode('utf-16-be', 'replace').strip()
+        else:
+            self.etiqueta = etq.decode('latin-1', 'replace').strip()
+        # El registro de la carpeta raiz vive dentro del descriptor, en el 156.
+        reg = descriptor[156:156 + 34]
+        lba = struct.unpack('<I', reg[2:6])[0]
+        tam = struct.unpack('<I', reg[10:14])[0]
+        self.raiz = Nodo('', lba, tam, True)
+        self.raiz.ino = 1
+
+    # -- arbol ----------------------------------------------------------------
+    def hijos(self, nodo):
+        """Los hijos de una carpeta. Se leen la primera vez y se guardan."""
+        if nodo.hijos is not None:
+            return nodo.hijos
+        hijos = {}
+        if not nodo.es_dir:
+            nodo.hijos = hijos
+            return hijos
+        datos = self._leer(nodo.lba * SECTOR, nodo.tam)
+        i = 0
+        n = len(datos)
+        while i < n:
+            largo = datos[i]
+            if largo == 0:
+                # Un registro no cruza el limite de un sector: cuando queda
+                # relleno, se salta al siguiente.
+                salto = SECTOR - (i % SECTOR)
+                i += salto
+                continue
+            if i + largo > n:
+                break
+            reg = datos[i:i + largo]
+            i += largo
+            if len(reg) < 33:
+                continue
+            lba = struct.unpack('<I', reg[2:6])[0]
+            tam = struct.unpack('<I', reg[10:14])[0]
+            banderas = reg[25]
+            largo_nombre = reg[32]
+            crudo = reg[33:33 + largo_nombre]
+            # Las dos entradas especiales: "." y ".." van con un nombre de un
+            # solo byte, 0 y 1.
+            if largo_nombre == 1 and crudo in (b'\x00', b'\x01'):
+                continue
+            # El area del sistema empieza detras del nombre, con relleno si el
+            # nombre ocupa un numero impar de bytes.
+            inicio_sis = 33 + largo_nombre
+            if largo_nombre % 2 == 0:
+                inicio_sis += 1
+            nombre = None
+            if not self.joliet and inicio_sis < len(reg):
+                nombre = _rock_ridge_nombre(reg[inicio_sis:])
+            if not nombre:
+                nombre = _nombre_limpio(crudo, self.joliet)
+            if not nombre:
+                continue
+            hijo = Nodo(nombre, lba, tam, bool(banderas & 0x02))
+            hijo.padre = nodo
+            hijos[nombre] = hijo
+        nodo.hijos = hijos
+        return hijos
+
+    def buscar(self, ruta):
+        """El nodo que hay en esa ruta, o None."""
+        nodo = self.raiz
+        for parte in ruta.strip('/').split('/'):
+            if not parte:
+                continue
+            hijos = self.hijos(nodo)
+            nodo = hijos.get(parte)
+            if nodo is None:
+                # Las imagenes se graban con las mayusculas que sea y Windows
+                # nunca las distinguio: se prueba tambien sin distinguirlas.
+                bajo = parte.lower()
+                for k, v in hijos.items():
+                    if k.lower() == bajo:
+                        nodo = v
+                        break
+            if nodo is None:
+                return None
+        return nodo
+
+    def leer_fichero(self, nodo, desplazamiento, cuantos):
+        if nodo.es_dir:
+            return b''
+        if desplazamiento >= nodo.tam:
+            return b''
+        cuantos = min(cuantos, nodo.tam - desplazamiento)
+        return self._leer(nodo.lba * SECTOR + desplazamiento, cuantos)
+
+    def recorrer(self, nodo=None, prefijo=''):
+        """Todo el arbol, de arriba abajo: (ruta, nodo)."""
+        if nodo is None:
+            nodo = self.raiz
+        for nombre, hijo in sorted(self.hijos(nodo).items()):
+            ruta = prefijo + '/' + nombre
+            yield ruta, hijo
+            if hijo.es_dir:
+                for x in self.recorrer(hijo, ruta):
+                    yield x
+
+    def cerrar(self):
+        try:
+            self.fh.close()
+        except Exception:
+            pass
+
+
+# ===========================================================================
+# EL PROTOCOLO DE /dev/fuse
+# ===========================================================================
+#
+# Las estructuras son las de fuse_kernel.h. Van en el orden y con el tamaño
+# que espera el kernel, asi que NO SE TOCAN sin mirar esa cabecera.
+FUSE_LOOKUP = 1
+FUSE_FORGET = 2
+FUSE_GETATTR = 3
+FUSE_READLINK = 5
+FUSE_OPEN = 14
+FUSE_READ = 15
+FUSE_STATFS = 17
+FUSE_RELEASE = 18
+FUSE_FSYNC = 20
+FUSE_GETXATTR = 22
+FUSE_LISTXATTR = 23
+FUSE_FLUSH = 25
+FUSE_INIT = 26
+FUSE_OPENDIR = 27
+FUSE_READDIR = 28
+FUSE_RELEASEDIR = 29
+FUSE_ACCESS = 34
+FUSE_DESTROY = 38
+FUSE_BATCH_FORGET = 42
+FUSE_READDIRPLUS = 44
+FUSE_LSEEK = 46
+
+CAB_ENTRADA = struct.Struct('<IIQQIIII')     # fuse_in_header, 40 bytes
+CAB_SALIDA = struct.Struct('<IiQ')           # fuse_out_header, 16 bytes
+
+# fuse_attr: 88 bytes
+ATTR = struct.Struct('<QQQQQQIIIIIIIIII')
+
+
+def _attr(ino, modo, tam, nlink, uid, gid, bloque=SECTOR):
+    return ATTR.pack(
+        ino, tam, (tam + 511) // 512,       # ino, size, blocks
+        0, 0, 0,                            # atime, mtime, ctime
+        0, 0, 0,                            # *nsec
+        modo, nlink, uid, gid,
+        0,                                  # rdev
+        bloque,
+        0)                                  # flags
+
+
+class ServidorFUSE(object):
+    """Sirve la imagen por /dev/fuse. Solo lectura y nada mas."""
+
+    def __init__(self, imagen, fd, depurar=False):
+        self.img = imagen
+        self.fd = fd
+        self.depurar = depurar
+        self.uid = os.getuid()
+        self.gid = os.getgid()
+        # El kernel habla de "nodeid"; aqui cada nodo tiene el suyo. El 1 es
+        # siempre la raiz, por definicion del protocolo.
+        self.por_id = {1: imagen.raiz}
+        self.siguiente = 2
+        self.tam_max = 128 * 1024
+        self.fin = False
+
+    # -- utilidades -----------------------------------------------------------
+    def _id_de(self, nodo):
+        if nodo.ino:
+            return nodo.ino
+        nodo.ino = self.siguiente
+        self.siguiente += 1
+        self.por_id[nodo.ino] = nodo
+        return nodo.ino
+
+    def _modo(self, nodo):
+        if nodo.es_dir:
+            return stat.S_IFDIR | 0o555
+        return stat.S_IFREG | 0o444
+
+    def _attr_de(self, nodo):
+        return _attr(self._id_de(nodo), self._modo(nodo),
+                     0 if nodo.es_dir else nodo.tam,
+                     2 if nodo.es_dir else 1, self.uid, self.gid)
+
+    def _responder(self, unico, datos=b'', error=0):
+        cab = CAB_SALIDA.pack(len(datos) + CAB_SALIDA.size, error, unico)
+        try:
+            os.write(self.fd, cab + datos)
+        except OSError:
+            pass
+
+    def _error(self, unico, err):
+        self._responder(unico, b'', -err)
+
+    # -- bucle ----------------------------------------------------------------
+    def servir(self):
+        while not self.fin:
+            try:
+                datos = os.read(self.fd, self.tam_max + 4096)
+            except OSError as e:
+                if e.errno in (errno.EINTR, errno.EAGAIN):
+                    continue
+                if e.errno == errno.ENODEV:    # desmontado
+                    break
+                break
+            if not datos:
+                break
+            try:
+                self._atender(datos)
+            except Exception as e:
+                if self.depurar:
+                    sys.stderr.write('isofuse: %s\n' % e)
+
+    def _atender(self, datos):
+        largo, opcode, unico, nodeid, uid, gid, pid, _ = \
+            CAB_ENTRADA.unpack_from(datos, 0)
+        cuerpo = datos[CAB_ENTRADA.size:largo]
+        f = self._ops.get(opcode)
+        if f is None:
+            self._error(unico, errno.ENOSYS)
+            return
+        f(self, unico, nodeid, cuerpo)
+
+    # -- operaciones ----------------------------------------------------------
+    def op_init(self, unico, nodeid, cuerpo):
+        major, minor = struct.unpack_from('<II', cuerpo, 0)
+        # Se contesta con la version del kernel si es menor que la nuestra:
+        # asi vale igual con uno viejo que con uno nuevo.
+        nuestro_minor = min(minor, 31)
+        # fuse_init_out, en su forma larga (minor >= 23). Los campos de mas
+        # los ignora un kernel antiguo.
+        salida = struct.pack('<IIIIHHIIHHI',
+                             7, nuestro_minor,
+                             0,          # max_readahead
+                             0,          # flags
+                             0, 0,       # max_background, congestion_threshold
+                             self.tam_max,
+                             1,          # time_gran
+                             0, 0,       # max_pages, map_alignment
+                             0)          # flags2
+        salida += b'\x00' * 28           # unused[7]
+        self._responder(unico, salida)
+
+    def op_destroy(self, unico, nodeid, cuerpo):
+        self.fin = True
+        self._responder(unico)
+
+    def op_lookup(self, unico, nodeid, cuerpo):
+        padre = self.por_id.get(nodeid)
+        if padre is None or not padre.es_dir:
+            self._error(unico, errno.ENOENT)
+            return
+        nombre = cuerpo.split(b'\x00', 1)[0].decode('utf-8', 'replace')
+        hijos = self.img.hijos(padre)
+        nodo = hijos.get(nombre)
+        if nodo is None:
+            bajo = nombre.lower()
+            for k, v in hijos.items():
+                if k.lower() == bajo:
+                    nodo = v
+                    break
+        if nodo is None:
+            self._error(unico, errno.ENOENT)
+            return
+        # fuse_entry_out: nodeid, generation, entry_valid, attr_valid,
+        #                 entry_valid_nsec, attr_valid_nsec, attr
+        ent = struct.pack('<QQQQII', self._id_de(nodo), 0, 3600, 3600, 0, 0)
+        self._responder(unico, ent + self._attr_de(nodo))
+
+    def op_forget(self, unico, nodeid, cuerpo):
+        # No se contesta a FORGET: lo dice el protocolo. Y no se olvida nada,
+        # porque el arbol de una imagen es pequeño y no cambia.
+        pass
+
+    def op_getattr(self, unico, nodeid, cuerpo):
+        nodo = self.por_id.get(nodeid)
+        if nodo is None:
+            self._error(unico, errno.ENOENT)
+            return
+        # fuse_attr_out: attr_valid, attr_valid_nsec, dummy, attr
+        self._responder(unico,
+                        struct.pack('<QII', 3600, 0, 0) + self._attr_de(nodo))
+
+    def op_open(self, unico, nodeid, cuerpo):
+        nodo = self.por_id.get(nodeid)
+        if nodo is None:
+            self._error(unico, errno.ENOENT)
+            return
+        if nodo.es_dir:
+            self._error(unico, errno.EISDIR)
+            return
+        banderas = struct.unpack_from('<I', cuerpo, 0)[0]
+        # SOLO LECTURA, y se dice que no: una imagen es el original del juego.
+        if banderas & (os.O_WRONLY | os.O_RDWR):
+            self._error(unico, errno.EROFS)
+            return
+        # fuse_open_out: fh, open_flags, padding
+        self._responder(unico, struct.pack('<QII', nodeid, 0, 0))
+
+    def op_read(self, unico, nodeid, cuerpo):
+        nodo = self.por_id.get(nodeid)
+        if nodo is None:
+            self._error(unico, errno.ENOENT)
+            return
+        fh, desp, tam = struct.unpack_from('<QQI', cuerpo, 0)
+        self._responder(unico, self.img.leer_fichero(nodo, desp, tam))
+
+    def op_release(self, unico, nodeid, cuerpo):
+        self._responder(unico)
+
+    def op_opendir(self, unico, nodeid, cuerpo):
+        nodo = self.por_id.get(nodeid)
+        if nodo is None or not nodo.es_dir:
+            self._error(unico, errno.ENOTDIR)
+            return
+        self._responder(unico, struct.pack('<QII', nodeid, 0, 0))
+
+    def op_readdir(self, unico, nodeid, cuerpo):
+        nodo = self.por_id.get(nodeid)
+        if nodo is None or not nodo.es_dir:
+            self._error(unico, errno.ENOTDIR)
+            return
+        fh, desp, tam = struct.unpack_from('<QQI', cuerpo, 0)
+        entradas = [('.', nodo), ('..', nodo.padre or nodo)]
+        entradas += sorted(self.img.hijos(nodo).items())
+        salida = b''
+        i = 0
+        for nombre, hijo in entradas:
+            i += 1
+            if i <= desp:              # ya se mando en una vuelta anterior
+                continue
+            nb = nombre.encode('utf-8')
+            # fuse_dirent: ino, off, namelen, type + nombre, en multiplos de 8
+            trozo = struct.pack('<QQII', self._id_de(hijo), i, len(nb),
+                                4 if hijo.es_dir else 8) + nb
+            relleno = (8 - (len(trozo) % 8)) % 8
+            trozo += b'\x00' * relleno
+            if len(salida) + len(trozo) > tam:
+                break
+            salida += trozo
+        self._responder(unico, salida)
+
+    def op_releasedir(self, unico, nodeid, cuerpo):
+        self._responder(unico)
+
+    def op_statfs(self, unico, nodeid, cuerpo):
+        total = (os.path.getsize(self.img.ruta) + SECTOR - 1) // SECTOR
+        # fuse_kstatfs: blocks, bfree, bavail, files, ffree, bsize, namelen,
+        #               frsize, padding, spare[6]
+        self._responder(unico,
+                        struct.pack('<QQQQQIIII',
+                                    total, 0, 0, len(self.por_id), 0,
+                                    SECTOR, 255, SECTOR, 0)
+                        + b'\x00' * 24)
+
+    def op_nosoportado(self, unico, nodeid, cuerpo):
+        self._error(unico, errno.ENOSYS)
+
+    def op_vacio(self, unico, nodeid, cuerpo):
+        self._responder(unico)
+
+    _ops = {
+        FUSE_INIT: op_init,
+        FUSE_DESTROY: op_destroy,
+        FUSE_LOOKUP: op_lookup,
+        FUSE_FORGET: op_forget,
+        FUSE_BATCH_FORGET: op_forget,
+        FUSE_GETATTR: op_getattr,
+        FUSE_OPEN: op_open,
+        FUSE_READ: op_read,
+        FUSE_RELEASE: op_release,
+        FUSE_OPENDIR: op_opendir,
+        FUSE_READDIR: op_readdir,
+        FUSE_RELEASEDIR: op_releasedir,
+        FUSE_STATFS: op_statfs,
+        FUSE_FLUSH: op_vacio,
+        FUSE_FSYNC: op_vacio,
+        FUSE_ACCESS: op_vacio,
+        FUSE_GETXATTR: op_nosoportado,
+        FUSE_LISTXATTR: op_nosoportado,
+        FUSE_READLINK: op_nosoportado,
+        FUSE_READDIRPLUS: op_nosoportado,
+        FUSE_LSEEK: op_nosoportado,
+    }
+
+
+def _buscar_fusermount():
+    nombres = ('fusermount3', 'fusermount')
+    rutas = os.environ.get('PATH', '/usr/bin:/bin').split(':')
+    # Y los sitios de siempre, por si PATH viniera recortado.
+    rutas += ['/usr/bin', '/bin', '/usr/local/bin', '/sbin', '/usr/sbin']
+    for n in nombres:
+        for d in rutas:
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+    return None
+
+
+def montar_fd(punto, nombre_fs='wproton-iso'):
+    """Le pide a fusermount que monte y devuelve el descriptor de /dev/fuse.
+
+    Es el reparto de siempre: fusermount es quien tiene permiso para montar,
+    monta, y nos pasa el descriptor por un socket. Asi no hace falta ser root
+    ni instalar nada.
+    """
+    prog = _buscar_fusermount()
+    if not prog:
+        raise ErrorISO('no se encuentra fusermount (ni fusermount3)')
+    padre, hijo = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    pid = os.fork()
+    if pid == 0:                                   # ---- hijo
+        try:
+            padre.close()
+            fd_hijo = hijo.fileno()
+            os.set_inheritable(fd_hijo, True)
+            entorno = dict(os.environ)
+            entorno['_FUSE_COMMFD'] = str(fd_hijo)
+            opciones = ('ro,nosuid,nodev,noatime,fsname=%s,subtype=isofuse'
+                        % nombre_fs)
+            os.execve(prog, [prog, '-o', opciones, '--', punto], entorno)
+        except Exception:
+            pass
+        os._exit(127)
+    # ---- padre
+    hijo.close()
+    try:
+        datos, aux, banderas, _ = padre.recvmsg(1, socket.CMSG_SPACE(4))
+        fd = -1
+        for nivel, tipo, carga in aux:
+            if nivel == socket.SOL_SOCKET and tipo == socket.SCM_RIGHTS:
+                fd = struct.unpack('<i', carga[:4])[0]
+                break
+    finally:
+        padre.close()
+        try:
+            os.waitpid(pid, 0)
+        except Exception:
+            pass
+    if fd < 0:
+        raise ErrorISO('fusermount no devolvio el descriptor (¿sin permiso '
+                       'para /dev/fuse, o el punto de montaje no existe?)')
+    return fd
+
+
+def desmontar(punto):
+    """Lo contrario. No hace falta para nada mas que para limpiar a mano."""
+    prog = _buscar_fusermount()
+    if not prog:
+        return False
+    return os.spawnv(os.P_WAIT, prog, [prog, '-u', punto]) == 0
+
+
+def montar(ruta_iso, punto, depurar=False):
+    img = ImagenISO(ruta_iso)
+    if not os.path.isdir(punto):
+        os.makedirs(punto, exist_ok=True)
+    fd = montar_fd(punto, os.path.basename(ruta_iso)[:60] or 'iso')
+    # Se avisa de que ya esta montada ANTES de ponerse a servir: quien nos
+    # lanzo esta esperando para seguir, y si no, se queda mirando.
+    sys.stdout.write('MONTADA %s\n' % punto)
+    sys.stdout.flush()
+    srv = ServidorFUSE(img, fd, depurar)
+    try:
+        srv.servir()
+    finally:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        img.cerrar()
+    return 0
+
+
+def extraer(ruta_iso, destino):
+    """Saca el contenido sin montar nada y sin 7zz."""
+    img = ImagenISO(ruta_iso)
+    n_fich = 0
+    n_dir = 0
+    os.makedirs(destino, exist_ok=True)
+    for ruta, nodo in img.recorrer():
+        fuera = os.path.join(destino, ruta.lstrip('/'))
+        if nodo.es_dir:
+            os.makedirs(fuera, exist_ok=True)
+            n_dir += 1
+            continue
+        os.makedirs(os.path.dirname(fuera), exist_ok=True)
+        with open(fuera, 'wb') as fh:
+            desp = 0
+            while desp < nodo.tam:
+                trozo = img.leer_fichero(nodo, desp, 1024 * 1024)
+                if not trozo:
+                    break
+                fh.write(trozo)
+                desp += len(trozo)
+        n_fich += 1
+    img.cerrar()
+    sys.stdout.write('EXTRAIDO %d fichero(s), %d carpeta(s)\n' % (n_fich, n_dir))
+    return 0
+
+
+def listar(ruta_iso):
+    img = ImagenISO(ruta_iso)
+    sys.stdout.write('etiqueta: %s\n' % img.etiqueta)
+    sys.stdout.write('nombres: %s\n' % ('Joliet' if img.joliet else 'ISO9660/RockRidge'))
+    for ruta, nodo in img.recorrer():
+        sys.stdout.write('%s%s%s\n' % (ruta, '/' if nodo.es_dir else '',
+                                       '' if nodo.es_dir else '  (%d)' % nodo.tam))
+    img.cerrar()
+    return 0
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.stderr.write(
+            'uso: isofuse.py montar <imagen> <punto>\n'
+            '     isofuse.py extraer <imagen> <carpeta>\n'
+            '     isofuse.py listar <imagen>\n'
+            '     isofuse.py comprobar\n')
+        return 2
+    orden = sys.argv[1]
+    try:
+        if orden == 'listar':
+            return listar(sys.argv[2])
+        if orden == 'extraer':
+            return extraer(sys.argv[2], sys.argv[3])
+        if orden == 'montar':
+            return montar(sys.argv[2], sys.argv[3],
+                          os.environ.get('WP_ISOFUSE_DEPURAR') == '1')
+    except ErrorISO as e:
+        sys.stderr.write('isofuse: %s\n' % e)
+        return 1
+    except Exception as e:
+        sys.stderr.write('isofuse: %s\n' % e)
+        return 1
+    sys.stderr.write('isofuse: orden desconocida: %s\n' % orden)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+ISOEOF
 }
 
 # ----------------------------------------------------------------------------
@@ -41006,24 +41778,6 @@ los de los codecs tambien se llaman asi." \
     return 0
 }
 
-setup_fuseiso() {
-    # CONSIGUE fuseiso, para MONTAR la imagen en vez de copiarla.
-    #
-    # Mismo camino que squashfuse_ll: lo nuestro primero, luego un binario
-    # estatico, luego el paquete de la distribucion. Si no hay manera se monta
-    # por otra via o, en ultimo caso, se extrae.
-    [ -n "$(resolve_tool fuseiso)" ] && return 0
-    local a; a="$(arch_tag)"
-    if try_wproton_repo_tool fuseiso; then
-        return 0
-    elif try_static_tool fuseiso "https://bin.pkgforge.dev/$a/fuseiso"; then
-        return 0
-    elif try_arch_package fuseiso; then
-        return 0
-    fi
-    log "[fuseiso] no se ha encontrado en ninguna fuente"
-    return 1
-}
 
 iso_montar_fuseiso() {
     # Monta la imagen con fuseiso. $1 = imagen, $2 = punto de montaje.
@@ -41047,59 +41801,72 @@ iso_montar_fuseiso() {
     return 1
 }
 
-iso_montar_udisks() {
-    # Monta la imagen con udisks, que es el kernel quien lo hace.
-    # $1 = imagen. Imprime "loop|punto de montaje".
+iso_montar_propio() {
+    # MONTA LA IMAGEN CON LO NUESTRO. $1 = imagen, $2 = punto de montaje.
     #
-    # IMPRIME LAS DOS COSAS, Y NO ES UN CAPRICHO.
+    # POR QUE EXISTE, Y POR QUE VA LA PRIMERA
     #
-    # Antes dejaba el dispositivo de loop en WP_ISO_LOOP y solo imprimia el
-    # punto de montaje. Pero a esta funcion se la llama DENTRO DE $( ), o sea
-    # en una subshell: la variable se ponia alli y se perdia al volver. Al
-    # cerrar, WP_ISO_LOOP estaba vacio, no se llamaba a udisksctl y la imagen
-    # SE QUEDABA MONTADA en /run/media. Lo conto Dani: "veo que se queda la
-    # imagen montada en el sistema".
+    # Las otras dos formas tenian pegas y Dani se las encontro las dos:
+    # fuseiso hay que bajarlo -"descargando fuseiso se ha pegado mucho rato"-
+    # y udisks INTERFIERE CON EL SISTEMA -"sigue apareciendo en Dolphin,
+    # tendriamos que buscar una alternativa portable y que no interfiera en el
+    # sistema"-, porque crea un dispositivo de loop y registra el montaje en
+    # /run/media, donde lo ve cualquier gestor de archivos.
     #
-    # Por la salida estandar si vuelve todo. WP_ISO_LOOP se sigue poniendo
-    # por si alguien la llama sin subshell, pero quien manda es lo impreso.
-    #
-    # POR QUE ESTA VIA ADEMAS DE fuseiso
-    #
-    # Aqui monta EL KERNEL, asi que entiende todo lo que entienda el sistema:
-    # ISO9660 y tambien UDF, que es donde fuseiso se queda corto. Y no hace
-    # falta ser root: udisks lo permite al usuario de la sesion.
-    #
-    # El "-r" NO ES OPCIONAL: monta de solo lectura. Una imagen es el original
-    # del juego y un instalador no tiene por que poder tocarla.
-    WP_ISO_LOOP=""
-    local img="${1:-}" sal loop pm
-    command -v udisksctl >/dev/null 2>&1 || return 1
-    sal="$(udisksctl loop-setup -r -f "$img" 2>&1)" || {
-        log "iso: udisks no pudo preparar el loop: $sal"
+    # Esto no baja nada y no se entera nadie: es un sistema de ficheros de
+    # solo lectura escrito en el propio WProton (isofuse.py), que monta BAJO
+    # $HOME hablando el protocolo del kernel por /dev/fuse. Lo unico que usa
+    # de fuera es fusermount, que es quien tiene permiso para montar y que ya
+    # hace falta para los .wsquashfs: si no estuviera, no habria biblioteca.
+    local img="${1:-}" pm="${2:-}" sal linea
+    [ -f "$img" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || {
+        log "iso: sin python portable no se puede montar con lo nuestro" WARN
         return 1; }
-    # "Mapped file X as /dev/loop0." -> el punto final hay que quitarlo, o la
-    # ruta del dispositivo sale con un punto pegado y nada funciona.
-    loop="$(printf '%s' "$sal" | sed -n 's/.* as \(\/dev\/loop[0-9]*\)\.*$/\1/p' | head -1)"
-    [ -n "$loop" ] || { log "iso: no se entendio la respuesta de udisks: $sal" WARN; return 1; }
-    WP_ISO_LOOP="$loop"
-    sal="$(udisksctl mount -b "$loop" 2>&1)" || {
-        log "iso: udisks no pudo montar $loop: $sal"
-        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
-        WP_ISO_LOOP=""
-        return 1; }
-    # "Mounted /dev/loop0 at /run/media/deck/ETIQUETA." -> igual, sin el punto.
-    pm="$(printf '%s' "$sal" | sed -n 's/^Mounted .* at \(.*\)$/\1/p' | sed 's/\.$//' | head -1)"
-    if [ -z "$pm" ] || [ ! -d "$pm" ]; then
-        log "iso: udisks dijo que la monto pero no se encuentra donde: $sal" WARN
-        udisksctl unmount -b "$loop" >>"$LOG_FILE" 2>&1
-        udisksctl loop-delete -b "$loop" >>"$LOG_FILE" 2>&1
-        WP_ISO_LOOP=""
-        return 1
-    fi
-    log "iso: montada con udisks en $pm ($loop, solo lectura)"
-    printf '%s|%s' "$loop" "$pm"
-    return 0
+    write_isofuse || return 1
+    [ -s "$ISOFUSE_PY" ] || return 1
+    mkdir -p "$pm" 2>/dev/null || return 1
+    sal="$(mktemp)"
+    # EN SEGUNDO PLANO Y CON setsid: el que monta se queda sirviendo hasta que
+    # se desmonte, asi que no puede ser hijo del menu ni morirse con el.
+    setsid "$PY_BIN" "$ISOFUSE_PY" montar "$img" "$pm" >"$sal" 2>&1 &
+    local pid=$!
+    # Se espera a que diga que ya esta, no un "sleep" a ojo. Diez segundos de
+    # tope: montar es instantaneo, asi que si no contesta es que algo va mal.
+    local i=0
+    while [ "$i" -lt 100 ]; do
+        if grep -q '^MONTADA ' "$sal" 2>/dev/null && is_mounted "$pm"; then
+            WP_ISO_SERVIDOR="$pid"
+            log "iso: montada con el montador propio en $pm (pid $pid)"
+            rm -f "$sal"
+            return 0
+        fi
+        kill -0 "$pid" 2>/dev/null || break     # se ha muerto: a mirar por que
+        sleep 0.1
+        i=$((i+1))
+    done
+    log "iso: el montador propio no pudo: $(head -c 400 "$sal" 2>/dev/null | tr '\n' ' ')" WARN
+    kill "$pid" 2>/dev/null
+    umount_dir "$pm" 2>/dev/null
+    rmdir "$pm" 2>/dev/null
+    rm -f "$sal"
+    return 1
 }
+
+iso_extraer_propio() {
+    # Saca el contenido SIN 7zz y sin nada instalado. $1 = imagen, $2 = dest.
+    #
+    # El mismo lector de isofuse.py, pero copiando en vez de montando. Esta
+    # por si en algun equipo no hubiera FUSE: asi abrir una imagen no depende
+    # de una sola cosa.
+    local img="${1:-}" dest="${2:-}"
+    [ -f "$img" ] || return 1
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 1
+    write_isofuse || return 1
+    [ -s "$ISOFUSE_PY" ] || return 1
+    "$PY_BIN" "$ISOFUSE_PY" extraer "$img" "$dest" >>"$LOG_FILE" 2>&1
+}
+
 
 iso_hay_instalador_dentro() {
     # ¿LA IMAGEN TRAE UN INSTALADOR? Mirando dentro SIN EXTRAER NADA.
@@ -41109,6 +41876,18 @@ iso_hay_instalador_dentro() {
     # para descubrir despues que el disco no es de instalacion es la clase de
     # espera que no se le hace a nadie. 7zz sabe listar sin extraer.
     local img="${1:-}"
+    # PRIMERO CON NUESTRO LECTOR, que no necesita nada instalado: lista el
+    # contenido de la imagen sin montarla ni sacar un solo byte al disco.
+    if [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] && write_isofuse && [ -s "$ISOFUSE_PY" ]; then
+        if "$PY_BIN" "$ISOFUSE_PY" listar "$img" 2>/dev/null \
+            | grep -q -i -E '(^|/)(setup|install|instalar|autoplay|autorun)\.exe'; then
+            return 0
+        fi
+        # Si el lector entendio la imagen y NO vio instalador, es que no hay.
+        if "$PY_BIN" "$ISOFUSE_PY" listar "$img" >/dev/null 2>&1; then
+            return 1
+        fi
+    fi
     [ -n "${SEVENZIP_BIN:-}" ] || return 0     # sin 7z no se puede saber: no se estorba
     "$SEVENZIP_BIN" l -slt "$img" 2>/dev/null \
         | sed -n 's/^Path = //p' \
@@ -41129,6 +41908,52 @@ iso_extraer() {
     WP_ISO_DIR=""
     local img="${1:-}" name="${2:-juego}" dest tam libre
     [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
+    # PRIMERO CON LO NUESTRO, que no necesita nada instalado.
+    #
+    # Es el mismo lector del montador (isofuse.py) copiando en vez de
+    # montando. Si la imagen es ISO9660 -o sea, casi todas-, con esto basta y
+    # no hay que traerse 7-Zip. 7zz se queda para lo que nosotros no leemos,
+    # que es UDF puro.
+    dest="$GAMES_PATH/.iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
+    tam="$(du -b "$img" 2>/dev/null | awk '{print $1}')"; [ -n "$tam" ] || tam=0
+    libre="$(free_bytes "$GAMES_PATH")"; [ -n "$libre" ] || libre=0
+    if [ "$libre" -gt 0 ] 2>/dev/null && [ "$tam" -gt 0 ] 2>/dev/null \
+       && [ "$libre" -lt $(( tam + tam / 10 )) ] 2>/dev/null; then
+        ui_error "No hay sitio para abrir la imagen.
+
+Hacen falta $(human_size $(( tam + tam / 10 ))) y en
+$GAMES_PATH quedan $(human_size "$libre").
+
+Lo extraido se borra al terminar la instalacion."
+        return 1
+    fi
+    # YA QUE HAY QUE EXTRAER, PRIMERO SE MIRA SI MERECE LA PENA.
+    #
+    # Sacar cuatro gigas al disco para descubrir despues que el disco no es de
+    # instalacion es la clase de espera que no se le hace a nadie. Se mira
+    # dentro SIN extraer nada.
+    if ! iso_hay_instalador_dentro "$img"; then
+        if ! ui_ask "En esta imagen no se ve ningun instalador
+(setup.exe, install.exe...).
+
+Puede que el disco no sea de instalacion: hay juegos que se
+juegan directamente desde el CD.
+
+Extraerla de todas formas? Son $(human_size "$tam")."; then
+            return 1
+        fi
+    fi
+    rm -rf "$dest"; mkdir -p "$dest" 2>/dev/null || { ui_error "No se pudo crear $dest"; return 1; }
+    say "[i] Extrayendo la imagen..."
+    if iso_extraer_propio "$img" "$dest" \
+       && [ -n "$(find "$dest" -mindepth 1 -maxdepth 2 -print -quit 2>/dev/null)" ]; then
+        WP_ISO_DIR="$dest"; WP_ISO_MONTADA=0; WP_ISO_COMO="extraida"
+        log "iso: extraida con el lector propio en $dest"
+        say "[+] Imagen extraida en: $(basename "$dest")"
+        return 0
+    fi
+    rm -rf "$dest"
+    log "iso: el lector propio no pudo extraerla; se prueba con 7zz" WARN
     if ! setup_sevenzip; then
         ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
 preparar. Mira el registro."
@@ -41490,111 +42315,60 @@ iso_abrir() {
     #
     # Deja la carpeta en WP_ISO_DIR y como se abrio en WP_ISO_COMO.
     #
-    # EL ORDEN, Y POR QUE ES ESTE
+    # EL ORDEN, Y POR QUE CAMBIO
     #
-    # Lo dijo Dani: montar en vez de extraer "nos ahorra muchos gigas por el
-    # camino y ganamos tiempo". Tiene razon, y de sobra: una ISO de DVD son
-    # 4-8 GB que se copiaban al disco para borrarlos media hora despues.
-    # Montada, la imagen se lee donde esta, tarda cero y no ocupa nada.
+    # Lo dijo Dani al principio: montar en vez de extraer "nos ahorra muchos
+    # gigas por el camino y ganamos tiempo". Tiene razon, y de sobra: una ISO
+    # de DVD son 4-8 GB que se copiaban al disco para borrarlos media hora
+    # despues. Montada, la imagen se lee donde esta y no ocupa nada.
     #
-    #   1. fuseiso SI YA ESTA         sin red, instantaneo
-    #   2. udisks                     lo monta el KERNEL, asi que entiende
-    #                                 tambien UDF -los DVD modernos-, y no
-    #                                 hace falta ser root. Casi siempre esta
-    #                                 en SteamOS y en CachyOS
-    #   3. fuseiso, descargandolo     por si no hay udisks
-    #   4. extraer con 7zz            siempre funciona; es lo unico que cuesta
-    #                                 espacio y tiempo
+    # Lo que ha cambiado es QUIEN la monta. Habia tres candidatos y los dos
+    # primeros fallaron en su Deck:
     #
-    # fuseiso va antes que udisks SOLO SI YA ESTA: montar con lo que tenemos no
-    # pide nada a nadie. Si hay que bajarlo, se prueba antes udisks, que no
-    # necesita descargar nada.
+    #   fuseiso   hay que bajarlo: "descargando fuseiso se ha pegado mucho
+    #             rato". Si ya esta, perfecto; si no, es una espera.
+    #   udisks    INTERFIERE CON EL SISTEMA: crea un dispositivo de loop y
+    #             registra el montaje en /run/media, asi que la imagen sale
+    #             en Dolphin como un disco mas. "Sigue apareciendo en
+    #             Dolphin, tendriamos que buscar una alternativa portable y
+    #             que no interfiera en el sistema". SE HA QUITADO.
     #
-    # NO SE USA pycdlib, que tambien se propuso: lee ISO en Python puro, pero
-    # NO ES UN SISTEMA DE FICHEROS, asi que Wine no puede leer el disco a
-    # traves de el y habria que extraer igual. No ahorraria ni un byte. Para
-    # mirar dentro sin extraer ya vale 7zz (ver iso_hay_instalador_dentro).
+    # Asi que ahora el primero es EL NUESTRO (isofuse.py): no baja nada, no
+    # instala nada, monta bajo $HOME y no sale en ningun gestor de archivos.
+    #
+    #   1. el montador propio     sin red, sin permisos, sin rastro
+    #   2. fuseiso SI YA ESTA     segunda opinion, por si acaso
+    #   3. extraer                lo unico que cuesta espacio y tiempo:
+    #                             primero con lo nuestro -que tampoco
+    #                             necesita nada- y si no, con 7zz, que ademas
+    #                             entiende UDF
+    #
+    # Lo que NINGUNO de los dos montadores entiende es UDF puro (algunos DVD
+    # modernos). Se nota enseguida -la imagen monta vacia o no monta- y por
+    # eso el ultimo escalon sigue siendo 7zz, que si lo lee.
     WP_ISO_DIR=""; WP_ISO_MONTADA=0; WP_ISO_COMO=""; WP_ISO_LOOP=""
-    local img="${1:-}" name="${2:-juego}" pm pmu
+    WP_ISO_SERVIDOR=""
+    local img="${1:-}" name="${2:-juego}" pm
     [ -f "$img" ] || { ui_error "No existe la imagen: $img"; return 1; }
     pm="$MOUNT_BASE/iso_$(printf '%s' "$name" | tr ' /' '__')_$$"
 
-    # 1) fuseiso, si ya lo tenemos
+    # 1) el montador propio: lo primero, porque siempre esta y no se nota
+    if iso_montar_propio "$img" "$pm"; then
+        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="propio"; iso_apuntar_abierta
+        say "[+] Imagen montada: no se copia nada al disco y no aparece"
+        say "    como un disco en el sistema."
+        return 0
+    fi
+    # 2) fuseiso, SOLO si ya esta: no se baja nada por esto
     if [ -n "$(resolve_tool fuseiso)" ] && iso_montar_fuseiso "$img" "$pm"; then
         WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
         say "[+] Imagen montada (fuseiso): no se copia nada al disco."
         return 0
     fi
-    # 2) udisks: lo monta el kernel
-    if pmu="$(iso_montar_udisks "$img")" && [ -n "$pmu" ]; then
-        # "loop|punto": las dos cosas vuelven por la salida estandar porque la
-        # llamada va en $( ) y lo que se ponga en una variable alli dentro se
-        # pierde. Ver iso_montar_udisks.
-        WP_ISO_LOOP="${pmu%%|*}"
-        pmu="${pmu#*|}"
-        WP_ISO_DIR="$pmu"; WP_ISO_MONTADA=1; WP_ISO_COMO="udisks"
-        log "iso: loop apuntado para el cierre: ${WP_ISO_LOOP:-(ninguno)}"
-        iso_apuntar_abierta
-        say "[+] Imagen montada (udisks, solo lectura): no se copia nada."
-        # UDISKS MONTA EN /run/media, QUE ESTA FUERA DE $HOME.
-        #
-        # Y pressure-vessel expone $HOME entero pero de /run/media no expone
-        # nada. WProton ya sabe abrirle esa ruta al contenedor cuando la
-        # carpeta del juego esta fuera -lo hace con STEAM_COMPAT_LIBRARY_PATHS,
-        # y le pasa el punto de montaje-, y aqui la carpeta del juego ES la
-        # imagen montada, asi que entra por ese mismo camino.
-        #
-        # Queda escrito porque, si algun dia un instalador no ve su propio
-        # disco, esta linea dice por donde empezar a mirar. fuseiso no tiene
-        # este problema: monta bajo $HOME, que es lo mismo que hace que un
-        # .wsquashfs funcione desde una tarjeta SD.
-        case "$pmu" in
-            "$HOME"/*) ;;
-            *) log "iso: el montaje ($pmu) esta fuera de \$HOME; Proton lo recibe por STEAM_COMPAT_LIBRARY_PATHS" ;;
-        esac
-        return 0
-    fi
-    # 3) fuseiso, bajandolo
-    #
-    # SE AVISA ANTES DE EMPEZAR. Aqui es donde se va el tiempo de todo el
-    # asistente -no hay nada instalado que monte, asi que hay que traerlo- y
-    # sin este aviso la pantalla se queda quieta sin decir por que. Dani lo
-    # vio: "descargando fuseiso se ha pegado mucho rato".
-    #
-    # Lo que de verdad lo arreglo esta en dl_bruto (DL_LIMITES): un espejo
-    # muerto se descarta en 30 s en vez de esperar sin fin. Esto es solo
-    # contarlo mientras pasa, y dejar en el registro cuanto costo.
-    local _t0_fuse; _t0_fuse="$(date +%s)"
-    say "[i] En este equipo no hay nada instalado que monte imagenes."
-    say "    Se intenta traer fuseiso (una sola vez; luego ya se queda)."
-    if setup_fuseiso && iso_montar_fuseiso "$img" "$pm"; then
-        log "iso: fuseiso conseguido y montado en $(( $(date +%s) - _t0_fuse ))s"
-        WP_ISO_DIR="$pm"; WP_ISO_MONTADA=1; WP_ISO_COMO="fuseiso"; iso_apuntar_abierta
-        say "[+] Imagen montada (fuseiso): no se copia nada al disco."
-        return 0
-    fi
-    log "iso: no se pudo conseguir fuseiso tras $(( $(date +%s) - _t0_fuse ))s" WARN
-    # 4) extraer, que es lo que siempre funciona
+    # 3) extraer, que es lo que siempre funciona
     log "iso: no se ha podido montar de ninguna forma; se extrae" WARN
     say "[i] No se ha podido montar la imagen en este equipo."
     say "    Se extrae al disco, que ocupa espacio y tarda mas."
-    if ! setup_sevenzip; then
-        ui_error "Para abrir una imagen hace falta 7-Zip y no se ha podido
-preparar. Mira el registro."
-        return 1
-    fi
-    # YA QUE HAY QUE EXTRAER, PRIMERO SE MIRA SI MERECE LA PENA.
-    if ! iso_hay_instalador_dentro "$img"; then
-        if ! ui_ask "En esta imagen no se ve ningun instalador
-(setup.exe, install.exe...).
-
-Puede que el disco no sea de instalacion: hay juegos que se
-juegan directamente desde el CD.
-
-Extraerla de todas formas? Son $(human_size "$(du -b "$img" 2>/dev/null | awk '{print $1}')")."; then
-            return 1
-        fi
-    fi
     iso_extraer "$img" "$name"
 }
 
@@ -41996,7 +42770,22 @@ iso_cerrar() {
     iso_olvidar_abierta
     if [ "${WP_ISO_MONTADA:-0}" = 1 ]; then
         say "[i] Desmontando la imagen..."
+        # EL SERVIDOR DEL MONTADOR PROPIO.
+        #
+        # Se cierra solo en cuanto el kernel le dice que se ha desmontado, asi
+        # que esto es el cinturon: si el desmontaje se hubiera torcido, no se
+        # queda un proceso vivo sirviendo una imagen que ya nadie mira.
+        if [ -n "${WP_ISO_SERVIDOR:-}" ]; then
+            kill "$WP_ISO_SERVIDOR" 2>/dev/null
+            WP_ISO_SERVIDOR=""
+        fi
         # EL LOOP, AUNQUE NO SE SEPA CUAL ES.
+        #
+        # OJO: WProton YA NO MONTA CON udisks -crea un dispositivo de loop y
+        # registra el montaje en /run/media, donde lo ve Dolphin, que es justo
+        # lo que se queria quitar-. Esto se queda para LIMPIAR lo que dejara
+        # montado una version anterior: quien actualice con una imagen abierta
+        # tiene que poder cerrarla desde aqui.
         #
         # Si por lo que sea no lo tenemos apuntado, se le pregunta a
         # /proc/mounts: ahi esta el dispositivo que hay montado en esa
