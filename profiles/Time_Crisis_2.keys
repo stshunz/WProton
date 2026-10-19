@@ -1,0 +1,1 @@
+{"actions_player1": [{"trigger": ["hotkey", "start"], "type": "key", "target": ["KEY_LEFTALT", "KEY_F4"]}, {"trigger": "l2", "type": "key", "target": "KEY_Z"}, {"trigger": "r2", "type": "key", "target": "KEY_SPACE"}], "wproton_para": "Time_Crisis_2"}
