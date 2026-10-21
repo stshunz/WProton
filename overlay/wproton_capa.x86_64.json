@@ -1,0 +1,16 @@
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "VK_LAYER_WPROTON_menu_x86_64",
+        "type": "GLOBAL",
+        "library_path": "./libwproton_capa.x86_64.so",
+        "api_version": "1.3.0",
+        "implementation_version": "1",
+        "description": "Menu de WProton dentro del juego (64 bits)",
+        "functions": {
+            "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion",
+            "vkGetInstanceProcAddr": "wproton_GetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "wproton_GetDeviceProcAddr"
+        }
+    }
+}
