@@ -37231,6 +37231,31 @@ Que cumplas muchos mas.
     # novedades de la 2.0 que a estas alturas ya ha leido todo el mundo. Eso va
     # justo contra lo que dice el aviso de arriba: en una pantalla de mano, una
     # lista que no cabe de un vistazo no se lee. Se queda lo de ESTA version.
+    #
+    # Y VOLVIO A PASAR, PEOR: ERAN LAS DE LA VERSION ANTERIOR (26/10)
+    #
+    # El titulo decia "NOVEDADES DE LA 2.15" y los diecisiete puntos de debajo
+    # eran, QUINCE DE ELLOS, los de la 2.04. Se comprobo comparando con el
+    # NOVEDADES-2.04.md: borrar un juego del disco, traer los perfiles de
+    # golpe, el 7-Zip portable, los sticks intercambiados, las caratulas al
+    # añadir a Steam... todo eso ya estaba publicado. Y lo que de verdad trae
+    # la 2.15 -el menu encima del juego, la ISO sin tocar el sistema, HelixSR-
+    # no aparecia.
+    #
+    # Pasa porque la lista se hereda al empezar una version y se va tocando
+    # por encima, igual que el fichero de novedades: de sus 94 secciones, 65
+    # son de la 2.04. El titulo cambia solo -lleva $WPROTON_VERSION- y eso
+    # tapa el problema: dice la version nueva encima de la lista vieja.
+    #
+    # DOS DE LOS PUNTOS ADEMAS ERAN FALSOS para esta version: decian que los
+    # prefijos que vienen dentro del archivo "se preparan bien" y que su carga
+    # estaba "arreglada", y eso se SACO de la 2.15 por la regresion del 18/10
+    # (esta contado en NOVEDADES-2.15.md). Prometer en el aviso de version algo
+    # que se quito de esa version es la clase de cosa que hace que nadie se
+    # crea el resto de la lista.
+    #
+    # Hay una suite (prueba_novedades.sh) que comprueba que cada punto es UNA
+    # linea, que no se pasa de catorce y que no reaparece lo de los prefijos.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
 GRACIAS A LOS TESTERS
@@ -37240,39 +37265,29 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Un juego se puede borrar del disco desde sus ajustes.
+  Un menu de WProton ENCIMA del juego, con Select+L1 o Ctrl+Alt+W.
 
-  Los perfiles del repositorio se pueden traer todos de una vez.
+  Se pinta dentro del juego, sin ventana: la imagen no se congela.
 
-  Si el perfil de la comunidad mejora, WProton te avisa.
+  La capa que lo hace posible se descarga sola; no hay que compilar.
 
-  Y puedes pedir el de la comunidad cuando quieras.
+  Instalar un juego desde una ISO, sin tocar el sistema y sin sudo.
 
-  7-Zip ya no hay que instalarlo: lo descarga WProton.
+  HelixSR: la red de DLSS tambien en tarjetas que no son NVIDIA.
 
-  Los juegos se pueden importar sin empaquetar, en una carpeta.
+  Dos mandos y ninguno responde: se esconde el de mas que deja Steam.
 
-  Un juego con decenas de miles de ficheros avisa antes de empaquetarse.
+  Renombrar un juego, y sus partidas y sus ajustes van con el.
 
-  Un juego puede intercambiar el stick izquierdo con el derecho.
+  Los juegos de GOG se instalan en SU prefijo, no en el compartido.
 
-  Los registros de las sesiones que van bien se borran al cerrar.
+  Una carpeta con varios juegos dentro puede ser una estanteria.
 
-  Al añadir un juego a Steam, sus caratulas se descargan solas.
+  Un perfil compartido ya no te deja sin copias de seguridad.
 
-  Arreglada la carga de los juegos que traen su prefijo dentro.
+  El panel dice en que formato esta el juego, y la lista su extension.
 
-  El puntero se esconde solo al dejar el raton, y vuelve al moverlo.
-
-  WProton sabe cual de tus mandos usas y propone los ajustes.
-
-  Avisa cuando hay un GE-Proton nuevo, en Runners y herramientas.
-
-  En pantallas 4K la letra sube sola y se lee.
-
-  Los prefijos que vienen dentro del archivo se preparan bien.
-
-  Select cierra tambien los juegos de Linux en carpeta.
+  Dos lanzadores nuevos para DeckStation: --saves y --keys.
 
   Lo demas, en las novedades del repositorio."
     return 0
