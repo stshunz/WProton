@@ -104,6 +104,16 @@ Elige la imagen en **Añadir un juego** y WProton hace el camino completo.
 4. **Abre el instalador.** Acepta las rutas que te ofrezca (`C:\...`); si te pide el disco, está en `D:`.
 5. **Te dice dónde ha quedado el juego**: mira *Program Files*, *Program Files (x86)*, *GOG Games* y la raíz de `C:` y te ofrece las carpetas, sin mezclar las de Windows. También puedes buscarla a mano.
 6. **Le pone tu nombre y tu idioma al crack.** Lo que viene en la carpeta `Crack` de la imagen es un emulador de la API de Steam con su configuración al lado, y ahí está escrito el nombre del jugador —el del grupo que hizo el release— y el idioma. Sin tocarlo, el juego arranca saludando a *RUNE* y en inglés. WProton busca esa configuración **por el contenido y no por el nombre del fichero** (cada emulador llama al suyo de una forma: `steam_emu.ini`, `ALI213.ini`, `SteamConfig.ini`, `OnlineFix.ini`…) y cambia `UserName`/`PlayerName` por el usuario de tu equipo y `Language` por tu idioma. Goldberg es la excepción: no usa un `.ini` sino un fichero por ajuste en `steam_settings/`, y esos se buscan por nombre. **Guarda copia de cada original** (`*.wproton.bak`), respeta los finales de línea de Windows y **no toca** un `Language=3` —hay emuladores que guardan ahí un número de su propia tabla—. Si la imagen trae el crack y el juego instalado no lo tiene, te ofrece copiarlo encima; eso sí se pregunta, porque sobrescribe ficheros del juego. Se puede repetir después desde *Ajustes del juego → Casos especiales → Nombre e idioma del juego instalado*, mientras el juego siga siendo una carpeta.
+
+   **Y esto no es solo de las imágenes.** Desde la 2.11 está en los tres caminos por los que entra un juego, porque la carpeta `Crack` viene igual en un comprimido que en una ISO:
+
+   | Entra como | Qué hace |
+   |---|---|
+   | **Imagen (ISO)** | automático, al acabar la instalación |
+   | **Comprimido** (zip, 7z, rar) | automático, al extraerlo — y **antes** de buscar el ejecutable, porque el crack muchas veces reemplaza el `.exe` del juego y el `autorun.cmd` tiene que apuntar al bueno |
+   | **Carpeta** | **te lo pregunta justo antes de empaquetar** a `.wsquashfs`, que es el último momento en que sirve de algo: dentro del archivo esos ficheros quedan de solo lectura |
+
+   No pregunta dos veces lo mismo: si el nombre y el idioma ya son los tuyos, lo dice y sigue.
 7. **Y pregunta cómo empaquetar:**
 
 | Opción | Para qué |
@@ -236,6 +246,20 @@ tuyo y lo que se ofrece, con tus valores intactos.
 y se lo pide a gamescope. La propia fila del menú te dice si va a poder verse:
 si no hay gamescope ni sesión Wayland, no hay HDR por mucho que lo enciendas.
 El monitor también tiene que serlo, y el juego traerlo.
+
+**HelixSR (DLSS en FSR 3.1)** — en *Rendimiento y compatibilidad*. Hace que el juego use **la red neuronal de DLSS** en lugar de FSR, **sin tarjeta NVIDIA**: HelixSR corre la Model E de DLSS como shaders de cómputo de Direct3D 12. Vale de **RDNA 1 en adelante**, así que la Steam Deck entra (y en RDNA 2 usa un camino de 8 bits algo más rápido).
+
+**Dónde funciona:** juegos de **Direct3D 12 que ya traigan FSR 3.1**. HelixSR ocupa el sitio de esa DLL del juego, así que **dentro del juego hay que elegir «AMD FSR»** como escalador: es por ahí por donde entra. En juegos con DLSS o XeSS pero sin FSR 3.1 haría falta el camino de OptiScaler, que todavía no está hecho aquí.
+
+La fila del menú te dice si se puede usar y por qué no: *no descargado*, *falta construir la red*, o *sí*. La primera vez, WProton lo descarga y ejecuta su instalador, que **baja la DLL de DLSS del GitHub de NVIDIA** (se te pregunta antes: se aplica la licencia de NVIDIA) y **construye la red en tu equipo**. Eso tarda varios minutos y el progreso va saliendo en pantalla; el detalle queda en `logs/helixsr-setup.log`.
+
+> **Lo que construye tu equipo no se reparte.** La DLL que queda lleva la red armada a partir de la de NVIDIA, y su licencia dice que es para tu PC. Por eso, **al empaquetar un juego a `.wsquashfs`, WProton saca HelixSR y devuelve la DLL original del juego**, y lo dice en el registro. No se pierde nada: el perfil se lleva HelixSR encendido, así que la primera vez que se juegue el archivo se vuelve a poner —en el equipo de quien juegue, con **su** red—. Si ahí no está preparado, se avisa y el juego arranca con su FSR normal.
+>
+> Por lo mismo, WProton **no deja que su instalador toque tus juegos de Steam**: se ejecuta con una carpeta propia como `$HOME`, así que no encuentra ninguna biblioteca. Los juegos los pone WProton, uno a uno y cuando se lo pides.
+
+Después de jugar, el registro dice si **la red corrió de verdad**. Importa porque HelixSR degrada en silencio: si la red no carga, el juego arranca igual y lo que se ve es **un borde rojo y la imagen temblando** —y eso, contado por otra persona, no se distingue de «no hace nada»—.
+
+Se avisa también de dos cosas antes de tocar nada: si el juego trae **anti-cheat** (cambiarle una DLL puede costarte la cuenta en juego en línea; decides tú) y si tiene un **OptiScaler** puesto junto al `.exe`, que puede quedarse las llamadas de FSR y dejar a HelixSR sin trabajo.
 
 **Mando vía SDL** — en automático. Se activa solo con mandos que lo necesitan (DualSense, DualShock, mandos de Nintendo) y se queda apagado con mandos XInput como los de la Steam Deck o la Legion Go.
 
@@ -507,6 +531,37 @@ lanza como juego de Linux, sin Wine de por medio.
 
 ![Archivo y mantenimiento: lo que se toca de uvas a peras](img/archivo-mantenimiento.png)
 
+### Renombrar el juego
+
+*Ajustes del juego → Archivo y mantenimiento → Renombrar el juego*.
+
+**Hazlo desde aquí y no desde el explorador de archivos.** El identificador de
+un juego sale de su nombre, y con ese identificador se llaman su perfil, su
+prefijo, sus unidades de datos, su ficha y la carpeta donde viven sus
+**partidas** (`wsquashfs/overlays/<juego>/upper`). Si renombras el fichero por
+fuera, el juego reaparece en la biblioteca como si fuera nuevo: perfil vacío,
+sin horas, sin favoritos, sin prefijo y sin partidas. Las viejas se quedan
+huérfanas ocupando disco, y nada las menciona.
+
+Desde aquí se mueve todo junto, y antes de tocar nada se te enseña la lista de
+lo que va a moverse. Si algo falla a mitad —un disco de solo lectura, el
+fichero abierto—, **se devuelve todo a su sitio**.
+
+- En un **archivo** se escribe el nombre **sin la extensión**, que se conserva:
+  de `Doom Eternal.wsquashfs` a `Doom 2` sale `Doom 2.wsquashfs`. La extensión
+  dice el formato, no el nombre.
+- En una **carpeta** se escribe el nombre entero, porque ahí el sufijo (`.pc`)
+  es parte del nombre de verdad.
+- Las **carátulas** conservan la forma del nombre: si las tenías con espacios,
+  siguen con espacios.
+- Un nombre **ya ocupado** no se pisa, ni aunque el juego que lo tenía ya no
+  esté: si quedan sus partidas o su perfil, se rechaza y se dice qué estorba.
+
+> Dos cosas van por el nombre y viven **fuera** de WProton, así que se avisa en
+> vez de callarlo: el **atajo de Steam** guarda la ruta absoluta del juego (hay
+> que volver a añadirlo con *Añadir a Steam*) y los **ajustes de la comunidad**,
+> que se buscan por el nombre y con otro ya no se aplican solos.
+
 ### Un juego puede traer su propia carpeta personal (`.home`)
 
 WProton busca una carpeta personal dentro del juego, **en este orden**:
@@ -663,10 +718,10 @@ cajón de sastre:
 
 | Submenú | Qué hay dentro |
 |---|---|
-| **Mandos >>** | SDL/hidraw, puente Steam Input → XInput, mando Sony, **mando virtual**, escribir SDL en el registro del prefijo |
+| **Mandos >>** | SDL/hidraw, puente Steam Input → XInput, mando Sony, **mando virtual**, **esconder el mando virtual de Steam**, escribir SDL en el registro del prefijo |
 | **Protonfixes / UMU >>** | El `GAMEID` y la búsqueda en la base de umu |
 | **Carátula y ficha >>** | Las carátulas (elegir una imagen, la 4:3 del repositorio, buscar en SteamGridDB), la ficha del juego, las notas y las estadísticas |
-| **Archivo y mantenimiento >>** | Reinstalar el `.bat` del juego, copias de partidas, comprobar el archivo, acceso directo, repetir el asistente, borrar saves del overlay y borrar la configuración |
+| **Archivo y mantenimiento >>** | **Renombrar el juego**, reinstalar el `.bat` del juego, copias de partidas, comprobar el archivo, acceso directo, repetir el asistente, borrar saves del overlay y borrar la configuración |
 | *Mapeador .keys* | Se queda **fuera**: convertir el mando en pulsaciones de teclado es otra cosa distinta de elegir cómo se lee el mando |
 
 *Favorito* y *Completado* se quedan fuera de ese submenú a propósito: son
@@ -868,8 +923,29 @@ Tres cosas que no hace nunca, por si acaso:
 
 Tampoco borra mientras estés jugando: hay que salir del juego primero.
 
+**Versión del juego** — solo aparece si el juego trae **las dos**: el `.exe` de
+Windows y su versión nativa de Linux (los de GOG lo hacen mucho). Las dos usan
+el mismo paquete y las mismas partidas guardadas, pero el camino es distinto: la
+de Windows pasa por Proton y su prefijo, y la de Linux se ejecuta tal cual, sin
+Wine. De fábrica va en *automática*, que es lo de siempre —si hay `.exe`, la de
+Windows—; si una te da problemas, prueba la otra. Al cambiarla se olvida el
+ejecutable que hubieras elegido a mano, porque apuntaba a la otra versión.
+
 **Acceso directo en el escritorio** — crea un icono que lanza ese juego
 directamente, con su carátula. Útil para los que juegas a menudo.
+
+Y para WProton entero hay otra fila, en *Runners y herramientas → **Acceso a
+WProton en el escritorio***. Se puede pulsar las veces que haga falta, que es
+justo para lo que está: el icono se borra sin querer, o mueves la carpeta de
+WProton y el que tenías se queda apuntando a donde ya no hay nada —y entonces
+no pasa nada al hacer doble clic, que desespera más que no tenerlo—. Al
+pulsarla se rehace apuntando al WProton que estás usando.
+
+Lo pone en **dos sitios**: en el escritorio y en el menú de aplicaciones, junto
+a los demás programas. El del menú es la copia de seguridad del otro: un icono
+del escritorio se borra fácil, y el del menú no estorba a nadie y sigue ahí. Si
+el equipo no tiene escritorio —el modo Juego de la Deck, por ejemplo— se pone
+solo el del menú y la fila lo dice en vez de darlo por fallado.
 
 **Favorito** — lo pone al principio de la lista, con una cinta en la carátula.
 
@@ -908,6 +984,90 @@ aunque la partida haya durado minutos: eso siempre significa que algo va mal.
 Y si **no** reconoce el fallo, no se inventa nada.
 
 Si un juego se cierra en menos de diez segundos, WProton te enseña automáticamente el final del registro.
+
+### «WProton abre pero no abre ningún juego»
+
+Si WProton arranca con normalidad y **todos** los juegos fallan al abrirse —no
+uno, todos—, lo que suele pasar es que WProton se está ejecutando **dentro de un
+contenedor**. Ocurre en el modo Juego de algunos sistemas (los atómicos, al
+estilo SteamOS o Bazzite): ahí Steam lanza lo que le pidas dentro de su propio
+contenedor, y dentro de él **no se puede montar nada con FUSE**. Como los juegos
+en `.wsquashfs` son imágenes que hay que montar, ninguno abre. WProton sí, porque
+WProton es un script y no monta nada.
+
+WProton **lo comprueba de verdad**, no lo sospecha: abre `/dev/fuse` y hace la
+misma llamada al sistema que hace la librería FUSE (`mount(2)`). Eso es lo que
+separa los dos fallos que desde fuera se parecen —«aquí no se puede montar
+nada» y «esta imagen está rota»—, y sin esa separación no se puede decir con
+honradez que tu fichero está bien.
+
+Hay **dos caminos** para montar y hacen falta los dos para dar algo por perdido:
+la llamada directa (que en un escritorio normal falla, porque no eres root, y no
+pasa nada) y `fusermount`, que es *setuid root* y monta por ti. Lo que cierra la
+puerta dentro de un contenedor es `NoNewPrivs=1`: una marca que pone bubblewrap
+al crear el contenedor, que **no se puede quitar** y que hace que el núcleo
+ignore el bit *setuid* de cualquier programa. `fusermount` sigue ahí, con su bit
+puesto, y no puede montar.
+
+WProton lo avisa **al arrancar**, en la primera pantalla del registro:
+
+```
+ATENCION: WProton corre DENTRO de un contenedor (pid 1 = bwrap).
+    Ahi FUSE suele estar prohibido y los juegos en imagen no abriran.
+```
+
+Y si llegas a intentar abrir un juego, el mensaje es corto y dice lo único que
+hace falta saber ahí: que **el fichero está bien** —no es un archivo dañado,
+aunque lo parezca— y que aquí no se puede montar.
+
+El detalle completo queda en el registro, bajo *por qué no se pudo montar*: si
+hay `/dev/fuse`, si `fusermount` es setuid, si el sistema de ficheros donde vive
+va montado con `nosuid`, y si el proceso lleva `NoNewPrivs`. Esas dos últimas son
+las que lo explican casi siempre, y conviene entenderlas porque son
+contraintuitivas: **el sistema sí tiene FUSE y funciona**. `fusermount3` está ahí
+con su bit *setuid* puesto. Lo que pasa es que dentro del contenedor ese bit **no
+se aplica** —`/usr` va montado `nosuid`, y además `NoNewPrivs` lo anula por otra
+vía y no se puede quitar—. Por eso el mismo juego, en el mismo equipo, abre desde
+el escritorio: ahí no hay contenedor.
+
+Ahí mismo, en el registro, quedan también las salidas que tienes.
+
+**Tres salidas, de mejor a peor:**
+
+1. **Elegir el runtime antiguo en Steam.** Sobre el atajo de WProton:
+   *Propiedades → Compatibilidad → «Select compatibility tool»*. Enciende
+   **«Show all compatibility tools»** y elige **«Legacy Steam Runtime»**: ese es
+   el runtime viejo de Steam, el que va por `LD_LIBRARY_PATH`, y **no usa
+   contenedor**. «Default» y «Steam Linux Runtime 1.0–4.0» sí lo usan, y son los
+   que traen este problema.
+
+   **Cuidado con «Steam Linux Runtime 1.0».** Se llama «1.0» y suena al
+   antiguo, pero no lo es: el repositorio de Valve lo describe como *«a Steam
+   Runtime 2 soldier container combined with the Steam Runtime 1 scout
+   LD_LIBRARY_PATH runtime»* —lleva contenedor igual que los demás—. Los cuatro
+   «Steam Linux Runtime» valen lo mismo aquí: ninguno sirve.
+
+   **Y en SteamOS puede que «Legacy» no esté en la lista.** En el modo Juego
+   suelen salir sólo los cuatro «Steam Linux Runtime» y los Proton. Ponlo desde
+   el **modo Escritorio**, donde sí aparece, y vuelve al modo Juego: el ajuste
+   se queda puesto. (En CachyOS, en el escritorio, sale sin problema.)
+
+   > Esto es interfaz de Steam y cambia. Hasta octubre de 2026 era una casilla
+   > («Forzar el uso de una herramienta de compatibilidad») que bastaba con
+   > desmarcar; ahora es una lista y hay que elegir. Si lo que ves no se parece
+   > a esto, busca la opción equivalente: lo que hace falta es que el atajo **no**
+   > use ninguna herramienta basada en contenedor.
+2. **Abrir WProton desde el escritorio**, donde no hay contenedor. El mismo juego
+   abre sin tocar nada.
+3. **Dejar ese juego en carpeta** en vez de en imagen: *Runners y herramientas →
+   Convertir wsquashfs a carpeta*. Una carpeta no se monta, así que no necesita
+   nada de esto. Ocupa bastante más disco, pero abre en cualquier sitio.
+
+   Ahí dentro, esa opción **desempaqueta con 7-Zip en vez de montar** —lo detecta
+   sola—, así que funciona aunque FUSE esté prohibido. Es lo mismo que hacen los
+   AppImage cuando no pueden montarse, y por eso en esos sistemas los AppImage sí
+   abren: no es que FUSE funcione, es que se extraen. Con DwarFS no hay forma:
+   ese formato solo se abre montándolo.
 
 ### El mando va en los menús pero no en el juego
 
@@ -949,6 +1109,70 @@ WProton también lo detecta:
 [!] EL UNICO MANDO QUE HAY ES VIRTUAL (uinput), sin nodo /dev/hidraw.
     Este runner lee los mandos por hidraw, asi que no lo encontrara.
 ```
+
+### Dos mandos y ninguno responde: el mando fantasma de Steam
+
+Este es distinto de los dos de arriba, y pasa **en el escritorio**, no solo en
+el modo Juego. Con Steam abierto aparece un mando de más:
+
+```
+mando 1: "Microsoft X-Box 360 pad"    [045e:028e]
+mando 2: "Microsoft X-Box 360 pad 0"  [28de:11ff]
+```
+
+El segundo es el **virtual de Steam** (`28de` es Valve, `11ff` es su mando
+virtual) y se hace pasar por un Xbox 360 a propósito. Si el juego no se lanza
+desde Steam, ese mando **no manda nada**, pero el juego lo ve igual y hay
+juegos que se quedan con él como jugador 1. El resultado es un juego que
+detecta el mando y no responde.
+
+WProton lo detecta y lo esconde él solo. En el registro:
+
+```
+mando fantasma: estorba (hay un mando de verdad y, al lado, el virtual de Steam)
+[+] Mando via SDL: ACTIVADO (... leyendo por SDL el virtual desaparece)
+[+] Mando virtual de Steam: escondido al juego.
+```
+
+Hacen falta **dos cosas a la vez**, una por generación de Proton: con Proton 9
+el fantasma entra por SDL y basta con decirle a SDL que lo ignore; con Proton
+10 y 11 entra por *evdev* a pesar de SDL, y lo que lo quita es que winebus lea
+por SDL —que es por lo que se enciende solo *Que Wine lea el mando por SDL* en
+este caso, aunque tu mando sea un Xbox, donde normalmente estorbaría.
+
+Se apaga en *Ajustes del juego → Mandos → Esconder el mando virtual de Steam al
+juego*.
+
+> **Si con el arreglo puesto te quedas sin mando**, mira el final del registro.
+> Hay equipos donde la SDL de Proton 11 no carga y winebus se cae entero; con
+> SDL apagada eso no se nota porque evdev salva la partida, pero con SDL forzada
+> no hay ningún mando. WProton lo comprueba al terminar la partida y lo dice:
+>
+> ```
+> [!] El lector de mandos de Wine fallo en esta partida.
+> ```
+>
+> La salida es poner *Que Wine lea el mando por SDL* en **OFF** para ese juego.
+
+### Alguien se está quedando los eventos de tu mando
+
+Hay un caso en el que el juego ve el mando, el mando funciona en los menús de
+WProton… y en el juego no se mueve: que **otro programa lo tenga en exclusiva**
+(una captura `EVIOCGRAB`). Capturar un mando no se lo quita a Wine de la vista
+—winebus lo enumera igual— pero sí le quita los eventos, así que el juego ve un
+joystick quieto.
+
+WProton lo prueba él solo antes de lanzar, sin pedirte comandos: intenta
+capturar cada mando y lo suelta en el acto; si otro lo tiene, el `ioctl` falla
+con `EBUSY`. En el registro queda quién:
+
+```
+event8: captura=libre | abierto por: python3, steam
+```
+
+Si el capturado es un mando real se avisa en pantalla, porque **esto no lo
+puede arreglar WProton**: quien tiene la captura tiene los eventos. Lo normal
+es que sea Steam Input (*Steam → Mando → Desactivar Steam Input*).
 
 ### Cuando Steam se queda el mando: el mando virtual de WProton
 
@@ -1180,6 +1404,20 @@ En *Ajustes de un juego → Partidas guardadas*:
 - **Sincronizar** — con *rsync* a otro equipo o disco, o preparando la carpeta para *Syncthing*.
 
 > Si acabas de añadir un juego, juega una partida antes de hacer la copia: hasta entonces WProton aún no sabe dónde guarda.
+
+### Si el perfil viene de otro equipo
+
+La carpeta aprendida se guarda en el perfil, y los perfiles se comparten. Pero
+sólo se guarda **la parte que vale en cualquier equipo** —
+`AppData/Roaming/Yacht Club Games/Mina the Hollower`, que es lo que decide el
+juego — y no el trozo de delante, que depende de qué disco es, de dónde tienes
+WProton y de cómo se llame el usuario del prefijo. Al usarla, WProton la rellena
+con **tus** carpetas.
+
+Así que un perfil de la comunidad no sólo no te estorba: te ahorra la partida de
+aprendizaje. Y si el perfil es de los antiguos y trae una ruta completa de otro
+equipo, WProton la recoloca en la tuya; si no puede, busca por el nombre del
+juego como si no hubiera nada aprendido, y lo dice en el registro.
 
 ---
 
@@ -1442,6 +1680,8 @@ Es más sencillo y se entiende de un vistazo: lo que hay en el disco es el juego
 - **El overlay que separa tus partidas del juego.** Con el juego en carpeta, las partidas se guardan entre sus archivos, como en Windows.
 - **Llevártelo a otro equipo copiando un archivo.**
 
+**Y un juego empaquetado tiene que comportarse como uno en carpeta.** Hubo un caso en el que no: Forza Horizon 2 iba en carpeta y, al empaquetarlo, su propio lanzador se negaba a arrancar diciendo que su carpeta era un enlace. Y lo era, para Wine: Wine le dice a los juegos que la **raíz de un montaje** es un enlace (una junction), y la carpeta de un juego empaquetado era justo eso. Ahora el juego cuelga de *dentro* del montaje, que para Wine ya es una carpeta normal — y los saves se siguen guardando exactamente donde se guardaban. No hay nada que configurar. Si algún día diera guerra, `MONTAJE_ANIDADO=0` en `settings.conf` vuelve al esquema anterior.
+
 Los juegos que ya tengas empaquetados se siguen usando igual: el ajuste solo afecta a los que importes a partir de ese momento. Y las dos opciones cuyo trabajo *es* empaquetar —*Convertir carpeta a wsquashfs* y *empaquetar un juego con su prefijo*— siguen haciendo un archivo aunque tengas puesto "carpeta": si has pedido un paquete, es que quieres un paquete.
 
 ### Juegos con decenas de miles de archivos
@@ -1537,7 +1777,81 @@ Proton no sabía que ese prefijo ya existía —le falta un fichero interno (`pf
 
 Y el fichero **sólo se pone si el prefijo se sostiene solo** —tiene registro y tiene `kernel32.dll`—. Dicho de un prefijo vacío sería mentira, y Proton se la creía: se saltaba la creación y se estrellaba en la primera copia (`FileNotFoundError: .../pfx/drive_c/vrclient/bin`). Si encuentra uno puesto por una versión anterior en un prefijo a medias, **lo quita**, así que los prefijos que se rompieron con la 2.03 se arreglan solos al volver a entrar.
 
-Si tienes un juego así y sigue fallando, el registro lo dice: busca `creation_sync_guard` y `CURRENT_PREFIX_VERSION`.
+**En la 2.11 se cerró lo que faltaba de eso, que eran dos cosas.** La primera: el centinela se quitaba, sí, pero el fichero `version` se quedaba, y la `version` sola basta para dejar el prefijo a medias para siempre —Proton compara su `CURRENT_PREFIX_VERSION` con ese fichero y, si coincide, no actualiza nada—. En el registro salían las dos líneas seguidas, diciendo cada una lo contrario de la otra:
+
+```
+proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+[+] Prefijo: ya marcado como 'GE-Proton11-9' (al dia)
+```
+
+Ahora las marcas van las tres juntas —`version`, `.update-timestamp` y `creation_sync_guard`— y **se ponen o se quitan con la misma regla**: sólo las lleva un prefijo que se sostiene solo. Además, un `.wsquashfs` ya **nace sin ellas** cuando el prefijo que lleva dentro está incompleto, que es lo normal: al empaquetar hay que quitarle los enlaces al runner del equipo de origen (medio `system32`, `kernel32.dll` incluido), y reponerlos es trabajo de Proton en el equipo donde se juegue. Y a un prefijo así ya no se le pasa `wineboot`, que sólo podía contestar `could not load kernel32.dll`.
+
+**La segunda es la que de verdad tumbaba el juego, y no estaba donde parecía: Proton no mira `WINEPREFIX`.** El prefijo que usa sale de `STEAM_COMPAT_DATA_PATH`, y umu sólo copia ahí `WINEPREFIX` *cuando esa variable viene vacía*. Un `.wsquashfs` con prefijo dentro se prepara en dos tiempos: primero se apunta la variable al montaje (correcto en ese momento) y después se **saca** el prefijo del archivo a disco, que cambia `WINEPREFIX`. Nadie volvía a tocar la variable, así que en el mismo lanzamiento salía esto:
+
+```
+WINEPREFIX=/home/deck/WProton/prefixes/The_Witcher_3_Wild_Hunt_Remastered
+STEAM_COMPAT_DATA_PATH=/home/deck/WProton/wsquashfs/tmp_mount/The_Witcher_3_...
+```
+
+Todo el arreglo del prefijo se hacía en uno y el juego arrancaba con el otro. Sin un solo error por nuestra parte: lo decía Wine por lo bajo (`MountMgr failed to start: 2`, y lo mismo con `PlugPlay` y `winebus`), y sin `MountMgr` no hay unidades y sin `PlugPlay` no hay mando, así que el juego se quedaba dando vueltas en la pantalla de carga. **El mismo juego en carpeta iba perfecto**, y ésa fue la pista: por el camino de carpeta esa variable no se pone nunca.
+
+Ahora se alinea cada vez que el prefijo puede haber cambiado: con prefijo **incluido** se fija al prefijo (Proton tiene que leer su `version` ahí), y con cualquier otro —propio, compartido, o sacado del archivo— **se quita** y la deduce umu de `WINEPREFIX`. Fijarla a mano en esos casos ya rompió un juego con prefijo compartido (`Proton: Error: unable to use parent for game drive, path /home`).
+
+Si tienes un juego así y sigue fallando, el registro lo dice: busca `creation_sync_guard`, `CURRENT_PREFIX_VERSION` y, en el diagnóstico de antes de lanzar, las dos líneas `prefijo=` y `compatdata=`, que ahora van juntas y se avisa si no coinciden.
+
+**Empaqueté un juego que funcionaba y, dentro del `.wsquashfs`, ya no va.**
+
+Era un fallo del empaquetado y está corregido en la 2.11. Un prefijo de Proton tiene **medio Windows como enlaces al runner** —así lo hace Proton— y el empaquetado los borraba todos: el archivo salía con un Windows a medias, contando con que Proton lo reconstruyera al abrirlo. Ahora **el archivo se lleva su Windows dentro**: cada enlace que lleva a un fichero se sustituye por el fichero de verdad, y solo se quitan los que no llevan a ningún sitio. Ocupa más (en la pregunta de empaquetar sale la línea *Windows* con los megas) y a cambio arranca donde lo lleves sin reconstruir nada.
+
+> **Retirado en la regresión del 18/10**, junto con el resto de los cambios de ese día sobre prefijos. Si un archivo con su prefijo dentro te falla, por ahora lo que hay es lo de la 2.11 publicada.
+
+**¿Cómo sé si el prefijo de un juego está bien?**
+
+> **Esto no está en la versión que tienes.** La comprobación automática del prefijo se retiró en la regresión del 18/10: algo del trabajo de ese día sobre los prefijos hacía que muchos juegos no arrancaran, no se sabía qué, y se volvió a la 2.11 publicada en todo lo que toca prefijos. Volverá, pieza a pieza y probando cada una. Lo de abajo describe cómo funcionaba.
+
+Porque WProton lo **prueba** antes de lanzar: ejecuta un programa de Windows dentro del prefijo, con la misma cadena con la que va a lanzar el juego, y mira si contesta. Mirar si está `kernel32.dll` no vale —un prefijo con esa DLL puede seguir sin arrancar, y uno sin ella arranca si quien lo usa lo completa antes—, y que arranque `cmd` tampoco basta: comprueba además que Wine no se queje de los servicios (`MountMgr` da las unidades, `PlugPlay` y `winebus` el mando) y qué piezas del Windows del runner le faltan.
+
+Si no arranca, lo repara en tres pasos, comprobando después de cada uno: le quita las marcas de «ya preparado» —que son lo que hace que Proton no lo toque—, le repone `drive_c/windows` desde el propio runner, y si aún así no hay manera **te lo dice antes de lanzar** con el motivo, en vez de dejar el juego arrancar a ciegas.
+
+Cuesta un arranque de Wine la primera vez con cada prefijo y nada las demás. Si cambias de runner se vuelve a comprobar, porque un prefijo que arranca con uno puede no arrancar con otro.
+
+A mano: *Ajustes del juego → Herramientas del prefijo → **Comprobar y reparar el prefijo***. Si te dice que arranca, ya sabes que lo que falla **no es el prefijo**.
+
+**Un juego grande tarda muchísimo en arrancar desde el `.wsquashfs` (y en carpeta no).**
+
+Es normal, y ahora el registro lo dice con números. Un archivo comprimido con zstd se descomprime **en un solo hilo**, así que el primer arranque de un juego de decenas de gigas puede tardar varias veces lo que tarda desde la carpeta. El caso que lo puso en evidencia: The Witcher 3 Remastered, 45 GB, cerrado a mano a los 90 segundos dándolo por colgado — y los dos registros, el de la carpeta y el del archivo, eran idénticos línea por línea.
+
+WProton toma tres muestras por partida (a los 20, 60 y 120 segundos) y escribe la conclusión:
+
+```
+[carga] 20s de partida: leidos 612 MB del archivo (30 MB/s) | CPU del juego 94% | estado RS
+[carga] ESTA CARGANDO del archivo. Si la pantalla sigue en negro, dale tiempo
+```
+
+| Lo que dice | Qué hacer |
+|---|---|
+| **ESTA CARGANDO del archivo** | esperar: no hay nada roto |
+| **no lee del archivo pero consume CPU** | está trabajando o dando vueltas; si no sale nunca, mira el vídeo de presentación (códec H.264) |
+| **ni lee ni consume CPU: está PARADO** | ahí sí hay algo que mirar: prefijo, mando, o un diálogo esperando |
+
+Si el juego es grande y lo vas a jugar mucho, el formato **carpeta** (en *Biblioteca y preferencias*) lo arranca igual de rápido que sin empaquetar, a cambio de espacio. Se apaga con `WP_DIAG_CARGA=0`.
+
+**El juego arranca "recién instalado": sin idioma, sin configuración y sin partidas.**
+
+Y no hay ningún error en el registro, porque para el sistema no ha pasado nada. Lo que hay es un **enlace** que ya no lleva a ningún sitio.
+
+Un prefijo de WProton está lleno de enlaces a propósito, y es la forma correcta de hacerlo: el juego ocupa gigas y no se copia dentro de cada prefijo. El más importante es `drive_c/users/<nombre>/AppData`, que en un prefijo sacado de un `.wsquashfs` apunta al montaje — ahí es donde la mayoría de los juegos guardan el idioma, la configuración y las partidas. En cuanto lo de enfrente cambia (se convierte el juego a carpeta, se borra el archivo, se lanza sin montar nada), ese enlace se queda colgado y el juego no encuentra nada.
+
+Desde la 2.11 WProton recorre esos enlaces **antes de lanzar**, los escribe enteros en el registro con su destino y marca los que están colgados:
+
+```
+enlaces del prefijo: drive_c/users/deck/AppData -> /home/deck/WProton/...  [COLGADO]
+enlaces del prefijo: 14 revisado(s), 1 colgado(s)
+```
+
+Y los arregla solo: en el perfil del usuario los deja como carpeta de verdad —así el juego al menos puede escribir— y en la raíz de `C:` los quita, que se rehacen al montar el juego. Si lo que buscas son las partidas que había detrás, el registro dice a dónde apuntaba el enlace.
+
+Lo mismo vigilado por el otro lado: al **empaquetar** un prefijo, lo que esté enlazado a la zona de WProton (el montaje de ese juego) se **trae dentro del archivo** en vez de vaciarse, que es lo que pasaba antes y por lo que un archivo rehecho salía sin `AppData`.
 
 **¿Dónde están mis partidas?**
 En `wsquashfs/overlays/<juego>/upper/` y, según el juego, dentro de su prefijo. Esa carpeta **no se borra nunca** al reempaquetar un juego.
@@ -1590,8 +1904,62 @@ Apunta el lanzador a `wproton.sh %ROM%`.
 **El mando funciona en los menús pero no dentro del juego.**
 Mira el ajuste *Mando vía SDL* del juego. En automático debería acertar, pero puedes forzarlo a ON (mandos de PlayStation) u OFF (mandos XInput).
 
+**Mapeé un botón a una tecla y en el juego no hace nada.**
+
+Si el botón que has mapeado es **Select** (o cualquiera que forme parte de una combinación), su tecla no se manda al pulsarlo: se espera a soltarlo. Eso es a propósito —si no, un `select → ESC` saltaría cada vez que usas Select+Start—, pero hasta la 2.11 la tecla se pulsaba y se soltaba tan rápido que un juego que mira el teclado una vez por fotograma no la veía. Corregido: ahora se mantiene 60 ms, ajustables con `WP_TECLEO_MS` si algún juego necesita más.
+
+Para comprobarlo, el registro de la sesión escribe el mapa en palabras antes de jugar:
+
+```
+[keys] mapa: select (codigo 314) -> KEY_TAB  [se manda AL SOLTAR: el boton tambien esta en una combinacion]
+```
+
+Si ahí sale tu botón y tu tecla, el mapeo está bien cargado. Y más abajo, `[keys] Al teclado virtual: Tabulador` significa que la tecla salió de verdad.
+
+**En «Runners y herramientas» pone que hay un runner nuevo y no se va nunca.**
+
+Fallo de la 2.10 y anteriores, corregido en la 2.11: cuando el runner nuevo era de Wine o de UMU-Proton (no de GE-Proton), la fila avisaba pero **al pulsarla no pasaba nada**, así que no había forma de actualizar y el aviso se quedaba. Ahora la fila dice **qué** runner hay nuevo y lleva a su menú; al instalarlo, el aviso desaparece.
+
+**Instalo un juego de GOG: ¿dónde van sus dependencias?**
+
+En **su propio prefijo** (`prefixes/<juego>`), no en el compartido. Importa porque un instalador de GOG no solo copia ficheros: escribe en el registro de Windows y lanza los redistribuibles que el juego necesita (DirectX, VC++, PhysX). Hasta la 2.11 todo eso iba al prefijo compartido, así que el juego quedaba atado a él y en otro equipo le faltaban sus cosas.
+
+WProton escribe ese ajuste en el perfil del juego antes de instalar, así que cuando lo lances después seguirá usando ese prefijo. Y al acabar, el menú ofrece **«Empaquetar CON su prefijo (archivo autosuficiente)»**: el `.wsquashfs` se lleva el prefijo dentro y funciona en cualquier equipo sin instalar nada, a cambio de tamaño. Esa fila solo aparece si el juego tiene prefijo propio con algo dentro — un juego que se extrajo con innoextract no instaló nada en ningún prefijo, así que no hay nada que empaquetar.
+
+**¿Se queda algo del instalador después de instalar un juego desde una ISO?**
+
+Ya no. Hasta la 2.11 quedaban el prefijo donde corrió el setup (cientos de megas, o más de un giga con DirectX y VC++), su perfil —que además salía en la biblioteca como un juego llamado `instalador_algo`— y su `.keys`. Ahora se borran al terminar, pero **solo si el empaquetado fue bien**: si falló, ese prefijo es lo único que queda de la instalación. Y si eliges «nada por ahora», no se toca nada, porque ahí el juego vive dentro de ese prefijo.
+
+**Encendí HelixSR y en el juego no cambia nada.**
+
+Tres motivos, por orden de probabilidad:
+
+1. **No has elegido «AMD FSR» dentro del juego.** HelixSR ocupa el sitio de FSR 3.1: si el juego está en DLSS, en XeSS o sin escalador, HelixSR no recibe nada.
+2. **El juego no trae FSR 3.1.** WProton lo dice al lanzar («este juego no trae la DLL de FSR 3.1»). Para esos haría falta OptiScaler.
+3. **El juego tiene un OptiScaler puesto** junto al `.exe` que se queda las llamadas de FSR. También se avisa.
+
+Si en el juego se ve **un borde rojo y la imagen temblando**, es otra cosa: la DLL está pero **la red no corrió**. Mira el registro de la sesión, que lo dice con esas palabras, y reconstruye la red en *Biblioteca y preferencias → HelixSR → Reconstruir la red*.
+
+**¿Puedo pasarle a alguien un `.wsquashfs` con HelixSR dentro?**
+
+No, y WProton no te deja sin querer: al empaquetar lo saca y devuelve la DLL original del juego. La red se construye a partir de la DLL de DLSS de NVIDIA y es para tu equipo. Quien reciba el archivo lo tendrá encendido en el perfil y, si en su equipo HelixSR está preparado, se pondrá solo con **su** red.
+
+**En un juego aparece el cursor en forma de X, o no aparece el cursor del juego.**
+
+Corregido en la 2.11, y eran dos cosas distintas:
+
+- **Con el mando haciendo de ratón, el puntero se escondía al segundo.** WProton esconde el puntero cuando nadie lo mueve, y si llegan eventos del mando asume que no estás en el ratón: con un segundo basta. Pero cuando el stick **es** el ratón, esos eventos son justo tu mano moviendo el puntero. Ahora, si el juego lleva el mando como ratón, sus eventos no lo esconden antes: manda la espera normal y moverlo con el stick lo devuelve al instante.
+- **La X.** En Wayland el puntero lo dibuja el compositor, así que WProton pone además un cursor transparente en la ventana del juego. Al quitarlo, la ventana vuelve a **heredar** el cursor del padre — y el de la ventana raíz es la X. Ahora, al devolver el puntero, se le da **un empujón de un píxel**: el juego recibe movimiento, repinta su propio cursor y la X desaparece. Es lo mismo que pasaba al mover el ratón, hecho sin esperar a que lo muevas.
+
+Si algo de esto molesta en tu caso: `WP_CURSOR_EMPUJON=0` quita el empujón, y el escondido completo se apaga en *Biblioteca y preferencias → Puntero mientras juegas*.
+
 **¿Se llenará la carpeta `logs/` de ficheros?**
-No: WProton borra los registros que tengan más de dos días.
+
+No: se borran los que tengan más de dos días, y nunca hay más de 40.
+
+Y si no los quieres, se pueden **apagar**: *Biblioteca y preferencias → Registros de las sesiones → **Guardar un registro de cada sesión: NO***. Entonces no se escribe ninguno — apagado no es «escribir y luego borrar», es no escribir. Ahí mismo puedes ver el de la sesión en curso o vaciar la carpeta.
+
+Vienen encendidos a propósito: cuando algo no va, el registro es lo primero que hace falta, y hay fallos que no escriben ningún error —un juego que se queda cargando— donde es lo único que hay. Si los apagas y algo deja de funcionar, vuelve a encenderlos y repite lo que falló.
 
 **Mi mando de PlayStation no responde (DualSense o DualShock 4).**
 Desde GE-Proton 11-4 los mandos de Sony se leen por `/dev/hidraw`, y en muchos
@@ -1829,6 +2197,253 @@ funciona, aunque ahí está además el botón de Steam.
 Se puede cambiar el tiempo y la combinación en `settings.conf`
 (`PAD_EXIT_SEGUNDOS`, `PAD_EXIT_COMBO`: `select`, `l3r3` o `start`).
 
+### El menú de WProton encima del juego
+
+Durante la partida, **Select+L1** (o **Ctrl+Alt+W** en el teclado) abre un
+panel a la izquierda con lo que hace falta a mano:
+
+| Fila | Qué hace |
+|---|---|
+| Volver al juego | cierra el panel |
+| **Captura de pantalla** | guarda un PNG del juego en `capturas/` |
+| **Mandar una tecla al juego** | Tabulador, Enter, Escape, F1…, Alt+Enter |
+| **Asignar una tecla al mando** | y queda guardada para la próxima partida |
+| **Copia de la partida guardada** | sin salir del juego |
+| Cerrar el juego | lo mismo que mantener Select |
+| **Forzar el cierre** | para cuando el juego **no responde** |
+
+Se mueve con la cruceta o el stick, **A** elige y **B** vuelve al juego.
+Arriba se ve el nombre del juego y **cuánto llevas jugando**.
+
+El panel se ve **a través** donde se puede: antes de abrirlo se fotografía el
+trozo de pantalla que va a tapar y se pinta esa imagen oscurecida dentro, así
+que el juego se transparenta debajo del menú. Eso se hace así porque la
+transparencia de una ventana la decide el escritorio y no siempre la aplica
+—gamescope, por ejemplo—. Si en algún equipo molesta, se apaga con
+`WP_OVERLAY_FOTO=0`.
+
+**En Wayland hace falta la herramienta del escritorio**, porque allí leer la
+pantalla está prohibido a propósito y cada compositor tiene su propia puerta.
+WProton las prueba por orden y recuerda la que funcione:
+
+| | |
+|---|---|
+| X11 | lo hace él mismo, sin lanzar nada |
+| KDE (Wayland y X11) | `spectacle` |
+| Sway, Hyprland… | `grim` |
+| GNOME | `gnome-screenshot` |
+
+**En Wayland esto viene apagado**, y no por capricho: ahí la única forma de leer la pantalla es lanzar una aplicación del escritorio, y lanzarla encima de un juego a pantalla completa lo saca de su camino directo a la pantalla — el juego se queda con la última imagen (sonando, porque él no se ha enterado de nada) hasta que mueves el ratón. Un juego congelado es un fallo; un panel que no se transparenta es un adorno de menos. Si prefieres el adorno, `WP_OVERLAY_FOTO=1` en `settings.conf` lo vuelve a encender. En X11 sigue encendido, porque allí la foto la saca el propio panel sin lanzar nada.
+
+Si no hay ninguna, el panel te dice cuál instalar. Y como la foto se hace **al
+abrir el panel** (para que no salga el propio panel en la imagen), en Wayland
+abrirlo puede tardar un par de décimas: el registro apunta cuánto, y con
+`WP_OVERLAY_FOTO=0` se quita.
+
+Mientras el panel está abierto, el mando y el teclado **no le llegan al
+juego**: así bajar por el menú no te mueve también al personaje. Al cerrarlo se
+devuelven.
+
+Y si el juego tiene un `.keys` que hace que el mapeador se quede el mando, el
+panel **se lo pide prestado** y se lo devuelve al cerrarse: el mando no puede
+ser de los dos a la vez, y sin eso el panel se abría y no respondía a ningún
+botón.
+
+**La captura de pantalla** sale del mismo sitio que la transparencia: el panel
+fotografía la pantalla cada vez que se abre, y esa foto *es* la captura del
+juego. Por eso la imagen es la del **instante en que abriste el menú**, no la de
+cuando pulsas la fila — si se volviera a fotografiar al pulsar, en la captura
+saldría nuestro propio panel tapando el juego. Los PNG se guardan en la carpeta
+`capturas/` de WProton, con el nombre del juego y la fecha. El panel te dice
+cómo se llama el fichero y se queda abierto, así que puedes hacer varias.
+
+### Mandar una tecla al juego, y asignarla al mando
+
+Esto es para el caso clásico: **un juego que necesita una tecla que el mando no
+tiene**. Un tester lo contó así: *«en El Torrente hay que usar el tabulador y no
+puedo remapearlo»*.
+
+- **Mandar una tecla al juego** la manda en ese momento. Útil para un lanzador
+  que pide Enter, para un `Alt+Enter` que cambia a pantalla completa, o para
+  probar si la tecla es la que hace falta antes de asignarla.
+- **Asignar una tecla al mando** escribe las **teclas del juego** y arranca el
+  mapeador con ellas, así que funciona desde ese mismo instante y también en las
+  partidas siguientes. Se elige primero el grupo, luego la tecla y luego el
+  botón, y el menú te dice si ese botón ya tiene algo asignado.
+
+Están **todas** las teclas (104). Las cinco que más se buscan —**tabulador,
+Enter, Escape, espacio y retroceso**— salen directamente en la primera pantalla,
+y el resto van por grupos para que la lista se pueda recorrer con la cruceta:
+*Letras*, *Números*, *Teclas F*, *Flechas y navegación*, *Modificadores*,
+*Signos*, *Teclado numérico*, *Ratón* (los clics) y *Combinaciones*.
+
+Dos cosas que conviene saber:
+
+- **El botón sigue haciendo lo suyo en el juego.** Asignar el tabulador a L1
+  **añade** la tecla, no sustituye al botón; para afinar eso está *Ajustes del
+  juego → Teclas del mando*, que es el editor completo. En la partida en curso
+  el mando **no** se captura, pase lo que pase: se pidió añadir una tecla, no
+  cambiar de esquema de control.
+- **Pero ojo con «el juego NO ve el mando: siempre».** Si ese ajuste está puesto
+  en este juego, el fichero de teclas que se acaba de crear le quitará el mando
+  **en la próxima partida**, aunque solo tenga un atajo. El panel te avisa al
+  asignarla, y se cambia en *Ajustes del juego → Mapeador `.keys`*.
+- **Alt+Enter se puede mandar pero no asignar.** En un fichero de teclas cada
+  acción manda **una** tecla, así que una combinación de dos no cabe ahí.
+
+Para **mandar** una tecla se usa el **teclado virtual del mapeador**, que es lo
+que funciona igual en X11 y en Wayland (un teclado de kernel lo lee el
+compositor en los dos). Si el mapeador no está en marcha, se intenta por el
+servidor gráfico (XTEST), que solo existe en X11 — y entonces **cada envío se
+comprueba**: se le pregunta al servidor si la tecla consta como pulsada y el
+panel te lo dice. Así, si el juego no reacciona, el registro distingue «no se
+pudo mandar» de «se mandó y el juego la ignoró», que desde fuera se parecen
+mucho; y cuando no consta, apunta además **qué ventana tiene el foco**.
+
+### Copia de la partida guardada
+
+Hace la misma copia que *Copias de seguridad*, pero sin salir. Va bien antes de
+un tramo difícil. El panel te dice el nombre del zip cuando termina.
+
+**Aviso honesto:** se copia **lo último que el juego haya escrito en el disco**.
+Si acabas de pasar un punto de guardado y el juego aún no lo ha volcado, eso no
+estará en la copia. No hay forma de obligarle a guardar desde fuera.
+
+**Qué va en este menú y qué no.** Aquí hubo dos filas más —MAKO y HelixSR «para
+la próxima partida»— y se han quitado: ninguno de los dos se puede encender en
+un juego ya arrancado (MAKO es una capa de Vulkan que se inyecta al lanzar,
+HelixSR una DLL que el juego carga al arrancar), así que la fila solo podía
+apuntarlo para la siguiente, que es lo que ya hace *Ajustes del juego*. La regla
+que queda: en este menú va lo que **solo** se puede hacer durante la partida.
+
+La fila que más se va a usar es probablemente **forzar el cierre**: si el juego
+responde, casi todos tienen su propio «salir», y si no responde, mantener
+Select tampoco sirve de nada. Esa fila va directa a matar los procesos del
+juego, así que lo que no estuviera guardado se pierde.
+
+Se enciende, se apaga y se cambia la combinación en **Biblioteca y preferencias
+→ Menú encima del juego** (en `settings.conf`: `OVERLAY`, `OVERLAY_COMBO`,
+`OVERLAY_TECLA`).
+
+### Lo que enseña la cabecera
+
+Arriba del panel, debajo del tiempo de partida, va cómo está la máquina: **CPU,
+RAM, temperatura y batería**, y los **FPS** del juego. Se mide una vez por
+segundo.
+
+Los FPS solo salen con la capa de Vulkan puesta, y por una razón de fondo: desde
+fuera no se pueden saber. Lo único que ve un programa de fuera es una ventana;
+los fotogramas los cuenta quien está dentro del dibujo del juego, y ahí está la
+capa, que ya los lleva apuntados. Es lo mismo que hace MangoHud, y por lo mismo.
+
+Lo demás sale siempre, con capa o sin ella, y lo que no haya en tu equipo
+sencillamente no aparece: un sobremesa sin batería no pierde una línea por
+decirlo. Si quieres estos datos **todo el rato** y no solo al abrir el menú,
+eso es MangoHud, que WProton ya enciende por juego y que además da GPU y
+tiempos de fotograma.
+
+Nada de esto se lee con librerías de fuera: sale de `/proc` y de `/sys`
+directamente, para que WProton siga funcionando tal cual se descomprime.
+
+**Si en tu equipo no sale la temperatura**, no hace falta que investigues: la
+primera vez que abres el panel, WProton apunta en el registro todos los
+sensores que encuentra, con su nombre y lo que miden. Con esa línea se sabe
+cuál es el bueno en ese equipo. Los nombres cambian de una máquina a otra —en
+una Steam Deck la CPU y la GPU son la misma pieza y el sensor no se llama como
+en un sobremesa—, y por eso se apunta solo en vez de adivinar.
+
+### Cómo se dibuja el panel: dentro del juego, y solo ahí
+
+El panel se pinta **dentro del juego**, sobre el fotograma, antes de que se
+enseñe. Es lo que hacen el overlay de Steam y MangoHud, y lo hace una capa de
+Vulkan propia de WProton.
+
+**Hubo otra forma, y se quitó.** La primera versión abría una ventana encima del
+juego. Daba dos problemas, y los dos graves:
+
+- **Congelaba la imagen.** Una ventana encima de un juego a pantalla completa
+  obliga al compositor a sacar al juego de su camino directo a pantalla para
+  poder componerla. En KDE el resultado era la imagen congelada —con el sonido
+  siguiendo— hasta que algo la forzaba a repintarse.
+- **Y en el modo Juego ni se veía.** La ventana va a la capa de overlay de
+  gamescope, que es la misma que usa MangoHud; si MangoHud la tiene cogida, no
+  la suelta. El panel se abría debajo.
+
+O sea: no salía el menú **y** se colgaba el juego. Mantenerla «por si acaso» era
+mantener setecientas líneas de código frágil cuyo mejor resultado posible era
+molestar. Así que el panel ahora tiene una sola vía.
+
+**La consecuencia, dicha claramente: sin la capa no hay menú encima del juego.**
+No hay nada que salga «peor pero algo». Y por eso WProton avisa en vez de dejar
+que descubras que la combinación no hace nada:
+
+- la fila de preferencias lo dice: *encendido, pero FALTA LA CAPA y sin ella no
+  sale*;
+- y antes de entrar al juego, en el registro y en pantalla: *NO habrá menú
+  encima del juego en esta partida*.
+
+**No hay que traerla a mano.** Si el menú encima del juego está encendido y la
+capa no está, WProton **se la descarga solo al arrancar**, en segundo plano y sin
+que nadie espere —igual que hace con `squashfuse_ll`—. Si no hay red, lo
+reintenta a la semana. Quien tenga el menú apagado no se descarga nada.
+
+**Tampoco hay que compilar nada.** Si la capa todavía no está, la fila *Se
+dibuja* lo dice y al pulsarla WProton se la descarga del repositorio del
+proyecto y la deja en su carpeta `overlay/`; no pide contraseña ni instala nada
+en el sistema. Si no hay red o todavía no está publicada para tu equipo, ese
+mismo sitio te deja compilarla ahí mismo, que es lo que hace falta de momento
+para la de 32 bits. El manifiesto `.json` que necesita el cargador de Vulkan lo
+escribe WProton solo: lo único que hace falta de fuera es la biblioteca.
+
+Lo que se descarga **se comprueba** antes de darlo por bueno: que sea una
+biblioteca de verdad, de la arquitectura que toca, y que sea la nuestra. Una
+página de error también se descarga con éxito, y una capa de la arquitectura
+equivocada también; las dos acabarían en un juego sin menú y sin explicación.
+
+**Cuándo no va a haber menú**, y conviene saberlo de antemano: un juego que no
+use Vulkan; uno de 32 bits en un equipo donde solo está la capa de 64; o una
+pantalla con un formato que la capa no sabe escribir (10 bits, HDR). WProton lo
+mira antes de abrir el panel, y al terminar la partida dice las dos cosas por
+separado: si la capa **entró** y si **pudo pintar**.
+
+**Dónde se pasan los píxeles.** El menú dibuja el panel fuera del juego y la
+capa lo copia dentro, así que los dos tienen que ver el mismo fichero. Va en
+`runtime/`, dentro de la carpeta de WProton, y eso no es casualidad: el juego se
+está ejecutando desde esa misma carpeta, así que si el juego ve sus propios
+ficheros ve este. Antes iba en `/dev/shm` —memoria en vez de disco— y eso falla
+dentro del contenedor de Steam, donde cada lado puede tener su propio
+`/dev/shm`: el menú escribía en uno y la capa miraba en el otro. Si prefieres la
+memoria y sabes que en tu equipo no hay contenedor de por medio: `CAPA_PANEL_SHM=1`
+en `settings.conf`.
+
+Lo que queda en el registro de la capa —`logs/wproton_<fecha>-capa.log`, al
+lado del de la sesión—: en qué entorno se metió la capa (sesión
+Wayland o X11, qué compositor, si hay gamescope), si encontró una pantalla a la
+que poder copiar, y los avisos de fotograma con la hora. Esa hora es útil: si
+siguen saliendo mientras la pantalla está congelada, el juego sigue
+presentando y el problema es del escritorio; si se paran, el que se quedó quieto
+es el juego.
+
+Tres avisos honestos:
+
+- **El botón de Steam como combinación solo vale en el escritorio.** En el modo
+  Juego de la Deck lo captura Steam y no nos llega.
+- **La captura de pantalla depende del escritorio.** El panel la saca al
+  abrirse, y en una sesión Wayland no se lanza la herramienta del escritorio
+  para hacerlo: abrir spectacle encima de un juego a pantalla completa lo
+  congela, que es justo lo que veníamos a evitar. En X11 la saca el propio
+  panel, sin lanzar nada.
+- **Con la capa, el panel se dibuja a la resolución del juego**, que no siempre
+  es la del escritorio. Si el juego corre a una resolución bastante más baja, el
+  panel sale más apretado de letra; se lee, pero se nota.
+
+Y una cosa que sí está resuelta, por si te la encuentras en el registro: cuando
+un juego tiene **teclas del mando** propias, el mapeador puede quedarse el mando
+**en exclusiva**, y entonces el vigilante no recibe nada y la combinación no
+podría abrir el panel. En ese caso **es el mapeador el que la vigila** y le pide
+al vigilante que lo abra, igual que ya hacía con el cierre. Es justo en esos
+juegos donde más falta hace poder asignar una tecla al mando sin salir.
+
 ---
 
 ## 14. Actualizar WProton
@@ -1972,7 +2587,7 @@ que ya está en *Ajustes del juego*.
 | `covers/` | Carátulas |
 | `metadata/` | Fichas de Steam y duraciones (se llamaba `datos`) |
 | `runtime/` | Python, runners y herramientas |
-| `logs/` | Registros (se limpian solos) |
+| `logs/` | Registros (se limpian solos; se pueden apagar en preferencias) |
 | `lang/` | Idiomas |
 
 Los ajustes generales están en `settings.conf`, que es un fichero de texto normal y corriente, comentado, por si prefieres editarlo a mano.

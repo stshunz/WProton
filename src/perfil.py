@@ -95,6 +95,8 @@ ESQUEMA = [
     ("MANGOHUD",          "entero", 0,                None),
     ("PAD_SDL",           "opcion", "auto",           ("auto", "1", "0")),
     ("PAD_SONY",          "opcion", "auto",           ("auto", "1", "0")),
+    # El mando virtual de Steam al lado de uno real: se le esconde al juego.
+    ("PAD_FANTASMA",      "opcion", "auto",           ("auto", "1", "0")),
     ("KEYS_ESTILO",       "opcion", "xbox",           ("xbox", "nintendo")),
     ("TECLADO_POS",       "opcion", "abajo",          ("abajo", "arriba", "centro")),
     ("KEYS_EXCLUSIVO",    "opcion", "auto",           ("auto", "1", "0")),
@@ -203,6 +205,32 @@ ESQUEMA = [
     # Las versiones son las de Valve: 1.0 = scout, 2.0 = soldier,
     # 3.0 = sniper, 4.0 = steamrt4 (Debian 13).
     ("RUNTIME_STEAM",     "opcion", "no",             ("no", "auto", "4.0", "3.0", "2.0", "1.0")),
+    # HELIXSR: la red de DLSS como shaders de computo, sustituyendo la DLL de
+    # FSR 3.1 del juego. Al final, por lo mismo que los de arriba: no mover de
+    # sitio los campos anteriores.
+    #
+    # Apagado por defecto, y con razon de mas que los otros: HelixSR CAMBIA UN
+    # FICHERO DENTRO DEL JUEGO. No es una variable de entorno que se pone y se
+    # quita, asi que no se enciende sin que alguien lo pida.
+    #
+    # HELIXSR_NITIDEZ va al helixsr.ini del juego ([Sharpening] Sharpener).
+    # "off" es el valor de HelixSR y el de DLSS 4, que no afila nada.
+    ("HELIXSR",           "entero", 0,                None),
+    ("HELIXSR_NITIDEZ",   "opcion", "off",            ("off", "nvidia", "rcas")),
+    # CON QUE VERSION SE JUEGA, cuando el juego trae las dos.
+    #
+    # Hay juegos que vienen con el .exe de Windows Y con su version de Linux
+    # dentro del mismo paquete -GOG lo hace mucho-, y hasta ahora no habia
+    # forma de elegir: juego_es_nativo da por Windows en cuanto ve un .exe, y
+    # ahi se acababa la conversacion.
+    #
+    # "auto" es lo de siempre, y sigue siendo el valor de partida: un juego que
+    # hoy arranca tiene que seguir arrancando igual sin tocar nada. Los otros
+    # dos mandan sobre la deteccion.
+    #
+    # Al final de la lista, como los anteriores: los campos no se mueven de
+    # sitio, que los perfiles ya escritos se leen por orden.
+    ("VERSION_JUEGO",     "opcion", "auto",           ("auto", "windows", "linux")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]

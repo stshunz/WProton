@@ -61,7 +61,7 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 - Detecta además los Wine que ya tenga el sistema, incluidos los de `/userdata/system/wine/custom`.
 
 ### Ajustes por juego
-Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense).
+Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID de protonfixes, y toggles de MangoHud, GameMode, Fsync/Esync, DXVK Async, WineD3D, FSR, LAA, Wayland, gamescope, NTsync, **HDR** y **mando vía SDL** (en automático: se activa solo con los mandos que lo necesitan, como el DualSense, y con el mando fantasma de Steam).
 
 - **DLL overrides con menú**: se marcan de una lista con las más habituales (`dinput8`, `d3d9`, `dxgi`, `winhttp`, `winmm`), las que ya tengas puestas y las que encuentre junto al ejecutable del juego. Nada de recordar el formato ni de perder por el camino lo que dejaron dgVoodoo2 u OptiScaler.
 - **Casos especiales**: unidades de Windows por juego, ejecutable acompañante, el juego dentro de `C:\`, versión de Windows (de 98 a 11), escritorio virtual, OpenGL por Vulkan (Zink) y **superposición de Steam** (por juego: es lo que hace que Steam vea el juego en su menú del modo Juego). Todo se guarda con los ajustes que ya existían, sin campos nuevos por opción.
@@ -88,6 +88,7 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 - **Descarga masiva de carátulas y de datos**: las verticales y las panorámicas desde SteamGridDB, y la ficha de Steam y la duración de HowLongToBeat de toda la biblioteca de una vez. Opcionalmente, **RAWG** rellena las notas y las fichas de los juegos que no están en Steam.
 - **Verificación de integridad** de los archivos y aviso de espacio insuficiente antes de importar.
 - **Reparación de montajes colgados**: los que deja un juego que se cuelga se limpian solos antes del siguiente lanzamiento, sin reiniciar. También a mano desde *Espacio en disco*.
+- **Renombrar un juego** desde WProton, moviendo con él todo lo que lleva el nombre pegado: perfil, horas jugadas, favoritos, prefijo, unidades de datos, ficha, carátulas y —lo que importa— las **partidas**. Hacerlo desde el explorador de archivos deja el juego como nuevo y las partidas huérfanas. Si algo falla a mitad, se devuelve todo a su sitio.
 - **Exportar/importar tu configuración** completa para pasar de máquina a máquina.
 - **Auto-actualización** desde este repositorio, validando el fichero antes de reemplazar nada.
 
@@ -96,6 +97,7 @@ winecfg, winetricks, redistribuibles de Windows **por categorías** (Visual C++ 
 ### Cuando algo no arranca
 
 - **WProton dice qué hacer**, no un código de error. Lee el final del registro y reconoce los fallos que ya han pasado: falta una librería concreta, el juego es de .NET y Mono está apagado, el prefijo está roto, no hay Vulkan, es un programa de 16 bits, se acabó la memoria de 32 bits… Y si no reconoce el fallo, **no se inventa nada**.
+- **El mando que el juego detecta y no responde**: con Steam abierto aparece un mando virtual de más que, fuera de Steam, no manda nada, y hay juegos que se quedan con él como jugador 1. WProton lo esconde solo. Y si alguien se está quedando los eventos de tu mando en exclusiva, lo comprueba él y dice quién, sin pedirte comandos.
 - **Aviso de versión nueva** en el menú principal, sin esperar a la red.
 
 ## Instalación
