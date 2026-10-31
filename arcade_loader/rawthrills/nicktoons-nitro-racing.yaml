@@ -1,0 +1,8 @@
+# rawthrills/nicktoons-nitro-racing - user overrides (written by the launcher GUI)
+input:
+  gamepad:
+    a: start
+    b: none
+    l1: none
+    x: none
+    y: b1
