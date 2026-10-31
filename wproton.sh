@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.15"
+WPROTON_VERSION="2.20"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -148,6 +148,37 @@ LOG_DIR="$BASE_DIR/logs"
 CAPTURAS_DIR="$BASE_DIR/capturas"        # capturas hechas desde el menu del juego
 SETTINGS_FILE="$BASE_DIR/settings.conf"  # ajustes globales (carpeta de juegos)
 LOG_FILE="$LOG_DIR/wproton_$(date +%Y%m%d_%H%M%S).log"
+
+# log() VA AQUI ARRIBA, PEGADA A LOG_FILE, Y NO EN SU APARTADO.
+#
+# Estaba setecientas lineas mas abajo, DESPUES de load_settings. Y
+# load_settings se ejecuta en el nivel superior: cuando llega a sus "log ..."
+# la funcion todavia no existe, asi que en bash eso es un "command not found"
+# silencioso y el mensaje NO SE ESCRIBE. Los avisos de la lectura de ajustes
+# -por ejemplo el de "CRACK_NOMBRE se llama ahora ISO_USUARIO"- no han salido
+# nunca.
+#
+# Lo encontro la regla 10b de la auditoria, la misma que destapo que el
+# interruptor de los registros no funcionaba (27/10). Y lo encontro a la
+# segunda: la primera version de la regla solo miraba las llamadas escritas
+# arriba, y esta esta DENTRO de load_settings. Una regla que no caza el fallo
+# para el que se escribio no sirve de nada.
+#
+# log() no necesita nada mas que LOG_FILE, que esta en la linea de encima.
+log() {
+    # UNA LINEA EN EL REGISTRO, Y NADA MAS.
+    #
+    # Aqui habia detras una clasificacion de la linea -por nivel y por como
+    # empieza el texto- para decidir si la sesion "tenia algo" y habia que
+    # conservar su registro al cerrar. Eso se ha quitado entero: necesitaba una
+    # marca oculta por sesion y, en palabras de Dani, "solo ha funcionado para
+    # generar mas ruido en la carpeta logs". Ahora el registro se escribe o no
+    # se escribe (ajuste LOGS) y los viejos se van por antiguedad.
+    #
+    # Con LOGS=0, LOG_FILE es /dev/null: esta funcion no necesita saberlo.
+    printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"
+    return 0
+}
 # AQUI HABIA DOS MARCAS -".err" y ".ok"- Y SE HAN QUITADO.
 #
 # La idea era conservar el registro de las sesiones con errores y borrar el de
@@ -263,6 +294,51 @@ RATON_RUEDA=3
 # limpiarla. Los registros viejos se siguen yendo por antiguedad (rotate_logs:
 # 2 dias, 40 como maximo).
 LOGS=1
+# LOS RESTOS DE WINE QUE DEJA UN JUEGO DE LINUX.
+#   NATIVO_LIMPIAR_WINE  1 = al acabar la partida se cierran los servicios del
+#                            prefijo que el juego dejo abiertos (por defecto).
+#                        0 = no se toca ninguno.
+# Solo afecta a los de ESE juego y a los que nacieron despues de lanzarlo.
+NATIVO_LIMPIAR_WINE=1
+# EL PREFIJO DE LAS INSTALACIONES (ISO, GOG, instaladores).
+#   PREFIX_BATOCERA_AL_INSTALAR  1 = el prefijo propio que se crea al instalar
+#                                    un juego se hace con el procedimiento de
+#                                    Batocera (ver bato_prefijo_crear).
+#                                0 = con el de siempre (por defecto).
+PREFIX_BATOCERA_AL_INSTALAR=0
+# ARCADE LOADER: de donde se descarga.
+#
+# Es un lanzador de arcades NATIVO de Linux. Esta alojado en una release de
+# GitHub, que da el fichero TAL CUAL: un 302 al almacen de GitHub y los bytes.
+# Sin pagina de por medio, sin comprobacion de robots y sin sesion.
+#
+# POR QUE SE FUE DE MEDIAFIRE. Porque no se podia descargar sin un navegador,
+# y eso no es una suposicion: su propia API lo contesto por escrito.
+#
+#   {"quickkey":"k2t62nrwcnu4mhb","direct_download_error_message":
+#    "Insufficient Permissions","direct_download_error":"45"}
+#
+# Es decir: la llamada era correcta y el fichero estaba ahi, pero esa cuenta
+# no tiene permiso para generar enlaces directos. Y por la pagina, 403 en
+# "?action=check". Las dos puertas cerradas. El resolvedor de MediaFire se
+# queda en el codigo -no estorba y lo usan otras descargas-, pero ya no se
+# pasa por el: mediafire_directo devuelve tal cual cualquier URL que no sea
+# suya, asi que esto se usa como viene.
+#
+# ADMITE VARIAS FUENTES, UNA POR LINEA. Se prueban EN ORDEN hasta que una dé
+# un .tar.gz valido, asi que el dia que haga falta un espejo se añade otra
+# linea y ya esta:
+#
+#   ARCADE_LOADER_URL="https://.../Arcade_Loader.tar.gz
+#   https://espejo.example/Arcade_Loader.tar.gz"
+#
+# ESTA EN LOS AJUSTES Y NO A FUEGO EN EL CODIGO a proposito: cuando cambie de
+# sitio se cambia esta linea y no hace falta una version nueva de WProton.
+ARCADE_LOADER_URL="https://github.com/stshunz/WProton/releases/download/WProton_Extras/Arcade_Loader.tar.gz"
+# La de fabrica, guardada aparte: load_settings la necesita para saber si
+# la que hay en settings.conf es una eleccion de la persona o un valor de
+# fabrica de una version anterior.
+ARCADE_LOADER_URL_FABRICA="$ARCADE_LOADER_URL"
 DIAG_MANDO=0                             # 1 = registro detallado del mando
 DIAG_CIERRE=0                            # 1 = vigilar qué queda tras cerrar
 DIAG_DLL=0                               # 1 = comprobar si los DLL overrides se aplican
@@ -473,6 +549,11 @@ RATON_RUEDA=$RATON_RUEDA
 #   por antiguedad: 2 dias, y 40 como maximo.
 # --------------------------------------------------------------------------
 LOGS=$LOGS
+NATIVO_LIMPIAR_WINE=$NATIVO_LIMPIAR_WINE
+PREFIX_BATOCERA_AL_INSTALAR=$PREFIX_BATOCERA_AL_INSTALAR
+# De donde se descarga Arcade Loader. Admite la pagina de MediaFire o un
+# enlace directo a un .tar.gz.
+ARCADE_LOADER_URL="$ARCADE_LOADER_URL"
 # Montaje DwarFS: cache de bloques y numero de hilos que descomprimen.
 # 0 hilos = automatico (tantos como nucleos, hasta 4).
 DWARFS_CACHE="$DWARFS_CACHE"
@@ -624,6 +705,104 @@ abs_path() {
         "~/"*)  printf '%s/%s' "$HOME" "${1#*/}" ;;
         *)      printf '%s/%s' "$BASE_DIR" "$1" ;;
     esac
+}
+
+ruta_cli_absoluta() {
+    # UNA RUTA QUE LLEGA DE FUERA (linea de ordenes, frontend), ABSOLUTA.
+    #
+    # POR QUE NO SIRVE abs_path() PARA ESTO
+    #
+    # abs_path resuelve lo relativo contra la CARPETA DE WPROTON, que es lo
+    # correcto para settings.conf -lo escribe quien configura WProton-. Pero
+    # una ruta que manda un frontend es relativa a SU directorio de trabajo, y
+    # ES-DE arranca desde la raiz de DeckStation:
+    #
+    #     cwd  = .../DeckStation
+    #     %ROM% = ./ROMs/windows/Age of Empires Gold.pc
+    #     WProton esta en .../DeckStation/Apps/WProton
+    #
+    # Con abs_path eso daria .../Apps/WProton/ROMs/windows/..., que no existe.
+    # La base buena aqui es $PWD. Se prueban las dos y manda la que exista,
+    # que ademas arregla al frontend que la mande relativa a otra cosa.
+    #
+    # NO SE RESUELVEN LOS ENLACES SIMBOLICOS, Y ES A PROPOSITO
+    #
+    # Es tentador llamar a "realpath" y acabar antes. Pero el identificador de
+    # un juego sale de su RUTA (game_id), y con el se nombran el perfil, el
+    # prefijo, la ficha y las partidas. A quien tenga la carpeta de juegos
+    # enlazada -en una Deck, "~/Games -> /run/media/deck/SSD/Games" es de lo
+    # mas normal- resolver el enlace le cambiaria el identificador de todos
+    # sus juegos de golpe: perfiles nuevos, prefijos nuevos y las partidas
+    # donde ya no mira nadie. Asi que se hace absoluta y nada mas: se quita el
+    # "./", se colapsan las barras repetidas y se deja el resto tal cual.
+    local r="${1:-}" base
+    [ -n "$r" ] || { printf ''; return 0; }
+    case "$r" in
+        /*) ;;
+        "~/"*) r="$HOME/${r#*/}" ;;
+        *)
+            base="$PWD"
+            # Si por $PWD no existe pero por la carpeta de WProton si, manda
+            # esa. Al reves tambien: lo que decide es cual de las dos EXISTE.
+            if [ ! -e "$PWD/$r" ] && [ -e "$BASE_DIR/$r" ]; then
+                base="$BASE_DIR"
+            fi
+            r="$base/$r" ;;
+    esac
+    # "/./" y "//" sobran y ensucian los mensajes y el registro.
+    while :; do
+        case "$r" in
+            */./*)  r="${r%%/./*}/${r#*/./}" ;;
+            *//*)   r="${r%%//*}/${r#*//}" ;;
+            */.)    r="${r%/.}" ;;
+            *)      break ;;
+        esac
+    done
+    # Una barra final sobra siempre menos cuando la ruta ES la raiz.
+    case "$r" in /) ;; */) r="${r%/}" ;; esac
+    printf '%s' "$r"
+}
+
+punto_de_montaje() {
+    # EL PUNTO DE MONTAJE QUE CONTIENE UNA RUTA, subiendo por sus padres.
+    #
+    # Hace falta para abrirle el contenedor de pressure-vessel a un juego que
+    # esta fuera de $HOME (ver export_game_env). Y esta aparte, en vez de en
+    # linea donde se usa, por una razon concreta:
+    #
+    # ESTE BUCLE SE COLGABA. Lo encontro un tester lanzando un juego .pc desde
+    # ES-DE, y el informe que mando es exacto: ES-DE entrega la ruta RELATIVA
+    # ("./ROMs/windows/Juego.pc"), y dirname sobre una ruta relativa acaba en
+    # "." y ahi se queda para siempre, porque dirname "." es "." otra vez:
+    #
+    #     ./ROMs/windows/Juego.pc -> ./ROMs/windows -> ./ROMs -> . -> . -> .
+    #
+    # La condicion de salida era solo [ "$x" != "/" ], asi que con "." nunca
+    # se cumplia: WProton se quedaba girando -con un "mountpoint" nuevo por
+    # vuelta- y no llegaba a arrancar Proton. Desde los menus no pasaba porque
+    # alli la ruta sale de la biblioteca y es absoluta.
+    #
+    # Ahora hay TRES salidas, no una: la raiz, que dirname devuelva lo mismo
+    # que entro -el caso de "." y tambien el de una ruta rara- y un tope de
+    # saltos. Un bucle que recorre padres no puede no tener tope: no hay
+    # arbol de 64 niveles que nos importe, y si lo hubiera, mejor seguir sin
+    # abrir el contenedor que no arrancar.
+    local d; d="$(ruta_cli_absoluta "${1:-}")"
+    [ -n "$d" ] || { printf ''; return 1; }
+    local prev saltos=0
+    while [ "$d" != "/" ] && [ "$saltos" -lt 64 ]; do
+        mountpoint -q "$d" 2>/dev/null && { printf '%s' "$d"; return 0; }
+        prev="$d"
+        d="$(dirname "$d")"
+        [ "$d" = "$prev" ] && break
+        saltos=$((saltos+1))
+    done
+    # La raiz NO vale como respuesta: pasarle "/" a pressure-vessel es
+    # justo el "unable to use parent for game drive, path /home" del que
+    # habla el comentario de abajo. Sin respuesta, quien llama usa la
+    # carpeta del juego.
+    printf ''
+    return 1
 }
 
 declare -A WP_TR
@@ -1117,6 +1296,83 @@ rawg_key_leer() {
     return 0
 }
 
+# ESTA FUNCION VA AQUI ARRIBA, Y NO CON LAS DEMAS DE LOS REGISTROS.
+#
+# EL FALLO QUE ESTO ARREGLA, Y QUE NO SE VEIA (27/10)
+#
+# "Aunque pongamos la casilla de no generar logs, los sigue generando".
+# Y era verdad: el interruptor NO HA FUNCIONADO NUNCA.
+#
+# load_settings se ejecuta en el nivel superior, nada mas leer los ajustes, y
+# llamaba a logs_aplicar... que estaba definida VEINTE MIL LINEAS MAS ABAJO.
+# En bash una funcion tiene que estar definida ANTES de llamarla, asi que
+# aquello era:
+#
+#   ./wproton.sh: line 1144: logs_aplicar: command not found
+#
+# Un mensaje a la salida de errores que nadie ve -va antes de que el registro
+# este montado- y que no para nada: el script sigue, LOG_FILE se queda con su
+# valor de siempre y el registro se escribe igual. Apagado, pero escribiendo.
+#
+# Se reprodujo poniendo LOGS=0 en settings.conf y lanzando "--version": el
+# fichero aparecia en logs/ con las lineas del cierre dentro.
+#
+# Lo demas de los registros -logs_label, logs_cuantos- se queda donde estaba:
+# eso se llama desde los menus, que corren mucho despues.
+logs_aplicar() {
+    # ENCIENDE O APAGA EL REGISTRO, SEGUN EL AJUSTE "LOGS".
+    #
+    # Apagado no significa "escribir y luego borrar": significa NO ESCRIBIR.
+    # LOG_FILE pasa a /dev/null, y como todo el programa escribe con
+    # >>"$LOG_FILE" no hay que tocar nada mas.
+    #
+    # OJO CON EL FICHERO QUE YA SE EMPEZO. El nombre del registro se calcula
+    # arriba, antes de leer los ajustes -hace falta para poder registrar lo que
+    # pase durante la propia lectura-, asi que cuando se llega aqui con LOGS=0
+    # puede haber ya un fichero con cuatro lineas. Se borra: dejarlo seria el
+    # mismo ruido que el usuario ha pedido no tener.
+    if [ "${LOGS:-1}" = 0 ]; then
+        [ "${LOG_FILE:-}" = /dev/null ] && return 0
+        local _viejo="${LOG_FILE:-}"
+        LOG_FILE=/dev/null
+        case "$_viejo" in
+            "$LOG_DIR"/wproton_*.log) rm -f "$_viejo" 2>/dev/null ;;
+        esac
+        return 0
+    fi
+    # Encendido: si estaba apagado, se abre uno nuevo con la hora de ahora.
+    case "${LOG_FILE:-}" in
+        /dev/null) LOG_FILE="$LOG_DIR/wproton_$(date +%Y%m%d_%H%M%S).log" ;;
+    esac
+    return 0
+}
+
+al_url_normalizar() {
+    # UNA URL DE ARCADE LOADER, EN SU FORMA MAS DESNUDA, PARA PODER COMPARARLA.
+    #
+    # POR QUE HACE FALTA. La lista de "URLs que alguna vez fueron el valor de
+    # fabrica" se comparaba con "=", o sea letra por letra. Y el 31/10 llego
+    # un registro de la Deck con esto guardado en su settings.conf:
+    #
+    #   https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz
+    #
+    # Fijate en el final: SIN "/file". Las dos de la lista lo llevan. Asi que
+    # la comparacion fallaba, WProton daba por hecho que esa URL la habia
+    # puesto la persona, no la tocaba... y al actualizar se quedaban con el
+    # enlace muerto para siempre. Justo lo que la migracion existe para
+    # evitar.
+    #
+    # Se quita lo que no distingue a una URL de otra: el "?..." del final, un
+    # "/file" de cola (MediaFire lo pone y lo quita segun de donde copies el
+    # enlace) y la barra final.
+    local u="${1:-}"
+    u="${u%%\?*}"          # fuera la parte de consulta
+    u="${u%/}"             # fuera la barra final
+    u="${u%/file}"         # fuera el "/file" de MediaFire
+    u="${u%/}"             # y la barra que pueda quedar debajo
+    printf '%s' "$u"
+}
+
 load_settings() {
     # shellcheck disable=SC1090
     [ -f "$SETTINGS_FILE" ] && . "$SETTINGS_FILE"
@@ -1135,6 +1391,41 @@ load_settings() {
         ISO_USUARIO="$CRACK_NOMBRE"
         log "ajustes: CRACK_NOMBRE se llama ahora ISO_USUARIO; se conserva '$CRACK_NOMBRE'"
     fi
+    # LA URL DE ARCADE LOADER, CUANDO CAMBIA DE SITIO.
+    #
+    # EL CASO (28/10): Dani volvio a subir el fichero y la URL cambio A LA
+    # HORA de ponerla. O sea que va a cambiar mas veces, y ahi hay una trampa:
+    #
+    # La URL se guarda en settings.conf, y settings.conf MANDA sobre el valor
+    # de fabrica. Asi que a quien ya hubiera arrancado una version anterior, la
+    # URL nueva no le llegaria NUNCA: WProton se traeria la vieja de su fichero
+    # y la descarga fallaria para siempre, con una version nueva que "ya lo
+    # arregla" instalada.
+    #
+    # Se arregla sabiendo QUE URLS FUERON ALGUNA VEZ EL VALOR DE FABRICA. Si la
+    # guardada es una de esas, no es una eleccion de nadie: es un valor de
+    # fabrica viejo, y se actualiza. Si es cualquier otra cosa, la puso la
+    # persona y no se toca.
+    #
+    # Cuando vuelva a cambiar, se añade la anterior a esta lista y listo.
+    #
+    # 31/10: SE COMPARA NORMALIZANDO, NO LETRA POR LETRA. Un registro de la
+    # Deck traia la misma URL de MediaFire pero sin el "/file" del final, y la
+    # comparacion exacta no la reconocia: se quedaba con el enlace muerto.
+    # al_url_normalizar quita el "/file", la barra final y el "?...".
+    local _al_vieja _al_act
+    _al_act="$(al_url_normalizar "${ARCADE_LOADER_URL:-}")"
+    for _al_vieja in \
+        "https://www.mediafire.com/file/ib27k8cya9ng0s8/Arcade_Loader.tar.gz/file" \
+        "https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz/file"
+    do
+        if [ "$_al_act" = "$(al_url_normalizar "$_al_vieja")" ]; then
+            ARCADE_LOADER_URL="$ARCADE_LOADER_URL_FABRICA"
+            log "ajustes: la URL de Arcade Loader guardada era un valor de fabrica viejo; se pone la nueva ($ARCADE_LOADER_URL)"
+            save_settings
+            break
+        fi
+    done
     GAMES_PATH="$(abs_path "$GAMES_PATH")"
     LAST_GAME="$(abs_path "${LAST_GAME:-}")"
     LAST_BROWSE="$(abs_path "${LAST_BROWSE:-}")"
@@ -1170,20 +1461,8 @@ py_libs_dir() {
 # ----------------------------------------------------------------------------
 # 2. LOG SOLO A FICHERO (nunca contaminar stdout: leccion del wrapper ES-DE)
 # ----------------------------------------------------------------------------
-log() {
-    # UNA LINEA EN EL REGISTRO, Y NADA MAS.
-    #
-    # Aqui habia detras una clasificacion de la linea -por nivel y por como
-    # empieza el texto- para decidir si la sesion "tenia algo" y habia que
-    # conservar su registro al cerrar. Eso se ha quitado entero: necesitaba una
-    # marca oculta por sesion y, en palabras de Dani, "solo ha funcionado para
-    # generar mas ruido en la carpeta logs". Ahora el registro se escribe o no
-    # se escribe (ajuste LOGS) y los viejos se van por antiguedad.
-    #
-    # Con LOGS=0, LOG_FILE es /dev/null: esta funcion no necesita saberlo.
-    printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "${2:-INFO}" "$1" >> "$LOG_FILE"
-    return 0
-}
+# log() VIVIA AQUI Y SE HA SUBIDO ARRIBA, junto a LOG_FILE. El motivo, con el
+# caso que lo destapo, esta escrito alli.
 
 say() { printf '%s\n' "$1" >&2; log "$1"; }
 die() { say "ERROR: $1"; ui_error "$1"; cleanup_mount; exit 1; }
@@ -3255,9 +3534,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 93a8ead3f841" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 311a6103fdf4" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 93a8ead3f841
+# WPROTON_HELPER mapeador.py 311a6103fdf4
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -3417,13 +3696,52 @@ PERFILES = {
         },
         "abs_map": ABS_ESTANDAR, "threshold": 40, "center": 127
     },
+    # LOS DOS DE SONY: CODIGOS DEL KERNEL, NO LOS QUE TENIAMOS.
+    #
+    # EL CASO (28/10): un tester con CachyOS y un DualShock 4 (054c:09cc). Un
+    # juego con .keys le fallaba lanzando WProton desde el escritorio, y
+    # funcionaba perfecto añadiendo WProton a Steam. Mismo equipo, mismo
+    # mando, mismo .keys.
+    #
+    # Los dos registros lo dijeron en una linea. Desde el escritorio:
+    #
+    #     [keys] Mando: "Sony ... Wireless Controller" -> perfil SONY_DS4
+    #     [keys] mapa: select (codigo 312) -> KEY_C
+    #     [keys] mapa: start  (codigo 313) -> KEY_LEFT
+    #     [keys] Combinacion: 312 + 313        <- SIN NOMBRES
+    #
+    # Y desde Steam -donde Steam ofrece su mando virtual, que se hace pasar
+    # por un Xbox 360 y por tanto cae en el perfil XBOX_360-:
+    #
+    #     [keys] mapa: select (codigo 314) -> KEY_C
+    #     [keys] mapa: start  (codigo 315) -> KEY_LEFT
+    #     [keys] Combinacion: Select + Start   <- CON NOMBRES
+    #
+    # En Linux, un DualShock 4 manda el Share como BTN_SELECT (314) y el
+    # Options como BTN_START (315): lo dice el mantenedor de hid-playstation
+    # en la lista del kernel ("the DS4 Share button was mapped to 'Select'
+    # under the Linux gamepad spec"; "the Options button replaced Start").
+    # Nuestros 312 y 313 son BTN_TL2 y BTN_TR2, o sea L2 y R2.
+    #
+    # O sea que con un mando de Sony: el Share y el Options no hacian NADA, y
+    # L2 y R2 mandaban las teclas que les tocaban a ellos. La pista estaba
+    # delante: la combinacion se imprimia como "312 + 313" en vez de
+    # "Select + Start" porque nuestra propia tabla de nombres -la del kernel-
+    # no llama "select" al 312. Dos tablas nuestras diciendo cosas distintas.
+    #
+    # Y lo mismo el DualSense y el mando de Switch: los tres tenian el mismo
+    # error copiado.
+    #
+    # Hoy esto es ademas una RED, no la via principal: los codigos se le
+    # preguntan al mando (ver ids_del_mando). La tabla es el respaldo para un
+    # mando que no declare los estandar.
     "SONY_DS4": {
         "match": ["sony", "playstation", "wireless controller", "dualshock 4", "ps4"],
         "ids": {
             "a": 304, "b": 305, "x": 307, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 316, "r2": 317, "l3": 318, "r3": 319
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -3431,9 +3749,9 @@ PERFILES = {
         "match": ["dualsense", "ps5"],
         "ids": {
             "a": 304, "b": 305, "x": 307, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 314, "r2": 315, "l3": 317, "r3": 318
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -3448,12 +3766,16 @@ PERFILES = {
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
     "NINTENDO_SWITCH": {
+        # El cruce de A/B y X/Y es a proposito: es la disposicion de Nintendo.
+        # Lo que estaba mal aqui eran select/start, igual que en los de Sony:
+        # hid-nintendo manda el "-" como BTN_SELECT (314) y el "+" como
+        # BTN_START (315).
         "match": ["nintendo", "switch", "pro controller", "joy-con"],
         "ids": {
             "a": 305, "b": 304, "x": 309, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 314, "r2": 315, "l3": 317, "r3": 318
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -3801,6 +4123,129 @@ def abrir_raton_xtest():
               % (nombre, raton.ancho, raton.alto, raton.x, raton.y), flush=True)
         return raton
     return None
+
+
+# LOS CODIGOS DE BOTON, PREGUNTADOS AL MANDO.
+#
+# POR QUE NO VALE UNA TABLA POR MANDO
+#
+# Teniamos una tabla de codigos por familia de mando, y la de Sony estaba mal:
+# el Share y el Options de un DualShock 4 no hacian nada (ver el comentario de
+# SONY_DS4). Y ese fallo no se puede arreglar "de verdad" corrigiendo la tabla,
+# porque la tabla se va a volver a equivocar con el proximo mando raro: hay
+# cientos, y el nombre con el que se reconocen -"wireless controller"- ni
+# siquiera identifica al fabricante.
+#
+# LO QUE SI ES FIABLE: EL PROPIO MANDO LO DICE
+#
+# evdev declara QUE codigos de tecla tiene cada aparato, y el kernel los nombra
+# segun la "Linux gamepad specification": BTN_SELECT es el Select de cualquier
+# mando, lo fabrique quien sea. Asi que en vez de adivinar por el nombre, se le
+# pregunta: si el mando declara BTN_SELECT, el select es ESE.
+#
+# Es exactamente lo que el mapeador ya hacia con los ejes -"Umbral de ABS_Y: 89
+# (el perfil decia 16000)", leyendo el rango real del mando-, y por lo mismo:
+# el aparato sabe mas de si mismo que nuestra tabla.
+#
+# La tabla se queda como RESPALDO, para un mando que declare codigos fuera de
+# la especificacion.
+CODIGOS_ESTANDAR = {
+    "a":        ecodes.BTN_SOUTH,    # 304
+    "b":        ecodes.BTN_EAST,     # 305
+    "x":        ecodes.BTN_NORTH,    # 307
+    "y":        ecodes.BTN_WEST,     # 308
+    "pageup":   ecodes.BTN_TL,       # 310  L1
+    "pagedown": ecodes.BTN_TR,       # 311  R1
+    "l2":       ecodes.BTN_TL2,      # 312
+    "r2":       ecodes.BTN_TR2,      # 313
+    "select":   ecodes.BTN_SELECT,   # 314  Share en un DS4, "-" en un Switch
+    "start":    ecodes.BTN_START,    # 315  Options en un DS4, "+" en un Switch
+    "l3":       ecodes.BTN_THUMBL,   # 317
+    "r3":       ecodes.BTN_THUMBR,   # 318
+}
+
+
+# Los nombres, escritos aqui y no sacados de evdev.
+#
+# La forma de la tabla de nombres de evdev ha cambiado entre versiones -unas
+# dan una cadena, otras una lista- y una linea de registro no merece un
+# "if hasattr": lo unico que hace falta son estos trece codigos, y de paso se
+# dice a que boton FISICO corresponde cada uno, que es el dato que hacia falta
+# para entender el fallo del DualShock 4.
+NOMBRES_CODIGO = {
+    304: "304 BTN_SOUTH (A / Cross)",
+    305: "305 BTN_EAST (B / Circle)",
+    306: "306 BTN_C",
+    307: "307 BTN_NORTH (X / Triangle)",
+    308: "308 BTN_WEST (Y / Square)",
+    310: "310 BTN_TL (L1)",
+    311: "311 BTN_TR (R1)",
+    312: "312 BTN_TL2 (L2)",
+    313: "313 BTN_TR2 (R2)",
+    314: "314 BTN_SELECT (Share / -)",
+    315: "315 BTN_START (Options / +)",
+    316: "316 BTN_MODE (PS / Home)",
+    317: "317 BTN_THUMBL (L3)",
+    318: "318 BTN_THUMBR (R3)",
+}
+
+
+def nombre_codigo(c):
+    """El codigo con su nombre, para el registro. Si no se conoce, el numero."""
+    return NOMBRES_CODIGO.get(c, str(c))
+
+
+def ids_del_mando(dev, ids_tabla, nombre_perfil=""):
+    """Los codigos de boton de ESTE mando, preguntandoselos a el.
+
+    $dev = el aparato evdev, ids_tabla = lo que dice el perfil.
+    Devuelve un diccionario nuevo: la tabla NO se toca.
+    """
+    ids = dict(ids_tabla)
+    try:
+        hay = set(dev.capabilities().get(ecodes.EV_KEY, []))
+    except Exception as e:
+        print("[keys] no se han podido leer los botones que declara el mando"
+              " (%s): se usa la tabla del perfil %s" % (e, nombre_perfil),
+              flush=True)
+        return ids
+    if not hay:
+        return ids
+    # ¿El hotkey iba pegado al select? Entonces lo sigue.
+    hotkey_era_select = (ids.get("hotkey") is not None
+                         and ids.get("hotkey") == ids.get("select"))
+    cambiados, confirmados = [], 0
+    for nombre, codigo in CODIGOS_ESTANDAR.items():
+        if nombre not in ids:
+            continue
+        if codigo not in hay:
+            # El mando no declara el estandar: manda la tabla, que para eso
+            # esta. Un mando raro puede poner el Select donde quiera.
+            continue
+        if ids[nombre] != codigo:
+            cambiados.append((nombre, ids[nombre], codigo))
+            ids[nombre] = codigo
+        else:
+            confirmados += 1
+    if hotkey_era_select and "select" in ids:
+        ids["hotkey"] = ids["select"]
+    # LO QUE SE HA CAMBIADO, DICHO. Y con nombre y numero, porque es justo lo
+    # que hacia falta para encontrar el fallo del DualShock 4: el registro
+    # decia "mapa: select (codigo 312)" y nadie podia saber que 312 no es el
+    # Select de ese mando.
+    if cambiados:
+        print("[keys] El mando declara sus botones y la tabla del perfil %s no"
+              " coincidia:" % (nombre_perfil or "?"), flush=True)
+        for nombre, viejo, nuevo in cambiados:
+            print("[keys]   %-9s la tabla decia %s, el mando dice %s:"
+                  " manda el mando"
+                  % (nombre, nombre_codigo(viejo), nombre_codigo(nuevo)),
+                  flush=True)
+    else:
+        print("[keys] Los %d boton(es) del perfil %s coinciden con lo que"
+              " declara el mando" % (confirmados, nombre_perfil or "?"),
+              flush=True)
+    return ids
 
 
 def get_perfil(dev_name):
@@ -4518,7 +4963,15 @@ def main():
           % ("como eje (ABS_HAT0)"
              if (ecodes.ABS_HAT0X in _ejes or ecodes.ABS_HAT0Y in _ejes)
              else "como botones"), flush=True)
-    ids            = perfil_actual["ids"]
+    # LOS CODIGOS, DEL MANDO. Y UNA COPIA, QUE ANTES NO HABIA.
+    #
+    # "ids" era el diccionario de la tabla TAL CUAL. Mas abajo, el estilo
+    # Nintendo intercambia a/b y x/y ahi dentro... o sea que modificaba la
+    # tabla global PERFILES de este proceso. Hoy da igual porque el mapeador
+    # mapea una vez y muere, pero es una mina: el dia que se mapee dos veces
+    # en el mismo proceso, el segundo juego saldria con los botones cruzados
+    # sin que nadie lo haya pedido. Con la copia, no.
+    ids            = ids_del_mando(device, perfil_actual["ids"], _nom_perfil)
     abs_map_actual = perfil_actual["abs_map"]
     threshold      = perfil_actual["threshold"]
     center         = perfil_actual["center"]
@@ -7176,9 +7629,9 @@ trackpad_raton_stop() {
 write_mando_virtual() {
     # El mando virtual va en su propio fichero, igual que el mapeador: son
     # cosas distintas y conviene que se puedan tocar por separado.
-    grep -q "WPROTON_HELPER mando_virtual.py 878a01f87630" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mando_virtual.py 9a77618927ed" "$MANDO_VIRTUAL_PY" 2>/dev/null && return 0
     cat > "$MANDO_VIRTUAL_PY" <<'MVIROF'
-# WPROTON_HELPER mando_virtual.py 878a01f87630
+# WPROTON_HELPER mando_virtual.py 9a77618927ed
 # -*- coding: utf-8 -*-
 # WProton - mando virtual (presenta al juego un mando distinto del tuyo)
 #
@@ -7725,6 +8178,130 @@ def traducir_escritorio(virtual, teclados):
                     virtual.syn()
 
 
+# ----------------------------------------------------------------------------
+# REMAPEAR UN BOTON EN OTRO (31/10)
+# ----------------------------------------------------------------------------
+#
+# LO QUE SE PIDIO: "poner el start en el boton A y que el start siga siendo el
+# start". O sea NO un intercambio: una COPIA en una direccion. Al pulsar A el
+# juego recibe Start, y el Start de verdad sigue haciendo Start.
+#
+# Esto es lo que hace falta en los arcades: muchos piden Start para empezar la
+# partida o para el servicio, y en un mando de mano el Start esta donde esta.
+#
+# POR QUE ENCAJA AQUI Y NO EN EL MAPEADOR .keys. El mapeador convierte el mando
+# en TECLAS, y muchos juegos, al ver un mando activo, dejan de leer el teclado.
+# Esto convierte un mando en OTRO MANDO, que es lo que el juego si lee.
+#
+# COMO SE APLICA. Reusa CAMBIO_BOTONES, el diccionario que ya existia para el
+# intercambio de los sticks, y que se consulta UNA sola vez arriba del bucle.
+# Por eso un remapeo no hay que acordarse de aplicarlo en cada sitio donde se
+# escribe un boton: con meterlo en ese diccionario, ya esta.
+#
+# LA DIFERENCIA CON EL INTERCAMBIO DE STICKS, que es la clave: aquel mete las
+# DOS direcciones ({L: R, R: L}) y por eso intercambia. Un remapeo mete solo
+# UNA ({A: START}), asi que A manda START y START no esta en el diccionario y
+# se queda como esta. El "y que el start siga siendo el start" sale gratis de
+# no poner la vuelta.
+
+# Los nombres que se admiten. Los BTN_* son los de verdad, sin ambiguedad, y
+# son los que escribe el menu de WProton. Los cortos ("a", "start") valen para
+# quien edite el perfil a mano, y van en DISPOSICION XBOX: en un mando Xbox la
+# A esta abajo (BTN_SOUTH). Por eso el menu nunca los usa: con el estilo
+# Batocera la A es la de la derecha y escribir "a" significaria otra cosa.
+NOMBRE_A_BOTON = {}
+
+
+def _poner_nombre(nombre, codigo):
+    if codigo is not None:
+        NOMBRE_A_BOTON[nombre] = codigo
+
+
+def _construir_nombres():
+    g = lambda n: getattr(ecodes, n, None)
+    # Los de la cara, por posicion fisica (lo que no se puede malinterpretar).
+    for n in ("BTN_SOUTH", "BTN_EAST", "BTN_NORTH", "BTN_WEST",
+              "BTN_TL", "BTN_TR", "BTN_TL2", "BTN_TR2",
+              "BTN_SELECT", "BTN_START", "BTN_MODE",
+              "BTN_THUMBL", "BTN_THUMBR",
+              "BTN_DPAD_UP", "BTN_DPAD_DOWN", "BTN_DPAD_LEFT",
+              "BTN_DPAD_RIGHT"):
+        _poner_nombre(n, g(n))
+    # Y los cortos, en disposicion Xbox.
+    cortos = {
+        "a": "BTN_SOUTH", "b": "BTN_EAST", "x": "BTN_WEST", "y": "BTN_NORTH",
+        "l1": "BTN_TL", "r1": "BTN_TR", "l2": "BTN_TL2", "r2": "BTN_TR2",
+        "l3": "BTN_THUMBL", "r3": "BTN_THUMBR",
+        "start": "BTN_START", "select": "BTN_SELECT", "guia": "BTN_MODE",
+        "up": "BTN_DPAD_UP", "down": "BTN_DPAD_DOWN",
+        "left": "BTN_DPAD_LEFT", "right": "BTN_DPAD_RIGHT",
+    }
+    for corto, largo in cortos.items():
+        _poner_nombre(corto, g(largo))
+
+
+def boton_por_nombre(txt):
+    """El codigo de un boton a partir de su nombre. None si no se reconoce."""
+    if not NOMBRE_A_BOTON:
+        _construir_nombres()
+    t = str(txt or "").strip()
+    if not t:
+        return None
+    # Un numero suelto vale: es el codigo tal cual.
+    if t.isdigit():
+        return int(t)
+    if t in NOMBRE_A_BOTON:
+        return NOMBRE_A_BOTON[t]
+    return NOMBRE_A_BOTON.get(t.lower())
+
+
+def leer_remapeo(txt):
+    """Parsea "A=START,BTN_WEST=BTN_SELECT" -> {codigo_origen: codigo_destino}.
+
+    Lo que no se entiende se AVISA y se salta: un nombre mal escrito no puede
+    dejar el mando sin arrancar, pero tampoco puede pasar en silencio o nadie
+    sabra por que su boton no hace nada.
+    """
+    pares = {}
+    for trozo in str(txt or "").replace(";", ",").split(","):
+        trozo = trozo.strip()
+        if not trozo:
+            continue
+        if "=" not in trozo:
+            sys.stderr.write("mando_virtual: remapeo sin '=': %r (se salta)\n"
+                             % trozo)
+            continue
+        izq, der = trozo.split("=", 1)
+        orig = boton_por_nombre(izq)
+        dest = boton_por_nombre(der)
+        if orig is None:
+            sys.stderr.write("mando_virtual: boton de origen desconocido:"
+                             " %r (se salta)\n" % izq.strip())
+            continue
+        if dest is None:
+            sys.stderr.write("mando_virtual: boton de destino desconocido:"
+                             " %r (se salta)\n" % der.strip())
+            continue
+        if orig == dest:
+            # No es un fallo, es que no hace nada. Se dice y se salta, para
+            # que no parezca que se ha aplicado algo.
+            sys.stderr.write("mando_virtual: %r se remapea a si mismo;"
+                             " no se aplica\n" % izq.strip())
+            continue
+        pares[orig] = dest
+    return pares
+
+
+def nombre_de_boton(codigo):
+    """Para los mensajes: el nombre BTN_* de un codigo, o el numero."""
+    if not NOMBRE_A_BOTON:
+        _construir_nombres()
+    for n, c in NOMBRE_A_BOTON.items():
+        if c == codigo and n.startswith("BTN_"):
+            return n
+    return str(codigo)
+
+
 def main():
     modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
     # MODO "mandos": no crea nada, solo mira y dice cual se esta usando.
@@ -7759,6 +8336,9 @@ def main():
     # TODOS los modos: xbox, ds4, clasico y la cruceta al stick.
     cambiar_sticks = str(sys.argv[3] if len(sys.argv) > 3 else "").strip() in (
         "1", "si", "true", "on")
+    # EL REMAPEO, como cuarto argumento y por el mismo motivo que los sticks:
+    # se combina con todos los modos, asi que no puede ser un sufijo del modo.
+    remapeo = leer_remapeo(sys.argv[4] if len(sys.argv) > 4 else "")
 
     # MODO ESCRITORIO: se leen los teclados virtuales de Steam, no un mando.
     if modo.startswith("escritorio"):
@@ -7890,6 +8470,19 @@ def main():
         # su sitio es dejar la mitad del cambio hecha.
         CAMBIO_BOTONES = {ecodes.BTN_THUMBL: ecodes.BTN_THUMBR,
                           ecodes.BTN_THUMBR: ecodes.BTN_THUMBL}
+    # EL REMAPEO VA DESPUES Y MANDA SOBRE EL INTERCAMBIO.
+    #
+    # Si alguien remapea a mano el clic de un stick, es que quiere eso: lo que
+    # ha pedido explicitamente pesa mas que lo que viene de arrastre con el
+    # intercambio de sticks.
+    #
+    # Y no se mete la vuelta: por eso es una copia y no un intercambio.
+    if remapeo:
+        CAMBIO_BOTONES.update(remapeo)
+        for _o, _d in sorted(remapeo.items()):
+            print("[mando] %s pasa a ser %s (y %s sigue igual)"
+                  % (nombre_de_boton(_o), nombre_de_boton(_d),
+                     nombre_de_boton(_d)), flush=True)
 
     def soltar(*_):
         try:
@@ -8263,7 +8856,7 @@ find_keys_file() {
     if [ -d "$p" ]; then dir="$p"; elif [ -f "$p" ]; then dir="$(dirname "$p")"; fi
     if [ -n "$dir" ]; then
         local sueltos n
-        sueltos="$(find "$dir" -maxdepth 1 -type f -name '*.keys' 2>/dev/null)"
+        sueltos="$(find -H "$dir" -maxdepth 1 -type f -name '*.keys' 2>/dev/null)"
         n="$(printf '%s\n' "$sueltos" | grep -c .)"
         if [ "$n" = 1 ] && keys_es_de "$sueltos" "$gid"; then
             keys_copiar_a_profiles "$sueltos" "$gid" && sueltos="$PROFILE_DIR/$gid.keys"
@@ -8272,6 +8865,108 @@ find_keys_file() {
         fi
     fi
     return 1
+}
+
+remap_botones_lista() {
+    # Los botones que se pueden elegir, como "Etiqueta|BTN_CODIGO".
+    #
+    # LOS DE LA CARA DEPENDEN DEL ESTILO, Y ESO NO ES COSMETICO. En un mando
+    # Xbox la A es la de ABAJO (BTN_SOUTH); con el estilo Batocera la A es la
+    # de la DERECHA (BTN_EAST). Si el menu dijera "A" y guardara siempre
+    # BTN_SOUTH, a quien use el estilo Batocera le saldria cambiado el boton de
+    # al lado y no entenderia por que.
+    #
+    # Por eso en el perfil se guarda SIEMPRE el nombre de verdad (BTN_*), que
+    # no depende del estilo, y la etiqueta solo se usa para enseñarla.
+    if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
+        printf '%s\n' "A (derecha)|BTN_EAST" "B (abajo)|BTN_SOUTH" \
+            "X (arriba)|BTN_NORTH" "Y (izquierda)|BTN_WEST"
+    else
+        printf '%s\n' "A (abajo)|BTN_SOUTH" "B (derecha)|BTN_EAST" \
+            "X (izquierda)|BTN_WEST" "Y (arriba)|BTN_NORTH"
+    fi
+    printf '%s\n' "L1|BTN_TL" "R1|BTN_TR" "L2|BTN_TL2" "R2|BTN_TR2" \
+        "L3 (clic stick izq.)|BTN_THUMBL" "R3 (clic stick der.)|BTN_THUMBR" \
+        "Start|BTN_START" "Select|BTN_SELECT" "Guia / Home|BTN_MODE" \
+        "Cruceta arriba|BTN_DPAD_UP" "Cruceta abajo|BTN_DPAD_DOWN" \
+        "Cruceta izq.|BTN_DPAD_LEFT" "Cruceta der.|BTN_DPAD_RIGHT"
+}
+
+remap_etiqueta() {
+    # La etiqueta de un BTN_*, para enseñarla. $1 = BTN_ALGO.
+    local fila
+    while IFS= read -r fila; do
+        [ "${fila#*|}" = "${1:-}" ] && { printf '%s' "${fila%%|*}"; return 0; }
+    done <<REMAPLST
+$(remap_botones_lista)
+REMAPLST
+    printf '%s' "${1:-}"
+}
+
+remap_describir() {
+    # "BTN_SOUTH=BTN_START" -> "A (abajo) manda Start". $1 = BOTONES_REMAP.
+    local txt="${1:-}" par salida=""
+    [ -n "$txt" ] || { printf 'ninguno'; return 0; }
+    local _ifs="$IFS"; IFS=','
+    for par in $txt; do
+        IFS="$_ifs"
+        [ -n "$par" ] || continue
+        case "$par" in
+            *=*) salida="$salida, $(remap_etiqueta "${par%%=*}") manda $(remap_etiqueta "${par#*=}")" ;;
+        esac
+        IFS=','
+    done
+    IFS="$_ifs"
+    printf '%s' "${salida#, }"
+}
+
+mando_virtual_del_juego() {
+    # ARRANCA EL MANDO VIRTUAL DE ESTE JUEGO. $1 = su .keys (puede no haber).
+    #
+    # UNA SOLA COPIA, Y ESO ES EL ARREGLO DEL 31/10.
+    #
+    # Esto mismo estaba escrito DOS VECES, palabra por palabra, en launch_game
+    # y en launch_loose_exe. Y no estaba en los otros dos caminos de
+    # lanzamiento -lanzar_arcade_loader y ejecutar_nativo-, asi que en un juego
+    # de Arcade Loader o en uno nativo de Linux se podia elegir el mando
+    # virtual en los ajustes, se guardaba en el perfil... y al lanzar nadie lo
+    # arrancaba. Desde fuera: "he puesto la opcion y no pasa nada".
+    #
+    # Es el descuido clasico de este proyecto, el que el propio codigo lleva
+    # avisado: hay varios caminos de lanzamiento y el recado vive en unos
+    # pocos. Con el bloque en un solo sitio, lo que se añada aqui vale para los
+    # cuatro, y no hay una quinta copia que se quede atras.
+    #
+    # Deja el modo que de verdad se ha usado en WP_MV_MODO, porque quien llama
+    # lo necesita despues para decidir si vuelve a mirar los mandos.
+    local keys_file="${1:-}"
+    WP_MV_MODO=0
+    # "nunca" se acepta como apagado por compatibilidad con los perfiles que se
+    # guardaron mientras existio el automatico.
+    local _mv="${MANDO_VIRTUAL:-0}"
+    [ "$_mv" = nunca ] && _mv=0
+    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
+    #
+    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
+    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
+    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
+    # como lo quiere el juego.
+    local _sticks=0
+    keys_sticks_cambiados "$keys_file" && _sticks=1
+    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
+    # LOS BOTONES REMAPEADOS SI SALEN DEL PERFIL: son como quieres TU el mando,
+    # no como lo quiere el juego. "poner el start en el boton A" es una
+    # preferencia de quien juega.
+    local _remap="${BOTONES_REMAP:-}"
+    [ -n "$_remap" ] && say "[i] Botones remapeados: $_remap"
+    mando_virtual_start "$_mv" "$_sticks" "$_remap"
+    # El modo de verdad lo decide mando_virtual_start: puede encender el
+    # "copia" por su cuenta si hay sticks al reves o botones remapeados.
+    if [ -n "${WP_MANDO_VIRTUAL_PID:-}" ]; then
+        WP_MV_MODO="${_mv:-0}"
+        { [ -z "$WP_MV_MODO" ] || [ "$WP_MV_MODO" = 0 ]; } && WP_MV_MODO=copia
+    fi
+    return 0
 }
 
 mando_virtual_start() {
@@ -8283,7 +8978,7 @@ mando_virtual_start() {
     #
     # Apagado por defecto: solo se enciende en los juegos que lo necesiten.
     WP_MANDO_VIRTUAL_PID=""
-    local modo="${1:-0}" sticks="${2:-0}"
+    local modo="${1:-0}" sticks="${2:-0}" remapeo="${3:-}"
     # LOS STICKS AL REVES ENCIENDEN EL MANDO VIRTUAL POR SU CUENTA.
     #
     # El intercambio lo hace este modulo, asi que pedirlo en el .keys y tener
@@ -8293,6 +8988,16 @@ mando_virtual_start() {
     if [ "$sticks" = 1 ] && { [ -z "$modo" ] || [ "$modo" = 0 ]; }; then
         modo="copia"
         log "Mando virtual: encendido en modo copia porque el .keys pide los sticks al reves"
+    fi
+    # Y UN REMAPEO DE BOTONES, IGUAL, POR EL MISMO MOTIVO.
+    #
+    # El remapeo lo hace este modulo. Pedirlo con el mando virtual apagado
+    # -que es como esta de serie- no haria nada, y desde fuera seria "he
+    # puesto el boton y no pasa nada", que es la peor clase de fallo. Con
+    # "copia" el juego ve un Xbox normal con ese boton cambiado y nada mas.
+    if [ -n "$remapeo" ] && { [ -z "$modo" ] || [ "$modo" = 0 ]; }; then
+        modo="copia"
+        log "Mando virtual: encendido en modo copia porque hay botones remapeados ($remapeo)"
     fi
     # SE DICE SIEMPRE, tambien cuando esta apagado.
     #
@@ -8361,7 +9066,8 @@ mando_virtual_start() {
     fi
     # El dispositivo va VACIO a proposito: que lo busque el modulo. Esta ahi
     # para poder pasarle el tercer argumento, el de los sticks.
-    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo" "" "$sticks")" \
+    [ -n "$remapeo" ] && log "Mando virtual: botones remapeados: $remapeo"
+    WP_MANDO_VIRTUAL_PID="$(lanzar_suelto "$PY_BIN" "$MANDO_VIRTUAL_PY" "$modo" "" "$sticks" "$remapeo")" \
         || WP_MANDO_VIRTUAL_PID=""
     # SE COMPRUEBA QUE SIGUE VIVO, no solo que arrancara.
     #
@@ -8678,9 +9384,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py e3796ec7d32a" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 90aef72840dc" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py e3796ec7d32a
+# WPROTON_HELPER menu_pygame.py 90aef72840dc
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -12136,12 +12842,44 @@ def run_session():
 
     if MODE == 'progress':
         # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
+        #
+        # Y SE PUEDE CANCELAR, SI QUIEN LA ABRIO LO PERMITE.
+        #
+        # Lo pidio Dani (30/10): "estaria bien un boton de cancelar descarga,
+        # en este momento me estoy dando conexion desde el movil a la Deck, por
+        # eso la descarga es lenta, asi que estaria bien poder probar que coge
+        # la descarga y cancelar".
+        #
+        # SOLO donde tiene sentido. Esta misma ventana la usan tambien la
+        # instalacion del runtime y el empaquetado, y cortar eso por la mitad
+        # deja cosas a medias. Por eso hace falta que quien la abre pase
+        # "cancelable": hoy solo lo hacen las descargas, que se pueden tirar y
+        # volver a empezar sin consecuencias.
+        #
+        # El aviso va por un fichero aparte -el de estado lo reescribe bash
+        # cada segundo y se llevaria por delante lo que escribieramos aqui-.
+        cancelable = (len(sys.argv) > 5 and sys.argv[5] == 'cancelable')
+        cancel_f = ARG4 + '.cancel'
+        cancelando = False
         bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
         clock2 = pygame.time.Clock()
         while True:
             for ev in eventos():
                 if ev.type == pygame.QUIT:
                     pygame.quit(); sys.exit(0)
+                # B en el mando llega aqui como ESCAPE: lo traduce el lector
+                # de /dev/input (RAW_BTN), asi que con mirar la tecla valen
+                # las dos cosas, mando y teclado.
+                if (cancelable and not cancelando
+                        and ev.type == pygame.KEYDOWN
+                        and ev.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE)):
+                    try:
+                        with open(cancel_f, 'w', encoding='utf-8') as fh:
+                            fh.write('1\n')
+                        cancelando = True
+                    except Exception as e:
+                        sys.stderr.write('menu_pygame: no se pudo pedir la '
+                                         'cancelacion (%s)\n' % e)
             try:
                 with open(ARG4, encoding='utf-8') as fh:
                     raw = fh.readline().rstrip('\n')
@@ -12171,7 +12909,15 @@ def run_session():
                                  (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
             if bar_pct:
                 screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
-            screen.blit(f_sm.render(L('Espera, esto puede tardar...', 'Please wait, this may take a while...'), True, DIM), (24, H - 40))
+            if cancelando:
+                _pie = L('Cancelando...', 'Cancelling...')
+            elif cancelable:
+                _pie = L('Espera, esto puede tardar...   B: cancelar',
+                         'Please wait, this may take a while...   B: cancel')
+            else:
+                _pie = L('Espera, esto puede tardar...',
+                         'Please wait, this may take a while...')
+            screen.blit(f_sm.render(_pie, True, DIM), (24, H - 40))
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
@@ -23585,6 +24331,21 @@ DL_LIMITES=(--connect-timeout 20 --speed-limit 2048 --speed-time 30
 # grande que traer, asi que 45 s es de sobra para cualquier respuesta sana.
 DL_META=(--connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2)
 
+# LAS LINEAS POR LAS QUE WProton SOSPECHA QUE FALTA .NET.
+#
+# En UNA sola variable a proposito: la condicion que decide y la funcion que
+# mira de quien es la queja (fallo_dotnet_es_del_juego) tienen que buscar
+# EXACTAMENTE lo mismo. Con el patron escrito dos veces, una se queda corta
+# al tocar la otra y la comprobacion deja de proteger sin que se note.
+# OJO CON "to? ?load": EXIGE UNA T.
+#
+# Asi venia escrito, y significa "espacio, t, o opcional, espacio opcional,
+# load". O sea que "failed to load mscoree" casa, pero "cannot load mscoree"
+# NO: no hay ninguna t ahi. La intencion era "(to )?", con el "to" entero
+# opcional. Lo encontro una prueba al pedirle que cazara justo esa linea.
+FALLO_DOTNET_PATRON='fixup_imports_ilonly|mscoree\.dll[^a-z]*not found|(failed|unable|could not|cannot) (to )?load[^\n]*(mscoree|\.NET|CLR)|err:[^\n]*mscoree|Mono[^\n]*not installed'
+
+
 dl_bruto() {
     # $1 = url, $2 = destino.
     #
@@ -23592,22 +24353,91 @@ dl_bruto() {
     # real, asi que la barra avanza de verdad en vez de ir "pulsando".
     local nombre; nombre="$(basename "$2")"
     say "Descargando $nombre..."
+    # $3 = sha256 que DEBE tener lo descargado. Opcional: si viene vacio solo
+    # se comprueba el tamaño. Lo mira dl_comprobar al final, una sola vez,
+    # pase por la rama que pase.
     local _sha_esperada="${3:-}"
+    local rc=0
+    # Las cabeceras de la PROPIA descarga, para saber el tamaño que el
+    # servidor dijo que iba a mandar. No es una peticion aparte: "-D" vuelca
+    # a un fichero las cabeceras de la descarga que ya se esta haciendo.
+    local _cab; _cab="$(mktemp 2>/dev/null)" || _cab=""
     # Si ya hay una ventana en pantalla, NO abrir otra encima: se solapaban.
+    WP_DL_CANCELADA=0
     if [ -n "${INSTALL_NOTICE_PID:-}" ] || [ -n "${PROGRESS_FILE:-}" ]; then
-        curl -fL "${DL_LIMITES[@]}" -s -o "$2" "$1"
+        # AQUI LA BARRA ES DE OTRO, pero la cancelacion se atiende igual: si
+        # quien la abrio la puso cancelable, esta descarga tambien se puede
+        # cortar. Por eso curl va al fondo y se mira cada segundo, en vez de
+        # esperar a que termine.
+        curl -fL "${DL_LIMITES[@]}" -s ${_cab:+-D "$_cab"} -o "$2" "$1" &
+        local _p2=$!
+        while kill -0 "$_p2" 2>/dev/null; do
+            sleep 1
+            if progress_cancelado; then
+                kill "$_p2" 2>/dev/null
+                sleep 0.3; kill -9 "$_p2" 2>/dev/null
+                wait "$_p2" 2>/dev/null
+                rm -f "$2" 2>/dev/null
+                [ -n "$_cab" ] && rm -f "$_cab" 2>/dev/null
+                WP_DL_CANCELADA=1
+                log "descarga cancelada por la persona: $nombre"
+                say "[i] Descarga cancelada."
+                return 130
+            fi
+        done
+        wait "$_p2"; rc=$?
     elif pygame_available; then
-        progress_start "Descargando $nombre"
-        # Tamaño total, para que la barra avance de verdad. Si el servidor no
-        # lo dice, se avanza despacio: al menos se ve que sigue trabajando.
-        local total; total="$(curl -fsIL --max-time 15 "$1" 2>/dev/null \
-            | grep -i '^content-length:' | tail -n1 \
-            | tr -dc '0-9')"
-        curl -fL "${DL_LIMITES[@]}" -s -o "$2" "$1" &
-        local pid=$! pct=0 hechos=0
+        progress_start "Descargando $nombre" cancelable
+        # EL TAMAÑO SALE DE LA PROPIA DESCARGA, NO DE UNA PETICION APARTE.
+        #
+        # AQUI HABIA UN "curl -fsIL" -una peticion HEAD- para preguntar el
+        # tamaño antes de empezar. O sea DOS peticiones al mismo enlace. Y eso
+        # es lo que hacia a Arcade Loader distinto del resto sin que se notara:
+        #
+        #   - los runners y el prefijo de TeknoParrot llegan aqui con la barra
+        #     YA abierta, asi que entran por la rama de arriba y hacen UNA
+        #     peticion;
+        #   - Arcade Loader cierra la barra a proposito -para que no se solape
+        #     con el dialogo del que viene- y por eso entra por esta rama, que
+        #     hacia dos.
+        #
+        # Con un enlace de MediaFire eso no da igual: el que se saca de la
+        # pagina lleva un testigo, y pedirlo dos veces no es lo mismo que
+        # pedirlo una. Era la unica diferencia que quedaba entre la descarga
+        # que falla y las que funcionan, y la habia metido yo el dia anterior
+        # al añadir la barra de progreso.
+        #
+        # Con "-D" la propia descarga vuelca sus cabeceras a un fichero, asi
+        # que el tamaño se lee de ahi en cuanto llega: UNA sola peticion y la
+        # barra sigue avanzando de verdad. Con "-L" se vuelcan tambien las de
+        # los saltos, y por eso se coge la ULTIMA Content-Length, que es la de
+        # la respuesta buena.
+        curl -fL "${DL_LIMITES[@]}" -s ${_cab:+-D "$_cab"} -o "$2" "$1" &
+        local pid=$! pct=0 hechos=0 total=""
         while kill -0 $pid 2>/dev/null; do
             sleep 1
+            # ¿Ha dado a cancelar? Se corta curl y se borra lo bajado a
+            # medias: un fichero incompleto que se quedara ahi haria fallar la
+            # proxima comprobacion de "esto no es un tar.gz" sin que nadie
+            # entendiera por que.
+            if progress_cancelado; then
+                kill "$pid" 2>/dev/null
+                sleep 0.3; kill -9 "$pid" 2>/dev/null
+                wait "$pid" 2>/dev/null
+                rm -f "$2" 2>/dev/null
+                [ -n "$_cab" ] && rm -f "$_cab" 2>/dev/null
+                WP_DL_CANCELADA=1
+                log "descarga cancelada por la persona: $nombre ($(human_size "${hechos:-0}") bajados)"
+                progress_stop
+                say "[i] Descarga cancelada."
+                return 130
+            fi
             hechos="$(stat -c %s "$2" 2>/dev/null || echo 0)"
+            # El tamaño, en cuanto el servidor lo haya dicho.
+            if [ -z "$total" ] && [ -n "$_cab" ]; then
+                total="$(grep -i '^content-length:' "$_cab" 2>/dev/null \
+                    | tail -n1 | tr -dc '0-9')"
+            fi
             if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
                 pct=$(( hechos * 100 / total ))
                 [ "$pct" -gt 99 ] && pct=99
@@ -23618,7 +24448,7 @@ dl_bruto() {
             fi
         done
         wait $pid
-        local rc=$?
+        rc=$?
         # AQUI NO SE INSTALA NADA. ESTO SOLO DESCARGA.
         #
         # Habia pegado aqui el bloque de los codecs de 32 bits, que es de la
@@ -23641,17 +24471,89 @@ dl_bruto() {
         # Los codecs se instalan donde toca, en instalar_runtime.
         progress_set 100 "Listo"
         progress_stop
-        return $rc
     elif [ "$HAS_ZENITY" = 1 ]; then
-        curl -fL "${DL_LIMITES[@]}" -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
+        curl -fL "${DL_LIMITES[@]}" ${_cab:+-D "$_cab"} -o "$2" "$1" >> "$LOG_FILE" 2>&1 &
         local pid=$!
         ( while kill -0 $pid 2>/dev/null; do echo 50; sleep 1; done; echo 100 ) \
             | zenity --progress --title="WProton" --text="Descargando $(basename "$2")..." \
                      --pulsate --auto-close --no-cancel 2>/dev/null
-        wait $pid
+        wait $pid; rc=$?
     else
-        curl -fL "${DL_LIMITES[@]}" -o "$2" "$1"
+        curl -fL "${DL_LIMITES[@]}" ${_cab:+-D "$_cab"} -o "$2" "$1"; rc=$?
     fi
+    # LA COMPROBACION, UNA SOLA VEZ Y PARA LAS CUATRO RAMAS.
+    #
+    # Antes esto no existia y cada rama se iba por su lado. Una descarga que
+    # se corta a mitad no siempre hace fallar a curl -f: si la conexion se
+    # cierra "en limpio", curl se da por satisfecho y lo que queda en el disco
+    # es medio fichero. Eso llegaba a 7zz o a tar, que decian lo suyo -"no es
+    # un tar.gz valido"- y la culpa parecia del fichero de origen.
+    #
+    # Con un gigabyte por una conexion compartida desde el movil, cortarse no
+    # es raro: es cuestion de tiempo.
+    if [ "$rc" = 0 ]; then
+        dl_comprobar "$2" "$_cab" "$_sha_esperada" || rc=$?
+    fi
+    [ -n "$_cab" ] && rm -f "$_cab" 2>/dev/null
+    return $rc
+}
+
+dl_comprobar() {
+    # ¿Esta entero lo que se ha descargado? $1 = fichero, $2 = fichero de
+    # cabeceras (puede no haber), $3 = sha256 esperada (puede estar vacia).
+    #
+    # Devuelve 0 si esta bien. Si no, BORRA lo descargado y devuelve != 0: un
+    # fichero a medias que se quede en el disco hace fallar el siguiente
+    # intento sin que nadie entienda por que.
+    local fich="${1:-}" cab="${2:-}" sha="${3:-}" total="" hay=""
+    [ -n "$fich" ] && [ -f "$fich" ] || return 0
+    hay="$(stat -c %s "$fich" 2>/dev/null || echo 0)"
+    # 1) EL TAMAÑO, contra lo que el servidor dijo que iba a mandar.
+    if [ -n "$cab" ] && [ -f "$cab" ]; then
+        # La ULTIMA Content-Length: con -L se vuelcan tambien las de los
+        # saltos, y la buena es la de la respuesta final.
+        total="$(grep -i '^content-length:' "$cab" 2>/dev/null \
+                 | tail -n1 | tr -dc '0-9')"
+    fi
+    if [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null \
+       && [ "$hay" != "$total" ]; then
+        log "descarga incompleta: $(basename "$fich") trae $hay bytes y el servidor anuncio $total" WARN
+        say "[!] La descarga se corto a medias ($(human_size "$hay") de $(human_size "$total"))."
+        rm -f "$fich" 2>/dev/null
+        return 2
+    fi
+    # 2) UN FICHERO VACIO tampoco vale, aunque nadie anuncie tamaño.
+    if [ "${hay:-0}" -lt 1 ] 2>/dev/null; then
+        log "descarga vacia: $(basename "$fich") no trae ni un byte" WARN
+        rm -f "$fich" 2>/dev/null
+        return 3
+    fi
+    # 3) LA SUMA, si se sabe cual tiene que ser.
+    if [ -n "$sha" ]; then
+        local real=""
+        if command -v sha256sum >/dev/null 2>&1; then
+            real="$(sha256sum "$fich" 2>/dev/null | cut -d" " -f1)"
+        elif command -v shasum >/dev/null 2>&1; then
+            real="$(shasum -a 256 "$fich" 2>/dev/null | cut -d" " -f1)"
+        fi
+        if [ -z "$real" ]; then
+            # Sin herramienta no se inventa un veredicto: se dice y se sigue.
+            log "no se ha podido calcular la sha256 de $(basename "$fich"): no hay sha256sum ni shasum" WARN
+            return 0
+        fi
+        # Sin distinguir mayusculas, que cada quien escribe la suma como le da.
+        local a b
+        a="$(printf '%s' "$real" | tr 'A-F' 'a-f')"
+        b="$(printf '%s' "$sha"  | tr 'A-F' 'a-f')"
+        if [ "$a" != "$b" ]; then
+            log "la sha256 no cuadra en $(basename "$fich"): se esperaba $b y ha salido $a" WARN
+            say "[!] Lo descargado no coincide con su suma de comprobacion."
+            rm -f "$fich" 2>/dev/null
+            return 4
+        fi
+        log "sha256 correcta en $(basename "$fich")"
+    fi
+    return 0
 }
 
 run_con_porcentaje() {
@@ -23955,23 +24857,188 @@ setup_umu() {
     say "umu-launcher instalado en runtime/umu/"
 }
 
+mediafire_clave() {
+    # LA "QUICK KEY" DE UN ENLACE DE MEDIAFIRE. $1 = url.
+    #
+    # En "https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz/file"
+    # la clave es "k2t62nrwcnu4mhb": el trozo que va detras de /file/ o de
+    # /file_premium/. Es lo unico que necesita la API para decir donde esta el
+    # fichero.
+    local u="${1:-}" k=""
+    case "$u" in
+        */file/*)         k="${u#*/file/}" ;;
+        */file_premium/*) k="${u#*/file_premium/}" ;;
+        *) return 1 ;;
+    esac
+    k="${k%%/*}"
+    k="${k%%\?*}"
+    # Las claves son letras y numeros; si sale otra cosa, no es una clave.
+    case "$k" in
+        ""|*[!A-Za-z0-9]*) return 1 ;;
+    esac
+    printf '%s' "$k"
+    return 0
+}
+
+mediafire_api_directo() {
+    # EL ENLACE DE DESCARGA POR LA API OFICIAL DE MEDIAFIRE. $1 = url.
+    #
+    # DE DONDE SALE (30/10). Despues de un dia detras de la pagina -que acaba
+    # en un 403 en "?action=check", su comprobacion de navegador-, Dani paso
+    # el enlace de la libreria oficial de Python (pypi.org/project/mediafire).
+    # Y ahi esta la clave: esa libreria NO descarga raspando la pagina, llama a
+    # "file/get_links" con la clave del fichero y usa la direccion que le
+    # devuelven.
+    #
+    # O sea que MediaFire tiene una puerta para esto, documentada y pensada
+    # para programas. No hay que imitar a nadie ni pasar ninguna comprobacion:
+    # se pregunta por donde se pregunta.
+    #
+    # NO SE TRAE LA LIBRERIA. Son dos peticiones HTTP; meter un paquete de
+    # Python -y sus dependencias- en un lanzador portable por esto seria pagar
+    # mucho por poco. Se llama igual que ella, con curl.
+    #
+    # Y SI NO FUNCIONA, NO PASA NADA: se cae al camino de siempre. La
+    # documentacion de la API dice que algunas llamadas piden una sesion y
+    # otras no, y para un fichero publico el ejemplo de la libreria no hace
+    # login. Si resulta que aqui si la pide, lo dira el registro y se vera.
+    local url="${1:-}" clave api json directo
+    clave="$(mediafire_clave "$url")" || return 1
+    log "MediaFire: probando la API oficial con la clave '$clave'"
+    for api in "https://www.mediafire.com/api/1.5/file/get_links.php" \
+               "https://www.mediafire.com/api/file/get_links.php"; do
+        json="$(curl -fsSL "${DL_META[@]}" \
+            "$api?quick_key=$clave&link_type=direct_download&response_format=json" \
+            2>/dev/null)" || continue
+        [ -n "$json" ] || continue
+        # El campo que interesa es "direct_download". En JSON las barras
+        # pueden venir escapadas ("https:\/\/..."), asi que se desescapan.
+        directo="$(printf '%s' "$json" \
+            | grep -o '"direct_download" *: *"[^"]*"' \
+            | head -n1 | sed 's/.*: *"//; s/"$//; s|\\/|/|g')"
+        [ -n "$directo" ] || continue
+        case "$directo" in
+            https://*) log "MediaFire: la API ha dado el enlace directo"
+                       printf '%s' "$directo"; return 0 ;;
+        esac
+    done
+    # Lo que haya contestado, al registro: si pide sesion, lo dira aqui.
+    if [ -n "${json:-}" ]; then
+        log "MediaFire: la API no dio enlace directo. Contesto: $(printf '%s' "$json" | tr -d '\n' | cut -c1-240)" WARN
+    else
+        log "MediaFire: la API no contesto" WARN
+    fi
+    return 1
+}
+
 mediafire_directo() {
-    # MediaFire no da un enlace directo: la pagina lleva dentro el enlace real
-    # al fichero. Se extrae de ahi. Si algun dia cambian su web esto dejara de
-    # funcionar, por eso el runner propio deberia acabar alojado en el
-    # repositorio de WProton (ver GE_CUSTOM_URL en settings.conf).
-    local pagina="$1" html directo
+    # EL ENLACE DE DESCARGA DE VERDAD DE UNA PAGINA DE MEDIAFIRE.
+    #
+    # Lo que MediaFire comparte no es el fichero: es una PAGINA con un boton.
+    # Si se le pasa esa direccion a curl, lo que baja es el HTML -unos 100 KB-
+    # y despues "tar" dice que no es un .tar.gz. Confunde mucho, porque la
+    # descarga "funciona".
+    #
+    # ESTA ES LA UNICA COPIA DE ESTO, Y ESO ES EL ARREGLO DEL 29/10.
+    #
+    # Habia TRES: esta, mediafire_enlace_directo (el prefijo de TeknoParrot) y
+    # una tercera dentro de Arcade Loader. Las dos primeras funcionaban en la
+    # maquina de Dani y la tercera no, el mismo dia y contra la misma web. La
+    # diferencia estaba en que la tercera mandaba un User-Agent de navegador
+    # "por si acaso": MediaFire contesta distinto segun quien pregunte, y a un
+    # navegador le sirve la pagina moderna, donde el enlace no esta escrito en
+    # el HTML. Con el User-Agent de curl, que es lo que llevaba la version que
+    # si funcionaba, el enlace viene en la pagina.
+    #
+    # Asi que no se manda User-Agent. Y lo importante no es ese detalle, sino
+    # que ahora esto esta UNA vez: tres copias de la misma idea se corrigen una
+    # sola vez y las otras dos se quedan con el fallo. Hay comprobacion de que
+    # no vuelva a haber mas de una.
+    #
+    # ES FRAGIL A PROPOSITO Y SE SABE: depende de como este hecha la pagina
+    # hoy. Por eso quien llama comprueba SIEMPRE lo que ha bajado, el registro
+    # dice exactamente que paso, y la direccion esta en los ajustes para poder
+    # cambiarla sin tocar el programa.
+    local pagina="${1:-}" html="" directo b64 _cod _bytes _via=""
+    [ -n "$pagina" ] || return 1
     case "$pagina" in
         *mediafire.com*) ;;
         *) printf '%s' "$pagina"; return 0 ;;   # ya es un enlace directo
     esac
-    html="$(curl -fsSL --max-time 30 "$pagina" 2>/dev/null)" || return 1
+    # SIN "-A": ver arriba. Si alguien lo vuelve a poner, la suite lo canta.
+    # SE PIDE DE DOS FORMAS, Y SE APUNTA CUAL FUNCIONO.
+    #
+    # EL 30/10 YO NO SABIA CUAL QUIERE MEDIAFIRE, Y ESO ES EL PUNTO.
+    #
+    # El dia anterior quite el User-Agent de navegador porque los runners y el
+    # prefijo de TeknoParrot -que no lo mandan- si se descargaban. Pero eso
+    # era una deduccion, no una medida: nadie habia bajado un runner ESE dia.
+    # Y MediaFire contesta distinto segun quien pregunte, asi que la respuesta
+    # puede cambiar de un dia para otro.
+    #
+    # Adivinar cual de las dos es la buena ya fallo una vez. Asi que se prueban
+    # LAS DOS, en el orden que menos ruido hace -primero como siempre- y se
+    # ESCRIBE cual gano. La proxima vez no habra que deducir nada: estara en
+    # el registro.
+    # LA API OFICIAL, PRIMERO.
+    #
+    # Es la puerta que MediaFire tiene puesta para los programas: se pregunta
+    # por la clave del fichero y contestan con la direccion. Si funciona, no
+    # hay que pedir la pagina siquiera, que es justo lo que lleva todo el dia
+    # devolviendo 403.
+    directo="$(mediafire_api_directo "$pagina")" && [ -n "$directo" ] && {
+        printf '%s' "$directo"; return 0; }
+    local _ua='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+    html="$(curl -fsSL --max-time 30 "$pagina" 2>/dev/null)" && _via="curl"
+    if [ -z "${html:-}" ]; then
+        html="$(curl -fsSL --max-time 30 -A "$_ua" "$pagina" 2>/dev/null)" && _via="navegador"
+    fi
+    if [ -z "${html:-}" ]; then
+        # EL CODIGO DE VERDAD, SIGUIENDO LOS SALTOS.
+        #
+        # Aqui habia un "curl -s -o /dev/null -w %{http_code}" SIN -L, y eso
+        # mentia: se paraba en el primer salto. El registro de Dani decia
+        # "codigo HTTP 302"... que no es un error, es una redireccion, y curl
+        # las sigue. O sea que el codigo que hizo fallar la descarga no se
+        # llego a ver nunca.
+        #
+        # Con -L se llega al final, y con %{url_effective} se apunta ADONDE se
+        # llego, que es lo que dice si MediaFire manda a una pagina de aviso,
+        # a un captcha o al fichero.
+        local _fin
+        # El limite va EN LA MISMA LINEA que el curl, y no es estetica: la
+        # comprobacion que vigila que no quede ningun curl sin acotar mira
+        # linea a linea, asi que un "--max-time" en la linea de continuacion
+        # no lo ve. Lo canto ella.
+        _fin="$(curl -sSL --max-time 20 -o /dev/null \
+                -w '%{http_code} %{url_effective}' "$pagina" 2>/dev/null)"
+        log "MediaFire: no se pudo pedir la pagina ni como curl ni como navegador. Final tras los saltos: ${_fin:-?} (origen: $pagina)" WARN
+        return 1
+    fi
+    [ "${_via:-}" = navegador ] \
+        && log "MediaFire: la pagina solo se dejo pedir mandando User-Agent de navegador"
+    _bytes="$(printf '%s' "$html" | wc -c)"
+    # 1) El href del boton de descarga.
     directo="$(printf '%s' "$html" \
         | grep -oE 'https://download[0-9]*\.mediafire\.com/[^"'"'"'<> ]+' \
         | head -n1)"
-    [ -n "$directo" ] || return 1
-    printf '%s' "$directo"
-    return 0
+    if [ -n "$directo" ]; then
+        printf '%s' "$directo"
+        return 0
+    fi
+    # 2) Y si no esta, "data-scrambled-url", que es ese mismo enlace en base64.
+    #    MediaFire ha ido cambiando de una forma a la otra, asi que se miran
+    #    las dos antes de darse por vencido.
+    b64="$(printf '%s' "$html" | grep -o 'data-scrambled-url="[^"]*"' \
+        | head -n1 | sed 's/^data-scrambled-url="//; s/"$//')"
+    if [ -n "$b64" ]; then
+        directo="$(printf '%s' "$b64" | base64 -d 2>/dev/null)"
+        case "$directo" in
+            https://*) printf '%s' "$directo"; return 0 ;;
+        esac
+    fi
+    log "MediaFire: la pagina no trae ningun enlace reconocible (${_bytes:-0} bytes recibidos): $pagina" WARN
+    return 1
 }
 
 runner_desde_url() {
@@ -24004,7 +25071,13 @@ runner_desde_url() {
     esac
     local tmp="$RUNNERS_DIR/.dl_$nombre"; rm -rf "$tmp"; mkdir -p "$tmp"
     if ! dl "$directo" "$tmp/runner.tar.gz"; then
-        rm -rf "$tmp"; say "AVISO: fallo la descarga de $nombre"; return 1
+        rm -rf "$tmp"
+        if [ "${WP_DL_CANCELADA:-0}" = 1 ]; then
+            say "[i] Descarga de $nombre cancelada; no queda nada a medias"
+        else
+            say "AVISO: fallo la descarga de $nombre"
+        fi
+        return 1
     fi
     # Que sea de verdad un tar.gz y no una pagina de error: MediaFire devuelve
     # HTML con codigo 200 cuando el enlace caduca, asi que sin esto se
@@ -26103,11 +27176,23 @@ diag_carga_juego() {
         # el juego carga. Se vio en la propia suite: la sonda tardaba mas de
         # dos segundos en dar una vuelta y la prueba "fallaba" sin que fallara
         # nada. Con "read" del propio bash no se arranca nada.
+        # EL "2>/dev/null" VA ANTES DEL "<", Y NO ES UN CAPRICHO.
+        #
+        # Las redirecciones se aplican de izquierda a derecha. Con
+        # "< fichero 2>/dev/null", cuando el fichero no esta el mensaje de
+        # error sale por la salida de errores de ENTONCES, que todavia no esta
+        # redirigida: "bash: /proc/1234/comm: No such file or directory" acaba
+        # en el registro. Y aqui pasa constantemente, porque los procesos
+        # nacen y mueren entre el listado y la lectura, y esto recorre
+        # cientos por muestra.
+        #
+        # Poniendolo delante, el error se calla de verdad. Comprobado, no
+        # supuesto: con el orden al reves el mensaje se ve.
         _pids_juego() {
             _hay=""
             for _d in /proc/[0-9]*; do
                 _c=""
-                read -r _c < "$_d/comm" 2>/dev/null || continue
+                read -r _c 2>/dev/null < "$_d/comm" || continue
                 [ "$_c" = "$_comm_juego" ] || continue
                 _hay=1
                 printf '%s ' "${_d#/proc/}"
@@ -26115,14 +27200,14 @@ diag_carga_juego() {
             [ -z "$_hay" ] || return 0
             for _d in /proc/[0-9]*; do
                 _c=""
-                read -r _c < "$_d/comm" 2>/dev/null || continue
+                read -r _c 2>/dev/null < "$_d/comm" || continue
                 [ -n "$_c" ] || continue
                 _nuestro "$_c" && continue
                 # La linea de ordenes va separada por NUL: con -d '' se lee
                 # hasta el primer NUL, o sea el argumento cero, que es donde
                 # esta el nombre del programa. Es un "read" y ya.
                 _a0=""
-                IFS= read -r -d '' _a0 < "$_d/cmdline" 2>/dev/null || continue
+                IFS= read -r -d '' _a0 2>/dev/null < "$_d/cmdline" || continue
                 case "$_a0" in
                     *"$exe_nom"*) printf '%s ' "${_d#/proc/}" ;;
                 esac
@@ -28060,6 +29145,41 @@ home_portable_exportar() {
     return 0
 }
 
+juego_hay_windows() {
+    # ¿HAY UNA VERSION DE WINDOWS EN ESTA CARPETA? $1 = raiz del juego.
+    #
+    # POR QUE ESTO ESTA EN UNA FUNCION Y NO ESCRITO DOS VECES
+    #
+    # Estaba escrito dos veces, con criterios DISTINTOS, y eso fue el fallo
+    # del 26/10 con "Super Alpine Racer":
+    #
+    #   - juego_es_nativo daba por Windows un autorun.cmd, y con razon: es un
+    #     guion de cmd y las .pc de Batocera lo llevan.
+    #   - juego_trae_las_dos exigia un *.exe, y no lo encontraba.
+    #
+    # Resultado: la carpeta tenia autorun.cmd Y un "Super Alpine Racer.sh".
+    # Al jugar se iba por Windows -lo decia el autorun- y la fila para elegir
+    # version NO aparecia, porque la otra funcion creia que no habia version de
+    # Windows y por tanto que no habia nada que elegir. El .sh solo se podia
+    # lanzar entrando por "Añadir un juego", que es lo que conto Dani: "si le
+    # doy a jugar no me ofrece el sh".
+    #
+    # Dos funciones que responden a la misma pregunta de dos maneras no es un
+    # detalle: es una que tapa a la otra.
+    local root="${1:-}"
+    [ -d "$root" ] || return 1
+    # 1. El autorun.cmd es la respuesta segura y barata.
+    [ -n "$(find "$root" -maxdepth 2 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)" ] \
+        && return 0
+    # 2. Y si no, un .exe. Hasta ocho niveles, porque un paquete de arcade
+    #    lleva la estructura de Unreal muy metida. El filtro va RELATIVO: con
+    #    la biblioteca en /GAMES/windows/, un "*/windows/*" absoluto casa con
+    #    todo y no se veria ni un .exe.
+    [ -n "$( (cd "$root" 2>/dev/null && \
+              find . -maxdepth 8 -iname '*.exe' ! -ipath './windows/*' \
+                  2>/dev/null) | head -n1)" ]
+}
+
 juego_trae_las_dos() {
     # ¿Este juego trae la version de Windows Y la de Linux? $1 = raiz montada.
     #
@@ -28068,9 +29188,11 @@ juego_trae_las_dos() {
     # demas la fila seria una pregunta sin respuestas.
     local root="${1:-}"
     [ -d "$root" ] || return 1
-    [ -n "$( (cd "$root" 2>/dev/null && \
-              find . -maxdepth 8 -iname '*.exe' ! -ipath './windows/*' \
-                  2>/dev/null) | head -n1)" ] || return 1
+    # EL MISMO CRITERIO QUE juego_es_nativo, y por eso va por juego_hay_windows.
+    # Antes aqui se exigia un *.exe mientras la otra se contentaba con un
+    # autorun.cmd: un juego con autorun.cmd y un .sh al lado se iba por Windows
+    # y no daba opcion a elegir.
+    juego_hay_windows "$root" || return 1
     [ -n "$(find "$root" -maxdepth 2 -type f \
             \( -iname '*.sh' -o -iname '*.AppImage' \) 2>/dev/null | head -n1)" ]
 }
@@ -28127,8 +29249,18 @@ juego_es_nativo() {
         #
         # Va PRIMERO porque es la respuesta segura y barata. Sin esto se dependia
         # de encontrar un .exe, y ahi estaba el fallo de abajo.
-        if [ -n "$(find "$root" -maxdepth 2 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)" ]; then
-            log "juego_es_nativo: hay autorun.cmd -> se trata como juego de Windows"
+        if [ -n "$(find -H "$root" -maxdepth 2 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)" ]; then
+            # Y SI ADEMAS TRAE LA DE LINUX, SE DICE.
+            #
+            # Un autorun.cmd con un .sh al lado no es "esto es de Windows": es
+            # "esto trae las dos y nadie te ha preguntado". El registro lo dice
+            # para que al leerlo se sepa que hay una fila donde elegir, en vez
+            # de pensar que WProton no ve el .sh.
+            if juego_trae_las_dos "$root"; then
+                log "juego_es_nativo: hay autorun.cmd -> Windows, PERO este juego trae tambien la version de Linux: se puede elegir en Ajustes del juego -> Version del juego"
+            else
+                log "juego_es_nativo: hay autorun.cmd -> se trata como juego de Windows"
+            fi
             return 1
         fi
         # ¿Hay ejecutables de Windows? Entonces no es un juego nativo.
@@ -28159,7 +29291,7 @@ juego_es_nativo() {
     # Si en la raiz hay un .sh o un AppImage, la raiz ES la del juego. Sin esta
     # segunda condicion, un juego de Linux empaquetado junto a un drive_c de
     # Wine se buscaba dentro de drive_c, donde no hay nada suyo.
-    if [ -z "$(find "$root" -maxdepth 1 \( -name '*.sh' -o -iname '*.AppImage' \) \
+    if [ -z "$(find -H "$root" -maxdepth 1 \( -name '*.sh' -o -iname '*.AppImage' \) \
                2>/dev/null | head -n1)" ] \
        && [ -d "$root/drive_c" ]; then
         _raiz_busq="$root/drive_c"
@@ -28186,7 +29318,7 @@ juego_es_nativo() {
         printf '%s' "$c"
         return 0
     done <<EOFSH
-$(find "$_raiz_busq" -maxdepth 2 -type f -iname '*.sh' 2>/dev/null | sort)
+$(find -H "$_raiz_busq" -maxdepth 2 -type f -iname '*.sh' 2>/dev/null | sort)
 EOFSH
 
     # 3. Un binario ELF en la raiz. Se mira la firma del fichero, no el
@@ -28210,7 +29342,7 @@ EOFSH
         printf '%s' "$c"
         return 0
     done <<EOFAI
-$(find "$_raiz_busq" -maxdepth 2 -type f -iname '*.AppImage' 2>/dev/null | sort)
+$(find -H "$_raiz_busq" -maxdepth 2 -type f -iname '*.AppImage' 2>/dev/null | sort)
 EOFAI
     while IFS= read -r c; do
         [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || continue
@@ -28219,7 +29351,7 @@ EOFAI
                    printf '%s' "$c"; return 0 ;;
         esac
     done <<EOFELF
-$(find "$_raiz_busq" -maxdepth 2 -type f -perm -u+x 2>/dev/null | sort)
+$(find -H "$_raiz_busq" -maxdepth 2 -type f -perm -u+x 2>/dev/null | sort)
 EOFELF
     log "  no hay lanzador de Linux; se tratara como juego de Windows"
     return 1
@@ -28298,19 +29430,19 @@ find_exe() {
     if [ "$mode" = "auto" ]; then
         # Paso 1: autorun.cmd (maxima prioridad, raiz primero)
         local M_AUTO
-        M_AUTO=$(find "$root" -maxdepth 1 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
-        [ -z "$M_AUTO" ] && M_AUTO=$(find "$root" -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
+        M_AUTO=$(find -H "$root" -maxdepth 1 -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
+        [ -z "$M_AUTO" ] && M_AUTO=$(find -H "$root" -type f -iname 'autorun.cmd' 2>/dev/null | head -n1)
         if [ -f "$M_AUTO" ]; then
             parse_autorun "$M_AUTO"
             if [ -n "$R_CMD_BASE" ]; then
                 local hit=""
                 if [ -n "$R_DIR" ]; then
-                    hit=$(find "$root" -ipath "*${R_DIR}*" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+                    hit=$(find -H "$root" -ipath "*${R_DIR}*" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                 else
                     # sin DIR: preferir raiz antes que homonimos en subcarpetas
-                    hit=$(find "$root" -maxdepth 1 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
-                    [ -z "$hit" ] && hit=$(find "$root" -maxdepth 2 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
-                    [ -z "$hit" ] && hit=$(find "$root" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+                    hit=$(find -H "$root" -maxdepth 1 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+                    [ -z "$hit" ] && hit=$(find -H "$root" -maxdepth 2 -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
+                    [ -z "$hit" ] && hit=$(find -H "$root" -iname "$R_CMD_BASE" 2>/dev/null | head -n1)
                 fi
                 if [ -n "$hit" ]; then
                     EXE_PATH="$hit"
@@ -28368,7 +29500,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO TECLADO_POS KEYS_EXCLUSIVO MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -28376,6 +29508,7 @@ profile_defaults() {
     EXE_OVERRIDE=""
     ARGS_OVERRIDE=""
     PREFIX_MODE="shared"
+    PREFIX_BATOCERA=""
     PREFIX_ORIGEN="nuevo"
     UNIDAD_JUEGO=""
     UNIDAD_CD=0
@@ -28390,12 +29523,15 @@ profile_defaults() {
     PAD_SONY="auto"
     PAD_FANTASMA="auto"
     KEYS_ESTILO="xbox"
+    BOTONES_REMAP=""
     TECLADO_POS="abajo"
     KEYS_EXCLUSIVO="auto"
+    KEYS_AL="0"
+    ES_AL="auto"
     MANDO_VIRTUAL="0"
     TEXTO_RAPIDO=""
     TEXTO_ENTER=0
-    PAD_STEAMFIX=0
+    PAD_STEAMFIX="auto"
     NESTED_GAMESCOPE=0
     NTSYNC=0
     FAVORITO=0
@@ -28439,10 +29575,10 @@ profile_defaults() {
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py a66652568693" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py 17012ea92575" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py a66652568693
+# WPROTON_HELPER perfil.py 17012ea92575
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -28528,6 +29664,9 @@ ESQUEMA = [
     ("EXE_OVERRIDE",      "texto",  "",               None),
     ("ARGS_OVERRIDE",     "texto",  "",               None),
     ("PREFIX_MODE",       "opcion", "shared",         ("shared", "own", "bundled", "teknoparrot")),
+    # Si el prefijo propio se hizo con el procedimiento de Batocera, aqui va
+    # el runner con el que se hizo: su prefijo es por runner.
+    ("PREFIX_BATOCERA",   "texto",  "",               None),
     ("PREFIX_ORIGEN",     "opcion", "nuevo",          ("nuevo", "bundled")),
     ("UNIDAD_JUEGO",      "texto",  "",               None),
     ("UNIDAD_CD",         "entero", 0,                None),
@@ -28543,14 +29682,42 @@ ESQUEMA = [
     # El mando virtual de Steam al lado de uno real: se le esconde al juego.
     ("PAD_FANTASMA",      "opcion", "auto",           ("auto", "1", "0")),
     ("KEYS_ESTILO",       "opcion", "xbox",           ("xbox", "nintendo")),
+    # REMAPEAR UN BOTON EN OTRO (31/10). Lista "origen=destino" separada por
+    # comas, con los nombres de verdad del boton: "BTN_SOUTH=BTN_START".
+    #
+    # Lo pidieron asi: "poner el start en el boton A y que el start siga
+    # siendo el start". O sea una COPIA en una direccion, no un intercambio:
+    # el boton de origen manda el de destino, y el de destino se queda como
+    # esta. Lo aplica mando_virtual.py, que es quien presenta al juego otro
+    # mando; el mapeador .keys no sirve para esto porque convierte el mando en
+    # TECLAS y muchos juegos, al ver un mando, dejan de leer el teclado.
+    ("BOTONES_REMAP",     "texto",  "",               None),
     ("TECLADO_POS",       "opcion", "abajo",          ("abajo", "arriba", "centro")),
     ("KEYS_EXCLUSIVO",    "opcion", "auto",           ("auto", "1", "0")),
+    # ARCADE LOADER: el mapeador .keys, APAGADO por defecto.
+    #
+    # Lo dijo Dani: "Arcade Loader se encarga del mando, pero mejor tener la
+    # opcion de mapear por si acaso". Si los dos cogen el mando a la vez, lo
+    # que pasa no es que uno gane: es que el juego ve botones repetidos o
+    # ninguno, y eso es muy dificil de diagnosticar despues.
+    #
+    # Asi que en los juegos [AL] el mapeador NO se arranca aunque el juego
+    # tenga su .keys. Se enciende aqui, por juego, cuando hace falta.
+    ("KEYS_AL",           "opcion", "0",              ("0", "1")),
+    # ¿ES UN JUEGO DE ARCADE LOADER? La casilla, pedida el 31/10.
+    #
+    # "auto" es lo de siempre: se reconoce solo por el marcador de dentro
+    # (.windowsloader) o por el [AL] del nombre. Pero hay juegos que no traen
+    # marcador -los empaqueto alguien antes de que existiera- y los hay que lo
+    # traen y no se quieren lanzar asi. Con "1" y "0" se decide a mano, por
+    # juego, y lo que se decide manda sobre la deteccion.
+    ("ES_AL",             "opcion", "auto",           ("auto", "1", "0")),
     # MANDO_VIRTUAL crece con cada mando que se añade, asi que va como texto
     # libre: una lista cerrada aqui obligaria a tocar dos sitios cada vez.
     ("MANDO_VIRTUAL",     "texto",  "0",              None),
     ("TEXTO_RAPIDO",      "texto",  "",               None),
     ("TEXTO_ENTER",       "entero", 0,                None),
-    ("PAD_STEAMFIX",      "entero", 0,                None),
+    ("PAD_STEAMFIX",      "opcion", "auto",           ("auto", "1", "0")),
     ("NESTED_GAMESCOPE",  "entero", 0,                None),
     ("NTSYNC",            "entero", 0,                None),
     ("FAVORITO",          "entero", 0,                None),
@@ -29474,15 +30641,32 @@ ultimo_juego_recordar() {
     # extension detras.
     local ruta="${1:-}" gid="${2:-}" abs d
     [ -n "$ruta" ] || return 0
-    abs="$(readlink -f "$ruta" 2>/dev/null || printf '%s' "$ruta")"
+    # EL RESPALDO TAMBIEN TIENE QUE SER ABSOLUTO.
+    #
+    # Si readlink falla -no esta, o la ruta tiene un enlace roto por medio- se
+    # usaba "$ruta" TAL CUAL, y una ruta relativa de un frontend se guardaba
+    # relativa en settings.conf: manana WProton se abre desde otro sitio y
+    # "jugar al ultimo" apunta a la nada. Y peor: el bucle de abajo sube por
+    # los padres con dirname, y con una ruta relativa eso acaba en "." para
+    # siempre (es el cuelgue del .pc de ES-DE, contado en punto_de_montaje),
+    # ademas con un game_id por vuelta.
+    abs="$(readlink -f "$ruta" 2>/dev/null)"
+    [ -n "$abs" ] || abs="$(ruta_cli_absoluta "$ruta")"
     # Con un fichero y un identificador, se sube hasta la carpeta que produce
     # ese identificador: es la misma regla que ya usaba launch_loose_exe, y
     # esta aqui para que la usen todos.
     if [ -n "$gid" ] && [ ! -d "$abs" ]; then
+        local _prev _saltos=0
         d="$(dirname "$abs")"
-        while [ -n "$d" ] && [ "$d" != "/" ]; do
+        # Con tope y con salida por "dirname no avanza", igual que
+        # punto_de_montaje: un bucle que sube por los padres no puede tener
+        # una sola salida.
+        while [ -n "$d" ] && [ "$d" != "/" ] && [ "$_saltos" -lt 64 ]; do
             if [ "$(game_id "$d")" = "$gid" ]; then abs="$d"; break; fi
+            _prev="$d"
             d="$(dirname "$d")"
+            [ "$d" = "$_prev" ] && break
+            _saltos=$((_saltos+1))
         done
     fi
     [ "$abs" != "${LAST_GAME:-}" ] || return 0
@@ -29617,7 +30801,7 @@ BUNDLED_RUNNER_DIR=""
 find_bundled_runner() {
     # Algunos wsquashfs (estilo Batocera) traen su propio Wine dentro.
     # $1 = raiz del juego -> dir del runner incluido (vacio si no hay)
-    find "$1" -maxdepth 4 -type f -name wine -path '*/bin/wine' 2>/dev/null \
+    find -H "$1" -maxdepth 4 -type f -name wine -path '*/bin/wine' 2>/dev/null \
         | head -n1 | xargs -r dirname | xargs -r dirname
 }
 
@@ -29862,7 +31046,22 @@ prefix_path() {
     # cambiar PREFIX_MODE antes de llamarlo no serviria de nada.
     [ -n "${WP_PREFIX_OVERRIDE:-}" ] && { printf '%s' "$WP_PREFIX_OVERRIDE"; return; }
     case "$PREFIX_MODE" in
-        own)     printf '%s' "$PREFIX_DIR/$1" ;;
+        own)
+            # EL PREFIJO DE BATOCERA, SI ES EL QUE SE HIZO PARA ESTE JUEGO.
+            #
+            # Va por runner a proposito: es una de las cosas que Batocera hace
+            # y nosotros no, y es la que evita reutilizar con un runner un
+            # prefijo que se inicializo con otro. Si el perfil apunta a un
+            # runner y el juego se lanza con otro, ESTE prefijo no vale: se
+            # usa el propio de siempre y se dice, en vez de meter el juego en
+            # un prefijo que no es el suyo.
+            if [ -n "${PREFIX_BATOCERA:-}" ]; then
+                local _bp="$PREFIX_DIR/$1.batocera/$PREFIX_BATOCERA"
+                if [ -d "$_bp" ]; then
+                    printf '%s' "$_bp"; return
+                fi
+            fi
+            printf '%s' "$PREFIX_DIR/$1" ;;
         bundled)
             if [ -n "$BUNDLED_PREFIX_DIR" ]; then
                 printf '%s' "$BUNDLED_PREFIX_DIR"
@@ -30395,6 +31594,53 @@ first_run_wizard() {
     # no va a usar, y luego por el prefijo, que tampoco tiene. Un tester
     # cancelo ahi mismo, con razon.
     #
+    # Y UN JUEGO DE ARCADE LOADER, MENOS TODAVIA (31/10).
+    #
+    # Lo conto Dani: "cuando pongas la opcion añadir juego detecte que el
+    # squashfs es de arcade loader y no ofrezca el Proton, ahora solo lo hace
+    # desde jugar". Y es exacto: el desvio de Arcade Loader estaba en
+    # launch_game, o sea solo al JUGAR. Entrando por "Añadir un juego" o por
+    # "Ajustes de un juego" se llegaba aqui, y aqui se preguntaba por Proton
+    # como a cualquier juego de Windows.
+    #
+    # Es el mismo fallo que ya tuvimos con los juegos de Linux, dos pantallas
+    # mas abajo, y por el mismo motivo: el asistente preguntaba antes de mirar
+    # QUE es el juego.
+    #
+    # SE ARREGLA AQUI Y NO EN CADA SITIO, y eso es lo importante: a
+    # first_run_wizard llegan los CUATRO caminos que ofrecen Proton (jugar,
+    # el .exe suelto, los ajustes y el de la lista). Poniendolo en el unico
+    # punto por donde se ofrece, no hay un quinto que se quede atras.
+    local _es_al=0 _al_forz
+    _al_forz="$(profile_get "$gid" ES_AL 2>/dev/null)" || _al_forz=""
+    case "$_al_forz" in
+        1) _es_al=1 ;;
+        0) _es_al=0 ;;
+        *) if { [ -n "$juego" ] && juego_es_arcade_loader "$juego"; } \
+              || al_marcador_en_raiz "$root" >/dev/null 2>&1; then
+               _es_al=1
+           fi ;;
+    esac
+    if [ "$_es_al" = 1 ]; then
+        say "[+] Juego de Arcade Loader: no hace falta runner ni prefijo."
+        log "asistente: '$gid' es de Arcade Loader; no se pregunta por Proton"
+        # NI RUNNER, NI PREFIJO, NI EJECUTABLE.
+        #
+        # Estos juegos no se lanzan con un .exe: se le pasa el archivo entero
+        # a arcade-launcher, que es quien sabe que hacer con el. Preguntar por
+        # un ejecutable que no existe es lo que hacia que un tester cancelara.
+        RUNNER=""
+        PREFIX_MODE=shared
+        write_full_profile "$gid"
+        ui_info "Perfil creado: profiles/$gid.conf
+
+Este juego es de Arcade Loader, asi que no lleva Proton ni Wine
+ni prefijo: se lanza con el propio Arcade Loader.
+
+Si te lo ha reconocido mal, en Ajustes de un juego hay una
+casilla para decirlo a mano."
+        return 0
+    fi
     # Se comprueba con la carpeta ya montada, que es lo que hace launch_game.
     if juego_es_nativo "$root" >/dev/null 2>&1; then
         say "[+] Juego de Linux: no hace falta runner ni prefijo."
@@ -34727,6 +35973,23 @@ export_game_env() {
         # que SDL busque también por evdev clasico, no solo hidapi
         export SDL_JOYSTICK_DISABLE_UDEV="${SDL_JOYSTICK_DISABLE_UDEV:-0}"
     fi
+    # ¿EL PREFIJO DE BATOCERA SE HIZO CON ESTE RUNNER?
+    #
+    # Si no, no se usa -prefix_path ya cae al propio de siempre- y hay que
+    # DECIRLO: un prefijo que de pronto deja de usarse sin avisar es la clase
+    # de cosa que convierte "me iba y ahora no" en una tarde de pruebas. La
+    # salida es rehacerlo con el runner nuevo, que son dos pulsaciones.
+    if [ "${PREFIX_MODE:-shared}" = own ] && [ -n "${PREFIX_BATOCERA:-}" ]; then
+        local _rn; _rn="$(basename "${rdir:-}")"
+        if [ "$_rn" != "$PREFIX_BATOCERA" ]; then
+            say "[!] El prefijo de Batocera de este juego se hizo con"
+            say "    '$PREFIX_BATOCERA' y ahora juegas con '$_rn': NO se usa."
+            say "    Rehazlo en Ajustes del juego -> Prefijo."
+            log "prefijo Batocera: hecho con '$PREFIX_BATOCERA', runner actual '$_rn': no se usa" WARN
+        else
+            log "prefijo Batocera: en uso ($PREFIX_BATOCERA)"
+        fi
+    fi
     # EL FANTASMA SE ESCONDE DESPUES DE PAD_STEAMFIX, NO ANTES.
     #
     # Ese bloque BORRA las listas SDL_*_IGNORE_DEVICES a proposito. Si
@@ -35380,6 +36643,19 @@ que necesita."
                 _juego_dir="$(dirname "$EXE_PATH")"
             fi
             if [ -d "$_juego_dir" ]; then
+                # ABSOLUTA ANTES DE EXPORTARLA. Lo pidio un tester con un
+                # informe que lo habia reproducido y corregido: ES-DE entrega
+                # la ruta del juego RELATIVA, y de aqui pasaba tal cual a
+                # Proton y al calculo del punto de montaje, que se colgaba
+                # (esta contado en punto_de_montaje).
+                #
+                # Y no es solo ese cuelgue: el lanzamiento hace "cd" a la
+                # carpeta del ejecutable antes de ejecutarlo, asi que una ruta
+                # relativa deja de valer justo despues -apuntaria desde la
+                # carpeta del juego, no desde donde arranco el frontend-. Por
+                # eso ahora se normaliza TAMBIEN en cli_ruta, en la puerta de
+                # entrada, y esto es la segunda red.
+                _juego_dir="$(ruta_cli_absoluta "$_juego_dir")"
                 export STEAM_COMPAT_INSTALL_PATH="$_juego_dir"
                 say "[+] Carpeta del juego para Proton: $_juego_dir"
                 # SI EL JUEGO ESTA FUERA DE $HOME, HAY QUE ABRIRLE EL
@@ -35421,12 +36697,9 @@ que necesita."
                 case "$_juego_dir" in
                     "$HOME"/*) ;;
                     *)
-                        local _mp="$_juego_dir"
-                        while [ "$_mp" != "/" ] \
-                              && ! mountpoint -q "$_mp" 2>/dev/null; do
-                            _mp="$(dirname "$_mp")"
-                        done
-                        [ "$_mp" = "/" ] && _mp="$_juego_dir"
+                        local _mp
+                        _mp="$(punto_de_montaje "$_juego_dir")" || _mp=""
+                        [ -n "$_mp" ] || _mp="$_juego_dir"
                         case ":${STEAM_COMPAT_LIBRARY_PATHS:-}:" in
                             *":$_mp:"*) ;;
                             *) export STEAM_COMPAT_LIBRARY_PATHS="${STEAM_COMPAT_LIBRARY_PATHS:+$STEAM_COMPAT_LIBRARY_PATHS:}$_mp"
@@ -35735,6 +37008,67 @@ minusculas. Tus reglas salen ANTES que las de fabrica." ;;
     done
 }
 
+fallo_dotnet_es_del_juego() {
+    # ¿La queja de .NET/mscoree es DEL JUEGO o de un programa interno?
+    # $1 = las ultimas lineas del registro.
+    #
+    # EL FALLO QUE LO DESTAPO (29/10, registro de Dani con End of Abyss)
+    #
+    # WProton acabo diciendo:
+    #
+    #   "Este programa es .NET y Mono esta desactivado para el: Wine no puede
+    #    cargarlo. [...] Instalar libreria -> este juego -> dotnet48"
+    #
+    # ...y era mentira. La linea que lo disparo era esta:
+    #
+    #   err:module:fixup_imports_ilonly mscoree.dll not found, IL-only binary
+    #   L"xalia.exe" cannot be loaded
+    #
+    # xalia.exe NO es el juego: es el programa de accesibilidad que trae
+    # Proton dentro, en files/share/xalia/. Se queja en todas las partidas y
+    # no tiene nada que ver con lo que se este jugando.
+    #
+    # Y lo peor es que WProton YA SABIA que el juego no era .NET: sesenta
+    # lineas antes habia escrito "Mono desactivado: ni el .exe ni su carpeta
+    # parecen .NET". O sea que el diagnostico se contradecia a si mismo y
+    # mandaba a instalar dotnet48 para nada.
+    #
+    # Asi que ahora se mira DE QUIEN es la queja. Si el unico que se queja es
+    # un programa interno, no hay nada que diagnosticar.
+    local txt="${1:-}" linea bin ruta
+    [ -n "$txt" ] || return 1
+    while IFS= read -r linea; do
+        [ -n "$linea" ] || continue
+        # El binario que no se pudo cargar va entre L"...".
+        ruta="$(printf '%s' "$linea" | sed -n 's/.*L"\([^"]*\)".*/\1/p')"
+        if [ -z "$ruta" ]; then
+            # La linea no dice de quien es. No se puede descartar, asi que
+            # cuenta: mas vale un aviso de mas que callarse un caso real.
+            return 0
+        fi
+        # Por donde vive: lo de Proton y lo de Wine no es del juego.
+        case "$(printf '%s' "$ruta" | tr 'A-Z\\' 'a-z/')" in
+            */files/share/*|*/windows/system32/*|*/windows/syswow64/*|\
+            */proton/*|*/dist/bin/*|*/ulwgl/*|*/umu/*) continue ;;
+        esac
+        # Y por como se llama, que es lo que queda cuando viene sin ruta
+        # -que es justo el caso de xalia.exe en el registro de Dani-.
+        bin="${ruta##*\\}"; bin="${bin##*/}"
+        case "$(printf '%s' "$bin" | tr 'A-Z' 'a-z')" in
+            xalia.exe|winemenubuilder.exe|wineboot.exe|explorer.exe|services.exe|\
+            rpcss.exe|plugplay.exe|winedevice.exe|start.exe|conhost.exe|\
+            wscript.exe|cscript.exe|msiexec.exe|regsvr32.exe|rundll32.exe|\
+            iexplore.exe|umu.exe|umu-run.exe|steam.exe|steamerrorreporter.exe|\
+            winedbg.exe|control.exe|wineconsole.exe|notepad.exe|winhlp32.exe|\
+            winecfg.exe|wineserver.exe|protonfixes.exe) continue ;;
+        esac
+        return 0
+    done <<EOFDOTNET
+$(printf '%s\n' "$txt" | grep -iE "$FALLO_DOTNET_PATRON")
+EOFDOTNET
+    return 1
+}
+
 fallo_analizar() {
     # Lee el registro de un arranque fallido y dice QUE hacer.
     #
@@ -35810,10 +37144,15 @@ $(tail -n 400 "$_gl" 2>/dev/null)"
     # Ahora hace falta que WINE SE QUEJE de verdad: que diga que no puede
     # cargar mscoree, o el fallo de binario IL-only. La presencia de nuestra
     # anulacion ya no es prueba de nada.
-    if printf '%s' "$cola" | grep -q 'fixup_imports_ilonly' \
-       || [ "$rc" = 53 ] \
-       || printf '%s' "$cola" | grep -qiE \
-            'mscoree\.dll[^a-z]*not found|(failed|unable|could not|cannot) to? ?load[^\n]*(mscoree|\.NET|CLR)|err:[^\n]*mscoree|Mono[^\n]*not installed'; then
+    # Y DE QUIEN ES LA QUEJA, QUE ES LO QUE FALTABA.
+    #
+    # Antes bastaba con que la cadena apareciera en el registro. Pero Proton
+    # trae dentro programas suyos que se quejan de .NET en TODAS las partidas
+    # -xalia.exe, el de accesibilidad- y eso acusaba al juego. Ver
+    # fallo_dotnet_es_del_juego, que tiene el caso entero apuntado.
+    if [ "$rc" = 53 ] \
+       || { printf '%s' "$cola" | grep -qiE "$FALLO_DOTNET_PATRON" \
+            && fallo_dotnet_es_del_juego "$cola"; }; then
         # QUE SE ACONSEJA DEPENDE DEL PREFIJO.
         #
         # Un prefijo que trae el paquete (Batocera) ya viene con lo que el
@@ -36179,6 +37518,405 @@ preparar_librerias_prefijo() {
     return 0
 }
 
+pid_del_juego() {
+    # EL PID DEL JUEGO, SIN CONFUNDIRLO CON EL NUESTRO. $1 = nombre del .exe.
+    #
+    # NO se usa "pgrep -f <nombre>", y el motivo es el mismo que ya esta
+    # explicado largo en la sonda de carga: cuando WProton se lanza con la
+    # ruta del juego como argumento, NUESTRA PROPIA linea de ordenes lleva ese
+    # nombre escrito -y tambien la del subshell del lanzamiento y la del
+    # vigilante-. Alli eso hacia que se midiera un bash dormido y se
+    # concluyera "el juego esta parado" con el juego cargando a tope.
+    #
+    # Aqui el sintoma seria otro -el diagnostico del mando mediria nuestro
+    # proceso en vez del juego- pero el error es el mismo, asi que se resuelve
+    # igual: por el nombre de programa que publica el nucleo, recortado a 15
+    # caracteres (TASK_COMM_LEN, que es lo que cabe ahi), y si por ahi no
+    # aparece -el nombre no siempre es el del .exe: segun el runner puede ser
+    # el preloader de Wine- se cae a la linea de ordenes DESCARTANDO lo
+    # nuestro.
+    #
+    # Y leyendo /proc con "read", sin arrancar un solo proceso: esto corre
+    # mientras el juego carga y no es momento de hacer cientos de forks.
+    local exe_nom="${1:-}" comm_juego="" _d="" _c="" _a0="" _hallado=0
+    [ -n "$exe_nom" ] || return 1
+    exe_nom="${exe_nom##*/}"
+    comm_juego="$(printf '%.15s' "$exe_nom")"
+    for _d in /proc/[0-9]*; do
+        _c=""
+        read -r _c 2>/dev/null < "$_d/comm" || continue
+        [ "$_c" = "$comm_juego" ] || continue
+        printf '%s' "${_d#/proc/}"
+        return 0
+    done
+    for _d in /proc/[0-9]*; do
+        _c=""
+        read -r _c 2>/dev/null < "$_d/comm" || continue
+        [ -n "$_c" ] || continue
+        # Lo nuestro fuera: son los que llevan la ruta del juego escrita sin
+        # SER el juego.
+        case "$_c" in
+            bash|sh|dash|zsh|python3|python|awk|sed|grep|sleep|timeout) continue ;;
+            wproton.sh|menu_pygame*|menu_qt*|mapeador*|guardia*) continue ;;
+            squashfuse*|dwarfs*|fuse-overlayfs*|mount.*|*fuse*) continue ;;
+            gamescope*|steam*|reaper|srt-*|pressure-vessel*|umu*|mangoapp) continue ;;
+        esac
+        # LA LINEA ENTERA, NO SOLO EL PROGRAMA.
+        #
+        # Un juego de Wine es "wine /ruta/juego.exe": el nombre esta en un
+        # ARGUMENTO, no en el nombre del programa. Mirando solo el argumento
+        # cero -que es lo que hace la sonda de carga- esos no se encuentran
+        # nunca. Por eso aqui se recorren todos.
+        #
+        # Y por eso hace falta el descarte de arriba: la linea entera de
+        # NUESTRA shell tambien lleva la ruta del juego escrita.
+        #
+        # La linea de ordenes va separada por NUL, asi que se lee con
+        # -d '' en un bucle: es "read" del propio bash, sin arrancar nada.
+        _hallado=0
+        while IFS= read -r -d '' _a0; do
+            case "$_a0" in
+                *"$exe_nom"*) _hallado=1; break ;;
+            esac
+        done 2>/dev/null < "$_d/cmdline"
+        if [ "$_hallado" = 1 ]; then printf '%s' "${_d#/proc/}"; return 0; fi
+    done
+    return 1
+}
+
+mandos_huella() {
+    # UNA FOTO DE LOS DISPOSITIVOS DE ENTRADA, EN TEXTO Y SIN ARRANCAR NADA.
+    #
+    # Una linea por dispositivo: "eventN|js|nombre". Se lee de un tiron
+    # /proc/bus/input/devices, que el nucleo rellena solo, asi que no hay que
+    # abrir ningun nodo -abrirlos tiene efectos: en la Deck, abrir el mando
+    # cambia lo que hace el firmware-.
+    #
+    # LOS TRACKPADS CUENTAN, Y ESO ES LO IMPORTANTE. El driver de la Deck
+    # publica los dos pads por evdev SOLO en modo gamepad; en modo escritorio
+    # no los publica. Asi que si el mando cambia de modo a mitad de partida,
+    # aqui se ve: aparecen o desaparecen dispositivos. Sin tocar el hidraw.
+    # DE DONDE SE LEE, CON UN PUNTO DE INYECCION PARA LAS PRUEBAS.
+    #
+    # Igual que WP_ABIERTO_FINGIDO en mando_quien_lo_tiene: en un equipo de
+    # pruebas no hay /dev/input ni se pueden crear mandos, asi que la suite
+    # le pasa un fichero con el contenido de un /proc/bus/input/devices de
+    # verdad -el de la Deck de Michel- y comprueba que se lee bien. En un
+    # equipo normal la variable no existe y se lee el de siempre.
+    local fuente="${WP_INPUT_DEVICES:-/proc/bus/input/devices}"
+    local linea nombre="" t ev
+    while IFS= read -r linea; do
+        case "$linea" in
+            'N: Name="'*)
+                nombre="${linea#N: Name=\"}"; nombre="${nombre%\"}" ;;
+            'H: Handlers='*)
+                ev=""
+                for t in ${linea#H: Handlers=}; do
+                    case "$t" in event*) ev="$t" ;; esac
+                done
+                case " ${linea#H: Handlers=} " in
+                    *" js"*) printf '%s|js|%s\n' "${ev:-sin-event}" "$nombre" ;;
+                    *)       printf '%s|--|%s\n' "${ev:-sin-event}" "$nombre" ;;
+                esac
+                nombre="" ;;
+        esac
+    done 2>/dev/null < "$fuente"
+    return 0
+}
+
+ejes_en_reposo() {
+    # LOS EJES DEL MANDO, TAL Y COMO ESTAN AHORA MISMO. $1 = eventN.
+    #
+    # POR QUE HACE FALTA (29/10, Michel con End of Abyss en una Deck)
+    #
+    # > "el juego arranca perfecto, menus perfecto, pero es empezar el juego y
+    # >  los controles no responden, se mueve solo y como con lag"
+    #
+    # Y el dato que lo coloca: los menus de ese juego se manejan con la CRUZ y
+    # los BOTONES, y la partida con los STICKS. O sea que lo digital funciona y
+    # lo analogico no. Eso no se ve mirando si hay mando o no: hay que mirar
+    # los ejes.
+    #
+    # Un eje que en reposo marca un extremo mueve al personaje solo, y las
+    # ordenes de verdad llegan sumadas a esa deriva: es exactamente "se mueve
+    # solo y como con lag".
+    #
+    # SE LEE SIN ABRIR EL FLUJO DE EVENTOS. EVIOCGABS devuelve el estado
+    # ACTUAL de un eje -valor, minimo, maximo, difuso, plano- con un ioctl
+    # sobre el nodo abierto en solo lectura. No se consume ningun evento, asi
+    # que no se le quita nada al juego.
+    local ev="${1:-}"
+    [ -n "$ev" ] || return 1
+    local py="${PY_BIN:-python3}"
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null)" || return 1
+    [ -n "$py" ] || return 1
+    "$py" -I - "/dev/input/$ev" <<'EJES' 2>/dev/null
+import fcntl, os, struct, sys
+
+# struct input_absinfo: value, minimum, maximum, fuzz, flat, resolution
+TAM = struct.calcsize('6i')
+# _IOR('E', 0x40 + eje, struct input_absinfo)
+def EVIOCGABS(eje):
+    return (2 << 30) | (TAM << 16) | (ord('E') << 8) | (0x40 + eje)
+
+# Los ejes que mueven a un personaje. Los gatillos (0x02, 0x05) van aparte:
+# en reposo valen el MINIMO a proposito, asi que no son una deriva.
+EJES = [(0x00, 'X izq'), (0x01, 'Y izq'), (0x03, 'X der'), (0x04, 'Y der'),
+        (0x10, 'cruz X'), (0x11, 'cruz Y')]
+GATILLOS = [(0x02, 'gatillo izq'), (0x05, 'gatillo der')]
+
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK)
+except OSError:
+    raise SystemExit(0)
+try:
+    for eje, nombre in EJES + GATILLOS:
+        buf = bytearray(TAM)
+        try:
+            fcntl.ioctl(fd, EVIOCGABS(eje), buf)
+        except (OSError, IOError):
+            continue
+        valor, mini, maxi, fuzz, plano, _res = struct.unpack('6i', bytes(buf))
+        if mini == maxi:
+            continue
+        centro = (mini + maxi) / 2.0
+        mitad = (maxi - mini) / 2.0
+        if mitad <= 0:
+            continue
+        # Cuanto se aparta del centro, de 0 a 100.
+        desvio = abs(valor - centro) * 100.0 / mitad
+        print('%s|%d|%d|%d|%.0f' % (nombre, valor, mini, maxi, desvio))
+finally:
+    os.close(fd)
+EJES
+    return 0
+}
+
+ejes_sospechosos() {
+    # Los ejes que en reposo NO estan en el centro. $1 = eventN.
+    #
+    # El umbral es 30 de 100. Un stick gastado se queda en 3 o 4; uno pegado o
+    # mal mapeado se va al extremo. Treinta deja fuera el desgaste normal y
+    # caza lo que mueve a un personaje solo.
+    #
+    # LA CRUZ NO CUENTA aunque sea un eje: en reposo vale 0 y sus extremos son
+    # -1 y 1, asi que cualquier pulsacion da 100 de desvio sin que pase nada
+    # raro. Y los gatillos tampoco: en reposo valen el minimo A PROPOSITO.
+    local ev="${1:-}" linea nombre desvio
+    while IFS='|' read -r nombre _valor _min _max desvio; do
+        [ -n "$nombre" ] || continue
+        case "$nombre" in cruz*|gatillo*) continue ;; esac
+        [ -n "$desvio" ] || continue
+        [ "${desvio%%.*}" -ge 30 ] 2>/dev/null || continue
+        printf '%s\n' "$nombre"
+    done <<EOFEJES
+$(ejes_en_reposo "$ev")
+EOFEJES
+    return 0
+}
+
+vigilante_mando_arrancar() {
+    # Pone en marcha el vigilante del mando para esta partida.
+    [ -r "${WP_INPUT_DEVICES:-/proc/bus/input/devices}" ] || return 0
+    [ "${VIGILANTE_MANDO:-1}" = 0 ] && return 0
+    WP_VIGMANDO_MARCA="$RUNTIME_DIR/.vigmando.$$"
+    : > "$WP_VIGMANDO_MARCA" 2>/dev/null || { WP_VIGMANDO_MARCA=""; return 0; }
+    ( vigilante_mando_durante "${VIGILANTE_MANDO_CADA:-3}" "$WP_VIGMANDO_MARCA" ) \
+        </dev/null >/dev/null 2>&1 &
+    WP_VIGMANDO_PID="$!"
+    disown "$WP_VIGMANDO_PID" 2>/dev/null || true
+    return 0
+}
+
+vigilante_mando_parar() {
+    # Quita la marca y espera un poco a que escriba su resumen.
+    [ -n "${WP_VIGMANDO_MARCA:-}" ] || return 0
+    rm -f "$WP_VIGMANDO_MARCA" 2>/dev/null
+    # SE LE DA TIEMPO A ESCRIBIR EL RESUMEN, pero poco: esta durmiendo hasta
+    # tres segundos y nadie va a esperar por un apunte. Si no llega a tiempo,
+    # el proceso muere con la sesion y se pierde solo el resumen, no los
+    # cambios, que ya estan escritos.
+    local i
+    for i in 1 2 3 4 5 6 7 8; do
+        [ -n "${WP_VIGMANDO_PID:-}" ] || break
+        kill -0 "$WP_VIGMANDO_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+    WP_VIGMANDO_MARCA=""; WP_VIGMANDO_PID=""
+    return 0
+}
+
+ejes_huella() {
+    # Una linea por mando: "eventN: <ejes torcidos>" o "eventN: centrados".
+    # Se usa para comparar entre muestras: lo que importa es que CAMBIE.
+    local l ev torcidos
+    while IFS='|' read -r ev _js _nombre; do
+        [ -n "$ev" ] || continue
+        case "$_js" in js) ;; *) continue ;; esac
+        case "$ev" in event*) ;; *) continue ;; esac
+        torcidos="$(ejes_sospechosos "$ev" | tr '\n' ',' )"
+        printf '%s: %s\n' "$ev" "${torcidos:-centrados}"
+    done <<EOFEH
+$(mandos_huella)
+EOFEH
+    return 0
+}
+
+vigilante_mando_durante() {
+    # APUNTA LOS CAMBIOS DE MANDO MIENTRAS SE JUEGA.
+    #
+    # POR QUE EXISTE (29/10)
+    #
+    # Michel, en una Steam Deck: el mando "se pierde a mitad de partida". Y al
+    # ir al registro no habia NADA que mirar, porque WProton tenia diagnostico
+    # de mando ANTES de lanzar y DESPUES de cerrar, pero nada mientras se
+    # juega. O sea que justo el momento que importaba era el unico que no se
+    # apuntaba.
+    #
+    # Dos cosas que esto distingue en una sola partida:
+    #
+    #   1. El mando de la Deck cambia de modo. Manteniendo OPCIONES medio
+    #      segundo se pasa de modo gamepad a modo escritorio -lo hace el
+    #      driver, con vibracion-, y en modo escritorio los pads dejan de
+    #      publicarse por evdev. Para el juego eso es quedarse sin mando. Y es
+    #      facil de provocar sin querer: OPCIONES es el boton de pausa de medio
+    #      mundo.
+    #   2. El mando virtual de Steam se va y vuelve. Steam lo recrea al cambiar
+    #      la disposicion o al abrir su superposicion, con un nodo NUEVO. El
+    #      juego tenia abierto el viejo y se queda sin nada, aunque por fuera
+    #      siga habiendo un mando.
+    #
+    # SOLO SE ESCRIBE CUANDO ALGO CAMBIA. Una linea cada tres segundos durante
+    # una partida de dos horas son dos mil cuatrocientas lineas que no dicen
+    # nada; lo que hace falta es el segundo exacto en que cambio algo.
+    #
+    # $1 = cada cuantos segundos se mira (3 por defecto)
+    # LA SEÑAL DE PARADA ES UN FICHERO, NO UNA VARIABLE.
+    #
+    # Esto corre en segundo plano, o sea en otro proceso: una variable que
+    # cambie el padre aqui NO se ve, el hijo se quedo con la copia que habia
+    # al bifurcar. El primer intento fue justo eso y habria dejado el
+    # vigilante dando vueltas hasta el final de la sesion.
+    local cada="${1:-3}" marca="${2:-}" ini ahora t prev="" ahora_h liz prev_liz="" n_cambios=0
+    [ -r "${WP_INPUT_DEVICES:-/proc/bus/input/devices}" ] || return 0
+    [ -n "$marca" ] || return 0
+    ini="$(date +%s)"
+    prev="$(mandos_huella)"
+    prev_liz="$(deck_lizard_estado 2>/dev/null)" || prev_liz=""
+    log "vigilante del mando: en marcha ($(printf '%s' "$prev" | grep -c '|js|') mando(s), se mira cada ${cada}s; solo se apuntan los cambios)"
+    # LOS EJES, AL EMPEZAR. Si ya salen torcidos de casa, el juego arrancara
+    # con el personaje moviendose solo y no hay que buscar mas lejos.
+    local prev_ejes ahora_e seguidas=0 avisado=0 _torcidos=0
+    prev_ejes="$(ejes_huella)"
+    local _l
+    while IFS= read -r _l; do
+        [ -n "$_l" ] || continue
+        case "$_l" in
+            *": centrados") log "vigilante del mando: ejes en reposo -> $_l" ;;
+            *) log "vigilante del mando: EJES TORCIDOS EN REPOSO -> $_l (un eje fuera del centro sin tocar el mando mueve al personaje solo, y lo que pulses llega sumado a esa deriva: es el 'se mueve solo y como con lag')" WARN ;;
+        esac
+    done <<EOFEJ0
+$prev_ejes
+EOFEJ0
+    while :; do
+        sleep "$cada"
+        # Si la marca ya no esta, la partida acabo.
+        [ -f "$marca" ] || break
+        ahora_h="$(mandos_huella)"
+        if [ "$ahora_h" != "$prev" ]; then
+            ahora="$(date +%s)"; t=$((ahora - ini))
+            n_cambios=$((n_cambios + 1))
+            log "vigilante del mando: ALGO CAMBIO a los ${t}s de partida" WARN
+            # Lo que se fue y lo que llego, linea a linea.
+            local l
+            while IFS= read -r l; do
+                [ -n "$l" ] || continue
+                case "$prev" in
+                    *"$l"*) ;;
+                    *) log "vigilante del mando:   + apareció  $l" ;;
+                esac
+            done <<EOFVIGA
+$ahora_h
+EOFVIGA
+            while IFS= read -r l; do
+                [ -n "$l" ] || continue
+                case "$ahora_h" in
+                    *"$l"*) ;;
+                    *)
+                        log "vigilante del mando:   - DESAPARECIO $l" WARN
+                        case "$l" in
+                            *"|js|"*)
+                                log "vigilante del mando:     (era un mando: para el juego, que un nodo desaparezca es quedarse sin el, aunque luego vuelva otro con numero distinto)" ;;
+                        esac
+                        ;;
+                esac
+            done <<EOFVIGB
+$prev
+EOFVIGB
+            # Y si lo que cambio fueron los pads de la Deck, se dice que
+            # significa, que es lo que convierte el apunte en algo accionable.
+            case "$prev$ahora_h" in
+                *"Steam Deck"*|*"Steam Controller"*|*"Valve Software"*)
+                    log "vigilante del mando:     ojo: ahi hay dispositivos del mando de la Deck. Si han desaparecido los pads, el mando ha pasado a modo escritorio: se hace manteniendo OPCIONES (las tres rayas) medio segundo, y es facil darle sin querer porque es el boton de pausa de muchos juegos. Se vuelve igual: OPCIONES medio segundo otra vez" ;;
+            esac
+            prev="$ahora_h"
+        fi
+        # LOS EJES: LO QUE IMPORTA NO ES QUE SE MUEVAN, ES QUE NO VUELVAN.
+        #
+        # LA PRIMERA VERSION APUNTABA CADA CAMBIO, Y ESO ERA RUIDO.
+        #
+        # En el registro de Michel salieron ocho "LOS EJES HAN CAMBIADO"... que
+        # eran el los sticks, jugando. Claro: un eje se mueve porque alguien lo
+        # mueve. Lo apuntado no decia nada y encima tapaba lo que si importaba,
+        # que estaba en la misma lista: los ejes volvian al centro las cuatro
+        # veces.
+        #
+        # Un eje PEGADO no vuelve. Asi que se cuenta cuantas muestras seguidas
+        # lleva fuera del centro y solo se habla cuando pasa de medio minuto,
+        # UNA vez por episodio. Soltar el stick lo pone a cero.
+        ahora_e="$(ejes_huella)"
+        # Cuantos mandos tienen algun eje fuera del centro AHORA. Se cuenta con
+        # "grep -c" sobre las lineas que NO acaban en ": centrados"; si no hay
+        # ninguna, grep imprime 0 y devuelve 1, y por eso no se encadena nada
+        # detras: el numero ya esta bien.
+        _torcidos="$(printf '%s\n' "$ahora_e" | grep -cv ': centrados$' 2>/dev/null)"
+        [ -n "$_torcidos" ] || _torcidos=0
+        if [ "$_torcidos" -gt 0 ] 2>/dev/null; then
+            seguidas=$((seguidas + 1))
+        else
+            [ "${avisado:-0}" = 1 ] && {
+                ahora="$(date +%s)"; t=$((ahora - ini))
+                log "vigilante del mando: los ejes han vuelto al centro a los ${t}s"
+            }
+            seguidas=0; avisado=0
+        fi
+        # MEDIO MINUTO, Y AJUSTABLE PARA QUE LA PRUEBA NO TARDE MEDIO MINUTO.
+        #
+        # La suite tiene que comprobar la REGLA -"un eje que no vuelve se
+        # avisa una sola vez"-, no el reloj. Con el plazo fijo en 30 s, dos
+        # comprobaciones costaban mas de un minuto y el pase entero se iba al
+        # doble. Con esto la prueba pone 2 y mide lo mismo.
+        if [ "$seguidas" -ge "$(( ${VIGILANTE_MANDO_PEGADO:-30} / cada + 1 ))" ] \
+           && [ "${avisado:-0}" = 0 ]; then
+            ahora="$(date +%s)"; t=$((ahora - ini))
+            avisado=1
+            log "vigilante del mando: UN EJE LLEVA MAS DE ${VIGILANTE_MANDO_PEGADO:-30}s SIN VOLVER AL CENTRO (a los ${t}s de partida): $ahora_e" WARN
+            log "vigilante del mando:   un eje que no vuelve mueve al personaje solo, y lo que pulses llega sumado a esa deriva" WARN
+        fi
+        prev_ejes="$ahora_e"
+        liz="$(deck_lizard_estado 2>/dev/null)" || liz=""
+        if [ "$liz" != "$prev_liz" ]; then
+            ahora="$(date +%s)"; t=$((ahora - ini))
+            log "vigilante del mando: el modo lagarto paso de '$prev_liz' a '$liz' a los ${t}s de partida" WARN
+            prev_liz="$liz"
+        fi
+    done
+    [ "$n_cambios" = 0 ] \
+        && log "vigilante del mando: la partida entera sin un solo cambio en los dispositivos de entrada" \
+        || log "vigilante del mando: $n_cambios cambio(s) durante la partida (arriba, con el segundo de cada uno)"
+    return 0
+}
+
 diag_mando_vigilante() {
     # Diagnostico de mando: antes de lanzar y con el juego ya corriendo.
     #
@@ -36246,7 +37984,7 @@ diag_mando_vigilante() {
         while [ "$_i" -lt 40 ]; do
             _i=$((_i+1))
             sleep 0.5
-            _p="$(pgrep -f "$exe_base" 2>/dev/null | head -n1)"
+            _p="$(pid_del_juego "$exe_base" 2>/dev/null)"
             if [ -n "$_p" ]; then
                 diag_mando_despues "$_p"
                 _n="$(ls /dev/input/js* 2>/dev/null | wc -l)"
@@ -36352,6 +38090,50 @@ launch_game() {
     # Recordar como "último juego jugado". Sin gid: una imagen se guarda tal
     # cual, que es lo que play_any sabe volver a montar.
     ultimo_juego_recordar "$abs_squash"
+
+    # ¿ES UN JUEGO DE ARCADE LOADER? ENTONCES AQUI NO PINTA NADA MAS.
+    #
+    # Va ANTES DE MONTAR, y eso es lo importante. Arcade Loader recibe EL
+    # ARCHIVO y se encarga el de abrirlo:
+    #
+    #     Arcade_Loader/arcade-launcher run "/ruta/Juego [AL].squashfs"
+    #
+    # Si montaramos primero, haríamos el trabajo dos veces y encima le
+    # pasariamos la ruta del montaje en vez de la del archivo. Tampoco hace
+    # falta runner, ni prefijo, ni buscar un .exe: nada de eso existe aqui.
+    #
+    # Y es el mismo sitio donde se desvia Batocera, un poco mas abajo, por la
+    # misma razon: son lanzadores que se llevan el archivo entero.
+    #
+    # VA ANTES DE LA COMPROBACION DE INTEGRIDAD, Y NO ES UN DESCUIDO.
+    #
+    # Esa comprobacion mira la cabecera squashfs/DwarFS, o sea NUESTROS
+    # formatos. El formato de un juego [AL] es cosa de Arcade Loader: si
+    # manana usa un contenedor propio, nuestra comprobacion diria "no parece
+    # una imagen valida" y el juego no arrancaria por una opinion nuestra
+    # sobre un fichero que no es nuestro. Quien tiene autoridad sobre ese
+    # archivo es Arcade Loader, y si esta roto lo dira el.
+    if juego_es_arcade_loader "$abs_squash" "$gid"; then
+        say "[+] Este juego es de Arcade Loader"
+        log "Arcade Loader: '$abs_squash' reconocido como juego de Arcade Loader"
+        if arcade_loader_asegurar "$(basename "$abs_squash")"; then
+            local _alrc=0
+            lanzar_arcade_loader "$abs_squash" "$gid" || _alrc=$?
+            post_game_resettle
+            partida_fin; return $_alrc
+        fi
+        # Ha dicho que no, o la descarga ha fallado. No se intenta con Proton:
+        # un juego de Arcade Loader no es un juego de Windows y lo unico que
+        # saldria es un fallo raro diez pantallas despues.
+        ui_info "Sin Arcade Loader no se puede lanzar '$(basename "$abs_squash")'.
+
+Cuando quieras, se instala desde:
+  Runners y herramientas -> Arcade Loader
+
+O quitale el [AL] del nombre si en realidad es un juego de
+Windows."
+        partida_fin; return 1
+    fi
 
     # Comprobacion rapida de integridad antes de montar (cabecera squashfs)
     if [ -f "$abs_squash" ]; then
@@ -36773,18 +38555,8 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # Se enciende en: Ajustes del juego -> Mapeador .keys -> Mando virtual.
     # "nunca" se acepta como apagado por compatibilidad con los perfiles que se
     # guardaron mientras existio el automatico.
-    local _mv="${MANDO_VIRTUAL:-0}"
-    [ "$_mv" = nunca ] && _mv=0
-    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
-    #
-    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
-    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
-    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
-    # como lo quiere el juego.
-    local _sticks=0
-    keys_sticks_cambiados "$keys_file" && _sticks=1
-    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
-    mando_virtual_start "$_mv" "$_sticks"
+    mando_virtual_del_juego "$keys_file"
+    local _mv="${WP_MV_MODO:-0}"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -36818,6 +38590,7 @@ Elige otro en: Ajustes del juego -> Ejecutable
     fi          # fin de los avisos que solo valen con Wine
     # Diagnostico completo del mando (se puede apagar con WP_DIAG_PAD=0)
     diag_mando_vigilante "$(basename "$EXE_PATH")"
+    vigilante_mando_arrancar
     local t0; t0=$(date +%s)
     STATS_T0="$t0"
     saves_detect_start
@@ -37085,6 +38858,7 @@ $(tail -n 8 "$LOG_FILE")"
         # lineas aqui dentro y NADA en launch_loose_exe: ver wineserver_cerrar_prefijo.
         wineserver_cerrar_prefijo "$rdir" "${RUNNER_KIND:-}"
     fi
+    vigilante_mando_parar    # antes de los diagnosticos, para que su resumen salga en orden
     diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     diag_log_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     diag_video_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
@@ -37265,29 +39039,33 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Un menu de WProton ENCIMA del juego, con Select+L1 o Ctrl+Alt+W.
+  Arcade Loader se descarga desde GitHub: ahora el enlace es directo.
 
-  Se pinta dentro del juego, sin ventana: la imagen no se congela.
+  Las descargas traen barra de progreso y se pueden cancelar.
 
-  La capa que lo hace posible se descarga sola; no hay que compilar.
+  Lo descargado se comprueba antes de instalarlo: tamaño y suma.
 
-  Instalar un juego desde una ISO, sin tocar el sistema y sin sudo.
+  Varias fuentes de descarga, que se prueban en orden.
 
-  HelixSR: la red de DLSS tambien en tarjetas que no son NVIDIA.
+  Al empaquetar con el prefijo, el juego conserva su ruta en C:\\.
 
-  Dos mandos y ninguno responde: se esconde el de mas que deja Steam.
+  Y se enlaza en vez de copiarse: con juegos enormes, se nota.
 
-  Renombrar un juego, y sus partidas y sus ajustes van con el.
+  El mando se vigila durante la partida, no solo al arrancar.
 
-  Los juegos de GOG se instalan en SU prefijo, no en el compartido.
+  Una carpeta de juego ya no se confunde con una estanteria.
 
-  Una carpeta con varios juegos dentro puede ser una estanteria.
+  El diagnostico de .NET ya no culpa al juego cuando no es suyo.
 
-  Un perfil compartido ya no te deja sin copias de seguridad.
+  Se limpia la letra de unidad que apuntaba dentro del juego.
 
-  El panel dice en que formato esta el juego, y la lista su extension.
+  Poner un boton del mando en otro, por juego: el Start en la A.
 
-  Dos lanzadores nuevos para DeckStation: --saves y --keys.
+  Y el mando virtual ya se aplica en Arcade Loader y en los nativos.
+
+  Un juego de Arcade Loader se reconoce al añadirlo, y hay casilla.
+
+  Y se trae su configuracion especial del repositorio, si la hay.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -40089,33 +41867,13 @@ redist_juego_marcar() {
 }
 
 mediafire_enlace_directo() {
-    # Saca el enlace de descarga real de una pagina de MediaFire.
-    #
-    # POR QUE HACE FALTA
-    #
-    # Una direccion ".../file/xxxx/nombre.tar.gz/file" NO es el fichero: es
-    # una pagina web. Si se le pasa a curl se baja el HTML y luego "no es un
-    # tar valido", que no dice nada de lo que pasa.
-    #
-    # El enlace de verdad esta dentro de esa pagina, en el boton de descarga,
-    # y apunta a un servidor "download####.mediafire.com". Se saca de ahi.
-    #
-    # ESTO ES FRAGIL A PROPOSITO Y SE SABE: depende de como este hecha la
-    # pagina hoy. Si MediaFire la cambia, esto deja de funcionar; por eso el
-    # que llama comprueba SIEMPRE lo que ha bajado y avisa con la direccion
-    # para que se pueda hacer a mano.
-    local pagina="${1:-}" html directo
-    case "$pagina" in
-        *mediafire.com*) ;;
-        *) printf '%s' "$pagina"; return 0 ;;   # otro servidor: tal cual
-    esac
-    html="$(curl -fsSL --max-time 30 "$pagina" 2>/dev/null)" || return 1
-    directo="$(printf '%s' "$html" \
-        | grep -oE 'https://download[0-9]*\.mediafire\.com/[^"'"'"'[:space:]]+' \
-        | head -n1)"
-    [ -n "$directo" ] || return 1
-    printf '%s' "$directo"
-    return 0
+    # El enlace real de una pagina de MediaFire, para el prefijo de
+    # TeknoParrot. Se queda el nombre porque es el que usa quien llama, pero
+    # el trabajo lo hace mediafire_directo: ANTES ESTO ERA UNA SEGUNDA COPIA
+    # de lo mismo, y tener la misma idea escrita varias veces fue justo lo que
+    # hizo que Arcade Loader se quedara con el fallo mientras los otros dos
+    # sitios funcionaban.
+    mediafire_directo "${1:-}"
 }
 
 teknoparrot_prefijo_descargar() {
@@ -41109,10 +42867,30 @@ overlay_opacos_avisar() {
     lista="$(overlay_opacos_listar "$upper")"
     n="$(printf '%s' "$lista" | grep -c . || true)"
     [ "${n:-0}" -gt 0 ] || return 0
-    # Lo que cuelga de drive_c/Games es el juego; el resto es el prefijo.
+    # QUE CUELGA DE drive_c Y NO ES DE WINDOWS: ESO ES EL JUEGO.
+    #
+    # Antes esto buscaba "/drive_c/Games/", porque el empaquetado con prefijo
+    # metia el juego ahi. Desde el 30/10 ya no: la carpeta entra en C:\ tal
+    # cual y con su nombre, asi que buscar "Games" dejaria de reconocer el
+    # juego y el aviso volveria a estar lleno de carpetas del prefijo, que es
+    # justo lo que se arreglo.
+    #
+    # Se mira al reves y aguanta los dos formatos: se listan las carpetas que
+    # son del prefijo de Windows, y todo lo demas que cuelgue de drive_c es
+    # del juego. Un archivo viejo con el juego en "Games" tambien encaja,
+    # porque "Games" no es una carpeta de Windows.
     local dentro fuera ndentro
-    dentro="$(printf '%s\n' "$lista" | grep -F '/drive_c/Games/' || true)"
-    fuera="$(printf '%s\n' "$lista" | grep -vF '/drive_c/Games/' || true)"
+    # Las que crea Wine al hacer un prefijo, y nada mas. No se ponen aqui
+    # "$Recycle.Bin" ni "System Volume Information": las hace Windows de
+    # verdad, no Wine, asi que en un prefijo no estan. Y escribir ese "$"
+    # dentro de la expresion hacia saltar a la auditoria -que no sabe que va
+    # entre comillas simples- por una carpeta que no existe.
+    local _win_re='/drive_c/(windows|users|programdata|program files|program files \(x86\)|openxr|vrclient)(/|$)'
+    dentro="$(printf '%s\n' "$lista" | grep -F '/drive_c/' | grep -ivE "$_win_re" || true)"
+    fuera="$(printf '%s\n' "$lista" | grep -vF '/drive_c/' || true)"
+    fuera="$(printf '%s\n%s\n' "$fuera" \
+        "$(printf '%s\n' "$lista" | grep -F '/drive_c/' | grep -iE "$_win_re" || true)" \
+        | grep -v '^$' || true)"
     ndentro="$(printf '%s' "$dentro" | grep -c . || true)"
     say "AVISO: $n carpeta(s) de la superposicion tapan lo que trae el archivo."
     say "       El juego NO vera sus propios ficheros ahi dentro (idiomas,"
@@ -42812,6 +44590,51 @@ raiz_juego_efectiva() {
     printf '%s' "$raiz"
 }
 
+diag_letras_del_exe() {
+    # APUNTA CON QUE LETRA VA A VER WINE EL EJECUTABLE.
+    #
+    # POR QUE HACE FALTA
+    #
+    # El 29/10 un juego no arrancaba y el registro solo decia esto, perdido
+    # entre mil lineas de Wine:
+    #
+    #     Loaded L"I:\\Binaries\\Win64\\EndOfAbyss.exe"
+    #
+    # Que la ruta fuera "I:\\Binaries\\..." y no "I:\\End of Abyss\\EndOfAbyss
+    # \\Binaries\\..." era TODO el fallo -a un Unreal le faltaban dos niveles
+    # para encontrar su Engine/-, pero habia que ir a buscarlo. Las letras
+    # viven en el prefijo y sobreviven a las partidas, asi que de donde salio
+    # esa no lo cuenta ningun registro.
+    #
+    # Asi que ahora se escribe: que letras cubren la ruta del ejecutable y
+    # cual gana. La mas larga es la que Wine usara, y si es una que entra POR
+    # DENTRO de la carpeta del juego, aqui se ve de un vistazo.
+    local dd exe enlace destino letra ganadora="" largo=0
+    exe="${EXE_PATH:-}"
+    [ -n "$exe" ] || return 0
+    [ -n "${WINEPREFIX:-}" ] || return 0
+    dd="$WINEPREFIX/dosdevices"
+    [ -d "$WINEPREFIX/pfx/dosdevices" ] && dd="$WINEPREFIX/pfx/dosdevices"
+    [ -d "$dd" ] || return 0
+    exe="$(readlink -f "$exe" 2>/dev/null)" || return 0
+    for enlace in "$dd"/[c-z]:; do
+        [ -L "$enlace" ] || continue
+        destino="$(readlink -f "$enlace" 2>/dev/null)" || continue
+        [ -n "$destino" ] || continue
+        case "$exe" in
+            "$destino"|"$destino"/*) ;;
+            *) continue ;;
+        esac
+        letra="$(basename "$enlace")"
+        log "unidad: $letra apunta a '$destino' y cubre el ejecutable"
+        if [ "${#destino}" -gt "$largo" ]; then
+            largo="${#destino}"; ganadora="$letra -> $destino"
+        fi
+    done
+    [ -n "$ganadora" ] && log "unidad: la ruta mas larga manda, asi que el juego se vera por $ganadora"
+    return 0
+}
+
 unidad_auto_juego() {
     # Da al juego una letra de unidad cuando PROTON NO HA PODIDO.
     #
@@ -42918,28 +44741,65 @@ unidad_auto_juego() {
     fi
 
     local l enlace destino
+    # LA LIMPIEZA VA ANTES DE LA SALIDA ANTICIPADA, Y ESO ES PARTE DEL ARREGLO.
+    #
+    # Estaba DESPUES del "ya hay una letra que apunte ahi -> ya esta", asi que
+    # en cuanto una letra apuntaba al sitio bueno se volvia sin limpiar las
+    # malas. Es justo lo que le paso a Dani: la letra buena existia, se salia
+    # por ahi, y la letra heredada que apuntaba DENTRO de la carpeta del juego
+    # se quedaba.
+    #
+    # LETRAS QUE APUNTAN DENTRO DE LA CARPETA DEL JUEGO: FUERA.
+    #
+    # EL CASO (29/10, registro de Dani con End of Abyss). El ejecutable acabo
+    # cargandose asi:
+    #
+    #     Loaded L"I:\Binaries\Win64\EndOfAbyss.exe"
+    #
+    # Esa I: apuntaba a "End of Abyss/EndOfAbyss", o sea una carpeta POR
+    # DENTRO del juego. Y a un juego de Unreal eso le importa mucho: su raiz
+    # la calcula contando niveles hacia arriba desde el ejecutable
+    # -<raiz>/<Juego>/Binaries/Win64/-, asi que desde "I:\Binaries\Win64" la
+    # raiz le cae POR ENCIMA de la raiz de la unidad y no encuentra Engine/.
+    # El juego cargo, saco un cartel y se cerro a los 13 segundos sin llegar a
+    # pedir ni DirectX ni Vulkan.
+    #
+    # Los enlaces viven DENTRO del prefijo y sobreviven al cierre, asi que una
+    # partida anterior -o una version anterior, o el mismo juego importado
+    # desde su carpeta de dentro- deja una letra ahi puesta para siempre. Y al
+    # traducir la ruta del ejecutable, una letra mas profunda le quita niveles
+    # al juego.
+    #
+    # Se quitan:
+    #   - las que apuntan DENTRO de la carpeta del juego, siempre: acortan la
+    #     ruta y eso no le conviene a nadie;
+    #   - la que apunta A la carpeta del juego, solo cuando la letra nueva va
+    #     a ir al padre; si va a ir a la propia carpeta -porque el padre es
+    #     demasiado general- esa letra es la que toca y se queda.
+    for enlace in "$dd"/[d-y]:; do
+        [ -L "$enlace" ] || continue
+        destino="$(readlink -f "$enlace" 2>/dev/null)" || continue
+        case "$destino" in
+            "$real"/*)
+                rm -f "$enlace" "$enlace:" 2>/dev/null
+                log "unidad: quitada $(basename "$enlace"), que apuntaba a '$destino' -DENTRO de la carpeta del juego- y le quitaba niveles a la ruta del ejecutable (un juego de Unreal cuenta esos niveles para encontrar su Engine/)" WARN
+                ;;
+            "$real")
+                [ -n "$nombre" ] || continue
+                rm -f "$enlace" "$enlace:" 2>/dev/null
+                log "unidad: quitada $(basename "$enlace"), que apuntaba a la carpeta del juego y la dejaba en la raiz de una unidad"
+                ;;
+        esac
+    done
     # ¿Ya hay una letra que apunte ahi? Entonces no hace falta nada.
     for enlace in "$dd"/[d-y]:; do
         [ -L "$enlace" ] || continue
         destino="$(readlink -f "$enlace" 2>/dev/null)" || continue
-        [ "$destino" = "$objetivo" ] && return 0
+        if [ "$destino" = "$objetivo" ]; then
+            diag_letras_del_exe
+            return 0
+        fi
     done
-    # Y SI QUEDO UNA LETRA APUNTANDO A LA CARPETA DEL JUEGO, FUERA.
-    #
-    # Los enlaces viven DENTRO del prefijo y sobreviven al cierre, asi que una
-    # partida anterior -con la version de antes de este arreglo- deja una letra
-    # apuntando a la carpeta del juego. Si se queda, Wine elige esa al traducir
-    # la ruta del ejecutable (gana la coincidencia mas larga) y el juego vuelve
-    # a vivir en la RAIZ de una unidad, que es justo lo que se esta evitando.
-    if [ -n "$nombre" ]; then
-        for enlace in "$dd"/[d-y]:; do
-            [ -L "$enlace" ] || continue
-            destino="$(readlink -f "$enlace" 2>/dev/null)" || continue
-            [ "$destino" = "$real" ] || continue
-            rm -f "$enlace" "$enlace:" 2>/dev/null
-            log "unidad: quitada $(basename "$enlace") , que apuntaba a la carpeta del juego y la dejaba en la raiz de una unidad"
-        done
-    fi
 
     # La primera letra libre. C: y Z: no se tocan nunca: son el prefijo y la
     # raiz del sistema.
@@ -42959,6 +44819,7 @@ unidad_auto_juego() {
                 say "[+] Unidad $L: -> la carpeta del juego"
             fi
             say "    (Proton no pudo crearla: la carpeta esta en un punto de montaje)"
+            diag_letras_del_exe
             return 0
         fi
     done
@@ -45273,33 +47134,6 @@ keys_raton_leer() {
     return 0
 }
 
-logs_aplicar() {
-    # ENCIENDE O APAGA EL REGISTRO, SEGUN EL AJUSTE "LOGS".
-    #
-    # Apagado no significa "escribir y luego borrar": significa NO ESCRIBIR.
-    # LOG_FILE pasa a /dev/null, y como todo el programa escribe con
-    # >>"$LOG_FILE" no hay que tocar nada mas.
-    #
-    # OJO CON EL FICHERO QUE YA SE EMPEZO. El nombre del registro se calcula
-    # arriba, antes de leer los ajustes -hace falta para poder registrar lo que
-    # pase durante la propia lectura-, asi que cuando se llega aqui con LOGS=0
-    # puede haber ya un fichero con cuatro lineas. Se borra: dejarlo seria el
-    # mismo ruido que el usuario ha pedido no tener.
-    if [ "${LOGS:-1}" = 0 ]; then
-        [ "${LOG_FILE:-}" = /dev/null ] && return 0
-        local _viejo="${LOG_FILE:-}"
-        LOG_FILE=/dev/null
-        case "$_viejo" in
-            "$LOG_DIR"/wproton_*.log) rm -f "$_viejo" 2>/dev/null ;;
-        esac
-        return 0
-    fi
-    # Encendido: si estaba apagado, se abre uno nuevo con la hora de ahora.
-    case "${LOG_FILE:-}" in
-        /dev/null) LOG_FILE="$LOG_DIR/wproton_$(date +%Y%m%d_%H%M%S).log" ;;
-    esac
-    return 0
-}
 
 logs_label() {
     # Como se resume el registro en el menu de preferencias.
@@ -47700,6 +49534,89 @@ prefijo_limpiar() {
     return 0
 }
 
+juego_colocar() {
+    # PONE UNA CARPETA DE JUEGO EN SU SITIO SIN MOVER LOS DATOS SI SE PUEDE.
+    # $1 = origen, $2 = destino (no debe existir).
+    #
+    # EL PROBLEMA: copiar un juego de 80 GB dentro de la copia de trabajo del
+    # prefijo son 80 GB leidos y escritos antes de empezar a comprimir. Lo
+    # dijo Dani: "cuando son juegos enormes, no veas".
+    #
+    # POR QUE NO SE MUEVE, QUE ES LO QUE SE PIDIO. Porque la copia de trabajo
+    # se borra al terminar -con un "rm -rf" que esta en las dos salidas, la
+    # buena y la mala-, y el dialogo de antes de empezar promete "El juego
+    # original NO se toca". Moviendolo ahi dentro, un empaquetado que falle,
+    # que se cancele o que se quede sin sitio SE LLEVA EL JUEGO POR DELANTE.
+    # Y encima, si el juego y la carpeta de trabajo estan en discos distintos
+    # -la tarjeta y el interno de la Deck-, mover ES copiar y borrar: mas
+    # lento todavia.
+    #
+    # LO QUE SE HACE, QUE ES IGUAL DE RAPIDO Y NO SE JUEGA NADA:
+    #
+    #   1. COPIA LIGERA (reflink). En btrfs y XFS el sistema de ficheros
+    #      apunta a los mismos bloques y solo escribe lo que cambie. Es
+    #      instantaneo, no ocupa el doble y las dos copias son independientes.
+    #      CachyOS suele ir en btrfs, asi que este es el camino normal ahi.
+    #   2. ENLACES DUROS. Mismo disco, sin reflink (ext4, el de la Deck por
+    #      defecto): se crean solo las entradas de directorio, o sea
+    #      instantaneo tambien. Vale porque DENTRO de la copia de trabajo el
+    #      juego solo se LEE: lo unico que se escribe es el autorun.cmd de la
+    #      raiz. Al borrar la copia de trabajo se borran los enlaces, no el
+    #      juego.
+    #   3. COPIA DE TODA LA VIDA. Discos distintos o cualquier otro motivo.
+    #      Es lo que se hacia siempre, asi que en el peor caso no se pierde
+    #      nada respecto a antes.
+    #
+    # Se dice en el registro cual de los tres ha salido, porque la diferencia
+    # entre el primero y el ultimo son minutos y conviene poder mirarlo.
+    local src="${1:-}" dst="${2:-}"
+    [ -n "$src" ] && [ -n "$dst" ] || return 1
+    [ -e "$src" ] || { log "juego_colocar: no existe el origen $src" WARN; return 1; }
+    # CADA INTENTO EMPIEZA CON EL DESTINO LIMPIO, Y ESTO NO ES PRECAUCION DE
+    # SOBRA: ES EL FALLO QUE SE ESCAPO AL ESCRIBIR ESTO.
+    #
+    # "cp --reflink=always" en ext4 -el sistema de ficheros de la Deck- no
+    # falla y se va: CREA la carpeta y lo que no necesita reflink (los enlaces
+    # simbolicos) y revienta al llegar al primer fichero de verdad. Deja el
+    # destino medio hecho.
+    #
+    # Y entonces el intento siguiente, "cp -al src dst", se encuentra dst YA
+    # EXISTENTE: cp no copia el contenido de src, copia src DENTRO de dst. El
+    # juego acababa en "drive_c/Juego/Juego/..." un nivel mas abajo, con el
+    # autorun apuntando al sitio equivocado... y devolviendo 0, asi que nadie
+    # se enteraba. Justo la clase de fallo que se acaba de arreglar arriba.
+    #
+    # Lo que se borra es la copia de trabajo, nunca el original: son enlaces o
+    # ficheros nuestros dentro de $tmp.
+    local _modo
+    for _modo in reflink enlaces copia; do
+        rm -rf "$dst" 2>/dev/null
+        case "$_modo" in
+            reflink)
+                cp -a --reflink=always "$src" "$dst" 2>/dev/null || continue
+                log "juego_colocar: copia ligera (reflink) de $src -> $dst; sin mover datos"
+                say "[+] Copia ligera: el sistema de ficheros no duplica los datos."
+                return 0 ;;
+            enlaces)
+                cp -al "$src" "$dst" 2>/dev/null || continue
+                log "juego_colocar: enlaces duros de $src -> $dst; sin mover datos (mismo disco)"
+                say "[+] Enlazado en el sitio: no hay que copiar los datos."
+                return 0 ;;
+            copia)
+                log "juego_colocar: ni reflink ni enlaces duros (seguramente discos distintos); copia completa de $src -> $dst"
+                say "[i] El juego y la carpeta de trabajo estan en discos distintos:"
+                say "    hay que copiarlo y puede tardar."
+                if cp -a "$src" "$dst" 2>>"$LOG_FILE"; then
+                    log "juego_colocar: copia completa terminada"
+                    return 0
+                fi ;;
+        esac
+    done
+    rm -rf "$dst" 2>/dev/null
+    log "juego_colocar: no se ha podido poner $src en $dst de ninguna manera" WARN
+    return 1
+}
+
 package_con_prefijo() {
     # Empaqueta el juego JUNTO CON su prefijo, al estilo Batocera: dentro del
     # archivo hay un drive_c/ con Windows entero y el juego dentro, mas un
@@ -47766,8 +49683,30 @@ Si el archivo va a ser grande, el formato DwarFS comprime bastante
 mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
         return 1
     fi
-    # hace falta sitio para la copia de trabajo Y para el archivo final
-    check_space "$(( total + total * 7 / 10 ))" "$WS_DIR" \
+    # EL SITIO QUE HACE FALTA DE VERDAD.
+    #
+    # Antes se pedia sitio para el prefijo MAS el juego mas el archivo final.
+    # Pero desde que el juego entra por enlaces o por copia ligera
+    # (juego_colocar), en el mismo disco NO se duplica: no ocupa nada nuevo.
+    # Pedirlo igual hacia que un juego grande -los de 80 GB, justo los que
+    # motivaron el cambio- se quedara sin empaquetar por falta de un espacio
+    # que no iba a usar.
+    #
+    # El juego solo cuenta si va a copiarse de verdad, y eso pasa cuando esta
+    # en OTRO disco: ni los enlaces duros ni el reflink cruzan sistemas de
+    # ficheros. Se compara el numero de dispositivo, que no escribe nada.
+    local _dev_juego _dev_ws _need
+    _dev_juego="$(stat -c %d "$src" 2>/dev/null || echo 0)"
+    _dev_ws="$(stat -c %d "$WS_DIR" 2>/dev/null || stat -c %d "$(dirname "$WS_DIR")" 2>/dev/null || echo 1)"
+    if [ "$_dev_juego" = "$_dev_ws" ] && [ "$_dev_juego" != 0 ]; then
+        # el juego no se duplica: solo el prefijo y el archivo final
+        _need=$(( ${tam_pfx:-0} + total * 7 / 10 ))
+        log "espacio: el juego esta en el mismo disco que $WS_DIR; no se duplica, hacen falta $(human_size "$_need")"
+    else
+        _need=$(( total + total * 7 / 10 ))
+        log "espacio: el juego esta en otro disco que $WS_DIR; hay que copiarlo, hacen falta $(human_size "$_need")"
+    fi
+    check_space "$_need" "$WS_DIR" \
         "empaquetar '$gid' con su prefijo" || return 1
 
     local tmp; tmp="$WS_DIR/build_prefijo_$$"
@@ -47820,13 +49759,66 @@ mas que wsquashfs (se elige en Biblioteca y preferencias)."; then
             rel_dir="${abs_src#"$abs_dc"/}"
             say "[+] El juego ya estaba dentro del prefijo: $rel_dir" ;;
         *)
-            destino="$tmp/drive_c/Games/$gid"
-            loading_say "Copiando el juego dentro de drive_c..."
-            mkdir -p "$(dirname "$destino")"
-            if ! cp -a "$src" "$destino" 2>>"$LOG_FILE"; then
-                rm -rf "$tmp"; ui_error "No se pudo copiar el juego"; return 1
+            # LA CARPETA ENTRA EN C:\ TAL CUAL, CON SU NOMBRE.
+            #
+            # Antes esto era "drive_c/Games/$gid", y hacia DOS cambios de ruta
+            # a la vez sin que se notara:
+            #
+            #   1. metia el juego un nivel mas abajo, en C:\Games\;
+            #   2. le cambiaba el NOMBRE a la carpeta por el identificador del
+            #      perfil, que sustituye espacios y barras por guiones bajos.
+            #
+            # O sea que una carpeta "Secret of Mana" que estaba en C:\ acababa
+            # dentro del archivo como "C:\Games\Secret_of_Mana". Lo conto
+            # Michel (30/10): "yo no lo instale, lo meti en games tal cual
+            # instalado... a mi me rompe las posibles rutas de que este en
+            # C:\". Y es exacto: un juego ya instalado lleva rutas absolutas
+            # en sus .ini, en sus ficheros de configuracion y en el registro
+            # que va DENTRO del archivo, y todas apuntan a donde estaba.
+            # Cambiarle la carpeta de sitio Y de nombre las rompe las dos
+            # veces.
+            #
+            # Lo de "Games" venia de los instaladores tipo GOG, que instalan
+            # ahi por su cuenta. Pero eso lo decide el instalador, no nosotros:
+            # cuando el juego viene ya instalado, lo unico correcto es no
+            # tocarle la ruta.
+            local nombre_carpeta; nombre_carpeta="$(basename "$abs_src")"
+            rel_dir="$nombre_carpeta"
+            destino="$tmp/drive_c/$nombre_carpeta"
+            # SALVO QUE ESE NOMBRE YA ESTE COGIDO EN LA RAIZ DE C:.
+            #
+            # En drive_c viven "windows", "users", "Program Files"... Si la
+            # carpeta del juego se llamara igual que una de ellas, copiar ahi
+            # mezclaria el juego con el prefijo, y eso es peor que moverlo.
+            # En ese caso -y solo en ese- se baja a Games\, conservando el
+            # nombre.
+            if [ -e "$destino" ]; then
+                local _n=0 _cand="Games/$nombre_carpeta"
+                while [ -e "$tmp/drive_c/$_cand" ] && [ "$_n" -lt 20 ]; do
+                    _n=$((_n + 1)); _cand="Games/${nombre_carpeta}_$_n"
+                done
+                if [ -e "$tmp/drive_c/$_cand" ]; then
+                    rm -rf "$tmp"
+                    ui_error "No hay donde poner '$nombre_carpeta' dentro del
+prefijo sin pisar algo que ya esta ahi."
+                    return 1
+                fi
+                rel_dir="$_cand"
+                destino="$tmp/drive_c/$_cand"
+                say "[i] En C:\\ ya habia algo llamado '$nombre_carpeta':"
+                say "    el juego va a C:\\${_cand//\//\\}"
+                log "empaquetado con prefijo: '$nombre_carpeta' ya existia en la raiz de drive_c; el juego se pone en $_cand" WARN
             fi
-            rel_dir="Games/$gid" ;;
+            loading_say "Poniendo el juego dentro de drive_c..."
+            mkdir -p "$(dirname "$destino")"
+            if ! juego_colocar "$src" "$destino"; then
+                rm -rf "$tmp"
+                ui_error "No se pudo poner el juego dentro del prefijo.
+
+El registro dice que se intento y que contesto el sistema."
+                return 1
+            fi
+            say "[+] El juego entra en el archivo como C:\\${rel_dir//\//\\}" ;;
     esac
 
     # autorun.cmd en la raiz, como los wsquashfs de Batocera
@@ -48594,6 +50586,31 @@ install_exe_silent_wine() {
     # solo en memoria, el juego se lanzaria con el compartido y las
     # dependencias no estarian.
     PREFIX_MODE="own"
+    # Y SI SE PIDE, EL PREFIJO SE HACE CON EL PROCEDIMIENTO DE BATOCERA.
+    #
+    # Lo pidieron para los dos casos: "tanto para una instalacion de una
+    # ISO/GOG como un juego que use su prefijo propio". Y aqui es donde mas
+    # se nota: un instalador de GOG escribe en el registro y lanza los
+    # redistribuibles, asi que si el prefijo nace torcido el juego queda
+    # torcido desde el minuto uno y no hay forma de arreglarlo despues.
+    #
+    # Se hace ANTES de instalar, a proposito: el instalador tiene que caer
+    # dentro del prefijo ya terminado, no al reves.
+    if [ "${PREFIX_BATOCERA_AL_INSTALAR:-0}" = 1 ]; then
+        local _rd; _rd="$(get_runner_path 2>/dev/null)" || _rd=""
+        if [ -n "$_rd" ] && [ -d "$_rd" ]; then
+            local _rn; _rn="$(basename "$_rd")"
+            say "[GOG] El prefijo se hara con el procedimiento de Batocera ($_rn)"
+            if bato_prefijo_crear "$PREFIX_DIR/$gid.batocera/$_rn" "$_rd" win64 0; then
+                PREFIX_BATOCERA="$_rn"
+                say "[GOG] Prefijo de Batocera listo ($BATO_PASOS pasos)"
+            else
+                say "[GOG] AVISO: no se pudo hacer el de Batocera (${BATO_MOTIVO:-?}); se usa el de siempre"
+            fi
+        else
+            say "[GOG] AVISO: sin runner no se puede hacer el prefijo de Batocera; se usa el de siempre"
+        fi
+    fi
     write_full_profile "$gid"
     say "[GOG] Prefijo propio para '$name': $(prefix_path "$gid")"
     say "      (ahi van las dependencias que instale el instalador)"
@@ -50185,14 +52202,50 @@ pick_game_root() {
     # juego pueden estar por encima de la carpeta del exe)
     local exe_dir="$1" h list c prev i sel
     h="$exe_dir"
-    if printf '%s' "$exe_dir" | grep -qiE '/Binaries/Win(64|32)$'; then
-        local strip="${exe_dir%/[Bb]inaries/[Ww]in*}"
-        h="$(dirname "$strip")"
-        { [ -z "$h" ] || [ "$h" = "/" ]; } && h="$strip"
-    elif printf '%s' "$exe_dir" | grep -qiE '/Win(64|32)$'; then
-        h="$(dirname "$(dirname "$exe_dir")")"
-        { [ -z "$h" ] || [ "$h" = "/" ]; } && h="$(dirname "$exe_dir")"
-    fi
+    # LA QUE SE SUGIERE PRIMERO ES LA QUE LA GENTE ACEPTA, ASI QUE TIENE QUE
+    # SER LA BUENA.
+    #
+    # EL CASO QUE LO DESTAPO (30/10): el Secret of Mana viene en dos carpetas,
+    # "Binary" y "Media". El .exe esta en Binary y TODO lo gordo en Media.
+    # Aqui se sugeria "Binary" -la carpeta del ejecutable-, y quien acepta lo
+    # que viene marcado se lleva un .wsquashfs con el ejecutable y sin el
+    # juego. El tester lo conto asi: "le dices de comprimir el juego y solo
+    # comprime la carpeta binary, no usa la media que es donde esta lo gordo".
+    #
+    # Antes esto eran dos casos escritos a mano -"/Binaries/Win64" y "/Win64"-
+    # y no habia tercero: cualquier otro reparto se quedaba sin cubrir. Ahora
+    # se SUBE mientras la carpeta sea una pieza de un juego y no un juego
+    # (carpeta_es_apoyo_de_juego: Binary, Bin, Media, x64, Release...), con
+    # tope de tres niveles para no acabar en la carpeta de juegos entera.
+    #
+    # Las otras opciones siguen saliendo debajo: esto cambia cual viene
+    # marcada, no lo que se puede elegir.
+    # UNREAL VA APARTE, Y NO ES UN CAPRICHO.
+    #
+    # En un Unreal la raiz es la carpeta que contiene a <Juego>/ Y a Engine/:
+    #
+    #     <raiz>/ElJuego/Binaries/Win64/ElJuego.exe
+    #     <raiz>/Engine/
+    #
+    # O sea que hay que subir un nivel MAS del que se deduce por el nombre:
+    # "ElJuego" no es una pieza, es el modulo del juego, y por nombre la
+    # subida general se para ahi. Esto ya estaba resuelto y al generalizar me
+    # lo cargue: lo canto la prueba, que esperaba la raiz y recibia el modulo.
+    case "$(printf '%s' "$exe_dir" | tr 'A-Z' 'a-z')" in
+        */binaries/win64|*/binaries/win32)
+            local _strip="${exe_dir%/[Bb]inaries/[Ww]in*}"
+            h="$(dirname "$_strip")"
+            { [ -z "$h" ] || [ "$h" = "/" ]; } && h="$_strip"
+            ;;
+    esac
+    local _sube=0
+    while [ "$_sube" -lt 3 ] && carpeta_es_apoyo_de_juego "$h"; do
+        prev="$h"; h="$(dirname "$h")"
+        { [ -z "$h" ] || [ "$h" = "/" ] || [ "$h" = "$prev" ]; } && { h="$prev"; break; }
+        case "$h" in "$HOME") h="$prev"; break ;; esac
+        _sube=$((_sube + 1))
+    done
+    [ -n "$h" ] && [ -d "$h" ] || h="$exe_dir"
     list="$h"
     c="$h"
     for i in 1 2 3; do
@@ -50688,14 +52741,39 @@ launch_loose_exe() {
     #
     # Hoy los cuatro sitios que llaman aqui ya pasan el nombre de la carpeta;
     # esto es la red por si mañana entra uno que no.
+    # Y LA CARPETA ES LA RAIZ DEL JUEGO, NO LA DEL EJECUTABLE (30/10).
+    #
+    # EL FALLO: con el Secret of Mana -"Binary" con el .exe y "Media" con todo
+    # lo demas- el tester configuraba el juego y WProton "se volvia loco y
+    # creaba otro perfil para Binary". Era esto.
+    #
+    # La red de arriba compara el identificador con el nombre del EJECUTABLE y,
+    # si coinciden, se queda con el de la carpeta. Pero cogia la carpeta del
+    # exe. Y hay un caso en el que coinciden sin que pase nada raro: cuando el
+    # ejecutable se llama COMO EL JUEGO, que es lo normal
+    # ("Secret of Mana/Binary/Secret of Mana.exe"). Ahi la red disparaba y
+    # cambiaba el perfil bueno por el de la subcarpeta.
+    #
+    # Dos cambios, y cada uno tapa el agujero del otro:
+    #   - se usa la RAIZ del juego, que es lo que quien llama ya sabe;
+    #   - y nunca se acepta una carpeta que sea una PIEZA de un juego
+    #     (Binary, Media, x64...), venga de donde venga.
     if [ -f "$exe" ]; then
-        local _base _carp
+        local _base _carp _carp_dir
         _base="$(basename "$exe")"; _base="${_base%.*}"
         _base="$(printf '%s' "$_base" | tr ' /' '__')"
-        _carp="$(game_id "$(dirname "$(readlink -f "$exe")")")"
-        if [ "$gid" = "$_base" ] && [ -n "$_carp" ] && [ "$_carp" != "$gid" ]; then
+        _carp_dir="${raiz_juego:-}"
+        if [ -z "$_carp_dir" ] || [ ! -d "$_carp_dir" ]; then
+            _carp_dir="$(raiz_paquete_detectar "$exe" 2>/dev/null)"
+        fi
+        [ -n "$_carp_dir" ] && [ -d "$_carp_dir" ] || _carp_dir="$(dirname "$(readlink -f "$exe")")"
+        _carp="$(game_id "$_carp_dir")"
+        if [ "$gid" = "$_base" ] && [ -n "$_carp" ] && [ "$_carp" != "$gid" ] \
+           && ! carpeta_es_apoyo_de_juego "$_carp_dir"; then
             say "[i] Perfil por la carpeta ('$_carp') y no por el lanzador ('$gid')"
             gid="$_carp"
+        elif [ "$gid" = "$_base" ] && [ -n "$_carp" ] && [ "$_carp" != "$gid" ]; then
+            log "perfil: NO se cambia '$gid' por '$_carp': esa carpeta es una pieza del juego, no el juego"
         fi
     fi
     # La carátula 4:3 del repositorio, igual que en launch_game. Aqui tenia
@@ -51125,18 +53203,8 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # Se enciende en: Ajustes del juego -> Mapeador .keys -> Mando virtual.
     # "nunca" se acepta como apagado por compatibilidad con los perfiles que se
     # guardaron mientras existio el automatico.
-    local _mv="${MANDO_VIRTUAL:-0}"
-    [ "$_mv" = nunca ] && _mv=0
-    # LOS STICKS AL REVES SALEN DEL .keys DEL JUEGO, no del perfil.
-    #
-    # Va ahi porque es cosa DE ESE JUEGO y porque asi viaja con el: un .keys de
-    # la comunidad puede traer ya puesto "este juego se maneja mejor apuntando
-    # con el izquierdo". El perfil guarda como quieres tu el mando; el .keys,
-    # como lo quiere el juego.
-    local _sticks=0
-    keys_sticks_cambiados "$keys_file" && _sticks=1
-    [ "$_sticks" = 1 ] && say "[i] El .keys pide los sticks intercambiados"
-    mando_virtual_start "$_mv" "$_sticks"
+    mando_virtual_del_juego "$keys_file"
+    local _mv="${WP_MV_MODO:-0}"
     # SE VUELVEN A MIRAR LOS MANDOS, AHORA QUE EL VIRTUAL YA ESTA.
     #
     # log_input_devices corre ANTES de crearlo, asi que en el registro solo
@@ -51154,6 +53222,7 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # antes de lanzar ni lo que el juego recibio de verdad. Y eso es lo unico
     # que dice si nuestras variables llegaron o alguien las cambio.
     diag_mando_vigilante "$(basename "$exe")"
+    vigilante_mando_arrancar
     # El vigilante de salida tambien aqui: antes solo lo arrancaba
     # launch_game, asi que en un exe suelto no se podia salir manteniendo
     # Select y no habia ninguna razon para esa diferencia.
@@ -51270,6 +53339,7 @@ EOFRB
     # Fin de la partida: el blindaje se levanta y se vuelve a atender las
     # senales de cierre, como en launch_game.
     partida_fin                      # se vuelve a atender las senales
+    vigilante_mando_parar    # antes de los diagnosticos, para que su resumen salga en orden
     diag_ultimas_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     diag_log_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
     diag_video_del_juego "$rc" "${WP_DUR_PARTIDA:-0}"
@@ -51368,6 +53438,10 @@ procesos_usando() {
     # frenaba el arranque de los juegos.
     trap - ERR
     local raiz="${1:-}" p _e _c _yo _mios=" "
+    # El arbol de procesos se puede cambiar para las pruebas: sin esto no hay
+    # forma de comprobar esta funcion ni la espera que la usa, porque harian
+    # falta procesos de verdad colgados de una carpeta de verdad.
+    local _proc="${WP_PROC:-/proc}"
     [ -n "$raiz" ] || return 0
     # Ademas de la cadena de padres, se descartan los PIDs que nos pasen en $2:
     # son procesos NUESTROS de la propia espera. El "sleep" del bucle hereda el
@@ -51377,11 +53451,11 @@ procesos_usando() {
     _yo="${BASHPID:-$$}"
     while [ -n "$_yo" ] && [ "$_yo" != 0 ] && [ "$_yo" != 1 ]; do
         _mios="$_mios$_yo "
-        _yo="$(awk '{print $4}' "/proc/$_yo/stat" 2>/dev/null)"
+        _yo="$(awk '{print $4}' "$_proc/$_yo/stat" 2>/dev/null)"
     done
-    for p in /proc/[0-9]*; do
+    for p in "$_proc"/[0-9]*; do
         [ -d "$p" ] || continue
-        case "$_mios" in *" ${p#/proc/} "*) continue ;; esac
+        case "$_mios" in *" ${p#$_proc/} "*) continue ;; esac
         # OJO: la carpeta EXACTA cuenta, no solo lo que hay debajo.
         #
         # Un lanzador hace "cd" a la carpeta del juego, asi que el directorio
@@ -51390,12 +53464,242 @@ procesos_usando() {
         # juego cuando seguia vivo: en la prueba, el juego duraba 6 segundos y
         # se dejaba de esperar a los 2.
         _e="$(readlink "$p/exe" 2>/dev/null)"
-        case "$_e" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#/proc/}"; continue ;; esac
+        case "$_e" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#$_proc/}"; continue ;; esac
         _c="$(readlink "$p/cwd" 2>/dev/null)"
-        case "$_c" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#/proc/}"; continue ;; esac
+        case "$_c" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#$_proc/}"; continue ;; esac
         grep -qF "$raiz/" "$p/maps" 2>/dev/null \
-            && printf '%s\n' "${p#/proc/}"
+            && printf '%s\n' "${p#$_proc/}"
     done
+    return 0
+}
+
+# LOS SERVICIOS DEL PREFIJO DE WINE, QUE NO SE VAN SOLOS.
+#
+# Un prefijo de Wine levanta una cuadrilla de procesos de fondo, y la gracia
+# -mala- es que NO TERMINAN cuando termina el juego. Lo explican bien en
+# noosxe/gogo#42: "wineserver nunca se apaga porque estos servicios de vida
+# larga esperan por el, y el espera por ellos". En shibco/ableton-linux#349
+# contaron 38 acumulados en un par de horas, el mas viejo de dos horas.
+#
+# Y aqui estorban porque un lanzador .sh que por dentro usa Wine -un cargador
+# de arcades, por ejemplo- les deja el DIRECTORIO DE TRABAJO en la carpeta del
+# juego. O sea que para "¿queda alguien usando la carpeta?" dicen si para
+# siempre, y la espera no termina JAMAS.
+#
+# Se reconocen por el nombre corto (/proc/<pid>/comm), que es lo unico que
+# tienen en comun: su linea de ordenes solo dice "C:\windows\system32\..." y no
+# menciona ni el prefijo ni Wine, asi que buscar "wine" no los encuentra. Ese
+# detalle tambien sale del hilo de ableton-linux.
+#
+# OJO CON LOS 15 CARACTERES: comm viene truncado a 15, asi que
+# "wine64-preloader" llega como "wine64-preloade". Estan las dos formas.
+WINE_SERVICIOS="services.exe winedevice.exe plugplay.exe svchost.exe
+rpcss.exe explorer.exe conhost.exe start.exe tabtip.exe wineserver
+wine64-preloader wine64-preloade wine-preloader winedbg.exe"
+
+proceso_es_servicio_de_wine() {
+    # ¿Es $1 (/proc/<pid>) uno de los servicios del prefijo? 0 si lo es.
+    #
+    # Dos condiciones, y hacen falta las dos: el nombre tiene que estar en la
+    # lista Y el proceso tiene que ser de Wine de verdad. Con solo el nombre,
+    # un juego de Linux llamado "start.exe" -raro, pero posible en un repack-
+    # se daria por servicio y se dejaria de esperarle.
+    #
+    # Lo de "ser de Wine de verdad" se mira en el entorno: los servicios del
+    # prefijo llevan WINEPREFIX puesto. Es el unico metodo fiable que
+    # encontraron en ableton-linux#349, y por el mismo motivo: la linea de
+    # ordenes no delata nada.
+    # AQUI NO SE PUEDE LANZAR NI UN PROCESO, Y ESTO NO ES UNA MANIA.
+    #
+    # Esto se llama DENTRO del recorrido de /proc que decide si alguien sigue
+    # usando la carpeta del juego. Un "cat", un "tr" o un "grep" lanzados aqui
+    # son procesos HERMANOS con el mismo directorio de trabajo -la carpeta del
+    # juego-, asi que la vuelta siguiente del bucle los cuenta como si fueran
+    # el juego y la espera no termina nunca.
+    #
+    # Ya paso tres veces en esta misma funcion y esta contado arriba: la
+    # espera, su sleep y su grep. Lo escribi con "cat $d/comm" y
+    # "tr | grep" y habria sido la cuarta. Se lee todo con read, que es
+    # del propio bash y no crea nada.
+    local d="${1:-}" nombre="" _kv=""
+    [ -n "$d" ] || return 1
+    read -r nombre < "$d/comm" 2>/dev/null || return 1
+    [ -n "$nombre" ] || return 1
+    case " $WINE_SERVICIOS " in
+        *" $nombre "*) ;;
+        *)
+            # El salto de linea de la lista tambien separa, asi que se prueba
+            # con los espacios normalizados a mano (sin tr).
+            case " ${WINE_SERVICIOS//$'\n'/ } " in
+                *" $nombre "*) ;;
+                *) return 1 ;;
+            esac ;;
+    esac
+    # El entorno no siempre se puede leer (otro usuario, o un proceso que ya
+    # murio). Si no se puede, el nombre manda: la cuadrilla de Wine es igual.
+    [ -r "$d/environ" ] || return 0
+    # EL "|| [ -n "$_kv" ]" NO ES ADORNO: SIN EL, ESTO NO FUNCIONABA.
+    #
+    # environ viene separado por NUL y "read -d ''" devuelve FALLO cuando se
+    # acaba el fichero sin encontrar el separador... pero deja lo leido en la
+    # variable. Sin esa segunda condicion, el while descarta el ultimo trozo, y
+    # si WINEPREFIX era justo el ultimo -o si el proceso muere a mitad de la
+    # lectura y llega cortado-, no se ve.
+    #
+    # Lo cazo la suite: el unico caso de prueba que no tenia tambien un
+    # ejecutable "wine-preloader" fallaba, y los demas pasaban por el camino de
+    # abajo. O sea que la deteccion por WINEPREFIX -que es la fiable, la que
+    # recomiendan en ableton-linux#349- estaba muerta y no se notaba.
+    while IFS= read -r -d '' _kv || [ -n "$_kv" ]; do
+        case "$_kv" in WINEPREFIX=*) return 0 ;; esac
+        _kv=""
+    done < "$d/environ" 2>/dev/null
+    # Sin WINEPREFIX pero con nombre de servicio: si el binario real es un
+    # preloader de Wine, tambien lo es. readlink si es externo, pero aqui solo
+    # se llega con un nombre de la lista, o sea casi nunca.
+    case "$(readlink "$d/exe" 2>/dev/null)" in
+        *wine*) return 0 ;;
+    esac
+    return 1
+}
+
+procesos_usando_detalle() {
+    # IGUAL QUE procesos_usando, PERO DICIENDO QUIEN Y POR QUE.
+    #
+    # EL FALLO QUE ESTO ARREGLA (registro del 26/10, 23:49)
+    #
+    # La espera del juego nativo escribia esto y NADA MAS:
+    #
+    #   23:49:10  el lanzador termino; se espera a los procesos dentro de ...
+    #   23:49:14  procesos usando la carpeta al empezar: 4
+    #
+    # Y ahi se quedaba para siempre. WProton no volvia y hubo que cerrarlo del
+    # todo. Con ese registro no se puede saber NI QUE eran esos cuatro NI si el
+    # numero bajo alguna vez: la funcion medía y tiraba la medida.
+    #
+    # Imprime una linea por proceso: "<pid> <clase> <nombre> <motivo>", donde
+    # la clase es "juego", "wine" o "nuestro". $1 = carpeta, $2 = PIDs nuestros.
+    trap - ERR
+    local raiz="${1:-}" p _e _c _yo _mios=" " _nom _clase _motivo
+    local _proc="${WP_PROC:-/proc}"
+    [ -n "$raiz" ] || return 0
+    _mios="$_mios${2:-} "
+    # Nuestros ayudantes: el servidor de menus, el guardian y el fondo. Son
+    # HIJOS de WProton, no padres, asi que la cadena de padres de abajo no los
+    # descarta, y el guardian vive toda la partida.
+    _mios="$_mios${MENUSRV_PID:-} ${GUARDIA_PID:-} ${CANVAS_PID:-} ${TRACKPAD_PID:-} "
+    _yo="${BASHPID:-$$}"
+    while [ -n "$_yo" ] && [ "$_yo" != 0 ] && [ "$_yo" != 1 ]; do
+        _mios="$_mios$_yo "
+        _yo="$(awk '{print $4}' "$_proc/$_yo/stat" 2>/dev/null)"
+    done
+    for p in "$_proc"/[0-9]*; do
+        [ -d "$p" ] || continue
+        case "$_mios" in *" ${p#$_proc/} "*) continue ;; esac
+        _motivo=""
+        _e="$(readlink "$p/exe" 2>/dev/null)"
+        case "$_e" in "$raiz"|"$raiz"/*) _motivo="su ejecutable esta dentro" ;; esac
+        if [ -z "$_motivo" ]; then
+            _c="$(readlink "$p/cwd" 2>/dev/null)"
+            case "$_c" in "$raiz"|"$raiz"/*) _motivo="trabaja desde la carpeta" ;; esac
+        fi
+        if [ -z "$_motivo" ]; then
+            grep -qF "$raiz/" "$p/maps" 2>/dev/null \
+                && _motivo="tiene abierto algo de dentro"
+        fi
+        [ -n "$_motivo" ] || continue
+        _nom=""
+        read -r _nom < "$p/comm" 2>/dev/null || true
+        [ -n "$_nom" ] || _nom='?'
+        # LAS HERRAMIENTAS DE ESTE MISMO RECORRIDO NO SON EL JUEGO.
+        #
+        # El readlink de arriba es un proceso externo y hermano, con el
+        # directorio de trabajo del juego: si el recorrido llega a su PID antes
+        # de que muera, se cuenta como si fuera el juego. Es la misma trampa
+        # que ya se piso con el sleep y con el grep, y la ventana es de
+        # milisegundos... que es justo lo que pasa cada dos segundos durante
+        # horas.
+        #
+        # Ninguna de estas es nunca un juego, asi que descartarlas no tapa
+        # nada real.
+        case " readlink grep awk sed cat tr sleep wc head dirname basename " in
+            *" $_nom "*) continue ;;
+        esac
+        if proceso_es_servicio_de_wine "$p"; then _clase=wine; else _clase=juego; fi
+        printf '%s %s %s (%s)\n' "${p#$_proc/}" "$_clase" "$_nom" "$_motivo"
+    done
+    return 0
+}
+
+wine_restos_cerrar() {
+    # CIERRA LOS SERVICIOS DE WINE QUE DEJO EL JUEGO, Y SOLO ESOS.
+    #
+    # $1 = carpeta del juego, $2 = fichero-marca con la hora del lanzamiento.
+    #
+    # POR QUE SE CIERRAN Y NO SE DEJAN
+    #
+    # Antes WProton se limitaba a no esperarlos, y eso resuelve el cuelgue pero
+    # no el problema: cada partida deja su cuadrilla viva, y se acumulan. En
+    # shibco/ableton-linux#349 contaron 38 en un par de horas. Son procesos
+    # ociosos, pero ocupan memoria y descriptores, y "no pasa nada" multiplicado
+    # por veinte partidas si pasa.
+    #
+    # CON QUE CUIDADO, QUE AQUI SE MATA
+    #
+    # Un "wineserver -k" sobre el prefijo seria lo limpio... si el prefijo
+    # fuera nuestro. No lo es: lo eligio el .sh del juego, y puede ser el
+    # ~/.wine de la persona, donde a lo mejor tiene abierto su propio programa.
+    # Matar el prefijo entero se lo llevaria por delante.
+    #
+    # Asi que se mata por PID, y solo los que cumplen LAS TRES cosas:
+    #
+    #   1. tienen la carpeta de ESTE juego (es lo que mira la espera);
+    #   2. son servicios del prefijo (nombre + WINEPREFIX, no "algo con wine");
+    #   3. ARRANCARON DESPUES de que lanzaramos el juego.
+    #
+    # La tercera es la que separa lo nuestro de lo ajeno: un programa de Wine
+    # que la persona ya tenia abierto, o los restos de una partida anterior,
+    # son MAS VIEJOS que la marca y no se tocan. Se compara con "-nt" sobre
+    # /proc/<pid>, cuya fecha es la del arranque del proceso, y eso es del
+    # propio bash: ni un proceso nuevo dentro del recorrido.
+    #
+    # El orden es el documentado en noosxe/gogo#42: primero pedirlo por las
+    # buenas y luego a la fuerza, porque winedevice.exe ignora SIGTERM.
+    local raiz="${1:-}" marca="${2:-}" l pid nom resto n=0 duros=""
+    [ "${NATIVO_LIMPIAR_WINE:-1}" = 1 ] || {
+        log "restos de Wine: no se tocan (NATIVO_LIMPIAR_WINE=0 en settings.conf)"
+        return 0; }
+    [ -n "$raiz" ] || return 0
+    local _proc="${WP_PROC:-/proc}"
+    while IFS=' ' read -r pid nom resto; do
+        [ -n "$pid" ] || continue
+        [ "$nom" = wine ] || continue
+        if [ -n "$marca" ] && [ -e "$marca" ] && [ ! "$_proc/$pid" -nt "$marca" ]; then
+            log "restos de Wine: $pid $resto es ANTERIOR al lanzamiento; no es nuestro y se deja"
+            continue
+        fi
+        if kill -TERM "$pid" 2>/dev/null; then
+            log "restos de Wine: cerrando $pid $resto"
+            duros="$duros $pid"; n=$((n+1))
+        fi
+    done <<EOFWR
+$(procesos_usando_detalle "$raiz" "")
+EOFWR
+    [ "$n" -gt 0 ] || { log "restos de Wine: no habia ninguno que cerrar"; return 0; }
+    # Un respiro para que los que atienden SIGTERM se vayan solos. En segundo
+    # plano y esperado aparte, igual que en la espera: un sleep normal hereda
+    # el directorio del juego y se contaria a si mismo.
+    local _sp; sleep 1 & _sp=$!; wait "$_sp" 2>/dev/null
+    local vivos=0
+    for pid in $duros; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null \
+                && log "restos de Wine: $pid no atendio al cierre y se ha forzado (winedevice.exe ignora SIGTERM)"
+            vivos=$((vivos+1))
+        fi
+    done
+    log "restos de Wine: $n proceso(s) cerrados${vivos:+, $vivos a la fuerza}"
+    say "[+] Cerrados $n proceso(s) de Wine que el juego dejo abiertos."
     return 0
 }
 
@@ -51445,25 +53749,104 @@ esperar_juego_nativo() {
     # Fueron tres capas del mismo error -la espera, su sleep y su grep-, todas
     # por medir dentro de la carpeta que se esta midiendo. Aqui se cuenta en el
     # propio bash, sin crear nada.
-    log "juego nativo: procesos usando la carpeta al empezar: $(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+    # QUIEN TIENE LA CARPETA, NO CUANTOS. Antes se escribia solo el numero y
+    # eso no sirve para nada: 4 procesos pueden ser el juego jugandose o cuatro
+    # restos que no se van a ir nunca, y son situaciones opuestas.
+    local _det _firma _firma_ant="" _n_juego _n_wine _ultimo_aviso=0 _ahora
+    _det="$(procesos_usando_detalle "$raiz" "$_sp")"
+    log "juego nativo: quien tiene la carpeta al empezar ($(contar_lineas "$_det")):"
+    espera_apuntar "$_det"
     local _pgid
     _pgid="$(cat "$RUNTIME_DIR/.juego_pgid" 2>/dev/null)"
     while :; do
-        n="$(contar_lineas "$(procesos_usando "$raiz" "$_sp")")"
+        _det="$(procesos_usando_detalle "$raiz" "$_sp")"
+        _n_juego="$(contar_lineas "$(espera_solo_clase "$_det" juego)")"
+        _n_wine="$(contar_lineas "$(espera_solo_clase "$_det" wine)")"
+        n="$_n_juego"
         # ¿Y queda alguien del grupo del lanzador? Cuenta igual: el juego puede
         # estar corriendo desde otra carpeta.
         if [ "${n:-0}" = 0 ] && [ -n "$_pgid" ]; then
             pgrep -g "$_pgid" >/dev/null 2>&1 && n=1
         fi
+        # SI LO QUE QUEDA SON SOLO LOS SERVICIOS DE WINE, LA PARTIDA HA ACABADO.
+        #
+        # ESTE ES EL CUELGUE DEL 26/10, Y NO SE ARREGLA CON UN TOPE DE TIEMPO.
+        #
+        # La espera NO puede tener un tope a secas: una partida dura lo que
+        # dura, y cortar a los N minutos seria desmontar el archivo con el
+        # juego dentro, que es justo el fallo que esta funcion vino a arreglar.
+        #
+        # Lo que distingue los dos casos no es el reloj: es QUIEN queda. Un
+        # juego jugandose tiene procesos suyos; una partida acabada que no
+        # termina de irse deja la cuadrilla del prefijo de Wine, que no se va
+        # sola nunca (noosxe/gogo#42). Asi que se mira eso y no el tiempo.
+        if [ "${n:-0}" = 0 ] && [ "${_n_wine:-0}" -gt 0 ]; then
+            log "juego nativo: del juego ya no queda nada; los $_n_wine proceso(s) que siguen son servicios del prefijo de Wine, que no se van solos. No se espera mas" WARN
+            espera_apuntar "$(espera_solo_clase "$_det" wine)"
+            # Y SE CIERRAN, que dejarlos vivos es ir acumulandolos partida tras
+            # partida. Solo los de ESTE juego y solo los que nacieron despues
+            # de lanzarlo: ver wine_restos_cerrar.
+            wine_restos_cerrar "$raiz" "$RUNTIME_DIR/.juego_arranque"
+            break
+        fi
         [ "${n:-0}" -gt 0 ] || break
+        # Y MIENTRAS SE ESPERA, SE CUENTA. Un bucle mudo convierte un cuelgue
+        # en un misterio: el registro del 26/10 no tiene ni una linea entre
+        # "procesos usando la carpeta al empezar: 4" y el final.
+        #
+        # Se escribe cuando CAMBIA quien esta (es la informacion de verdad) y,
+        # si no cambia nada, una vez por minuto para que se vea que seguimos
+        # esperando y a quien.
+        _firma="$(printf '%s' "$_det" | tr '\n' ';')"
+        _ahora="$(date +%s)"
+        if [ "$_firma" != "$_firma_ant" ]; then
+            log "juego nativo: cambia quien tiene la carpeta ($_n_juego del juego, $_n_wine de Wine):"
+            espera_apuntar "$_det"
+            _firma_ant="$_firma"; _ultimo_aviso="$_ahora"
+        elif [ $(( _ahora - _ultimo_aviso )) -ge 60 ]; then
+            log "juego nativo: seguimos esperando tras $(( _ahora - t0 ))s; $_n_juego proceso(s) del juego dentro"
+            _ultimo_aviso="$_ahora"
+        fi
         if [ "$espera_max" -gt 0 ] \
            && [ $(( $(date +%s) - t0 )) -ge "$espera_max" ]; then
             log "juego nativo: se deja de esperar tras ${espera_max}s con $n proceso(s) dentro" WARN
+            espera_apuntar "$_det"
             break
         fi
         sleep 2 & _sp=$!; wait "$_sp" 2>/dev/null
     done
-    log "juego nativo: ya no queda ningun proceso usando $raiz"
+    log "juego nativo: se deja de esperar por $raiz tras $(( $(date +%s) - t0 ))s"
+    return 0
+}
+
+espera_apuntar() {
+    # Deja en el registro una linea por proceso, con sangria. Aparte para que
+    # el bucle de arriba se lea de un tiron.
+    local l
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        log "    $l"
+    done <<EOFEA
+${1:-}
+EOFEA
+    return 0
+}
+
+espera_solo_clase() {
+    # Las lineas de $1 cuya clase (segundo campo) es $2. Sin lanzar procesos:
+    # un grep hermano heredaria el directorio del juego y se contaria a si
+    # mismo, que es el fallo de las tres capas que ya costo un rato.
+    # Se compara el SEGUNDO CAMPO, no "la linea contiene la palabra": el
+    # nombre del proceso o el motivo podrian llevarla dentro y entonces un
+    # servicio de Wine contaria como juego, que es exactamente lo contrario de
+    # lo que hace falta.
+    local _pid _cl _resto
+    while IFS=' ' read -r _pid _cl _resto; do
+        [ -n "$_pid" ] || continue
+        [ "$_cl" = "${2:-}" ] && printf '%s %s %s\n' "$_pid" "$_cl" "$_resto"
+    done <<EOFSC
+${1:-}
+EOFSC
     return 0
 }
 
@@ -52521,6 +54904,12 @@ ejecutar_nativo() {
         # vacio, esta linea es EXACTAMENTE la de siempre: el lanzador y nada
         # mas. La expansion con "+" es la que deja usar un array vacio con
         # "set -u" puesto.
+        # LA MARCA DE LA HORA, JUSTO ANTES DE LANZAR.
+        #
+        # Sirve para distinguir los procesos de Wine que deja ESTE juego de los
+        # que la persona ya tuviera abiertos: los nuestros son mas nuevos que
+        # esta marca. Ver wine_restos_cerrar.
+        : > "$RUNTIME_DIR/.juego_arranque" 2>/dev/null
         setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" >>"$_sal_nat" 2>&1 &
         local _pg=$!
         printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
@@ -52572,6 +54961,7 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
     # El prefijo va DELANTE de bash, no detras: "bash <punto-de-entrada>" haria
     # que bash interpretara el punto de entrada del contenedor en vez de
     # entrar en el.
+    : > "$RUNTIME_DIR/.juego_arranque" 2>/dev/null
     ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1
     local _rc2=$?
     log "juego nativo: el lanzador (interpretado) salio con codigo $_rc2 tras $(( $(date +%s) - _t0_nat ))s"
@@ -52581,6 +54971,1011 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
     diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
     diag_video_del_juego "$_rc2" "$(( $(date +%s) - _t0_nat ))"
     return $_rc2
+}
+
+# ---------------------------------------------------------------------------
+# ARCADE LOADER: ARCADES NATIVOS DE LINUX
+#
+# QUE ES
+#
+# Un lanzador de juegos de arcade NATIVO de Linux. Se le pasa el archivo del
+# juego y el se encarga:
+#
+#     Arcade_Loader/arcade-launcher run "/ruta/Juego [AL].squashfs"
+#
+# COMO SE RECONOCEN ESTOS JUEGOS
+#
+# Por la cadena [AL] en el nombre del fichero:
+#
+#     Daytona USA 2 [AL].squashfs
+#
+# Lo eligio asi Dani, y tiene una ventaja sobre un ajuste del perfil: viaja con
+# el fichero. Copias el juego a otro equipo y sigue sabiendose como se lanza,
+# sin configurar nada y sin perfil.
+#
+# QUE NO SE HACE CON ESTOS JUEGOS
+#
+# Nada de lo de Windows: ni runner, ni prefijo, ni montar la imagen, ni buscar
+# un .exe. La imagen se le pasa A EL tal cual. Por eso el desvio esta ANTES del
+# montaje en launch_game: montarla seria trabajo tirado y encima le daria la
+# ruta del montaje en vez de la del archivo.
+# ---------------------------------------------------------------------------
+
+arcade_loader_dir() { printf '%s' "$BASE_DIR/Arcade_Loader"; }
+arcade_loader_bin() { printf '%s' "$BASE_DIR/Arcade_Loader/arcade-launcher"; }
+
+arcade_loader_instalado() {
+    # Instalado = esta el lanzador y se puede ejecutar.
+    local b; b="$(arcade_loader_bin)"
+    [ -f "$b" ] || return 1
+    [ -x "$b" ] || chmod +x "$b" 2>/dev/null || return 1
+    return 0
+}
+
+arcade_loader_label() {
+    if arcade_loader_instalado; then
+        printf 'instalado'
+    else
+        printf 'no instalado'
+    fi
+}
+
+# EL MARCADOR DE ARCADE LOADER ES UNA EXTENSION, NO UN NOMBRE.
+#
+# Lo vi en una captura de Dani del 28/10: dentro del squashfs de Nicktoons
+# Nitro el fichero se llama
+#
+#     nicktoons-nitro-racing.windowsloader
+#
+# y no ".windowsloader" a secas. O sea que lo que identifica al juego es la
+# EXTENSION: cada juego trae el suyo con su nombre.
+#
+# Yo lo habia entendido como un nombre de fichero fijo y hasta habia escrito
+# una comprobacion para que "notas.windowsloader.txt" NO colara... que es justo
+# lo que habria rechazado el fichero de verdad. Lo que no cuenta es que la
+# cadena aparezca EN MEDIO del nombre; lo que cuenta es que el nombre TERMINE
+# ahi.
+AL_MARCADOR=".windowsloader"
+AL_MARCADOR_GLOB="*.windowsloader"
+
+al_marcador_en_carpeta() {
+    # ¿Esta carpeta trae el marcador de Arcade Loader? $1 = carpeta.
+    # $2 = "nombre" para que ADEMAS escriba como se llama el marcador.
+    #
+    # EL NOMBRE IMPORTA, Y NO ES UN EXTRA: el marcador se llama
+    # "<gameid>.windowsloader", asi que su nombre ES el identificador del juego
+    # para Arcade Loader. Lo dice su propia ayuda:
+    #
+    #   "launch a game from its dump (directory or <gameid>.windowsloader file)"
+    #   "<dump>/<gameid>.windowsloader holds its path"
+    #
+    # Y la foto que mando Dani del paquete lo confirmaba:
+    # "nicktoons-nitro-racing.windowsloader".
+    #
+    # POR DEFECTO SE CALLA. Esta funcion se usa como pregunta de si/no dentro
+    # de $(...) en una fila de menu; si escribiera siempre el nombre, ese
+    # nombre acabaria pegado a la etiqueta del menu.
+    local d="${1:-}" quiere="${2:-}" hallado
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    # Cualquier fichero que TERMINE en .windowsloader, con el nombre que sea.
+    # El glob casa tambien el caso de que alguien lo deje sin nombre, a secas.
+    hallado="$(find -H "$d" -maxdepth 2 -iname "$AL_MARCADOR_GLOB" -print -quit 2>/dev/null)"
+    [ -n "$hallado" ] || return 1
+    [ "$quiere" = nombre ] && printf '%s' "$(basename "$hallado")"
+    return 0
+}
+
+al_marcador_en_raiz() {
+    # ¿El marcador esta en la RAIZ de esta carpeta? $1 = carpeta.
+    #
+    # POR QUE AQUI SE EXIGE LA RAIZ Y EN al_marcador_en_carpeta NO.
+    #
+    # Esto decide si una carpeta ES un juego de Arcade Loader, y una carpeta de
+    # la biblioteca puede ser una ESTANTERIA: "Lucha" con tres juegos dentro.
+    # Si se mirara un nivel mas abajo, el marcador de uno de esos juegos haria
+    # que la estanteria entera pasara por un solo juego de Arcade Loader.
+    #
+    # Dentro de una imagen no hay ese problema -una imagen es un juego- y ahi
+    # si se mira mas abajo, por si el paquete lo trae dentro de su carpeta.
+    local d="${1:-}"
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    [ -n "$(find -H "$d" -maxdepth 1 -iname "$AL_MARCADOR_GLOB" -print -quit 2>/dev/null)" ]
+}
+
+al_marcador_en_imagen() {
+    # ¿Esta IMAGEN trae el marcador dentro? $1 = imagen.
+    #
+    # SIN MONTARLA, si se puede. El 7zz que ya trae WProton lee squashfs, asi
+    # que se le pide la lista y se corta en cuanto aparece el marcador: no hay
+    # que montar un juego de 40 GB para preguntar una cosa tan pequeña.
+    #
+    # Y con un montaje de solo lectura APARTE como respaldo, para lo que 7zz no
+    # abre (DwarFS). Es un montaje propio, con su nombre, y se desmonta aqui
+    # mismo: NO se tocan MOUNT_POINT ni MOUNT_OK, que son del lanzamiento y los
+    # usa launch_game despues. Mezclarlos seria dejarle un montaje a medias.
+    # $2 = "nombre" para que ADEMAS escriba como se llama el marcador. Por
+    # defecto se calla, por lo mismo que al_marcador_en_carpeta.
+    local img="${1:-}" quiere="${2:-}"
+    [ -n "$img" ] && [ -f "$img" ] || return 1
+    # 7ZZ PRIMERO, PERO SOLO SE LE CREE CUANDO HA PODIDO LEER DE VERDAD.
+    #
+    # ESTE FUE EL FALLO DEL 28/10, Y ES EL DE SIEMPRE: CONFUNDIR "NO" CON "NO
+    # LO SE".
+    #
+    # El registro de Dani decia:
+    #
+    #   Arcade Loader: '...Nicktoons Nitro.squashfs' no trae .windowsloader
+    #                  (listado con 7zz, sin montar)
+    #
+    # ...y el fichero SI estaba dentro. Lo que pasaba es que no todas las
+    # versiones de 7-Zip leen squashfs: las de p7zip (7z/7za 16.02, que es lo
+    # que hay en muchas distribuciones) no, y el 7zz oficial solo desde la 21.
+    # Cuando no puede, no da error visible: SALE SIN LISTAR NADA. Y un listado
+    # vacio pasaba por "no trae el marcador".
+    #
+    # Asi que ahora se mira si el listado ha salido bien: codigo de salida 0 Y
+    # con lineas. Si no, no se concluye nada: se cae al montaje, que es lo que
+    # siempre sabe la verdad. Un "no lo se" nunca puede valer por un "no".
+    if find_sevenzip && [ -n "${SEVENZIP_BIN:-}" ]; then
+        case "$(printf '%s' "${img##*.}" | tr 'A-Z' 'a-z')" in
+            squashfs|wsquashfs)
+                local _lst _rc7 _n7
+                _lst="$(mktemp)"
+                "$SEVENZIP_BIN" l -ba -- "$img" >"$_lst" 2>>"$LOG_FILE"; _rc7=$?
+                # OJO: "grep -c" IMPRIME 0 y ADEMAS devuelve 1 cuando no
+                # encuentra nada. Con un "|| printf 0" detras salian DOS ceros
+                # ("0\n0") y la comparacion de abajo reventaba con "integer
+                # expression expected". Lo caza la prueba del listado vacio.
+                _n7="$(grep -c . "$_lst" 2>/dev/null)"
+                [ -n "$_n7" ] || _n7=0
+                if [ "$_rc7" = 0 ] && [ "${_n7:-0}" -gt 0 ]; then
+                    # .windowsloader ES UNA EXTENSION, NO UN NOMBRE.
+                    #
+                    # La foto que mando Dani del contenido del paquete lo
+                    # dejo claro: el fichero se llama
+                    # "nicktoons-nitro-racing.windowsloader". Yo habia
+                    # entendido un nombre fijo, y la version que comparaba el
+                    # nombre entero habria rechazado el fichero de verdad.
+                    #
+                    # Asi que se mira el FINAL del nombre. El listado de
+                    # "l -ba" pone la ruta en el ultimo campo de la linea -el
+                    # numero de espacios entre columnas cambia con el tamaño,
+                    # asi que por posicion no vale-, se le quita la carpeta y
+                    # se comprueba que acabe en .windowsloader: asi casa
+                    # "nicktoons-nitro-racing.windowsloader" y NO casa
+                    # "notas.windowsloader.txt", que es el accidente facil
+                    # porque el punto es un comodin si no se ata al final.
+                    # Se saca el NOMBRE, no solo el si/no: hace falta para
+                    # la configuracion especial del juego, y sale del mismo
+                    # listado sin pedir nada mas.
+                    local _mnom
+                    _mnom="$(awk '{ ruta = $NF; n = tolower(ruta)
+                                    sub(/.*\//, "", n)
+                                    if (n ~ /\.windowsloader$/) {
+                                        sub(/.*\//, "", ruta); print ruta; exit } }' "$_lst")"
+                    if [ -n "$_mnom" ]; then
+                        rm -f "$_lst"
+                        log "Arcade Loader: '$img' trae $AL_MARCADOR (visto con 7zz, sin montar): $_mnom"
+                        [ "$quiere" = nombre ] && printf '%s' "$_mnom"
+                        return 0
+                    fi
+                    rm -f "$_lst"
+                    log "Arcade Loader: '$img' no trae $AL_MARCADOR (listado con 7zz: $_n7 entrada(s), sin montar)"
+                    return 1
+                fi
+                # NO SE SABE. Y se dice por que, con el codigo de salida: es el
+                # dato que hacia falta para entender el fallo de Dani.
+                log "Arcade Loader: 7zz no ha podido listar '$img' (codigo $_rc7, $_n7 linea(s)): seguramente esta version no lee squashfs. Se mira montando" WARN
+                rm -f "$_lst"
+                ;;
+        esac
+    fi
+    local m="$MOUNT_BASE/.al_ojeada.$$"
+    umount_dir "$m" 2>/dev/null
+    mkdir -p "$m" 2>/dev/null || return 1
+    if ! mount_image_ro "$img" "$m" 2>>"$LOG_FILE"; then
+        rmdir "$m" 2>/dev/null
+        log "Arcade Loader: no se ha podido mirar dentro de '$img' (no se monta)" WARN
+        return 1
+    fi
+    local hay=1 _mnom2=""
+    _mnom2="$(al_marcador_en_carpeta "$m" nombre)" && hay=0
+    umount_dir "$m" 2>/dev/null
+    rmdir "$m" 2>/dev/null
+    [ "$hay" = 0 ] && [ "$quiere" = nombre ] && printf '%s' "$_mnom2"
+    log "Arcade Loader: '$img' $([ "$hay" = 0 ] && printf 'trae' || printf 'no trae') $AL_MARCADOR (montaje de ojeada)"
+    return $hay
+}
+
+al_recuerdo() {
+    # LO QUE YA SE SABE DE ESTE FICHERO, para no mirar dentro en cada arranque.
+    #
+    # La clave lleva el tamaño y la fecha del fichero: si el juego se cambia o
+    # se vuelve a empaquetar, el recuerdo deja de valer solo, sin que nadie
+    # tenga que acordarse de borrarlo.
+    #
+    # $1 = ruta, $2 = valor a guardar (1 o 0). Sin $2, consulta:
+    #   0 = es de Arcade Loader | 2 = no lo es | 1 = no se sabe
+    local ruta="${1:-}" valor="${2:-}" clave f sello g
+    [ -n "$ruta" ] || return 1
+    sello="$(stat -c '%s:%Y' "$ruta" 2>/dev/null)" || sello=""
+    [ -n "$sello" ] || return 1
+    clave="$(printf '%s' "$ruta" | tr -c 'A-Za-z0-9._-' '_')"
+    f="$RUNTIME_DIR/al_marcador/$clave"
+    # LA VERSION DEL RECUERDO, Y HACE FALTA.
+    #
+    # La primera version se creia el listado de 7zz aunque 7zz no hubiera
+    # podido leer el fichero, asi que apunto "no trae el marcador" en juegos
+    # que SI lo traen (le paso a Dani con Nicktoons Nitro el 28/10). Esos
+    # apuntes estan en el disco de quien ya probo esa version, y el sello
+    # -tamaño y fecha- no ha cambiado: sin esto, el arreglo no le serviria de
+    # nada, porque se leeria el apunte malo.
+    #
+    # Con la marca de version, los apuntes viejos simplemente no casan y se
+    # vuelve a mirar. Cuando cambie la forma de averiguarlo, se sube el numero.
+    local VER_REC="v2"
+    if [ -n "$valor" ]; then
+        mkdir -p "$RUNTIME_DIR/al_marcador" 2>/dev/null
+        printf '%s %s %s\n' "$VER_REC" "$sello" "$valor" > "$f" 2>/dev/null
+        return 0
+    fi
+    [ -f "$f" ] || return 1
+    g="$(cat "$f" 2>/dev/null)"
+    case "$g" in
+        "$VER_REC $sello 1") return 0 ;;
+        "$VER_REC $sello 0") return 2 ;;
+    esac
+    return 1
+}
+
+juego_es_arcade_loader() {
+    # ¿ESTE JUEGO ES DE ARCADE LOADER? $1 = ruta del juego.
+    #
+    # DOS FORMAS DE SABERLO, Y LA BUENA ES LA SEGUNDA
+    #
+    # 1. La cadena [AL] en el nombre del fichero. Fue la primera convencion y
+    #    se mantiene: hay juegos ya nombrados asi y seguiran funcionando.
+    #
+    # 2. EL MARCADOR DENTRO DEL ARCHIVO: un fichero ".windowsloader". Lo
+    #    propuso Dani el 28/10 -"realmente no hace falta que tengan [AL] en el
+    #    nombre, con que mire el interior del squashfs"- y es mejor por tres
+    #    razones:
+    #
+    #      - no hay que renombrar nada ni acordarse de ninguna etiqueta;
+    #      - no se pierde al renombrar el fichero, que es justo lo que le pasa
+    #        a una etiqueta en el nombre;
+    #      - y lo pone quien EMPAQUETA el juego, que es quien sabe con que se
+    #        lanza. Un nombre lo escribe cualquiera y se copia mal.
+    #
+    #    Es la misma idea que ya usamos para el prefijo incluido: se mira si el
+    #    archivo trae drive_c y system.reg en vez de preguntarselo a nadie.
+    #
+    # Pase lo que pase, el juego acaba en el mismo sitio: si Arcade Loader no
+    # esta se ofrece descargarlo, y si esta se lanza directamente. Da igual por
+    # cual de las dos vias se haya reconocido.
+    #
+    # EL ORDEN ES POR COSTE, no por importancia: el nombre es gratis y mirar
+    # dentro cuesta. Y lo que se mira dentro se recuerda, asi que se paga una
+    # vez por fichero y no en cada arranque.
+    #
+    # SE ACEPTA EL [AL] EN CUALQUIER PARTE DEL NOMBRE Y SIN DISTINGUIR
+    # MAYUSCULAS: quien renombra a mano acaba poniendo "[al]", o delante, y que
+    # un juego no arranque por una mayuscula invisible es una trampa. Lo que si
+    # se exige es que los corchetes cierren, para que "[ALL DLC]" no cuele.
+    # LA CASILLA DEL PERFIL MANDA SOBRE TODO LO DEMAS (31/10).
+    #
+    # $2 = gid, opcional. Si viene y ese juego tiene la casilla puesta, se hace
+    # lo que diga y no se mira nada mas. Lo pidio Dani: "estaria bien que
+    # indique en la configuracion una casilla que es un juego de arcade
+    # loader".
+    #
+    # Hace falta porque la deteccion no puede acertar siempre: hay juegos
+    # empaquetados ANTES de que existiera el marcador .windowsloader, que no lo
+    # traen y aun asi son de Arcade Loader; y al contrario, alguien puede
+    # querer lanzar con Wine algo que lo trae.
+    #
+    # SE LEE CON profile_get, QUE LEE UN SOLO DATO DEL FICHERO, no con
+    # load_profile. Y no es por rapidez: load_profile PISA las variables del
+    # juego que se este configurando en ese momento. Esta funcion la llaman las
+    # listas y los menus mientras hay otro perfil en memoria, asi que cargar
+    # uno aqui seria cambiarle los ajustes al juego de al lado.
+    local ruta="${1:-}" gid="${2:-}" nom forzado=""
+    [ -n "$ruta" ] || return 1
+    if [ -n "$gid" ]; then
+        forzado="$(profile_get "$gid" ES_AL 2>/dev/null)" || forzado=""
+        case "$forzado" in
+            1) log "Arcade Loader: '$gid' lo es porque lo dice su casilla (ES_AL=1)"
+               return 0 ;;
+            0) log "Arcade Loader: '$gid' NO lo es porque lo dice su casilla (ES_AL=0)"
+               return 1 ;;
+        esac
+    fi
+    nom="$(basename "$ruta")"
+    case "$(printf '%s' "$nom" | tr 'A-Z' 'a-z')" in
+        *'[al]'*) return 0 ;;
+    esac
+    # Una carpeta se mira directamente: no cuesta nada y no hay nada que
+    # recordar.
+    if [ -d "$ruta" ]; then
+        al_marcador_en_carpeta "$ruta" && return 0
+        return 1
+    fi
+    [ -f "$ruta" ] || return 1
+    al_recuerdo "$ruta"; local r=$?
+    [ "$r" = 0 ] && return 0
+    [ "$r" = 2 ] && return 1
+    if al_marcador_en_imagen "$ruta"; then
+        al_recuerdo "$ruta" 1
+        return 0
+    fi
+    al_recuerdo "$ruta" 0
+    return 1
+}
+
+arcade_loader_url_directa() {
+    # EL ENLACE DE DESCARGA DE VERDAD. $1 = lo que diga ARCADE_LOADER_URL.
+    #
+    # EL TRABAJO LO HACE mediafire_directo, Y ESO ES EL ARREGLO.
+    #
+    # Aqui habia una TERCERA copia de la extraccion, escrita por mi, que
+    # ademas mandaba un User-Agent de navegador. El resultado fue que el
+    # prefijo de TeknoParrot y el Proton Frankenstein se descargaban sin
+    # problema y Arcade Loader no, el mismo dia y contra la misma web: "No se
+    # ha podido sacar el enlace de descarga de MediaFire".
+    #
+    # Si la URL ya es directa, mediafire_directo la devuelve tal cual, asi que
+    # el dia que esto se mueva a un sitio normal basta con cambiar el ajuste.
+    local url="${1:-}" directa
+    [ -n "$url" ] || return 1
+    case "$url" in
+        *mediafire.com*) log "Arcade Loader: resolviendo el enlace de MediaFire: $url" ;;
+        *) printf '%s' "$url"; return 0 ;;
+    esac
+    directa="$(mediafire_directo "$url")" || {
+        log "Arcade Loader: no se ha podido sacar el enlace de MediaFire" WARN
+        return 1; }
+    [ -n "$directa" ] || return 1
+    log "Arcade Loader: enlace directo resuelto"
+    printf '%s' "$directa"
+    return 0
+}
+
+arcade_loader_fuentes() {
+    # Parte ARCADE_LOADER_URL en una lista de fuentes, UNA POR LINEA.
+    #
+    # Se admiten separadas por lineas, por espacios o por "|", porque el
+    # ajuste lo puede escribir una persona y no hay por que obligarla a
+    # acertar con el separador. Las URLs no llevan espacios dentro, asi que
+    # partir por espacios no rompe ninguna.
+    printf '%s\n' "${1:-}" \
+        | tr '|' '\n' \
+        | tr -s ' \t' '\n' \
+        | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+        | grep -v '^$'
+}
+
+arcade_loader_sha_de_al_lado() {
+    # LA SUMA, SI EL QUE LO SUBIO LA DEJO AHI. $1 = enlace directo.
+    #
+    # Se mira si existe el mismo enlace con ".sha256" pegado al final. Si
+    # esta, se usa para comprobar lo descargado; si no esta, no pasa nada y
+    # se sigue sin ella: esto es una mejora, no un requisito.
+    #
+    # POR QUE DE AL LADO Y NO A FUEGO EN EL CODIGO: porque Arcade Loader se
+    # actualiza por su cuenta. Una suma escrita aqui dentro obligaria a sacar
+    # una version nueva de WProton cada vez que cambiara el tarball, que es
+    # justo lo que se evito poniendo el enlace en los ajustes.
+    local url="${1:-}" txt=""
+    [ -n "$url" ] || return 1
+    txt="$(curl -fsSL "${DL_META[@]}" "${url}.sha256" 2>/dev/null)" || return 1
+    # El fichero suele ser "<suma>  <nombre>": se coge lo que parezca una
+    # sha256 y se ignora el resto.
+    printf '%s' "$txt" | tr -d '\r' | grep -oE '[0-9a-fA-F]{64}' | head -n1
+}
+
+al_fallo() {
+    # Un fallo instalando Arcade Loader. $1 = que ha pasado.
+    #
+    # SI QUEDAN FUENTES POR PROBAR NO SE ABRE UN DIALOGO. Con varias fuentes,
+    # avisar de cada una por separado es contarle a la persona nuestros
+    # intentos en vez del resultado: que vea un error, le de a aceptar, y
+    # entonces empiece otra descarga, es peor que no decir nada. Queda en el
+    # registro, que para eso esta, y solo se avisa cuando ya no queda ninguna.
+    log "Arcade Loader: ${1%%$'\n'*}" WARN
+    [ "${AL_QUEDAN_FUENTES:-0}" = 1 ] && return 0
+    ui_error "$1"
+}
+
+arcade_loader_poner_en_su_sitio() {
+    # Coge un .tar.gz ya descargado y lo deja instalado. $1 = fichero.
+    #
+    # SE DESCOMPRIME EN UN SITIO APARTE Y DESPUES SE MUEVE. No se descomprime
+    # directamente en la carpeta de WProton: un .tar.gz de un tercero puede
+    # traer dentro lo que quiera -rutas con "..", ficheros en la raiz- y ahi
+    # viven los ajustes, los perfiles y los juegos de la persona. Primero se
+    # mira lo que trae y solo entra lo que es.
+    local tgz="${1:-}" tmp ruta raiz dest
+    [ -f "$tgz" ] || { al_fallo "No existe el fichero: $tgz"; return 1; }
+    if ! tar -tzf "$tgz" >/dev/null 2>&1; then
+        al_fallo "'$(basename "$tgz")' no es un .tar.gz valido.
+
+Si lo descargo WProton, lo mas probable es que la descarga se
+cortara a medias. El registro trae el enlace y el tamaño."
+        return 1
+    fi
+    tmp="$RUNTIME_DIR/arcade_loader_tmp.$$"
+    rm -rf "$tmp"; mkdir -p "$tmp" || { al_fallo "No se pudo crear la carpeta temporal"; return 1; }
+    if ! tar -xzf "$tgz" -C "$tmp" 2>>"$LOG_FILE"; then
+        rm -rf "$tmp"; al_fallo "No se pudo descomprimir Arcade Loader. Mira el registro."
+        return 1
+    fi
+    # EL LANZADOR, BUSCADO. No se da por hecho que la carpeta de dentro se
+    # llame "Arcade_Loader": si el que empaqueta cambia el nombre, esto sigue
+    # funcionando.
+    #
+    # GANA EL MENOS PROFUNDO, Y NO ES UN DETALLE. El tarball que hay hoy trae
+    # DOS:
+    #
+    #   Arcade_Loader/arcade-launcher        <- el bueno, la raiz del programa
+    #   Arcade_Loader/dist/arcade-launcher   <- una copia suelta dentro
+    #
+    # Antes aqui habia un "find ... | head -n1", y find no promete ningun
+    # orden: saca las entradas como se las da el sistema de ficheros. O sea
+    # que cual de los dos salia primero era una MONEDA AL AIRE, distinta en
+    # cada maquina y en cada descompresion.
+    #
+    # Y si salia el de dist/, raiz pasaba a ser ".../Arcade_Loader/dist" y se
+    # instalaba ESA carpeta como si fuera Arcade Loader entero: sin el resto
+    # de ficheros, con un lanzador que arranca y no encuentra lo suyo. Un
+    # fallo que a uno le pasa y a otro no, con el mismo fichero.
+    #
+    # Se ordena por numero de barras y se coge el primero: el de arriba del
+    # todo, que es la raiz de verdad.
+    ruta="$(find "$tmp" -maxdepth 3 -name arcade-launcher -type f 2>/dev/null \
+            | awk '{ n = gsub("/", "/"); print n "\t" $0 }' \
+            | sort -n -k1,1 | head -n1 | cut -f2-)"
+    if [ -z "$ruta" ]; then
+        log "Arcade Loader: el archivo no trae 'arcade-launcher'. Contenido: $(find "$tmp" -maxdepth 2 | head -n 20 | tr '\n' ' ')" WARN
+        rm -rf "$tmp"
+        al_fallo "Ese archivo no trae ningun 'arcade-launcher' dentro.
+
+Se ha mirado hasta tres carpetas de profundidad. El registro
+trae la lista de lo que si traia."
+        return 1
+    fi
+    raiz="$(dirname "$ruta")"
+    dest="$(arcade_loader_dir)"
+    # Lo que hubiera antes se aparta, no se borra: si la version nueva sale
+    # mal, la de antes sigue a mano.
+    if [ -e "$dest" ]; then
+        rm -rf "$dest.anterior" 2>/dev/null
+        mv -- "$dest" "$dest.anterior" 2>/dev/null \
+            && say "[+] La instalacion anterior queda en Arcade_Loader.anterior"
+    fi
+    if ! mv -- "$raiz" "$dest" 2>>"$LOG_FILE"; then
+        # Entre discos distintos mv puede fallar: se copia.
+        if ! cp -a -- "$raiz" "$dest" 2>>"$LOG_FILE"; then
+            rm -rf "$tmp"; al_fallo "No se pudo poner Arcade Loader en su sitio."
+            return 1
+        fi
+    fi
+    rm -rf "$tmp"
+    chmod +x "$(arcade_loader_bin)" 2>/dev/null
+    if ! arcade_loader_instalado; then
+        al_fallo "Arcade Loader se ha descomprimido pero su lanzador no se
+puede ejecutar:
+  $(arcade_loader_bin)"
+        return 1
+    fi
+    log "Arcade Loader: instalado en $(arcade_loader_dir)"
+    say "[+] Arcade Loader instalado en Arcade_Loader/"
+    return 0
+}
+
+arcade_loader_instalar() {
+    # Descarga e instala Arcade Loader. Devuelve 0 si quedo instalado.
+    #
+    # SE PRUEBAN TODAS LAS FUENTES, EN ORDEN. ARCADE_LOADER_URL puede traer
+    # varias (ver el ajuste). Se va bajando por la lista hasta que una deje
+    # Arcade Loader instalado; si ninguna lo consigue, se avisa UNA vez.
+    #
+    # Hoy hay una sola fuente, asi que esto se comporta igual que antes. Lo
+    # que cambia es el dia que haga falta un espejo: se añade una linea al
+    # ajuste y no hay que tocar nada mas.
+    local tgz fuente url sha fuentes quedan=0 hubo=0
+    fuentes="$(arcade_loader_fuentes "${ARCADE_LOADER_URL:-}")"
+    if [ -z "$fuentes" ]; then
+        log "Arcade Loader: no hay ninguna fuente configurada" WARN
+        ui_error "Ahora mismo no se ha podido descargar Arcade Loader.
+
+Vuelve a intentarlo mas tarde."
+        return 1
+    fi
+    log "Arcade Loader: $(printf '%s\n' "$fuentes" | grep -c .) fuente(s) por probar"
+    tgz="$RUNTIME_DIR/Arcade_Loader.tar.gz"
+    quedan="$(printf '%s\n' "$fuentes" | grep -c .)"
+    while IFS= read -r fuente; do
+        [ -n "$fuente" ] || continue
+        quedan=$((quedan - 1))
+        # Mientras queden fuentes detras, los fallos NO abren dialogos: se
+        # pasa a la siguiente y se cuenta todo en el registro.
+        AL_QUEDAN_FUENTES=0
+        [ "$quedan" -gt 0 ] && AL_QUEDAN_FUENTES=1
+        hubo=1
+        url="$(arcade_loader_url_directa "$fuente")" || url=""
+        if [ -z "$url" ]; then
+            log "Arcade Loader: no se ha podido resolver la fuente: $fuente" WARN
+            continue
+        fi
+        rm -f "$tgz"
+        log "Arcade Loader: descargando de $url"
+        # LA SUMA DE AL LADO, si el que lo subio la dejo. Si no hay, se sigue
+        # sin ella: dl_bruto comprueba el tamaño de todas formas.
+        sha="$(arcade_loader_sha_de_al_lado "$url")" || sha=""
+        if [ -n "$sha" ]; then
+            log "Arcade Loader: hay suma de comprobacion al lado del fichero"
+        else
+            log "Arcade Loader: no hay .sha256 junto al fichero; se comprobara solo el tamaño"
+        fi
+        # LA BARRA DE LA DESCARGA. Lo pidio Dani: "algo que no hemos tenido en
+        # cuenta es que cuando descargue Arcade Loader salga una barra de
+        # progreso con la descarga".
+        #
+        # dl_bruto ya sabe pintarla -y con el porcentaje de verdad, leyendo el
+        # tamaño total-, pero se calla y descarga en silencio si ya hay una
+        # barra o un aviso abiertos, para no poner dos ventanas una encima de
+        # otra. Y aqui venimos de un dialogo en medio del lanzamiento, asi que
+        # puede quedar algo abierto: sin esto, la descarga se hace con la
+        # pantalla parada y sin una pista de que esta pasando.
+        progress_stop 2>/dev/null || true
+        install_notice_stop 2>/dev/null || true
+        loading_clear 2>/dev/null || true
+        if ! dl_bruto "$url" "$tgz" "$sha"; then
+            rm -f "$tgz"
+            # CANCELAR NO ES FALLAR, Y ADEMAS CORTA DEL TODO.
+            #
+            # Quien le da a cancelar quiere parar, no que se intente por otro
+            # sitio. Asi que aqui se sale de la lista entera, no se pasa a la
+            # fuente siguiente.
+            if [ "${WP_DL_CANCELADA:-0}" = 1 ]; then
+                AL_QUEDAN_FUENTES=0
+                ui_info "Descarga cancelada.
+
+No se ha instalado nada y no queda nada a medias. Puedes
+volver a intentarlo cuando quieras."
+                return 1
+            fi
+            log "Arcade Loader: la descarga de $url no ha salido bien" WARN
+            continue
+        fi
+        if arcade_loader_poner_en_su_sitio "$tgz"; then
+            rm -f "$tgz"
+            AL_QUEDAN_FUENTES=0
+            return 0
+        fi
+        rm -f "$tgz"
+        log "Arcade Loader: lo descargado de $url no ha servido" WARN
+    done <<FUENTES_AL
+$fuentes
+FUENTES_AL
+    AL_QUEDAN_FUENTES=0
+    [ "$hubo" = 1 ] || log "Arcade Loader: la lista de fuentes se quedo vacia" WARN
+    # AQUI YA NO QUEDA NINGUNA. Ahora si se avisa, y una sola vez.
+    #
+    # NI UNA PALABRA DE CAMBIAR LA URL.
+    #
+    # Dani, 30/10: "no quiero que muestres la opcion de cambiar la URL, ese
+    # mensaje no tiene que salir. Tiene que funcionar sin tocar nada". Y tiene
+    # razon: mandar a quien solo queria jugar a editar un ajuste es pasarle
+    # nuestro problema. Si no se puede descargar, se dice y ya; lo de instalar
+    # desde un fichero sigue estando en el menu de Arcade Loader para quien lo
+    # necesite.
+    ui_error "No se ha podido descargar Arcade Loader.
+
+El registro trae el enlace que se intento y lo que dijo curl."
+    return 1
+}
+
+arcade_loader_desde_fichero() {
+    # Instalarlo desde un .tar.gz que ya este en el disco.
+    #
+    # Se usa el elegidor que NO filtra por extension (pick_file_any): el
+    # fichero puede llamarse "Arcade_Loader.tar.gz" o como lo haya dejado el
+    # navegador -"Arcade_Loader(1).tar.gz", sin extension...-, y filtrar por
+    # nombre aqui solo serviria para esconderselo a quien lo tiene delante.
+    local f
+    f="$(pick_file_any "Elige el Arcade_Loader.tar.gz" "${WP_ULTIMA_CARPETA:-$HOME}")" || return 1
+    [ -n "$f" ] || return 1
+    [ -f "$f" ] || { ui_error "Eso no es un fichero:
+$f"; return 1; }
+    arcade_loader_poner_en_su_sitio "$f"
+}
+
+arcade_loader_asegurar() {
+    # SE OFRECE SOLO AL LANZAR UN JUEGO DE ESTOS, Y SOLO SI NO ESTA.
+    #
+    # Tal cual lo pidio Dani: "solo se ofrece para descargar cuando lancemos un
+    # juego de estas caracteristicas y si esta ya no se vuelve a ofrecer". Asi
+    # que quien no tenga ni un juego [AL] no va a ver esto en su vida, y quien
+    # ya lo tenga instalado tampoco.
+    #
+    # $1 = nombre del juego, para que el aviso diga de que va.
+    arcade_loader_instalado && return 0
+    local nom="${1:-este juego}"
+    if ui_ask "'$nom' es un juego de Arcade Loader.
+
+Arcade Loader es un lanzador de arcades NATIVO de Linux.
+Todavia no lo tienes.
+
+Se descarga una vez y se queda en la carpeta de WProton, en
+Arcade_Loader/. No se vuelve a preguntar.
+
+Descargarlo ahora?"; then
+        arcade_loader_instalar && return 0
+        return 1
+    fi
+    log "Arcade Loader: el usuario ha dicho que no se descargue" WARN
+    return 1
+}
+
+arcade_loader_menu() {
+    # LA PANTALLA DE ARCADE LOADER, en Runners y herramientas.
+    #
+    # OJO: esto NO contradice lo de "solo se ofrece al lanzar un juego de
+    # estos". Ahi no se ofrece nada: esta en el menu de herramientas, al lado
+    # de los runners, para quien VENGA A BUSCARLO -reinstalar, actualizar,
+    # cambiar de donde se descarga-. Lo que no pasa es que a nadie le salte un
+    # aviso por tener WProton instalado.
+    local sel
+    while :; do
+        sel="$(menu "Arcade Loader - $(arcade_loader_label)
+
+Lanzador de arcades NATIVO de Linux.
+
+Sus juegos se reconocen solos: llevan dentro un fichero
+terminado en .windowsloader, que pone quien los empaqueta.
+Tambien vale la cadena [AL] en el nombre, de antes.
+
+Al lanzar uno de esos, WProton usa Arcade Loader en vez de
+Proton o Wine. Si no lo tienes, lo ofrece entonces." \
+            "$(arcade_loader_instalado \
+                 && printf 'Reinstalar / actualizar (volver a descargarlo)' \
+                 || printf 'Descargar e instalar')" \
+            "Instalar desde un .tar.gz que ya tengas" \
+            "$(arcade_loader_instalado && printf 'Borrarlo')" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "<< Volver"|"") return 0 ;;
+            "Descargar e instalar"*|"Reinstalar"*)
+                if arcade_loader_instalar; then
+                    ui_info "Arcade Loader instalado.
+
+Esta en la carpeta de WProton, en Arcade_Loader/, y se usa
+solo al lanzar un juego con [AL] en el nombre."
+                fi ;;
+            "Instalar desde un .tar.gz"*)
+                if arcade_loader_desde_fichero; then
+                    ui_info "Arcade Loader instalado desde el fichero."
+                fi ;;
+            "Borrarlo"*)
+                if ui_ask "Borrar Arcade Loader de la carpeta de WProton?
+
+Los juegos [AL] dejaran de poder lanzarse hasta que se vuelva
+a instalar. Los juegos NO se tocan."; then
+                    rm -rf "$(arcade_loader_dir)" "$(arcade_loader_dir).anterior"
+                    log "Arcade Loader: borrado por el usuario"
+                    ui_info "Borrado."
+                fi ;;
+        esac
+    done
+}
+
+al_gameid_de() {
+    # EL IDENTIFICADOR DE ARCADE LOADER DE ESTE JUEGO. $1 = ruta del juego.
+    #
+    # Sale del NOMBRE DEL MARCADOR, que es donde Arcade Loader lo pone. De su
+    # propia ayuda:
+    #
+    #   "launch a game from its dump (directory or <gameid>.windowsloader file)"
+    #   "<dump>/<gameid>.windowsloader holds its path"
+    #
+    # Asi que "nicktoons-nitro-racing.windowsloader" -> "nicktoons-nitro-racing".
+    #
+    # NO SE SACA DEL NOMBRE DEL FICHERO DEL JUEGO, y eso hay que decirlo porque
+    # es la tentacion: el gamedirs.yaml de Arcade Loader tiene
+    #
+    #   rawthrills/nicktoons-nitro-racing: .../Nicktoons Nitro.squashfs
+    #
+    # o sea que el fichero se llama "Nicktoons Nitro" y el identificador es
+    # "nicktoons-nitro-racing". No se parecen lo suficiente para adivinar uno
+    # desde el otro, y adivinarlo mal seria copiar la configuracion de otro
+    # juego.
+    local ruta="${1:-}" nom=""
+    [ -n "$ruta" ] || return 1
+    if [ -d "$ruta" ]; then
+        nom="$(al_marcador_en_carpeta "$ruta" nombre)" || return 1
+    else
+        [ -f "$ruta" ] || return 1
+        nom="$(al_marcador_en_imagen "$ruta" nombre)" || return 1
+    fi
+    [ -n "$nom" ] || return 1
+    # Fuera la extension, sin distinguir mayusculas (el glob las acepta).
+    nom="$(printf '%s' "$nom" | sed 's/\.[Ww][Ii][Nn][Dd][Oo][Ww][Ss][Ll][Oo][Aa][Dd][Ee][Rr]$//')"
+    [ -n "$nom" ] || return 1
+    printf '%s' "$nom"
+}
+
+al_sistema_de_gameid() {
+    # EL SISTEMA AL QUE PERTENECE UN JUEGO ("rawthrills"). $1 = gameid.
+    #
+    # SIN PEDIR NADA A LA RED, y por eso se hace asi: Arcade Loader YA TRAE
+    # instalados los perfiles de fabrica de 195 juegos, ordenados por sistema:
+    #
+    #   Arcade_Loader/systemprofiles/rawthrills/nicktoons-nitro-racing.yaml
+    #
+    # O sea que el sistema esta en el disco, gratis. La alternativa era
+    # preguntarle a GitHub por el contenido de una carpeta -una peticion mas,
+    # con su limite de uso y su espera- para averiguar algo que ya tenemos.
+    local gameid="${1:-}" dir hit
+    [ -n "$gameid" ] || return 1
+    dir="$(arcade_loader_dir)/systemprofiles"
+    [ -d "$dir" ] || return 1
+    hit="$(find -H "$dir" -mindepth 2 -maxdepth 2 -type f \
+             -name "$gameid.yaml" -print -quit 2>/dev/null)"
+    [ -n "$hit" ] || return 1
+    # .../systemprofiles/rawthrills/nicktoons-nitro-racing.yaml -> rawthrills
+    printf '%s' "$(basename "$(dirname "$hit")")"
+}
+
+al_config_especial() {
+    # LA CONFIGURACION ESPECIAL DE UN JUEGO, TRAIDA DEL REPOSITORIO.
+    # $1 = ruta del juego, $2 = gid del perfil de WProton.
+    # $3 = "forzar" para volver a mirar aunque ya se mirara hoy.
+    #
+    # LO QUE PIDIO DANI (31/10): "en algunos juegos de arcade loader le vamos a
+    # poner una configuracion especial. La subiremos al git dentro de la
+    # carpeta arcade_loader... quedara arcade_loader/rawthrills/nombre del
+    # juego yaml. Cuando detecte el windowsloader puede buscar si hay fichero
+    # de configuracion y copiarlo la primera vez."
+    #
+    # Y LA CORRECCION, QUE CAMBIA LO IMPORTANTE: "en este caso si que hay que
+    # sobreescribir el fichero, por defecto viene ya un fichero pero nosotros
+    # lo hemos modificado y lo queremos cambiar si o si, despues de esa copia
+    # si que no haria falta copiarlo de nuevo, porque dejariamos una marca de
+    # que no es necesario salvo que tenga una fecha mas nueva".
+    #
+    # O sea que NO es "copiar solo si no hay nada": es
+    #
+    #   1. la primera vez SE PISA lo que haya -ese fichero viene de serie y el
+    #      nuestro es el bueno-;
+    #   2. despues NO se vuelve a copiar...
+    #   3. ...salvo que en el repositorio haya una version mas nueva.
+    #
+    # COMO SE SABE SI HAY ALGO MAS NUEVO, SIN DESCARGARLO. Con una peticion
+    # condicional: se guarda el ETag que mando GitHub y se vuelve a pedir con
+    # "If-None-Match". Si no ha cambiado contesta 304 y NO manda el fichero;
+    # si ha cambiado, lo manda. Es una peticion pequeña, no una descarga.
+    # (Comprobado que GitHub manda ETag y Last-Modified en sus respuestas.)
+    #
+    # Y UNA VEZ AL DIA COMO MUCHO. Esto pasa justo antes de lanzar un juego:
+    # preguntar en CADA arranque son segundos de pantalla quieta cada vez que
+    # la red vaya mal. La marca es la FECHA DEL FICHERO del ETag, asi que no
+    # hace falta guardar nada en el perfil: si se miro hoy, no se mira otra
+    # vez. Desde el menu se puede forzar.
+    local juego="${1:-}" gid="${2:-}" forzar="${3:-}"
+    local gameid sistema dest destdir url etagdir etag tmp
+    [ -n "$juego" ] || return 1
+    arcade_loader_instalado || return 1
+    gameid="$(al_gameid_de "$juego")" || gameid=""
+    if [ -z "$gameid" ]; then
+        log "Arcade Loader: no se ha podido sacar el gameid del marcador de '$juego'; no se busca configuracion" WARN
+        return 1
+    fi
+    log "Arcade Loader: gameid '$gameid' (del nombre del marcador)"
+    sistema="$(al_sistema_de_gameid "$gameid")" || sistema=""
+    if [ -z "$sistema" ]; then
+        # No es un fallo: Arcade Loader no trae perfil de fabrica para TODOS
+        # los juegos. Sin sistema no se puede construir la ruta, y no se va a
+        # adivinar: se dice y se sigue, que el juego arranca igual.
+        log "Arcade Loader: '$gameid' no tiene perfil de fabrica en systemprofiles; no se sabe su sistema y no se busca configuracion"
+        return 1
+    fi
+    dest="$(arcade_loader_dir)/userprofiles/$sistema/$gameid.yaml"
+    etagdir="$PROFILE_DIR/.al_cfg"
+    etag="$etagdir/${sistema}__${gameid}.etag"
+    mkdir -p "$etagdir" 2>/dev/null || true
+    # ¿YA SE MIRO HOY? Entonces nada, y sin tocar la red.
+    if [ "$forzar" != forzar ] && [ -f "$etag" ] \
+       && [ "$(date -r "$etag" +%F 2>/dev/null)" = "$(date +%F 2>/dev/null)" ]; then
+        log "Arcade Loader: la configuracion de '$sistema/$gameid' ya se miro hoy; no se vuelve a preguntar"
+        return 0
+    fi
+    url="https://raw.githubusercontent.com/$WPROTON_REPO/main/arcade_loader/$sistema/$gameid.yaml"
+    tmp="$(mktemp 2>/dev/null)" || return 1
+    local _cond=()
+    # SOLO SE PREGUNTA "¿HA CAMBIADO?" SI YA TENEMOS UNA COPIA PUESTA.
+    #
+    # Si el ETag esta guardado pero el fichero de destino ya no esta -alguien
+    # lo borro, o reinstalo Arcade Loader-, preguntar en condicional daria 304
+    # y nos quedariamos sin copiarlo. En ese caso se pide entero.
+    if [ -s "$etag" ] && [ -f "$dest" ]; then
+        _cond=(--etag-compare "$etag")
+        log "Arcade Loader: preguntando si hay una version mas nueva de '$sistema/$gameid'"
+    else
+        log "Arcade Loader: buscando la configuracion de '$sistema/$gameid' en el repositorio"
+    fi
+    # CON POCO TIEMPO DE ESPERA, a proposito: esto pasa justo antes de lanzar
+    # un juego. Mas vale quedarse sin la configuracion que dejar a alguien
+    # mirando una pantalla quieta.
+    local _http
+    _http="$(curl -sSL --connect-timeout 5 --max-time 15 \
+        "${_cond[@]}" --etag-save "$etag" \
+        -o "$tmp" -w '%{http_code}' "$url" 2>>"$LOG_FILE")" || _http=""
+    # LA MARCA DEL DIA, PASE LO QUE PASE. Se ha preguntado, asi que no se
+    # vuelve a preguntar hoy aunque la respuesta no sirviera.
+    [ -f "$etag" ] || : > "$etag" 2>/dev/null
+    touch "$etag" 2>/dev/null || true
+    case "$_http" in
+        304)
+            rm -f "$tmp"
+            log "Arcade Loader: la configuracion de '$sistema/$gameid' no ha cambiado (304); se deja la que hay"
+            return 0 ;;
+        200)
+            : ;;
+        404)
+            rm -f "$tmp"
+            log "Arcade Loader: el repositorio no trae configuracion para '$sistema/$gameid' (404)"
+            return 1 ;;
+        *)
+            rm -f "$tmp"
+            log "Arcade Loader: no se ha podido preguntar por la configuracion de '$sistema/$gameid' (codigo '${_http:-sin respuesta}')" WARN
+            return 1 ;;
+    esac
+    if [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        log "Arcade Loader: la configuracion de '$sistema/$gameid' ha venido vacia; no se copia" WARN
+        return 1
+    fi
+    destdir="$(dirname "$dest")"
+    if ! mkdir -p "$destdir" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"
+        log "Arcade Loader: no se ha podido crear $destdir" WARN
+        return 1
+    fi
+    # LO QUE HABIA SE GUARDA AL LADO ANTES DE PISARLO.
+    #
+    # Se pisa porque asi se ha pedido -el nuestro es el bueno-, pero si alguien
+    # habia ajustado el suyo a su mando y a su pantalla, tirarlo sin mas seria
+    # llevarse por delante un trabajo que no es nuestro. Queda una copia .anterior
+    # y se dice donde.
+    if [ -f "$dest" ]; then
+        cp -f "$dest" "$dest.anterior" 2>/dev/null \
+            && log "Arcade Loader: lo que habia en userprofiles/$sistema/$gameid.yaml queda en .anterior"
+    fi
+    # SE MUEVE AL SITIO DE UNA VEZ. Si se escribiera directamente en el
+    # destino, una descarga cortada dejaria ahi un yaml a medias y Arcade
+    # Loader se lo creeria.
+    if ! mv -f "$tmp" "$dest" 2>>"$LOG_FILE"; then
+        rm -f "$tmp"
+        log "Arcade Loader: no se ha podido poner la configuracion en $dest" WARN
+        return 1
+    fi
+    log "Arcade Loader: configuracion especial puesta en userprofiles/$sistema/$gameid.yaml ($(wc -c < "$dest" 2>/dev/null) bytes)"
+    say "[+] Configuracion especial de Arcade Loader para este juego:"
+    say "    userprofiles/$sistema/$gameid.yaml"
+    return 0
+}
+
+lanzar_arcade_loader() {
+    # LANZA UN JUEGO CON ARCADE LOADER. $1 = ruta del juego, $2 = gid.
+    #
+    # La orden es la suya, tal cual:
+    #
+    #     Arcade_Loader/arcade-launcher run "<ruta del juego>"
+    #
+    # Y todo lo que lleva alrededor es lo MISMO que un juego de Linux: el
+    # vigilante de salida, la capa del menu, el mando fantasma, el mapeador de
+    # teclas, el reloj de la partida y "el ultimo jugado". Es el descuido
+    # clasico de este proyecto -hay varios caminos de lanzamiento y el recado
+    # vive en unos pocos-, asi que aqui estan todos desde el primer dia.
+    # UNA CARPETA VALE IGUAL QUE UN ARCHIVO.
+    #
+    # Lo confirmo Dani el 28/10: "Arcade Loader tambien acepta carpetas con el
+    # fichero .windowsloader en su interior". Asi que aqui se admite lo que
+    # EXISTA, sea fichero o carpeta, y se le pasa tal cual: quien decide que
+    # hacer con eso es Arcade Loader, no nosotros.
+    local juego="${1:-}" gid="${2:-}" bin
+    bin="$(arcade_loader_bin)"
+    [ -e "$juego" ] || { fallo "No existe el juego: $juego"; return 1; }
+    log "Arcade Loader: $([ -d "$juego" ] && printf 'carpeta' || printf 'archivo'): $juego"
+    arcade_loader_instalado || { fallo "Arcade Loader no esta instalado"; return 1; }
+    load_profile "$gid" >/dev/null 2>&1 || true
+    # LA CONFIGURACION ESPECIAL DEL JUEGO, SI LA HAY EN EL REPOSITORIO.
+    #
+    # La primera vez PISA lo que haya, y despues solo vuelve a copiar si en el
+    # repositorio hay una version mas nueva. Como mucho pregunta una vez al
+    # dia, porque esto pasa justo antes de lanzar el juego.
+    al_config_especial "$juego" "$gid" || true
+    covers43_offer_for "$gid" || true
+    say "[+] Juego de Arcade Loader: $(basename "$juego")"
+    say "    $bin run \"$juego\""
+    log "Arcade Loader: lanzando '$juego' con $bin"
+    # EL MAPEADOR DE TECLAS: APAGADO POR DEFECTO, Y A PROPOSITO.
+    #
+    # "Arcade Loader se encarga del mando, pero mejor tener la opcion de mapear
+    # por si acaso" (Dani, 27/10). Son las dos cosas a la vez, y el orden
+    # importa:
+    #
+    # POR QUE APAGADO. Si Arcade Loader lee el mando Y nosotros lo mapeamos a
+    # teclas al mismo tiempo, no es que gane uno: el juego ve los botones dos
+    # veces, o ninguno si el mapeador lo coge en exclusiva. Y eso, visto desde
+    # fuera, parece un fallo del juego o del mando. Arrancar el mapeador "por
+    # si acaso" seria meter un segundo inquilino en el mismo mando sin que
+    # nadie lo haya pedido.
+    #
+    # POR QUE EXISTE LA OPCION. Porque habra juegos que pidan teclas de teclado
+    # -servicio, test, insertar moneda- que Arcade Loader no cubra. Para esos
+    # se enciende, por juego, en Ajustes del juego -> Mapeador .keys.
+    #
+    # La fila solo sale en los juegos [AL]: en los demas no significa nada.
+    local kf=""
+    if [ "${KEYS_AL:-0}" = 1 ]; then
+        if kf="$(find_keys_file "$juego" "$gid")"; then
+            say "[+] Mapeador .keys ENCENDIDO para este juego de Arcade Loader"
+            say "    (lo has pedido tu: Arcade Loader tambien lee el mando)"
+            log "Arcade Loader: KEYS_AL=1, se arranca el mapeador con $kf"
+            mapeador_start "$kf"
+        else
+            say "AVISO: has pedido el mapeador .keys para este juego y no hay"
+            say "       ningun .keys. Crealo en Ajustes del juego -> Mapeador."
+            log "Arcade Loader: KEYS_AL=1 pero no hay .keys para '$gid'" WARN
+            kf=""
+        fi
+    else
+        log "Arcade Loader: mapeador .keys apagado (del mando se encarga Arcade Loader)"
+    fi
+    # EL MANDO VIRTUAL, QUE AQUI NO ESTABA (31/10).
+    #
+    # Se podia elegir en Ajustes del juego, se guardaba en el perfil y al
+    # lanzar NADIE lo arrancaba: la opcion existia y no hacia nada. Y es justo
+    # aqui donde mas falta hace, porque el remapeo de botones -"poner el start
+    # en el boton A"- lo hace este mecanismo, y lo pidieron para los arcades.
+    #
+    # Ojo con convivir con Arcade Loader: el mando virtual CAPTURA el fisico,
+    # asi que Arcade Loader vera el virtual y no el de verdad. Eso es lo que se
+    # quiere -es como llega el boton cambiado- pero por eso sigue apagado de
+    # serie y solo se enciende si el perfil lo pide.
+    mando_virtual_del_juego "$kf"
+    pad_fantasma_aplicar
+    capa_vulkan_entorno
+    guardia_salida_start "$bin"
+    ultimo_juego_recordar "$juego"
+    local _st0; _st0="$(date +%s)"
+    local _sal; _sal="$(mktemp)"
+    : > "$RUNTIME_DIR/.juego_arranque" 2>/dev/null
+    pad_bridge_stop
+    # setsid y su propio grupo de procesos, como en ejecutar_nativo: asi el
+    # vigilante de salida puede cerrar el juego entero y no solo el lanzador.
+    ( cd "$(arcade_loader_dir)" 2>/dev/null || cd "$BASE_DIR" || exit 1
+      setsid "$bin" run "$juego" >>"$_sal" 2>&1 ) &
+    local _pg=$!
+    printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+    wait "$_pg" 2>/dev/null
+    local _rc=$?
+    log "Arcade Loader: el lanzador salio con codigo $_rc tras $(( $(date +%s) - _st0 ))s"
+    # EL LANZADOR PUEDE SALIR ANTES QUE EL JUEGO, igual que los nativos: se
+    # espera a que no quede nada suyo antes de recoger.
+    # La raiz desde la que se vigilan los procesos del juego: con un archivo,
+    # la carpeta donde esta; con una carpeta, ella misma.
+    esperar_juego_nativo "$([ -d "$juego" ] && printf '%s' "$juego" || dirname "$juego")" 0
+    nativo_volcar_salida "$_sal"
+    rm -f "$_sal" 2>/dev/null
+    rm -f "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
+    [ -n "$kf" ] && mapeador_stop
+    pad_informe
+    capa_vulkan_informe
+    stats_record "$gid" "$(( $(date +%s) - _st0 ))"
+    return $_rc
 }
 
 lanzar_nativo_suelto() {
@@ -52633,6 +56028,13 @@ lanzar_nativo_suelto() {
     # Y aqui el arreglo es mas directo todavia: un juego nativo usa SDL de
     # verdad, asi que ALLOW_STEAM_VIRTUAL_GAMEPAD=0 es literalmente la regla
     # que SDL ya quiere aplicar.
+    # EL MANDO VIRTUAL, QUE AQUI TAMPOCO ESTABA (31/10). Mismo caso que en
+    # Arcade Loader: la opcion se guardaba y no se aplicaba nunca.
+    #
+    # Sin .keys: este camino no arranca el mapeador a proposito. Asi que de
+    # aqui sale lo del perfil -el tipo de mando y los botones remapeados-, y
+    # los sticks al reves, que vienen del .keys, no aplican.
+    mando_virtual_del_juego ""
     pad_fantasma_aplicar
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
@@ -52725,6 +56127,10 @@ lanzar_script_si_existe() {
     # Y aqui el arreglo es mas directo todavia: un juego nativo usa SDL de
     # verdad, asi que ALLOW_STEAM_VIRTUAL_GAMEPAD=0 es literalmente la regla
     # que SDL ya quiere aplicar.
+    # EL MANDO VIRTUAL, EN ESTE CAMINO TAMBIEN (31/10). Sin .keys, como en
+    # lanzar_nativo_suelto: de aqui sale lo del perfil -el tipo de mando y los
+    # botones remapeados-.
+    mando_virtual_del_juego ""
     pad_fantasma_aplicar
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
@@ -52797,6 +56203,62 @@ resolver_exe_carpeta() {
     return 1
 }
 
+carpeta_nombre_normal() {
+    # El nombre de una carpeta sin nada que estorbe para compararlo:
+    # minusculas y solo letras y numeros. "End of Abyss" y "EndOfAbyss" dan
+    # los dos "endofabyss".
+    printf '%s' "$(basename "${1:-}")" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9'
+}
+
+carpeta_es_apoyo_de_juego() {
+    # ¿Esta carpeta es UNA PARTE de un juego, en vez de un juego? $1 = carpeta.
+    #
+    # DE DONDE SALE ESTO (29/10, Dani)
+    #
+    # > "en la opcion jugar si el juego esta en modo carpeta me aparece la
+    # >  carpeta EndofAbyss y Engine como si fueran dos juegos dentro la
+    # >  carpeta EndofAbyss general... quedamos que solo saldria en las
+    # >  carpetas con varios juegos, no con varias carpetas sin mas"
+    #
+    # Y tiene razon. "End of Abyss" lleva dentro:
+    #
+    #     End of Abyss/
+    #       EndOfAbyss/        <- el juego (Binaries, Content)
+    #       Engine/            <- el MOTOR, Unreal Engine
+    #
+    # ...que es la forma de un juego de Unreal de toda la vida. Las dos
+    # carpetas tienen ejecutables dentro, asi que las dos pasaban por juego y
+    # el juego salia como una estanteria de dos.
+    #
+    # Estos nombres no son juegos en ningun sitio: son las piezas con las que
+    # se reparte un juego. Un juego que se llame "Engine" o "Binaries" no
+    # existe; una carpeta de juego que se llame asi, en cambio, esta en la
+    # mitad de los juegos que hay.
+    local n
+    n="$(carpeta_nombre_normal "${1:-}")"
+    case "$n" in
+        # El motor y sus piezas (Unreal, Unity, Godot, Source...)
+        engine|binaries|binary|binarios|content|data|bin|lib|libs|resources|assets|plugins) return 0 ;;
+        # Y las que se reparten al lado del ejecutable. "media" entro por el
+        # Secret of Mana, que viene en dos carpetas -Binary y Media- con el
+        # .exe en la primera y TODO lo demas en la segunda.
+        media|medios|movies|videos|audio|sound|sounds|music|textures|shaders) return 0 ;;
+        # Y las de la arquitectura o el tipo de compilacion, que cuelgan del
+        # ejecutable y nunca son el juego.
+        x86|x64|win32|win64|win|release|debug|retail) return 0 ;;
+        # Lo que se instala, no lo que se juega
+        redist|commonredist|redistributables|directx|dotnet|vcredist|prerequisites|prereq|dependencies) return 0 ;;
+        # Extras que acompañan al juego
+        support|extras|soundtrack|ost|manual|manuales|manuals|docs|documentation|artbook|wallpapers) return 0 ;;
+        # Cosas del propio juego mientras se juega
+        saves|savegames|savedata|mods|tools|launcher|config|configs|cache|temp|tmp|logs) return 0 ;;
+        # Unity deja "<Juego>_Data" al lado del .exe. Se normaliza a
+        # "<juego>data", asi que se mira el final.
+        *data) [ "$n" != "data" ] && return 0 ;;
+    esac
+    return 1
+}
+
 carpeta_hijos_juego() {
     # Los juegos que hay DENTRO de esta carpeta, uno por linea. $1 = carpeta.
     local d="${1:-}" h
@@ -52808,6 +56270,16 @@ carpeta_hijos_juego() {
                 printf '%s\n' "$h"; continue ;;
         esac
         [ -d "$h" ] || continue
+        # LAS PIEZAS DE UN JUEGO NO SON JUEGOS. Ver carpeta_es_apoyo_de_juego:
+        # "Engine" al lado de "EndOfAbyss" es el motor, no un segundo juego.
+        carpeta_es_apoyo_de_juego "$h" && continue
+        # Y UNA HIJA QUE SE LLAMA COMO SU MADRE TAMPOCO.
+        #
+        # "End of Abyss/EndOfAbyss" es el modulo del juego, no otro juego: los
+        # dos nombres dan "endofabyss" al quitarles espacios y mayusculas. Una
+        # estanteria de verdad -"Lucha" con Street Fighter y Mortal Kombat
+        # dentro- no tiene ninguna hija que se llame como ella.
+        [ "$(carpeta_nombre_normal "$h")" = "$(carpeta_nombre_normal "$d")" ] && continue
         es_juego_carpeta "$h" && printf '%s\n' "$h"
     done <<EOFHIJOS
 $(find "$d" -mindepth 1 -maxdepth 1 ! -name '.*' 2>/dev/null | sort)
@@ -52840,11 +56312,31 @@ es_carpeta_de_juegos() {
     #     en estanteria seria meter un paso de mas por el camino.
     #   - que ella misma no tenga con que arrancar (autorun.cmd, drive_c, un
     #     .exe o un .sh sueltos, o acabar en .pc).
-    local d="${1:-}" n
+    local d="${1:-}" n _eng
     [ -d "$d" ] || return 1
     case "$(printf '%s' "$d" | tr 'A-Z' 'a-z')" in *.pc) return 1 ;; esac
     [ -f "$d/autorun.cmd" ] && return 1
     [ -d "$d/drive_c" ] && return 1
+    # UN MOTOR AL LADO ES UN JUEGO, NO DOS.
+    #
+    # Esto va aparte de la lista de nombres de carpeta_es_apoyo_de_juego, y a
+    # proposito: aquella dice "Engine no es un juego" por el nombre; esta
+    # dice "si hay un Engine CON SUS BINARIOS dentro, lo que tienes delante es
+    # un juego de Unreal entero", que es una afirmacion sobre la FORMA de la
+    # carpeta y no sobre como se llame nada.
+    #
+    #     End of Abyss/
+    #       EndOfAbyss/Binaries/Win64/EndOfAbyss.exe
+    #       Engine/Binaries/...            <- esto
+    #
+    # Nadie reparte una estanteria de juegos asi.
+    _eng="$(find -H "$d" -mindepth 1 -maxdepth 1 \
+              \( -type d -o \( -type l -a -xtype d \) \) \
+              -iname 'engine' -print -quit 2>/dev/null)"
+    if [ -n "$_eng" ] && [ -n "$(find -H "$_eng" -mindepth 1 -maxdepth 1 \
+                                   -iname 'binaries' -print -quit 2>/dev/null)" ]; then
+        return 1
+    fi
     # Ficheros propios en el primer nivel: entonces es un juego. Se perdonan
     # tres clases, que no son "suyas":
     #   - la caratula y los textos, que no arrancan nada y es muy normal
@@ -52908,6 +56400,33 @@ play_folder() {
         return $?
     fi
     es_carpeta_de_juegos "$dir" && return 0   # era estanteria y se cancelo
+    # ¿ES UN JUEGO DE ARCADE LOADER? Tambien en carpeta.
+    #
+    # "Arcade Loader tambien acepta carpetas con el fichero .windowsloader en
+    # su interior" (Dani, 28/10). Asi que se le pasa la carpeta tal cual, igual
+    # que se le pasa el archivo.
+    #
+    # VA DESPUES de la comprobacion de estanteria, y eso importa: una carpeta
+    # con tres juegos dentro tiene que seguir siendo una estanteria, no un
+    # juego de Arcade Loader porque uno de sus hijos traiga el marcador. Por
+    # eso aqui se mira la RAIZ y nada mas (al_marcador_en_raiz).
+    #
+    # Y va ANTES de buscar el .exe: en estos juegos no hay ejecutable que
+    # buscar, de eso se encarga Arcade Loader.
+    if al_marcador_en_raiz "$dir" || juego_es_arcade_loader "$dir"; then
+        local _algid; _algid="$(game_id "$dir")"
+        say "[+] Esta carpeta es un juego de Arcade Loader"
+        log "Arcade Loader: carpeta '$dir' reconocida ($AL_MARCADOR o [AL] en el nombre)"
+        if arcade_loader_asegurar "$(basename "$dir")"; then
+            lanzar_arcade_loader "$dir" "$_algid"
+            return $?
+        fi
+        ui_info "Sin Arcade Loader no se puede lanzar '$(basename "$dir")'.
+
+Cuando quieras, se instala desde:
+  Runners y herramientas -> Arcade Loader"
+        return 1
+    fi
     lanzar_script_si_existe "$dir" && return 0
     name="$(game_id "$dir")"
     load_profile "$name"
@@ -58216,6 +61735,532 @@ run_args_for() {
     esac
 }
 
+# ============================================================================
+# EL PREFIJO AL ESTILO BATOCERA
+# ============================================================================
+#
+# QUE ES ESTO Y POR QUE EXISTE
+#
+# Lo pidieron asi: "algunos prefijos que creamos dan problemas y los de
+# Batocera no". Asi que esto NO es nuestra forma de crear un prefijo con
+# retoques: es el procedimiento de Batocera, leido de su codigo y reproducido
+# paso por paso, en su mismo orden.
+#
+# DE DONDE SALE, EXACTAMENTE
+#
+# Del repositorio batocera-linux/batocera.linux, commit d196627, fichero
+# package/batocera/wine/batocera-wine. Las funciones que importan son
+# createOrUpdatePrefix(), geproton_libs_install(), find_runner_dll_dir(),
+# reg_install(), fonts_install(), sandboxing_prefix() y setPrefixArch(), y la
+# tuberia que las encadena es identica en sus tres caminos de juego
+# (play_wine, play_pc, play_exe):
+#
+#     setPrefixArch        <prefijo> <runner> [accion]
+#     createOrUpdatePrefix <prefijo>  || return 1
+#     redist_install       <prefijo>  || return 1
+#     reg_install          <prefijo>  || return 1
+#     fonts_install        <prefijo>  || return 1
+#     sandboxing_prefix    <prefijo>  || return 1
+#     dxvk_install         <prefijo>  || return 1
+#
+# Batocera ademas tiene ya una accion suelta para esto ("batocera-wine <sys>
+# createprefix <juego>"), que hace setPrefixArch + createOrUpdatePrefix. Esta
+# opcion es el equivalente, con los pasos de despues incluidos.
+#
+# LAS SIETE COSAS QUE HACEN DISTINTO, Y QUE SON EL MOTIVO
+#
+# No es magia: son siete decisiones concretas, y cada una tapa un fallo que a
+# nosotros nos ha pasado alguna vez.
+#
+#   1. WINEDLLOVERRIDES="winegstreamer=" MIENTRAS SE CREA. Su propio comentario
+#      lo llama "workaround wine bottle creation issue with debug enabled". Un
+#      wineboot que intenta cargar winegstreamer con el registro de depuracion
+#      puesto se queda a medias.
+#   2. EL wineboot LO HACE EL wine DE 32 BITS, no wine64. En Batocera es
+#      "${WINE}" wineboot -u, y WINE es lib/wine/i386-unix/wine cuando existe.
+#   3. SE ESPERA AL wineserver, sin limite: "wineserver -w". Sin eso, lo que
+#      venga detras pisa un prefijo a medio escribir.
+#   4. SI FALLA, SE BORRA: "rm -rf ${WINEPREFIX}". Nunca se queda un prefijo a
+#      medias, que es lo peor de todo porque la siguiente vez parece bueno.
+#   5. UN PREFIJO POR RUNNER. La ruta lleva el runner dentro:
+#      /userdata/system/wine-bottles/<sistema>/<runner>/<juego>.wine. Y ademas
+#      guardan en el prefijo un ".update-timestamp" con la fecha del wine.inf
+#      del runner: si cambia, rehacen el wineboot -u. Nosotros reutilizabamos
+#      el mismo prefijo con otro runner, y eso es media hora de fallos raros.
+#   6. LOS ENLACES DE LA CARPETA PERSONAL SE CONVIERTEN EN CARPETAS DE VERDAD
+#      (sandboxing_prefix). Un prefijo nuevo de Wine enlaza Documents, Music,
+#      Pictures... a tu HOME de verdad. Eso saca las partidas del prefijo y
+#      ademas hace que Proton falle al renombrar entre sistemas de ficheros.
+#   7. SE LE METEN LAS DLL DE vkd3d Y icu DEL RUNNER (geproton_libs_install) y
+#      las fuentes que el runner traiga. Sin eso, un GE-Proton al que le faltan
+#      esas piezas falla en juegos de DirectX 12.
+#
+# LO QUE NO SE COPIA, Y POR QUE
+#
+#   - redist_install y la parte de usuario de reg_install/fonts_install
+#     instalan lo que la persona haya dejado caer en /userdata/system/wine/exe,
+#     /regs y /fonts. Eso es cosa de Batocera, no un paso de crear el prefijo:
+#     aqui esa funcion la hacen "Librerias" y "Importar un .reg".
+#   - dxvk_install es configuracion DE LANZAMIENTO (pone DLL overrides), no del
+#     prefijo. WProton ya tiene su capa grafica.
+#
+# Y SE DEJA CONSTANCIA DE CADA PASO. Si un prefijo hecho asi falla, el registro
+# tiene que decir en que paso y con que mandato, porque la siguiente pregunta
+# va a ser "¿pero lo hizo igual que Batocera?".
+
+BATO_PASOS=0            # cuantos pasos del procedimiento se han dado
+BATO_DETALLE=""         # el parte, para el dialogo del final
+
+bato_wine_bins() {
+    # LAS RUTAS DE WINE, CON LA MISMA PREFERENCIA QUE init_wine() DE BATOCERA.
+    #
+    # $1 = carpeta del runner. Deja BATO_WINE, BATO_WINE64, BATO_WINESERVER,
+    # BATO_LIB32, BATO_LIB64 y BATO_INF.
+    #
+    # El orden de busqueda es el suyo, literal:
+    #
+    #   WINE     = lib/wine/i386-unix/wine   si existe, si no bin/wine
+    #   WINE64   = lib/wine/x86_64-unix/wine64, si no bin/wine64, si no WINE
+    #   LIB64    = lib64/wine si existe, si no lib/wine
+    #   LIB32    = lib32/wine si existe, si no lib/wine
+    #
+    # La diferencia con lo nuestro es la primera linea: nosotros cogiamos
+    # bin/wine y Batocera prefiere el de i386-unix. Para wineboot importa.
+    local r="${1:-}"
+    BATO_WINE=""; BATO_WINE64=""; BATO_WINESERVER=""
+    BATO_LIB32=""; BATO_LIB64=""; BATO_INF=""
+    [ -d "$r" ] || return 1
+    # GE-Proton mete todo bajo files/; un Wine normal lo tiene en la raiz.
+    local base="$r"
+    [ -d "$r/files/bin" ] && base="$r/files"
+    [ -d "$r/dist/bin" ] && base="$r/dist"
+    if [ -x "$base/lib/wine/i386-unix/wine" ]; then
+        BATO_WINE="$base/lib/wine/i386-unix/wine"
+    elif [ -x "$base/bin/wine" ]; then
+        BATO_WINE="$base/bin/wine"
+    fi
+    [ -n "$BATO_WINE" ] || return 1
+    if [ -x "$base/lib/wine/x86_64-unix/wine64" ]; then
+        BATO_WINE64="$base/lib/wine/x86_64-unix/wine64"
+    elif [ -x "$base/bin/wine64" ]; then
+        BATO_WINE64="$base/bin/wine64"
+    else
+        BATO_WINE64="$BATO_WINE"
+    fi
+    [ -x "$base/bin/wineserver" ] && BATO_WINESERVER="$base/bin/wineserver"
+    if [ -d "$base/lib64/wine" ]; then BATO_LIB64="$base/lib64/wine"
+    else BATO_LIB64="$base/lib/wine"; fi
+    if [ -d "$base/lib32/wine" ]; then BATO_LIB32="$base/lib32/wine"
+    else BATO_LIB32="$base/lib/wine"; fi
+    [ -f "$base/share/wine/wine.inf" ] && BATO_INF="$base/share/wine/wine.inf"
+    return 0
+}
+
+bato_dll_dir() {
+    # DONDE ESTAN LAS DLL DE UN COMPONENTE DEL RUNNER. $1 = componente
+    # (vkd3d, icu), $2 = arquitectura (x86_64-windows, i386-windows).
+    #
+    # Es find_runner_dll_dir() de Batocera, con su mismo orden de busqueda: los
+    # runners cambian de distribucion de carpetas segun quien los compile, y
+    # por eso se prueban cuatro sitios y no uno.
+    local comp="${1:-}" arch="${2:-}" libdir altdir i
+    local base="${BATO_BASE:-}"
+    if [ "$arch" = "i386-windows" ]; then
+        libdir="$BATO_LIB32"; altdir="$base/lib"
+    else
+        libdir="$BATO_LIB64"; altdir="$base/lib64"
+    fi
+    for i in "$BATO_LIB64/$comp/$arch" "$base/lib/$comp/$arch" \
+             "$libdir/$comp" "$altdir/$comp"; do
+        [ -d "$i" ] && { printf '%s' "$i"; return 0; }
+    done
+    return 1
+}
+
+bato_libs_runner() {
+    # geproton_libs_install() DE BATOCERA: las DLL de vkd3d y icu del runner,
+    # enlazadas dentro del prefijo.
+    #
+    # Su comentario explica por que hace falta: "wine-tkg && wine-proton have
+    # wined3d dll statically linked. ge-proton need to manually add libvkd3d &&
+    # icu", citando bottlesdevs/Bottles#3485.
+    local pfx="${1:-}" sys32="${1:-}/drive_c/windows/system32"
+    local wow64="${1:-}/drive_c/windows/syswow64" src n=0
+    if [ "${BATO_WINEARCH:-win64}" = win32 ]; then
+        wow64="$sys32"
+        mkdir -p "$sys32" || return 1
+    else
+        mkdir -p "$sys32" "$wow64" || return 1
+        if src="$(bato_dll_dir vkd3d x86_64-windows)"; then
+            ln -sf "$src"/*.dll "$sys32" 2>/dev/null && n=$((n+1))
+            log "    vkd3d (64 bits) desde $src"
+        fi
+        if src="$(bato_dll_dir icu x86_64-windows)"; then
+            ln -sf "$src"/*.dll "$sys32" 2>/dev/null && n=$((n+1))
+            log "    icu (64 bits) desde $src"
+        fi
+    fi
+    if src="$(bato_dll_dir vkd3d i386-windows)"; then
+        ln -sf "$src"/*.dll "$wow64" 2>/dev/null && n=$((n+1))
+        log "    vkd3d (32 bits) desde $src"
+    fi
+    if src="$(bato_dll_dir icu i386-windows)"; then
+        ln -sf "$src"/*.dll "$wow64" 2>/dev/null && n=$((n+1))
+        log "    icu (32 bits) desde $src"
+    fi
+    [ "$n" = 0 ] && log "    este runner no trae vkd3d ni icu aparte (los lleva dentro); no hay nada que enlazar"
+    return 0
+}
+
+bato_esperar_wineserver() {
+    # waitWineServer DE BATOCERA: "wineserver -w", y SIN LIMITE (su primer
+    # argumento es 0 en todas las llamadas de la creacion del prefijo).
+    #
+    # Es el paso que mas se olvida y el que evita media clase de fallos: hasta
+    # que wineserver no termina, el prefijo esta a medio escribir.
+    #
+    # Aqui si se le pone un tope -alto- porque un wineserver colgado no puede
+    # dejar a WProton bloqueado para siempre: eso ya nos paso con la espera de
+    # los juegos nativos. Si salta el tope se dice.
+    local pfx="${1:-}" tope="${2:-120}"
+    [ -n "${BATO_WINESERVER:-}" ] || { log "    (este runner no trae wineserver; no se puede esperar)"; return 0; }
+    local t0; t0="$(date +%s)"
+    if WINEPREFIX="$pfx" timeout "$tope" "$BATO_WINESERVER" -w 2>>"$LOG_FILE"; then
+        log "    wineserver terminado tras $(( $(date +%s) - t0 ))s"
+        return 0
+    fi
+    log "    AVISO: el wineserver seguia vivo tras ${tope}s; se sigue de todas formas" WARN
+    return 0
+}
+
+bato_arch_del_prefijo() {
+    # setPrefixArch DE BATOCERA, en lo que aplica aqui.
+    #
+    # Batocera lee "#arch=" de userdef.reg del propio prefijo, y solo acepta
+    # win32 si el runner TIENE lib/wine/i386-unix/wine -los builds wow64-only
+    # ya no lo traen y no lo necesitan: corren los exe de 32 bits en su prefijo
+    # normal-. Esa comprobacion es la que evita el fallo que ellos mismos
+    # documentan: "Prefix is a real win32 prefix but runner no longer supports
+    # WINEARCH=win32".
+    local pfx="${1:-}" quiere="${2:-win64}" val
+    BATO_WINEARCH=win64
+    local soporta=0
+    # "Admite win32 de verdad" = el runner tiene el wine de i386-unix. Es la
+    # misma comprobacion que hace Batocera, solo que ellos miran el fichero y
+    # aqui ya se sabe cual se eligio en bato_wine_bins.
+    case "$BATO_WINE" in */i386-unix/wine) soporta=1 ;; esac
+    if [ -f "$pfx/userdef.reg" ]; then
+        val="$(sed -n 's/^#arch=//p' "$pfx/userdef.reg" 2>/dev/null | head -n1)"
+        if [ -n "$val" ]; then
+            log "    el prefijo ya declara arch='$val' en su userdef.reg"
+            if [ "$val" = win32 ]; then
+                if [ "$soporta" = 0 ]; then
+                    BATO_MOTIVO="el prefijo es win32 de verdad y este runner ya no admite WINEARCH=win32: borralo y rehazlo, o usa un runner que lo admita"
+                    return 1
+                fi
+                BATO_WINEARCH=win32
+            fi
+            return 0
+        fi
+    fi
+    if [ "$quiere" = win32 ] && [ ! -d "$pfx" ]; then
+        if [ "$soporta" = 1 ]; then
+            BATO_WINEARCH=win32
+            log "    arquitectura: win32 (lo has pedido y el runner lo admite)"
+        else
+            log "    arquitectura: win64 (pediste win32, pero este runner no tiene modo win32 de verdad; los programas de 32 bits van igual por wow64)"
+        fi
+    else
+        log "    arquitectura: win64"
+    fi
+    return 0
+}
+
+bato_enlaces_a_carpetas() {
+    # sandboxing_prefix DE BATOCERA, literal.
+    #
+    # Un prefijo recien hecho enlaza Documents, Music, Pictures... a TU carpeta
+    # personal de verdad. Batocera deshace esos enlaces y pone carpetas. Y su
+    # comentario avisa de un detalle que es facil pasar por alto: NO se crean
+    # todas las carpetas, solo las que existian como enlace, porque Wine viejo
+    # usa "My Music" y el nuevo "Music", y crearlas todas deja las dos.
+    #
+    # La lista es la suya, en su orden.
+    local pfx="${1:-}" usuario="" d n=0
+    for usuario in steamuser root; do
+        [ -d "$pfx/drive_c/users/$usuario" ] && break
+        usuario=""
+    done
+    if [ -z "$usuario" ]; then
+        # Batocera arranca con USERNAME ya puesto por el entorno; aqui se busca
+        # el que haya, que con Proton es steamuser y con Wine el del sistema.
+        for d in "$pfx"/drive_c/users/*/; do
+            [ -d "$d" ] || continue
+            case "$(basename "$d")" in Public|All\ Users) continue ;; esac
+            usuario="$(basename "$d")"; break
+        done
+    fi
+    [ -n "$usuario" ] || { log "    no hay carpeta de usuario en el prefijo; no hay enlaces que deshacer"; return 0; }
+    log "    usuario del prefijo: $usuario"
+    for d in "Downloads" "Documents" "My Documents" "Music" "My Music" \
+             "Pictures" "My Pictures" "Videos" "My Videos" "Templates"; do
+        if [ -L "$pfx/drive_c/users/$usuario/$d" ]; then
+            unlink "$pfx/drive_c/users/$usuario/$d" || return 1
+            mkdir -p "$pfx/drive_c/users/$usuario/$d" || return 1
+            log "    '$d' era un enlace a tu carpeta personal: ahora es una carpeta del prefijo"
+            n=$((n+1))
+        fi
+    done
+    [ "$n" = 0 ] && log "    no habia ningun enlace que deshacer"
+    return 0
+}
+
+bato_registro() {
+    # LA PARTE DE reg_install() QUE ES DEL PREFIJO Y NO DEL USUARIO.
+    #
+    # Batocera mete ahi tres cosas distintas: los .reg que la persona deja
+    # caer en su carpeta (eso aqui lo hace "Importar un .reg"), cosas de su
+    # hardware (NVAPI, el fondo del escritorio virtual) y UNA que es del
+    # prefijo en si:
+    #
+    #   HKLM\System\CurrentControlSet\Services\winebus  DisableHidraw
+    #
+    # La ponen SIEMPRE, a 1 salvo que el ajuste enable_hidraw diga lo
+    # contrario, y solo si no esta ya puesta -comprueban system.reg antes de
+    # llamar a wine, que es lo que evita un arranque de wine por lanzamiento-.
+    #
+    # Es la misma clave de la que hablamos con el mando fantasma, asi que aqui
+    # se respeta lo que el juego tenga pedido: si el perfil quiere hidraw, 0.
+    local pfx="${1:-}" quiere="${2:-1}" tiene
+    [ -n "$BATO_WINE" ] || return 1
+    tiene=0
+    grep -q "\"DisableHidraw\"=dword:0000000$quiere" "$pfx/system.reg" 2>/dev/null && tiene=1
+    if [ "$tiene" = 1 ]; then
+        log "    DisableHidraw ya esta a $quiere; no se toca el registro"
+        return 0
+    fi
+    log "    poniendo DisableHidraw=$quiere en winebus (como hace Batocera)"
+    WINEPREFIX="$pfx" "$BATO_WINE" reg add \
+        'HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\winebus' \
+        /v DisableHidraw /t REG_DWORD /d "$quiere" /f >>"$LOG_FILE" 2>&1 \
+        || log "    AVISO: no se pudo escribir DisableHidraw" WARN
+    bato_esperar_wineserver "$pfx"
+    return 0
+}
+
+bato_fuentes_del_runner() {
+    # La parte de fonts_install() que no es del usuario: las fuentes que trae
+    # el propio runner, ENLAZADAS (no copiadas) en drive_c/windows/Fonts.
+    #
+    # Y con su salvedad: si ya hay un fichero con ese nombre y NO es un enlace,
+    # se deja en paz -es una fuente que instalo el juego-.
+    local pfx="${1:-}" src="${BATO_BASE:-}/share/fonts" f dst n=0
+    [ -d "$src" ] || { log "    el runner no trae fuentes propias"; return 0; }
+    mkdir -p "$pfx/drive_c/windows/Fonts" || return 1
+    for f in "$src"/*.ttf "$src"/*.ttc; do
+        [ -e "$f" ] || continue
+        dst="$pfx/drive_c/windows/Fonts/${f##*/}"
+        [ -e "$dst" ] && [ ! -L "$dst" ] && continue
+        ln -sf "$f" "$dst" || return 1
+        n=$((n+1))
+    done
+    log "    $n fuente(s) del runner enlazadas"
+    return 0
+}
+
+bato_prefijo_crear() {
+    # EL PROCEDIMIENTO COMPLETO, EN EL ORDEN DE BATOCERA.
+    #
+    # $1 = ruta del prefijo, $2 = carpeta del runner, $3 = win32|win64 (lo que
+    # se pide; manda lo que el runner admita), $4 = 1 si se quiere hidraw.
+    #
+    # Devuelve 0 si el prefijo quedo hecho. BATO_DETALLE trae el parte y
+    # BATO_MOTIVO el fallo, si lo hubo.
+    local pfx="${1:-}" rdir="${2:-}" quiere="${3:-win64}" hidraw="${4:-0}"
+    BATO_PASOS=0; BATO_DETALLE=""; BATO_MOTIVO=""
+    paso() { BATO_PASOS=$((BATO_PASOS+1))
+             BATO_DETALLE="$BATO_DETALLE
+  $BATO_PASOS. $1"
+             log "prefijo Batocera: paso $BATO_PASOS - $1"; }
+    case "$pfx" in ""|/|/*/..*) BATO_MOTIVO="ruta de prefijo no valida"; return 1 ;; esac
+    [ -d "$rdir" ] || { BATO_MOTIVO="no se encuentra el runner ($rdir)"; return 1; }
+    log "prefijo Batocera: ================= empieza ================="
+    log "prefijo Batocera: procedimiento de batocera-wine (commit d196627), reproducido paso a paso"
+    log "prefijo Batocera: prefijo = $pfx"
+    log "prefijo Batocera: runner  = $rdir"
+
+    # (0) LAS RUTAS DE WINE, con la preferencia de Batocera.
+    if ! bato_wine_bins "$rdir"; then
+        BATO_MOTIVO="en ese runner no hay ningun 'wine' que ejecutar"
+        return 1
+    fi
+    BATO_BASE="$rdir"
+    [ -d "$rdir/files/bin" ] && BATO_BASE="$rdir/files"
+    [ -d "$rdir/dist/bin" ] && BATO_BASE="$rdir/dist"
+    paso "wine = $BATO_WINE"
+    log "    wine64 = $BATO_WINE64"
+    log "    wineserver = ${BATO_WINESERVER:-(no trae)}"
+    log "    lib32 = $BATO_LIB32 | lib64 = $BATO_LIB64"
+    log "    wine.inf = ${BATO_INF:-(no hay)}"
+
+    # (1) setPrefixArch
+    if ! bato_arch_del_prefijo "$pfx" "$quiere"; then
+        return 1
+    fi
+    paso "arquitectura: $BATO_WINEARCH"
+
+    # (2) createOrUpdatePrefix
+    if [ ! -e "$pfx" ]; then
+        mkdir -p "$pfx" || { BATO_MOTIVO="no se pudo crear la carpeta del prefijo"; return 1; }
+        paso "carpeta del prefijo creada"
+        # EL OVERRIDE DE BATOCERA MIENTRAS SE CREA. Literal, y solo aqui.
+        log "    WINEDLLOVERRIDES=winegstreamer= (lo que Batocera llama"
+        log "    'workaround wine bottle creation issue with debug enabled')"
+        if ! WINEPREFIX="$pfx" WINEARCH="$BATO_WINEARCH" \
+             WINEDLLOVERRIDES="winegstreamer=" \
+             "$BATO_WINE" wineboot -u >>"$LOG_FILE" 2>&1; then
+            # (4) SI FALLA, SE BORRA. Nunca un prefijo a medias.
+            log "    el wineboot fallo: se BORRA el prefijo a medias (como hace Batocera)" WARN
+            rm -rf -- "${pfx:?}"
+            BATO_MOTIVO="el wineboot inicial fallo; mira el registro. El prefijo a medias se ha borrado"
+            return 1
+        fi
+        paso "wineboot -u hecho con el wine de 32 bits"
+        bato_esperar_wineserver "$pfx"
+        paso "esperado el wineserver"
+        bato_libs_runner "$pfx" || { BATO_MOTIVO="no se pudieron enlazar las DLL del runner"; return 1; }
+        paso "DLL de vkd3d e icu del runner"
+        [ -n "$BATO_INF" ] && printf '%s' "$(stat -c %Y "$BATO_INF" 2>/dev/null)" > "$pfx/.update-timestamp" 2>/dev/null
+    else
+        # EL PREFIJO YA ESTA: solo se rehace si el runner cambio.
+        local stamp inf_ts
+        stamp="$(cat "$pfx/.update-timestamp" 2>/dev/null)"
+        inf_ts="$(stat -c %Y "$BATO_INF" 2>/dev/null)"
+        if [ -n "$BATO_INF" ] && [ "$stamp" != "$inf_ts" ]; then
+            log "    el runner ha cambiado (${stamp:-ninguno} != $inf_ts): se actualiza el prefijo"
+            # Sus enlaces se rehacen abajo, asi que primero fuera los viejos.
+            find "$pfx/drive_c/windows/system32" "$pfx/drive_c/windows/syswow64" \
+                -maxdepth 1 -type l -delete 2>/dev/null
+            paso "enlaces viejos de system32/syswow64 quitados"
+            bato_libs_runner "$pfx" || { BATO_MOTIVO="no se pudieron enlazar las DLL del runner"; return 1; }
+            paso "DLL de vkd3d e icu del runner nuevo"
+            # Si hay dotnet instalado por tricks, Wine-Mono tiene que quedarse
+            # fuera o el wineboot da error. Es su comprobacion, literal.
+            local ov=""
+            grep -q '"\*mscoree"="native"' "$pfx/user.reg" 2>/dev/null && ov="mscoree,mshtml="
+            [ -n "$ov" ] && log "    user.reg tiene mscoree nativo: WINEDLLOVERRIDES=$ov"
+            WINEPREFIX="$pfx" WINEDLLOVERRIDES="$ov" "$BATO_WINE" wineboot -u >>"$LOG_FILE" 2>&1
+            paso "wineboot -u de actualizacion"
+            bato_esperar_wineserver "$pfx"
+            printf '%s' "$inf_ts" > "$pfx/.update-timestamp" 2>/dev/null
+            paso "fecha del runner apuntada en .update-timestamp"
+        else
+            log "    el prefijo ya existe y el runner es el mismo: no hay que rehacerlo"
+            paso "prefijo existente, al dia"
+        fi
+    fi
+
+    # (5) reg_install, la parte del prefijo
+    bato_registro "$pfx" "$([ "$hidraw" = 1 ] && printf 0 || printf 1)"
+    paso "registro: DisableHidraw"
+
+    # (6) fonts_install, la parte del runner
+    bato_fuentes_del_runner "$pfx" || { BATO_MOTIVO="no se pudieron poner las fuentes"; return 1; }
+    paso "fuentes del runner"
+
+    # (7) sandboxing_prefix
+    bato_enlaces_a_carpetas "$pfx" || { BATO_MOTIVO="no se pudieron deshacer los enlaces de la carpeta personal"; return 1; }
+    paso "enlaces de la carpeta personal convertidos en carpetas"
+
+    log "prefijo Batocera: ============ listo, $BATO_PASOS pasos ============"
+    unset -f paso
+    return 0
+}
+
+bato_prefijo_ui() {
+    # LA OPCION: "Crear prefijo de Batocera". $1 = gid.
+    #
+    # POR QUE ES UNA OPCION APARTE Y NO "mejorar" LA QUE YA HAY
+    #
+    # Lo pidieron asi, y tiene sentido: si el prefijo de siempre falla en un
+    # juego, lo que hace falta es poder probar OTRO procedimiento entero, no
+    # el mismo con un parche. Mezclarlos deja un tercer procedimiento que no
+    # es ni el nuestro ni el de Batocera, y entonces "a mi en Batocera me va"
+    # vuelve a no poder compararse con nada.
+    #
+    # El prefijo se hace EN SU SITIO, con el nombre del runner dentro, que es
+    # otra de las cosas que Batocera hace y nosotros no:
+    #
+    #     prefixes/<juego>.batocera/<runner>/
+    #
+    # Asi conviven el de siempre y el de Batocera, y cambiar de runner no
+    # reutiliza un prefijo hecho con otro.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 0
+    # EL RUNNER SALE DEL PERFIL YA CARGADO, por get_runner_path, que es la
+    # misma puerta que usa el lanzamiento. Asi el prefijo se hace con el
+    # MISMO wine con el que se va a jugar, que es justo el punto de que
+    # Batocera tenga un prefijo por runner.
+    local rdir rname
+    rdir="$(get_runner_path 2>/dev/null)" || rdir=""
+    if [ -z "$rdir" ] || [ ! -d "$rdir" ]; then
+        ui_error "No se sabe que runner usa este juego, y el procedimiento de
+Batocera depende del runner: el prefijo se hace con SU wine y
+con sus DLL.
+
+Elige un runner en Ajustes del juego y vuelve."
+        return 0
+    fi
+    rname="$(basename "$rdir")"
+    local pfx="$PREFIX_DIR/$gid.batocera/$rname"
+    local existe="no"; [ -d "$pfx" ] && existe="si"
+    ui_ask "¿Crear el prefijo con el procedimiento de Batocera?
+
+  Juego:   $gid
+  Runner:  $rname
+  Prefijo: prefixes/$gid.batocera/$rname$([ "$existe" = si ] && printf '
+            (ya existe: se actualizara si el runner cambio)')
+
+Esto NO es nuestra forma de crear un prefijo: es la de
+Batocera, leida de su codigo (batocera-wine) y hecha paso a
+paso. Las diferencias que importan:
+
+  - el wineboot lo hace el wine de 32 bits, con
+    WINEDLLOVERRIDES=winegstreamer=
+  - se espera al wineserver antes de seguir
+  - si falla, el prefijo se borra; nunca queda a medias
+  - un prefijo por runner, y se rehace si el runner cambia
+  - los enlaces de Documentos, Musica, Imagenes... se
+    convierten en carpetas de verdad del prefijo
+  - se le meten las DLL de vkd3d e icu y las fuentes del runner
+
+Cada paso queda en el registro." || return 0
+
+    progress_start "Prefijo de Batocera" || true
+    progress_set 10 "Preparando..."
+    local hidraw=0
+    [ "${PROTON_ENABLE_HIDRAW:-0}" = 1 ] && hidraw=1
+    if bato_prefijo_crear "$pfx" "$rdir" "${WINEARCH_PEDIDO:-win64}" "$hidraw"; then
+        progress_stop || true
+        # Y SE DEJA APUNTADO EN EL PERFIL, que si no el juego no lo usa.
+        PREFIX_MODE=own
+        PREFIX_BATOCERA="$rname"
+        write_full_profile "$gid"
+        ui_info "Prefijo de Batocera hecho ($BATO_PASOS pasos).
+$BATO_DETALLE
+
+El juego pasa a usar su prefijo propio. Si algo falla, el
+registro trae cada paso con su mandato."
+    else
+        progress_stop || true
+        ui_error "No se pudo crear el prefijo de Batocera:
+${BATO_MOTIVO:-sin motivo apuntado}
+
+El registro trae los pasos que si se dieron."
+    fi
+    return 0
+}
+
 wine_matar_prefijo() {
     # Mata TODOS los procesos del prefijo, cuelguen de donde cuelguen.
     # $1 = carpeta del runner (opcional; si falta se busca uno).
@@ -59623,16 +63668,36 @@ covers_wide_preparar() {
 PROGRESS_PID=""
 
 progress_start() {
-    # Ventana de progreso con pygame. $1 = titulo
+    # Ventana de progreso con pygame. $1 = titulo, $2 = "cancelable" (opcional)
+    #
+    # LO DE CANCELAR NO SE OFRECE SIEMPRE, Y ES A PROPOSITO.
+    #
+    # Esta ventana la usan tambien la instalacion del runtime y el
+    # empaquetado, y cortar eso por la mitad deja cosas a medias: un prefijo
+    # sin terminar, un .wsquashfs roto. Hoy solo las DESCARGAS se abren como
+    # cancelables, porque una descarga se tira y se vuelve a empezar sin que
+    # pase nada.
     PROGRESS_PID=""; PROGRESS_FILE=""
     menu_grafico_disponible || return 0
     pad_bridge_stop
     PROGRESS_FILE="$(mktemp)"
+    # Por si quedo una peticion de cancelar de una vez anterior.
+    rm -f "$PROGRESS_FILE.cancel" 2>/dev/null
     printf '0|Preparando...\n' > "$PROGRESS_FILE"
+    local _canc=""
+    [ "${2:-}" = cancelable ] && _canc=cancelable
     PYGAME_HIDE_SUPPORT_PROMPT=1 SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1 \
-        env -u LD_PRELOAD "$PY_BIN" "$(menu_helper progress)" progress "$1" "$PROGRESS_FILE" < /dev/null >> "$LOG_FILE" 2>&1 &
+        env -u LD_PRELOAD "$PY_BIN" "$(menu_helper progress)" progress "$1" "$PROGRESS_FILE" $_canc < /dev/null >> "$LOG_FILE" 2>&1 &
     PROGRESS_PID=$!
     return 0
+}
+
+progress_cancelado() {
+    # ¿Ha pedido la persona cancelar? Lo escribe la ventana de progreso en un
+    # fichero APARTE: el de estado lo reescribe bash cada segundo y se
+    # llevaria por delante lo que escribiera la ventana.
+    [ -n "${PROGRESS_FILE:-}" ] || return 1
+    [ -f "$PROGRESS_FILE.cancel" ]
 }
 
 progress_set() {
@@ -59643,6 +63708,7 @@ progress_set() {
 }
 
 progress_stop() {
+    [ -n "$PROGRESS_FILE" ] && rm -f "$PROGRESS_FILE.cancel" 2>/dev/null
     [ -n "$PROGRESS_FILE" ] && printf 'DONE|\n' > "$PROGRESS_FILE" 2>/dev/null
     if [ -n "$PROGRESS_PID" ]; then
         local i
@@ -60805,10 +64871,18 @@ browse_start() {
     # Carpeta inicial del navegador: la última visitada. Si ya no existe
     # (p.ej. la carpeta del juego se borro al empaquetar), sube por sus
     # padres hasta encontrar una que siga estando.
-    local d="${LAST_BROWSE:-}"
-    while [ -n "$d" ] && [ "$d" != "/" ]; do
+    # Absoluta antes de subir: si en settings.conf quedo una ruta relativa
+    # -de una version vieja o de un fichero editado a mano-, subir por sus
+    # padres acaba en "." y se devolveria "." como carpeta del explorador,
+    # que es distinta cada vez segun desde donde se lance WProton.
+    local d; d="$(ruta_cli_absoluta "${LAST_BROWSE:-}")"
+    local _prev _saltos=0
+    while [ -n "$d" ] && [ "$d" != "/" ] && [ "$_saltos" -lt 64 ]; do
         [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+        _prev="$d"
         d="$(dirname "$d")"
+        [ "$d" = "$_prev" ] && break
+        _saltos=$((_saltos+1))
     done
     printf '%s' "${1:-$HOME}"
 }
@@ -60855,19 +64929,31 @@ browse_for_path() {
         return 0
     fi
     while true; do
-        dirs="$(find "$cur" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f/\n' 2>/dev/null | sort)"
+        # LOS ENLACES, TAMBIEN EN EL EXPLORADOR.
+        #
+        # Mismo agujero que en la biblioteca y por el mismo motivo: "-type d"
+        # no casa un enlace -find lo clasifica como "l"-. Y aqui duele de otra
+        # forma: este es el explorador con el que se AÑADE un juego a mano, o
+        # se elige un .keys o un .reg. Si el juego esta enlazado, no sale en la
+        # biblioteca Y TAMPOCO se puede ir a buscarlo: no hay forma de añadirlo.
+        #
+        # Se pide "-xtype": el enlace tiene que apuntar a algo del tipo que se
+        # esta buscando. Uno colgado no sale, que es lo que hace falta.
+        dirs="$(find "$cur" -mindepth 1 -maxdepth 1 \
+            \( -type d -o \( -type l -a -xtype d \) \) \
+            ! -name '.*' -printf '%f/\n' 2>/dev/null | sort)"
         files=""
         if [ "$mode" = "keys" ]; then
-            files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f -iname '*.keys' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
+            files="$(find "$cur" -mindepth 1 -maxdepth 1 \( -type f -o \( -type l -a -xtype f \) \) -iname '*.keys' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
             header=".. (subir)"
         elif [ "$mode" = "reg" ]; then
             # Los .reg tienen su propio modo. Con "file" se filtraba por
             # extensiones de JUEGO (wsquashfs, zip, exe...) y no salia
             # ninguno: la pantalla aparecia vacia y no habia nada que elegir.
-            files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f -iname '*.reg' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
+            files="$(find "$cur" -mindepth 1 -maxdepth 1 \( -type f -o \( -type l -a -xtype f \) \) -iname '*.reg' ! -name '.*' -printf '%f\n' 2>/dev/null | sort)"
             header=".. (subir)"
         elif [ "$mode" = "file" ] || [ "$mode" = "play" ]; then
-            files="$(find "$cur" -mindepth 1 -maxdepth 1 -type f \( \
+            files="$(find "$cur" -mindepth 1 -maxdepth 1 \( -type f -o \( -type l -a -xtype f \) \) \( \
                 -iname '*.wsquashfs' -o -iname '*.squashfs' -o -iname '*.dwarfs' -o -iname '*.zip' \
                 -o -iname '*.7z' -o -iname '*.rar' -o -iname '*.001' \
                 -o -iname '*.z01' -o -iname '*.exe' -o -iname '*.bat' \
@@ -61504,14 +65590,23 @@ find_paquetes() {
     # se quedaba sin biblioteca y sin decir por que.
     local raiz="${1:-}" hondo="${2:-3}"
     [ -d "$raiz" ] || return 0
+    # LOS ARCHIVOS ENLAZADOS, IGUAL QUE LAS CARPETAS ENLAZADAS.
+    #
+    # Mismo agujero que en lista_juegos y por la misma razon: "-type f" no casa
+    # un enlace. Quien tiene los .wsquashfs en un disco externo y los enlaza en
+    # games/ -para tener la biblioteca junta sin duplicar gigas- no los veia.
+    # Y aqui es mas facil de pasar por alto que con las carpetas, porque el
+    # explorador de ficheros SI los enseña: el juego se puede añadir a mano y
+    # luego no aparece en la lista.
     find "$raiz" -maxdepth "$hondo" \
         \( -name '$RECYCLE.BIN' -o -name 'RECYCLER' \
            -o -name 'System Volume Information' -o -name 'lost+found' \
            -o -name '.Trash-*' -o -name 'found.???' \
            -o -name '.Spotlight-V100' -o -name '.fseventsd' \
            -o -name '.TemporaryItems' \) -prune -o \
-        -type f \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
-                   -o -iname '*.dwarfs' \) -print 2>/dev/null
+        \( -type f -o \( -type l -a -xtype f \) \) \
+        \( -iname '*.wsquashfs' -o -iname '*.squashfs' \
+           -o -iname '*.dwarfs' \) -print 2>/dev/null
     # LOS JUEGOS DE LINUX SUELTOS, Y SOLO EN EL PRIMER NIVEL.
     #
     # Un .sh o un .AppImage dejado en la carpeta de juegos ES un juego, y hasta
@@ -61525,7 +65620,7 @@ find_paquetes() {
     # juego llenaria la lista de entradas que no son juegos. En el primer nivel
     # de la carpeta de juegos, en cambio, lo que hay puesto lo ha puesto el
     # usuario a proposito.
-    find "$raiz" -maxdepth 1 -type f \
+    find "$raiz" -maxdepth 1 \( -type f -o \( -type l -a -xtype f \) \) \
         \( -iname '*.sh' -o -iname '*.AppImage' \) -print 2>/dev/null
 }
 
@@ -61538,6 +65633,31 @@ es_juego_carpeta() {
     #   - tiene un lanzador .sh
     #   - contiene algun .exe/.bat (hasta 4 niveles: muchos juegos lo esconden
     #     en Binaries/Win64/ o similar)
+    # OJO CON EL "-H" DE LOS find DE AQUI ABAJO, QUE NO ES ADORNO.
+    #
+    # EL CASO (28/10): un tester con "Black Myth Wukong.wsquashfs" ENLAZADO en
+    # su carpeta de juegos. El 27/10 ya se arreglo que lista_juegos y
+    # find_paquetes reconocieran los enlaces... y una carpeta enlazada SEGUIA
+    # sin salir en la biblioteca. El arreglo estaba a medias y la prueba no lo
+    # vio porque FINGIA esta funcion.
+    #
+    # Por que: find NO entra en un enlace a carpeta que se le da como camino.
+    #
+    #     find  enlace_a_carpeta -type f   -> nada
+    #     find -H enlace_a_carpeta -type f -> los ficheros de dentro
+    #
+    # Asi que lista_juegos encontraba el enlace, se lo pasaba a esta funcion,
+    # y esta contestaba "no es un juego" porque no veia ningun .exe dentro.
+    # El juego estaba, el enlace estaba bien, y no aparecia.
+    #
+    # Se usa -H y no -L a proposito, y es la diferencia que importa:
+    #
+    #   -H  sigue el enlace QUE SE LE DA como camino, y nada mas
+    #   -L  sigue TODOS los enlaces que encuentre por dentro
+    #
+    # Con -L, un juego que traiga un enlace a /usr o a la carpeta personal se
+    # recorreria entero: mucho mas lento y con riesgo de bucles. Lo que hace
+    # falta es solo lo primero.
     local d="$1"
     case "$(printf '%s' "$d" | tr 'A-Z' 'a-z') " in
         *.pc\ ) return 0 ;;
@@ -61547,18 +65667,18 @@ es_juego_carpeta() {
     # -print -quit en vez de "| head -n1": find para en cuanto encuentra uno, y
     # ademas se ahorra un proceso. Se ejecuta una vez POR CARPETA de la
     # biblioteca, asi que con muchos juegos se nota.
-    [ -n "$(find "$d" -maxdepth 1 -type f -name '*.sh' -print -quit 2>/dev/null)" ] && return 0
+    [ -n "$(find -H "$d" -maxdepth 1 -type f -name '*.sh' -print -quit 2>/dev/null)" ] && return 0
     # OJO con la profundidad: sin limite, una carpeta SIN ejecutable se
     # recorre entera. Con juegos de miles de ficheros y una biblioteca
     # grande, eso son minutos de espera al abrir la lista. Cuatro niveles
     # cubren de sobra los casos reales (Binaries/Win64/... incluido).
-    [ -n "$(find "$d" -maxdepth 4 -type f \( -iname '*.exe' -o -iname '*.bat' \) \
+    [ -n "$(find -H "$d" -maxdepth 4 -type f \( -iname '*.exe' -o -iname '*.bat' \) \
             ! -ipath "$d/windows/*" ! -ipath '*/system32/*' \
             -print -quit 2>/dev/null)" ] && return 0
     # Ultimo recurso, tambien acotado: si hay contenido que no sean imagenes
     # ni documentos, se ofrece igual. Mas vale que aparezca y no arranque,
     # que no aparecer y que el usuario no lo encuentre.
-    [ -n "$(find "$d" -maxdepth 2 -type f ! -iname '*.png' ! -iname '*.jpg' \
+    [ -n "$(find -H "$d" -maxdepth 2 -type f ! -iname '*.png' ! -iname '*.jpg' \
             ! -iname '*.jpeg' ! -iname '*.txt' ! -iname '*.pdf' ! -iname '*.md' \
             -print -quit 2>/dev/null)" ] && return 0
     return 1
@@ -61616,11 +65736,25 @@ lista_juegos() {
         # Carpetas que son un juego (incluidas las .pc). Solo se miran las
         # de PRIMER nivel: si no, las subcarpetas del propio juego ("bin",
         # "data"...) saldrian tambien como juegos sueltos.
+        #
+        # Y LOS ENLACES A CARPETA TAMBIEN CUENTAN.
+        #
+        # "-type d" NO casa un enlace: find lo clasifica como "l". Asi que un
+        # juego ENLAZADO en la carpeta de juegos no salia en la biblioteca, y
+        # eso es de lo mas normal: en una Deck con tarjeta, lo habitual es
+        # tener los juegos en /run/media/... y enlazarlos en games/ para
+        # tenerlos todos juntos. El juego estaba ahi, el enlace estaba bien, y
+        # en "Jugar" no aparecia.
+        #
+        # Se pide "-xtype d": enlace QUE APUNTA A UNA CARPETA. Uno colgado no
+        # casa, que es justo lo que hace falta: un enlace roto no es un juego y
+        # no tiene que ensuciar la lista.
         while IFS= read -r d; do
             [ -n "$d" ] || continue
             es_juego_carpeta "$d" && printf '%s\n' "$d"
         done <<EOFDIR
-$(find "$raiz" -mindepth 1 -maxdepth 1 -type d ! -name '.*' \
+$(find "$raiz" -mindepth 1 -maxdepth 1 \
+        \( -type d -o \( -type l -a -xtype d \) \) ! -name '.*' \
         ! -name '$RECYCLE.BIN' ! -name 'RECYCLER' \
         ! -name 'System Volume Information' ! -name 'lost+found' \
         ! -name 'found.???' 2>/dev/null)
@@ -62625,6 +66759,7 @@ cfg_prefijo_menu() {
     local gid="$1" squash="${2:-}" sel
     while :; do
         sel="$(menu "Herramientas del prefijo - $gid" \
+            "Crear prefijo de Batocera (de cero, su procedimiento)" \
             "Abrir winecfg" \
             "Abrir winetricks" \
             "Instalar librerias en el prefijo: $(prefix_label)" \
@@ -63992,10 +68127,14 @@ cfg_ap_teclas() {
                 "Asignar fichero .keys (se copia a profiles/$gid.keys)" \
                 "Quitar el .keys de profiles" \
                 "Estilo de botones: $([ "${KEYS_ESTILO:-xbox}" = nintendo ] && printf 'Batocera' || printf 'Xbox')" \
+                "Remapear un boton en otro: $(remap_describir "${BOTONES_REMAP:-}")" \
                 "Teclado en pantalla: ${TECLADO_POS:-abajo}" \
                 "El juego NO ve el mando: $(case "${KEYS_EXCLUSIVO:-auto}" in \
                     1) printf 'siempre' ;; 0) printf 'nunca' ;; \
                     *) printf 'automatico' ;; esac)" \
+                "$(juego_es_arcade_loader "$squash" "$gid" \
+                    && printf 'Usar el mapeador en Arcade Loader: %s' \
+                       "$([ "${KEYS_AL:-0}" = 1 ] && printf 'si' || printf 'NO (del mando se encarga el)')")" \
                 "<< Volver")
             kmenu="$(menu "Mapeador .keys para $gid (actual: $kstat)" "${kopts[@]}")" || kmenu=""
             case "$kmenu" in
@@ -64032,6 +68171,111 @@ cfg_ap_teclas() {
                         *) _mv="" ;;
                     esac
                     [ -n "$_mv" ] && write_full_profile "$gid" ;;
+                "Remapear un boton en otro:"*)
+                    # PONER UN BOTON EN OTRO, SIN INTERCAMBIARLOS.
+                    #
+                    # Lo pidieron asi: "poner el start en el boton A y que el
+                    # start siga siendo el start". Se elige el boton que se va
+                    # a PULSAR y luego lo que el juego va a RECIBIR. El de
+                    # destino no se toca: sigue haciendo lo suyo.
+                    #
+                    # Lo aplica el mando virtual, que se encendera solo en
+                    # modo copia si estaba apagado: sin eso, se guardaria el
+                    # ajuste y no pasaria nada al jugar.
+                    local _rop=() _rfila _rsel _rorig _rdest
+                    while IFS= read -r _rfila; do
+                        [ -n "$_rfila" ] && _rop+=("${_rfila%%|*}")
+                    done <<REMAPMENU
+$(remap_botones_lista)
+REMAPMENU
+                    _rsel="$(menu "¿Que boton quieres PULSAR?
+
+Lo que elijas aqui dejara de hacer lo suyo y pasara a hacer
+lo del boton que elijas despues." \
+                        "${_rop[@]}" "Quitar todos los remapeos" "<< Volver")" || _rsel=""
+                    case "$_rsel" in
+                        ""|"<< Volver") : ;;
+                        "Quitar todos"*)
+                            BOTONES_REMAP=""
+                            write_full_profile "$gid"
+                            ui_info "Quitados los remapeos de botones de este juego." ;;
+                        *)
+                            _rorig=""
+                            while IFS= read -r _rfila; do
+                                [ "${_rfila%%|*}" = "$_rsel" ] && _rorig="${_rfila#*|}"
+                            done <<REMAPO
+$(remap_botones_lista)
+REMAPO
+                            if [ -z "$_rorig" ]; then
+                                ui_error "No se ha reconocido ese boton."
+                            else
+                            _rdest="$(menu "Al pulsar '$_rsel', ¿que debe recibir el juego?
+
+El boton que elijas aqui NO cambia: seguira haciendo lo suyo
+ademas de esto." \
+                                "${_rop[@]}" "<< Volver")" || _rdest=""
+                            case "$_rdest" in
+                                ""|"<< Volver") : ;;
+                                *)
+                                    local _rcod=""
+                                    while IFS= read -r _rfila; do
+                                        [ "${_rfila%%|*}" = "$_rdest" ] && _rcod="${_rfila#*|}"
+                                    done <<REMAPD
+$(remap_botones_lista)
+REMAPD
+                                    if [ -z "$_rcod" ]; then
+                                        ui_error "No se ha reconocido ese boton."
+                                    elif [ "$_rcod" = "$_rorig" ]; then
+                                        # No es un fallo: es que no hace nada.
+                                        ui_info "Ese es el mismo boton: no hay nada que remapear."
+                                    else
+                                        # SE SUSTITUYE EL PAR DE ESE ORIGEN, no
+                                        # se acumula: dos destinos para el mismo
+                                        # boton no tiene sentido y el ultimo
+                                        # ganaria sin que se viera.
+                                        local _rnuevo="" _rp
+                                        local _ifs2="$IFS"; IFS=','
+                                        for _rp in ${BOTONES_REMAP:-}; do
+                                            IFS="$_ifs2"
+                                            case "$_rp" in
+                                                ""|"$_rorig="*) : ;;
+                                                *) _rnuevo="$_rnuevo,$_rp" ;;
+                                            esac
+                                            IFS=','
+                                        done
+                                        IFS="$_ifs2"
+                                        _rnuevo="${_rnuevo#,}"
+                                        BOTONES_REMAP="${_rnuevo:+$_rnuevo,}$_rorig=$_rcod"
+                                        write_full_profile "$gid"
+                                        log "remapeo de botones de '$gid': $BOTONES_REMAP"
+                                        ui_info "Hecho: al pulsar '$_rsel' el juego recibira '$_rdest'.
+
+'$_rdest' sigue haciendo lo suyo, no se ha intercambiado nada.
+
+Para que esto funcione hace falta el mando virtual, asi que se
+encendera solo en modo copia si lo tenias apagado. Si el juego
+deja de ver el mando, apaga el remapeo y avisa."
+                                    fi ;;
+                            esac
+                            fi ;;
+                    esac ;;
+                "Usar el mapeador en Arcade Loader:"*)
+                    # Un interruptor, no tres estados: o lo lleva Arcade Loader
+                    # -lo normal- o lo llevamos nosotros. No hay "automatico"
+                    # posible aqui, porque desde fuera no se puede saber si el
+                    # juego necesita teclas que Arcade Loader no cubre.
+                    KEYS_AL=$((1-${KEYS_AL:-0}))
+                    write_full_profile "$gid"
+                    if [ "$KEYS_AL" = 1 ]; then
+                        ui_info "Mapeador .keys ENCENDIDO para este juego.
+
+Ojo: Arcade Loader tambien lee el mando. Si notas botones
+repetidos o que el juego no responde, vuelve a apagarlo: es
+que los dos estan cogiendo el mismo mando."
+                    else
+                        ui_info "Mapeador .keys apagado: del mando se encarga
+Arcade Loader, que es lo normal."
+                    fi ;;
                 "Ver las teclas asignadas"*)
                     case "$kres" in
                         '!ROTO')
@@ -65326,6 +69570,7 @@ arranca o no sale el menu, vuelve aqui y cambia de DLL." \
             esac
             install_reshade "$squash" "$gid" "$_rs_dll" "$_rs_var"
             load_profile "$gid" ;;
+        "Crear prefijo de Batocera"*) bato_prefijo_ui "$gid" ;;
         "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
         "Instalar librerias en el prefijo:"*)
             # Directo al prefijo DE ESTE juego. Desde el menu principal hay
@@ -65733,6 +69978,27 @@ game_config_menu() {
         # entender que el juego va por Wine.
         #
         # Mismo truco que pack_row: la fila vacia no se enseña.
+        # LA FILA DE ARCADE LOADER, EN UNA VARIABLE Y NO EN MEDIO DEL MENU.
+        #
+        # No es cosmetico: la auditoria comprueba que cada fila del menu tenga
+        # su rama en el case, y para eso lee la fila. Una etiqueta partida en
+        # cuatro lineas con un "case" dentro no se puede leer, y saltaba con
+        # "nadie la atiende" sobre un trozo de la propia expresion. Las demas
+        # filas calculadas -r_runner, r_prefijo, pack_row- estan asi por lo
+        # mismo.
+        #
+        # En automatico se enseña ADEMAS lo que la deteccion dice, para que
+        # quien lo mire sepa si hace falta tocarlo.
+        local r_esal
+        case "${ES_AL:-auto}" in
+            1) r_esal="Es un juego de Arcade Loader: si" ;;
+            0) r_esal="Es un juego de Arcade Loader: no" ;;
+            *) if juego_es_arcade_loader "$squash"; then
+                   r_esal="Es un juego de Arcade Loader: automatico (reconocido: SI)"
+               else
+                   r_esal="Es un juego de Arcade Loader: automatico (reconocido: no)"
+               fi ;;
+        esac
         local r_runner="Runner (Proton/Wine): $(runner_etiqueta "${RUNNER:-}")"
         local r_prefijo="Prefijo: $(prefix_label)"
         local r_libs="Instalar librerias en el prefijo: $(prefix_label)"
@@ -65781,7 +70047,42 @@ game_config_menu() {
         # <lanzador>.home, creando la carpeta a mano; desde el menu no habia
         # forma-.
         local r_home="Carpeta personal del juego: $(home_juego_label)"
-        if juego_es_nativo "$squash" >/dev/null 2>&1; then
+        local r_exe="Ejecutable: ${EXE_OVERRIDE:-auto (autorun.cmd / escaneo)}"
+        local r_args="Argumentos: $(args_etiqueta "$squash")"
+        local r_pfxtools="Herramientas del prefijo >>"
+        # Solo en los juegos de Arcade Loader: en los demas no significa nada.
+        local r_alcfg=""
+        # UN JUEGO DE ARCADE LOADER NO TIENE NADA DE ESTO (31/10).
+        #
+        # Lo conto Dani probando: "juego funcionando bien y detecto que era de
+        # arcade loader, aun asi te deja elegir runner".
+        #
+        # Y es el mismo descuido de siempre, en el sitio de al lado: esta
+        # condicion solo miraba juego_es_nativo. Un juego de Arcade Loader no
+        # es "nativo" para esa comprobacion -es una imagen con un marcador
+        # dentro, no un ejecutable de Linux-, asi que caia por el else y le
+        # salian TODAS las filas de Wine.
+        #
+        # Lo que se vacia no es una opinion: es lo que lanzar_arcade_loader NO
+        # usa, comprobado leyendola. Ahi no se mira EXE_OVERRIDE, ni
+        # ARGS_OVERRIDE, ni el prefijo, ni home_portable: se le pasa el archivo
+        # entero a arcade-launcher y el decide. Dejar esas filas puestas es
+        # ofrecer ajustes que no hacen nada, que es de lo que venimos.
+        local _es_al_cfg=0
+        juego_es_arcade_loader "$squash" "$gid" >/dev/null 2>&1 && _es_al_cfg=1
+        if [ "$_es_al_cfg" = 1 ]; then
+            r_runner=""; r_prefijo=""; r_libs=""
+            r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""; r_unidad=""
+            r_acomp=""; r_mono=""
+            # Ni ejecutable, ni argumentos, ni herramientas del prefijo, ni
+            # carpeta personal: ninguna de las cuatro llega al juego.
+            r_exe=""; r_args=""; r_pfxtools=""; r_home=""
+            # Y SI UNA QUE SOLO TIENE SENTIDO AQUI: volver a mirar si el
+            # repositorio trae ya la configuracion especial de este juego.
+            # Hace falta porque la busqueda se apunta para no repetirla en cada
+            # arranque, asi que subir el yaml despues no se notaria sin esto.
+            r_alcfg="Buscar su configuracion de Arcade Loader"
+        elif juego_es_nativo "$squash" >/dev/null 2>&1; then
             r_runner=""; r_prefijo=""; r_libs=""
             r_gameid=""; r_umudb=""; r_packpfx=""; r_redist=""; r_unidad=""; r_acomp=""; r_mono=""
             # CASOS ESPECIALES SI SE QUEDA.
@@ -65846,8 +70147,8 @@ game_config_menu() {
             ">> JUGAR AHORA <<" \
             "$r_runner" \
             "$r_version" \
-            "Ejecutable: ${EXE_OVERRIDE:-auto (autorun.cmd / escaneo)}" \
-            "Argumentos: $(args_etiqueta "$squash")" \
+            "$r_exe" \
+            "$r_args" \
             "$r_deps" \
             "$r_prefijo" \
             "$r_home" \
@@ -65863,7 +70164,9 @@ game_config_menu() {
             "Mandos >>" \
             "Mapeador .keys: $kstat" \
             "Rendimiento y compatibilidad >>" \
-            "Herramientas del prefijo >>" \
+            "$r_pfxtools" \
+            "$r_esal" \
+            "$r_alcfg" \
             "Favorito: $(onoff "${FAVORITO:-0}")" \
             "Completado: $(onoff "${COMPLETADO:-0}")" \
             "$([ "${IS_GAMESCOPE:-0}" = 1 ] \
@@ -65877,6 +70180,72 @@ game_config_menu() {
                 # resucitar el .conf que el usuario acaba de tirar.
                 [ "${WP_BORRADO_TOTAL:-0}" = 1 ] || write_full_profile "$gid"
                 return 0 ;;
+            "Buscar su configuracion de Arcade Loader")
+                # SE OLVIDA EL APUNTE Y SE VUELVE A MIRAR.
+                #
+                # La comprobacion normal se hace una vez al dia para no
+                # pedirle nada a GitHub en cada arranque. Eso significa que si
+                # la configuracion se sube justo despues de jugar, puede tardar
+                # en notarse. Esta fila es la salida a eso.
+                # SE FUERZA, sin esperar al dia siguiente. La comprobacion
+                # normal se hace una vez al dia para no preguntar en cada
+                # arranque; esta fila es la salida para cuando acabas de subir
+                # la configuracion y la quieres ya.
+                if al_config_especial "$squash" "$gid" forzar; then
+                    ui_info "Hecho: este juego ya tiene su configuracion
+especial de Arcade Loader.
+
+Esta en Arcade_Loader/userprofiles/, que es donde Arcade Loader
+busca los cambios, asi que no se pierde al actualizarlo.
+
+Si habia una puesta antes, queda al lado con .anterior."
+                else
+                    ui_info "No se ha traido ninguna configuracion nueva.
+
+Puede ser que el repositorio no tenga nada para este juego, o
+que la que ya tienes sea la ultima. El registro dice cual de
+las dos."
+                fi
+                continue ;;
+            "Es un juego de Arcade Loader:"*)
+                # TRES ESTADOS, Y EL AUTOMATICO ES EL DE SERIE.
+                #
+                # Lo pidio Dani el 31/10. Hace falta porque la deteccion no
+                # puede acertar siempre: hay juegos empaquetados ANTES de que
+                # existiera el marcador .windowsloader, que no lo traen y aun
+                # asi son de Arcade Loader. Y al contrario: alguien puede
+                # querer abrir con Wine algo que si lo trae.
+                #
+                # Se enseña lo que la deteccion dice cuando esta en
+                # automatico, para que quien lo mire sepa si hace falta
+                # tocarlo o no.
+                local _esal
+                _esal="$(menu "¿'$gid' es un juego de Arcade Loader?
+
+En automatico se reconoce solo: por el fichero .windowsloader
+que lleva dentro, o por el [AL] del nombre.
+
+Si es de Arcade Loader, se lanza con el y no con Proton ni
+Wine, y el asistente no pregunta por el runner ni el prefijo." \
+                    "Automatico (reconocerlo solo)" \
+                    "Si, es de Arcade Loader" \
+                    "No, lanzarlo con Proton o Wine" \
+                    "<< Volver")" || _esal=""
+                case "$_esal" in
+                    "Automatico"*) ES_AL=auto ;;
+                    "Si, es"*)     ES_AL=1 ;;
+                    "No, lanzarlo"*) ES_AL=0 ;;
+                    *) continue ;;
+                esac
+                # SE GUARDA AQUI MISMO, no al salir del menu.
+                #
+                # juego_es_arcade_loader lee esta casilla con profile_get, o
+                # sea DEL FICHERO. Si solo se dejara en memoria, la propia fila
+                # del menu seguiria enseñando lo de antes y parecería que no se
+                # ha guardado.
+                write_full_profile "$gid"
+                log "ajustes de '$gid': ES_AL=$ES_AL"
+                continue ;;
             "Rendimiento y compatibilidad >>")
                 cfg_rendimiento_menu "$gid" "$squash"; continue ;;
             "Dependencias del juego:"*)
@@ -65946,9 +70315,33 @@ main_dispatch() {
             local gx="${sel#WPACT:CONFIG|}"
             case "$gx" in
                 *"Jugar al último"*)
-                    [ -n "$LAST_GAME" ] && [ -e "$LAST_GAME" ] \
-                        && game_config_menu "$LAST_GAME" \
-                        || ui_error "No hay ningun juego reciente." ;;
+                    # EL "||" SE COMIA EL CANCELAR. (registro del 26/10, 23:47)
+                    #
+                    # Estaba escrito como una cadena:
+                    #
+                    #   [ -n "$LAST_GAME" ] && [ -e "$LAST_GAME" ] \
+                    #       && game_config_menu "$LAST_GAME" \
+                    #       || ui_error "No hay ningun juego reciente."
+                    #
+                    # Y en un "A && B && C || D", la D salta si falla
+                    # CUALQUIERA de los tres, incluida C. game_config_menu
+                    # devuelve distinto de cero cuando el usuario CANCELA, asi
+                    # que cancelar los ajustes sacaba un error diciendo que no
+                    # hay ningun juego reciente... justo despues de haber
+                    # abierto los ajustes de ese juego reciente:
+                    #
+                    #   23:47:46  MENU [...] -> [WPACT:CONFIG|Jugar al ultimo: Windows_loader]
+                    #   23:47:46  [i] Perfil: 'Windows_loader' (existe, se carga)
+                    #   23:47:47  MENU [Configuracion de: Windows_loader] -> cancelado
+                    #   23:47:47  ERROR-UI: No hay ningun juego reciente.
+                    #
+                    # Con un if, el error solo sale cuando de verdad no hay
+                    # juego, que es lo que dice.
+                    if [ -n "$LAST_GAME" ] && [ -e "$LAST_GAME" ]; then
+                        game_config_menu "$LAST_GAME"
+                    else
+                        ui_error "No hay ningun juego reciente."
+                    fi ;;
                 *) : ;;
             esac ;;
         "Jugar"*)
@@ -65992,6 +70385,7 @@ main_dispatch() {
                 game_config_menu "$g2"
             fi ;;
         "Descargar runners"*)    download_runner_menu ;;
+        "Arcade Loader"*)        arcade_loader_menu ;;
         "Actualizar a la última versión"*) actualizar_runners_menu ;;
         # LOS DOS TEXTOS DE LA MISMA FILA. Hoy solo se genera el primero
         # ("*** RUNNER NUEVO: <nombre> ***", ver runner_aviso_alguno), pero el
@@ -66273,6 +70667,21 @@ Los wsquashfs que ya tienes se siguen usando igual."
                 *)        LIST_COVER=vertical ;;
             esac
             save_settings ;;
+        "Prefijo de Batocera al instalar:"*)
+            PREFIX_BATOCERA_AL_INSTALAR=$((1-${PREFIX_BATOCERA_AL_INSTALAR:-0}))
+            save_settings
+            ui_info "Prefijo de Batocera al instalar: $(onoff "$PREFIX_BATOCERA_AL_INSTALAR")
+
+Con esto encendido, el prefijo propio que WProton crea al
+instalar un juego (ISO, GOG, un instalador) se hace con el
+procedimiento de Batocera en vez de con el de siempre.
+
+Importa justo ahi: un instalador escribe en el registro de
+Windows y lanza los redistribuibles del juego, asi que si el
+prefijo nace torcido el juego queda torcido desde el principio.
+
+Cada paso queda en el registro, y si falla se usa el de
+siempre en vez de dejarte sin instalar." ;;
         "Usuario instalación ISO:"*)
             # El nombre que se le pone a la configuracion que trae el juego
             # al instalarlo desde una imagen. Sale EN LA PANTALLA DEL JUEGO,
@@ -66867,6 +71276,7 @@ library_menu() {
             "Carátula en la vista de lista: $(list_cover_label)" \
             "Extensión en la lista: $(lista_extension_label)" \
             "Usuario instalación ISO: $(crack_nombre_sugerido)" \
+            "Prefijo de Batocera al instalar: $(onoff "${PREFIX_BATOCERA_AL_INSTALAR:-0}")" \
             "Carátulas por fila: $(grid_cols_label)" \
             "Traer todas las carátulas del repositorio" \
             "Perfiles del repositorio (traer para tus juegos o todos)" \
@@ -67444,6 +71854,7 @@ tools_menu() {
             "Borrar un runner" \
             "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
+            "Arcade Loader (arcades nativos de Linux): $(arcade_loader_label)" \
             "Convertir carpeta a $(pack_formato_archivo)" \
             "Convertir wsquashfs a carpeta" \
             "Acceso a WProton en el escritorio: $(acceso_directo_label)" \
@@ -67953,88 +72364,119 @@ if [ ! -x "$PY_DIR/bin/python3" ] || [ ! -x "$UMU_BIN" ] || [ ! -f "$FIRSTRUN_MA
     install_notice_start
 fi
 
-covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
-datos_preparar          # crea metadata/ y trae lo que hubiera de antes
-# LA MARCA DE "EL MENU GRAFICO FALLO" DURA UNA SESION, NO PARA SIEMPRE.
-#
-# Se pone cuando el menu grafico no arranca dos veces seguidas, para dejar de
-# insistir durante ESA sesion. Si se quedara, un fallo puntual -un gamescope
-# que se reinicia, una pantalla que tarda- dejaria a alguien con los menus de
-# respaldo para siempre y sin saber por que.
-rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
-perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
-update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
-runner_comprobar_fondo   # y si hay runners nuevos, igual: en segundo plano
-repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
-# EL TRACKPAD COMO RATON, SI ESTA PEDIDO.
-#
-# Va aqui y no en los menus para que este listo desde el primer momento, y
-# porque los menus son varios procesos distintos: si lo arrancara cada uno,
-# habria varios leyendo el mando a la vez.
-if [ "${TRACKPAD_RATON:-no}" != no ]; then
-    trackpad_raton_start "$TRACKPAD_RATON" || true
-fi
-# Una marca de "volver al inicio" que sobreviviera a un cierre brusco
-# cerraria todos los menus nada mas abrirlos. Se limpia al arrancar.
-rm -f "${WP_MARCA_INICIO:-/nonexistent}" 2>/dev/null
-# Los .conf.bak que quedaran de versiones anteriores. Ya no se crean, y nada
-# los lee: dejarlos ahi solo sirve para confundir a quien mire la carpeta de
-# perfiles y crea que ese juego sigue configurado.
-rm -f "$PROFILE_DIR"/*.conf.bak 2>/dev/null
-ultimo_juego_olvidar_si_borrado   # no ofrecer "jugar al ultimo" si ya no existe
-# Deshace lo que unas pruebas dejaron escrito en el prefijo compartido: si se
-# le ocultaron los mandos, se le devuelven. Aqui, con todo ya definido.
-winebus_reparar_compartido
-# Si la sesion anterior murio con un juego de TeknoParrot abierto, su perfil
-# se quedo reescrito y no valdria en Batocera. Se devuelve a su sitio.
-teknoparrot_restaurar_pendientes
-check_deps
-# El driver rapido para montar imagenes, si todavia no esta. Va DESPUES de
-# check_deps porque hasta aqui no se sabe si hay squashfuse ni cual, y en
-# segundo plano para que no retrase el arranque.
-squashfuse_ll_al_arrancar
-# Y la capa de Vulkan del menu encima del juego, por lo mismo: en segundo
-# plano, solo si el menu esta encendido y solo si no la tiene ya.
-capa_vulkan_al_arrancar
-# Como llegan los trackpads de la Deck ANTES de que WProton abra un solo menu:
-# es la referencia con la que se compara despues.
-trackpad_lagarto_log arranque
-rotate_logs          # no acumular cientos de logs antiguos
-sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
-# Restos de una sesion anterior que no se cerrara bien: si quedo un servidor
-# de menus vivo, tendria una ventana en pantalla y se pelearia con el nuevo.
-if [ -f "$RUNTIME_DIR/.menusrv.pid" ]; then
-    _viejo="$(cat "$RUNTIME_DIR/.menusrv.pid" 2>/dev/null)"
-    if [ -n "$_viejo" ] && kill -0 "$_viejo" 2>/dev/null; then
-        kill "$_viejo" 2>/dev/null; sleep 0.3; kill -9 "$_viejo" 2>/dev/null
-        log "Servidor de menus huerfano de una sesion anterior: cerrado"
+arranque_del_programa() {
+    # TODO LO QUE HAY QUE HACER UNA VEZ AL ARRANCAR, Y SOLO AL ARRANCAR.
+    #
+    # ESTO ESTABA SUELTO EN EL PRIMER NIVEL DEL FICHERO, Y ESO TENIA DOS
+    # PROBLEMAS -uno de verdad y otro de velocidad-.
+    #
+    # EL DE VERDAD: quien le haga "source" a wproton.sh ejecutaba todo esto
+    # sin querer. Y aqui dentro se cierran procesos huerfanos "de una sesion
+    # anterior": menus, mapeadores, puentes del mando. Si hay una partida en
+    # marcha, esos procesos NO son huerfanos, son los suyos. O sea que un
+    # "source" podia tumbarle los menus a una instancia viva.
+    #
+    # EL DE VELOCIDAD: las suites cargan las funciones del programa generado
+    # haciendole "source", y pagaban esto en CADA comprobacion: pgrep, pkill,
+    # barridos de montajes, comprobaciones de version en segundo plano... unos
+    # segundos por comprobacion, multiplicado por miles. El pase entero tardaba
+    # veinticinco minutos y casi todo era esto.
+    #
+    # Asi que ahora es una funcion y se llama SOLO si el fichero se esta
+    # ejecutando. Lo de abajo no cambia de orden ni de contenido.
+
+    covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
+    datos_preparar          # crea metadata/ y trae lo que hubiera de antes
+    # LA MARCA DE "EL MENU GRAFICO FALLO" DURA UNA SESION, NO PARA SIEMPRE.
+    #
+    # Se pone cuando el menu grafico no arranca dos veces seguidas, para dejar de
+    # insistir durante ESA sesion. Si se quedara, un fallo puntual -un gamescope
+    # que se reinicia, una pantalla que tarda- dejaria a alguien con los menus de
+    # respaldo para siempre y sin saber por que.
+    rm -f "$PYGAME_KO_MARK" "$QT_KO_MARK" 2>/dev/null
+    perfiles_limpiar_mscoree # quita el mscoree que escribia una version anterior
+    update_comprobar_fondo   # mira si hay version nueva, sin que nadie espere
+    runner_comprobar_fondo   # y si hay runners nuevos, igual: en segundo plano
+    repo_refrescar_al_arrancar  # y pone al dia las listas del repositorio, igual
+    # EL TRACKPAD COMO RATON, SI ESTA PEDIDO.
+    #
+    # Va aqui y no en los menus para que este listo desde el primer momento, y
+    # porque los menus son varios procesos distintos: si lo arrancara cada uno,
+    # habria varios leyendo el mando a la vez.
+    if [ "${TRACKPAD_RATON:-no}" != no ]; then
+        trackpad_raton_start "$TRACKPAD_RATON" || true
     fi
-    rm -f "$RUNTIME_DIR/.menusrv.pid" 2>/dev/null
-    rm -rf "$RUNTIME_DIR/.menusrv" 2>/dev/null
-fi
-unset _viejo
-pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
-# Y mapeadores .keys huerfanos de una sesion anterior.
+    # Una marca de "volver al inicio" que sobreviviera a un cierre brusco
+    # cerraria todos los menus nada mas abrirlos. Se limpia al arrancar.
+    rm -f "${WP_MARCA_INICIO:-/nonexistent}" 2>/dev/null
+    # Los .conf.bak que quedaran de versiones anteriores. Ya no se crean, y nada
+    # los lee: dejarlos ahi solo sirve para confundir a quien mire la carpeta de
+    # perfiles y crea que ese juego sigue configurado.
+    rm -f "$PROFILE_DIR"/*.conf.bak 2>/dev/null
+    ultimo_juego_olvidar_si_borrado   # no ofrecer "jugar al ultimo" si ya no existe
+    # Deshace lo que unas pruebas dejaron escrito en el prefijo compartido: si se
+    # le ocultaron los mandos, se le devuelven. Aqui, con todo ya definido.
+    winebus_reparar_compartido
+    # Si la sesion anterior murio con un juego de TeknoParrot abierto, su perfil
+    # se quedo reescrito y no valdria en Batocera. Se devuelve a su sitio.
+    teknoparrot_restaurar_pendientes
+    check_deps
+    # El driver rapido para montar imagenes, si todavia no esta. Va DESPUES de
+    # check_deps porque hasta aqui no se sabe si hay squashfuse ni cual, y en
+    # segundo plano para que no retrase el arranque.
+    squashfuse_ll_al_arrancar
+    # Y la capa de Vulkan del menu encima del juego, por lo mismo: en segundo
+    # plano, solo si el menu esta encendido y solo si no la tiene ya.
+    capa_vulkan_al_arrancar
+    # Como llegan los trackpads de la Deck ANTES de que WProton abra un solo menu:
+    # es la referencia con la que se compara despues.
+    trackpad_lagarto_log arranque
+    rotate_logs          # no acumular cientos de logs antiguos
+    sweep_stale_mounts   # limpiar restos de sesiones anteriores (ro/merged llenos)
+    # Restos de una sesion anterior que no se cerrara bien: si quedo un servidor
+    # de menus vivo, tendria una ventana en pantalla y se pelearia con el nuevo.
+    if [ -f "$RUNTIME_DIR/.menusrv.pid" ]; then
+        _viejo="$(cat "$RUNTIME_DIR/.menusrv.pid" 2>/dev/null)"
+        if [ -n "$_viejo" ] && kill -0 "$_viejo" 2>/dev/null; then
+            kill "$_viejo" 2>/dev/null; sleep 0.3; kill -9 "$_viejo" 2>/dev/null
+            log "Servidor de menus huerfano de una sesion anterior: cerrado"
+        fi
+        rm -f "$RUNTIME_DIR/.menusrv.pid" 2>/dev/null
+        rm -rf "$RUNTIME_DIR/.menusrv" 2>/dev/null
+    fi
+    unset _viejo
+    pkill -f "$PAD_BRIDGE_PY" 2>/dev/null   # puentes uinput zombis -> fuera
+    # Y mapeadores .keys huerfanos de una sesion anterior.
+    #
+    # El mapeador convierte los botones del mando en TECLAS del sistema. Si
+    # sobrevive a la partida, sigue haciendolo dentro de los menus de WProton: con
+    # un .keys que asigne A a la letra "i" y B a la "j", entrar en una carpeta
+    # escribia "i" en el buscador y volver escribia "j". La pantalla se filtraba
+    # sola y parecia que los ficheros habian desaparecido.
+    # Por NOMBRE, no por ruta: puede venir de otra copia de WProton
+    _huerf="$(pgrep -f 'mapeador\.py' 2>/dev/null | grep -c . || true)"
+    [ "${_huerf:-0}" -gt 0 ] && log "Arranque: $_huerf mapeador(es) huerfano(s); se cierran" WARN
+    pkill -f 'mapeador\.py' 2>/dev/null
+    unset _huerf
+    # Menus huerfanos de una sesion anterior: su ventana a pantalla completa deja
+    # el monitor en negro y parece que el equipo se ha colgado.
+    _hmenu="$(pgrep -f 'menu_pygame\.py' 2>/dev/null | grep -c . || true)"
+    if [ "${_hmenu:-0}" -gt 0 ]; then
+        log "Arranque: $_hmenu proceso(s) de menus huerfano(s); se cierran" WARN
+        pkill -f 'menu_pygame\.py' 2>/dev/null
+        sleep 0.3
+    fi
+    unset _hmenu
+}
+
+# Y AQUI LA CONDICION: solo si esto se EJECUTA, no si le hacen "source".
 #
-# El mapeador convierte los botones del mando en TECLAS del sistema. Si
-# sobrevive a la partida, sigue haciendolo dentro de los menus de WProton: con
-# un .keys que asigne A a la letra "i" y B a la "j", entrar en una carpeta
-# escribia "i" en el buscador y volver escribia "j". La pantalla se filtraba
-# sola y parecia que los ficheros habian desaparecido.
-# Por NOMBRE, no por ruta: puede venir de otra copia de WProton
-_huerf="$(pgrep -f 'mapeador\.py' 2>/dev/null | grep -c . || true)"
-[ "${_huerf:-0}" -gt 0 ] && log "Arranque: $_huerf mapeador(es) huerfano(s); se cierran" WARN
-pkill -f 'mapeador\.py' 2>/dev/null
-unset _huerf
-# Menus huerfanos de una sesion anterior: su ventana a pantalla completa deja
-# el monitor en negro y parece que el equipo se ha colgado.
-_hmenu="$(pgrep -f 'menu_pygame\.py' 2>/dev/null | grep -c . || true)"
-if [ "${_hmenu:-0}" -gt 0 ]; then
-    log "Arranque: $_hmenu proceso(s) de menus huerfano(s); se cierran" WARN
-    pkill -f 'menu_pygame\.py' 2>/dev/null
-    sleep 0.3
+# Cuando el fichero se ejecuta ("bash wproton.sh"), BASH_SOURCE[0] y $0 son el
+# mismo. Cuando se le hace "source" desde otro sitio, BASH_SOURCE[0] es este
+# fichero y $0 es quien lo cargo. Esa es toda la diferencia.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+    arranque_del_programa
 fi
-unset _hmenu
 
 cli_ruta() {
     # La ruta del juego, venga como venga desde la linea de ordenes.
@@ -68068,7 +72510,46 @@ cli_ruta() {
     # shell ya los ha convertido en una separacion antes de que existamos, y
     # esa informacion no esta en ningun sitio. Un nombre con un solo espacio
     # entre palabras -o sea, todos- si.
-    printf '%s' "$*"
+    #
+    # Y SE DEVUELVE ABSOLUTA. ESTE ES EL ARREGLO DE RAIZ DEL CASO .pc DE ES-DE.
+    #
+    # Un tester mando un informe con el fallo reproducido: DeckStation -> ES-DE
+    # -> juego .pc se quedaba colgado antes de arrancar Proton, y el mismo
+    # juego por los menus o lanzando WProton a mano iba bien. La causa: ES-DE
+    # entrega la ruta RELATIVA a su directorio de trabajo
+    #
+    #     ./ROMs/windows/Age of Empires Gold.pc
+    #
+    # y el calculo del punto de montaje se colgaba con ella (contado en
+    # punto_de_montaje). Su correccion -normalizar justo antes de ese
+    # calculo- es correcta y la lleva, pero el sitio bueno es ESTE, porque
+    # desde aqui la ruta relativa llega a mas sitios:
+    #
+    #   - el lanzamiento hace "cd" a la carpeta del ejecutable ANTES de
+    #     ejecutarlo. Despues de ese cd, "./ROMs/..." ya no existe: un juego
+    #     de Linux se lanza con "ejecutar_nativo $EXE_PATH" y no lo
+    #     encontraria;
+    #   - el vigilante de salida, el .home portable y las copias de partidas
+    #     guardan rutas en el perfil, y una relativa queda guardada relativa
+    #     al directorio de trabajo de QUIEN LO LANZO aquella vez;
+    #   - "ultimo juego jugado" se guarda en settings.conf, y manana se abre
+    #     WProton desde otro sitio.
+    #
+    # Asi que la ruta se hace absoluta UNA VEZ, en la puerta, y de ahi para
+    # dentro nadie tiene que acordarse. La base es $PWD -no la carpeta de
+    # WProton- y no se resuelven enlaces: las dos cosas estan explicadas en
+    # ruta_cli_absoluta.
+    #
+    # LO QUE NO SE TOCA: si la ruta no existe por ningun lado, se devuelve
+    # absoluta igualmente. El mensaje de "No existe la ruta" con la ruta
+    # completa dice mucho mas que con un "./algo" que depende de donde
+    # estuviera quien llamo.
+    local _r; _r="$(ruta_cli_absoluta "$*")"
+    case "$*" in
+        /*|"") ;;
+        *) log "CLI: ruta relativa '$*' (cwd=$PWD) -> '$_r'" ;;
+    esac
+    printf '%s' "$_r"
 }
 
 case "${1:-}" in
