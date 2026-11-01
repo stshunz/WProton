@@ -1,0 +1,100 @@
+{
+  "wproton_para": "Extreme_Off_Road",
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_E"
+      ]
+    },
+    {
+      "trigger": "r3",
+      "type": "key",
+      "target": "KEY_E"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "pageup",
+      "type": "key",
+      "target": "KEY_L"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "KEY_R"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_V"
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_F"
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "select",
+      "type": "key",
+      "target": "KEY_SPACE"
+    },
+    {
+      "trigger": "joystick1left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "joystick1right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "joystick2left",
+      "type": "key",
+      "target": "KEY_L"
+    },
+    {
+      "trigger": "joystick2right",
+      "type": "key",
+      "target": "KEY_R"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_F"
+    }
+  ]
+}
