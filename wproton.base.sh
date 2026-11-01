@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.21"
+WPROTON_VERSION="2.22"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -16319,9 +16319,7 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Las descargas grandes salen ya del repositorio: enlaces directos.
-
-  El prefijo de Windows, ya hecho y probado, se ofrece al empezar.
+  Arreglados los juegos de TeknoParrot que morian al arrancar.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -19236,6 +19234,45 @@ ni drive_c ni pfx dentro."
     fi
     rm -rf "$tmp"; rm -f "$pkg"
 
+    # VIENE DE OTRO EQUIPO: HAY QUE QUITARLE SUS RUTAS. ESTO FALTABA (01/11).
+    #
+    # El prefijo que se publica trae kernel32.dll -y las demas DLL del runner-
+    # como ENLACES ABSOLUTOS a un runner concreto. Tal cual esta en el tarball
+    # de la release:
+    #
+    #   drive_c/windows/system32/kernel32.dll ->
+    #     /home/deck/Wproton/runtime/proton/GE-Proton11-6-x86_64/files/lib/
+    #       wine/x86_64-windows/kernel32.dll
+    #
+    # En la maquina donde se hizo eso vale. En cualquier otra -o en la misma
+    # jugando con OTRO runner, que es lo normal- ese enlace queda COLGADO. Y
+    # "[ -f ... ]" sigue los enlaces, asi que un enlace colgado se ve como
+    # "no esta el fichero".
+    #
+    # De ahi el registro del tester con Initial D 6 AA (01/11): jugaba con
+    # Proton7-38-Frankenstein, no tenia GE-Proton11-6, y salio
+    #
+    #   proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+    #
+    # seguido de un juego que moria en cinco segundos con
+    #
+    #   wine: failed to open "c:\windows\system32\steam.exe": c0000135
+    #
+    # No le faltaba kernel32: le faltaba el runner al que apuntaba.
+    #
+    # prefijo_hacer_portable quita justo esos enlaces -los absolutos de
+    # drive_c/windows que salen del prefijo- y rehace dosdevices en relativo.
+    # Es la misma limpieza que se hace con los prefijos que viajan dentro de
+    # un archivo y la que ya hace prefijo_default_traer; aqui se habia quedado
+    # sin poner. Sin los enlaces, Proton pone sus propias DLL al arrancar.
+    local _port _pn _pd
+    _port="$(prefijo_hacer_portable "$destino")" || _port="0 0"
+    _pn="${_port%% *}"; _pd="${_port#* }"
+    if [ "${_pn:-0}" -gt 0 ] || [ "${_pd:-0}" -gt 0 ]; then
+        say "[+] Prefijo adaptado a este equipo: $_pn enlace(s) al runner de"
+        say "    donde se hizo y $_pd unidad(es) de dosdevices"
+        log "prefijo de TeknoParrot: hecho portable ($_pn enlaces, $_pd unidades)"
+    fi
     # EL ENLACE QUE BUSCA PROTON, desde ya.
     #
     # El paquete viene en formato Wine (drive_c en la raiz), que es lo que
@@ -19898,6 +19935,24 @@ proton_marcar_prefijo() {
     # kernel32.dll, que es el fichero exacto con el que fallaba Wine cuando el
     # prefijo venia a medias. Con esas dos, Proton puede saltarse copy_pfx sin
     # que falte nada.
+    # LOS ENLACES COLGADOS SE QUITAN ANTES DE JUZGAR EL PREFIJO (01/11).
+    #
+    # Un prefijo traido de otro equipo -o hecho con un runner que ya no esta-
+    # tiene las DLL del runner como enlaces absolutos que no apuntan a nada. Y
+    # "[ -f ]" sigue los enlaces, asi que esos ficheros "no estan" y el prefijo
+    # se ve a medias... con los enlaces muertos todavia puestos, que es lo peor
+    # de los dos mundos: no sirven y encima estorban a quien venga a poner los
+    # buenos.
+    #
+    # Se quitan primero. Si despues el prefijo esta entero, perfecto; y si no,
+    # al menos Proton y Wine lo encuentran limpio para rehacerlo.
+    local _colg
+    _colg="$(prefijo_enlaces_colgados_quitar "$pfx")" || _colg=0
+    if [ "${_colg:-0}" -gt 0 ] 2>/dev/null; then
+        say "[+] Prefijo: quitados $_colg enlace(s) que no apuntaban a nada"
+        say "    (DLL de un runner que no esta en este equipo)"
+        log "proton_marcar_prefijo: quitados $_colg enlace(s) colgados de drive_c/windows; apuntaban a un runner que no esta" WARN
+    fi
     local _pfx_entero=1
     [ -f "$pfx/system.reg" ] || _pfx_entero=0
     [ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || _pfx_entero=0
@@ -19923,6 +19978,52 @@ proton_marcar_prefijo() {
             say "    a medias, asi que Proton TIENE que crearlo)"
         fi
         log "proton_marcar_prefijo: sin centinela; system.reg=$([ -f "$pfx/system.reg" ] && echo si || echo NO) kernel32=$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] && echo si || echo NO)"
+        # Y AQUI SE PARA. A UN PREFIJO A MEDIAS NO SE LE MIENTE (01/11).
+        #
+        # ESTE ERA EL FALLO. Quitar el centinela esta bien, pero mas abajo se
+        # escribian dos cosas mas sin comprobar nada:
+        #
+        #   version            -> Proton lo lee y dice "esta al dia, no lo toco"
+        #   .update-timestamp  -> Wine lo lee y dice lo mismo
+        #
+        # O sea que se quitaba el centinela con una mano y con la otra se les
+        # decia a Proton Y a Wine que el prefijo estaba al dia. Resultado:
+        # NADIE lo reparaba nunca, y el juego moria en cinco segundos con
+        #
+        #   wine: failed to open "c:\windows\system32\steam.exe": c0000135
+        #
+        # que es "no se pudo cargar una DLL", porque efectivamente faltaba.
+        #
+        # Salio en el registro de un tester con Initial D 6 AA y el prefijo de
+        # TeknoParrot (wproton_20261101_102420.log), cuatro lineas seguidas:
+        #
+        #   proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+        #   [+] Prefijo: venia de 'GE-Proton11-11', se marca como 'Proton7-38-...'
+        #   [+] Prefijo marcado como preparado para Proton7-38-Frankenstein
+        #       y con la fecha de wine.inf, para que Wine no lo toque
+        #
+        # Se dice que esta a medias y se marca igual.
+        #
+        # El comentario de arriba ya tenia escrito el principio -"el centinela
+        # es una AFIRMACION... dicho de un prefijo que NO lo esta, es mentira"-
+        # y estas dos son la misma afirmacion. Faltaba aplicarselo a ellas.
+        #
+        # Y SE RETIRAN LAS QUE HUBIERA DE ANTES, por lo mismo que el centinela:
+        # si no, un prefijo que se quedo a medias con la version ya escrita
+        # sigue roto para siempre, porque ni Proton ni Wine lo van a tocar.
+        # Son ficheros de contabilidad de ellos dos, no datos de nadie: sin
+        # ellos, los dos rehacen lo que falte, que es justo lo que se quiere.
+        local _quitadas=""
+        [ -e "$WINEPREFIX/version" ] && rm -f "$WINEPREFIX/version" 2>/dev/null \
+            && _quitadas="version"
+        [ -e "$pfx/.update-timestamp" ] && rm -f "$pfx/.update-timestamp" 2>/dev/null \
+            && _quitadas="${_quitadas:+$_quitadas y }.update-timestamp"
+        say "[i] Prefijo a medias: NO se marca como preparado."
+        say "    Le falta $([ -f "$pfx/system.reg" ] || printf 'el registro; ')$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || printf 'kernel32.dll; ')asi"
+        say "    que Proton y Wine tienen que terminarlo. Tardara mas esta vez."
+        [ -n "$_quitadas" ] && say "    (quitada la marca $_quitadas, que les decia que estaba al dia)"
+        log "proton_marcar_prefijo: el prefijo esta a medias; no se marca y se quitan las marcas viejas (${_quitadas:-no habia}), para que Proton y Wine lo reparen" WARN
+        return 0
     fi
     local _vname_actual _vname_nuevo
     if [ -n "$pver" ]; then
@@ -22134,6 +22235,49 @@ exe_dentro_del_prefijo() {
     # build_runner_cmd, que corre ANTES que esto.
     local _d; _d="$(dirname "$EXE_PATH")"
     [ -d "$_d" ] && export STEAM_COMPAT_INSTALL_PATH="$_d"
+    return 0
+}
+
+prefijo_enlaces_colgados_quitar() {
+    # QUITA DE UN PREFIJO LOS ENLACES QUE NO APUNTAN A NADA. $1 = prefijo.
+    #
+    # Devuelve cuantos ha quitado.
+    #
+    # POR QUE ESTO Y NO prefijo_hacer_portable. Son parecidas y la diferencia
+    # importa: aquella quita TODOS los enlaces absolutos que salen del
+    # prefijo, y eso esta bien al INSTALAR uno que viene de otro equipo. Pero
+    # al LANZAR seria un destrozo: en un prefijo sano hecho en esta maquina,
+    # los enlaces a las DLL del runner son absolutos y salen del prefijo...
+    # porque son los que FUNCIONAN. Borrarlos romperia un prefijo que iba
+    # bien.
+    #
+    # Esto solo quita los que no apuntan a nada. Un enlace colgado no sirve
+    # para nada por definicion, asi que quitarlo es seguro siempre, y es
+    # EXACTAMENTE el daño que deja un prefijo traido de otro equipo -o hecho
+    # con un runner que ya no esta-:
+    #
+    #   drive_c/windows/system32/kernel32.dll ->
+    #     .../runtime/proton/GE-Proton11-6-x86_64/.../kernel32.dll
+    #
+    # Si ese runner no esta, el enlace cuelga. Y "[ -f ]" sigue los enlaces,
+    # asi que el fichero "no esta" aunque el enlace si. Quitandolo, Proton
+    # pone su propia DLL al crear el prefijo.
+    #
+    # Solo en drive_c/windows, que es donde viven los del runner. Una limpieza
+    # no debe pasearse por donde no la han llamado.
+    local pfx="${1:-}" l n=0
+    [ -d "$pfx/drive_c/windows" ] || { printf '0'; return 0; }
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        # -e sigue el enlace: falso si apunta a nada. Y -L confirma que es un
+        # enlace, para no tocar nunca un fichero de verdad.
+        if [ -L "$l" ] && [ ! -e "$l" ]; then
+            rm -f "$l" 2>/dev/null && n=$((n+1))
+        fi
+    done <<EOFCOLG
+$(find "$pfx/drive_c/windows" -type l 2>/dev/null)
+EOFCOLG
+    printf '%s' "$n"
     return 0
 }
 
