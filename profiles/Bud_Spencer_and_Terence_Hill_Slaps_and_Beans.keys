@@ -1,0 +1,193 @@
+{
+  "wproton_para": "Bud_Spencer_and_Terence_Hill_Slaps_and_Beans",
+  "actions_player2": [
+    {
+      "trigger": "up",
+      "type": "key",
+      "target": "KEY_W"
+    },
+    {
+      "trigger": "down",
+      "type": "key",
+      "target": "KEY_S"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_A"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_D"
+    },
+    {
+      "trigger": "joystick1up",
+      "type": "key",
+      "target": "KEY_W"
+    },
+    {
+      "trigger": "joystick1down",
+      "type": "key",
+      "target": "KEY_S"
+    },
+    {
+      "trigger": "joystick1left",
+      "type": "key",
+      "target": "KEY_A"
+    },
+    {
+      "trigger": "joystick1right",
+      "type": "key",
+      "target": "KEY_D"
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_E"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_T"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_R"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_F"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "KEY_I"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "KEY_LEFTSHIFT"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "KEY_LEFTSHIFT"
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "select",
+      "type": "key",
+      "target": "KEY_ESC"
+    }
+  ],
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_O"
+    },
+    {
+      "trigger": "pageup",
+      "type": "key",
+      "target": "KEY_SPACE"
+    },
+    {
+      "trigger": "joystick1up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "joystick1down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "joystick1left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "joystick1right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "KEY_RIGHTSHIFT"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "KEY_RIGHTSHIFT"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_I"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "KEY_I"
+    },
+    {
+      "trigger": "select",
+      "type": "key",
+      "target": "KEY_ESC"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_U"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_P"
+    }
+  ]
+}
