@@ -1,0 +1,83 @@
+{
+  "wproton_para": "Anno_1602_History_Edition",
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_SPACE"
+    },
+    {
+      "trigger": "pageup",
+      "type": "key",
+      "target": "KEY_F7"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "KEY_F6"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_I"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_S"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_D"
+    },
+    {
+      "trigger": "up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ENTER"
+    },
+    {
+      "trigger": "select",
+      "type": "key",
+      "target": "KEY_P"
+    }
+  ],
+  "mouse": {
+    "axis": "joystick1",
+    "click_left": "r2",
+    "speed": 900,
+    "click_right": "l2",
+    "click_middle": ""
+  }
+}
