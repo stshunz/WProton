@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.20"
+WPROTON_VERSION="2.22"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -374,7 +374,29 @@ GAMES_PATHS_EXTRA=""                     # carpetas de juegos adicionales
 # pruebas resulto mas eficaz, y ademas es un nombre que la gente reconoce, asi
 # que no hace falta explicar que es.
 GE_CUSTOM_NAME="Proton7-38-Frankenstein"
-GE_CUSTOM_URL="https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Frankenstein.tar.gz/file"
+# EN LA RELEASE DEL REPOSITORIO desde el 31/10. Antes estaba en MediaFire, que
+# no da enlaces directos con esa cuenta: lo contesto su propia API con
+# "Insufficient Permissions" (error 45). Una release de GitHub entrega el
+# fichero tal cual, sin pagina de por medio ni comprobacion de robots.
+GE_CUSTOM_URL="https://github.com/stshunz/WProton/releases/download/WProton_Extras/Proton7-38-Frankenstein.tar.gz"
+# La de fabrica, aparte: ajuste_url_migrar la necesita para saber si lo que hay
+# en settings.conf es una eleccion de la persona o un valor de fabrica viejo.
+GE_CUSTOM_URL_FABRICA="$GE_CUSTOM_URL"
+# EL PREFIJO COMPARTIDO, YA HECHO.
+#
+# Lo subio Dani el 31/10: "tambien he subido el prefijo default para ofrecerlo
+# para descargar la primera vez que se carga un juego".
+#
+# Dentro lleva un prefijo de Proton entero con los redistribuibles ya pasados
+# -se ven sus registros de instalacion-, asi que ahorra la primera puesta en
+# marcha, que son varios minutos y alguna libreria puede fallar.
+#
+# Se OFRECE, no se impone: son 166 MB y hay quien prefiere que se cree solo.
+PREFIJO_DEFAULT_URL="https://github.com/stshunz/WProton/releases/download/WProton_Extras/default.tar.gz"
+PREFIJO_DEFAULT_FABRICA="$PREFIJO_DEFAULT_URL"
+# Lo que dijo la persona la primera vez que se le ofrecio: 0 = no se ha
+# ofrecido todavia, 1 = ya se ofrecio y no hay que volver a insistir.
+PREFIJO_DEFAULT_OFRECIDO=0
 # RUNNERS QUE ALOJAMOS NOSOTROS.
 #
 # Una LISTA, no una variable por runner. Con dos ya se veia venir: cada uno
@@ -677,6 +699,8 @@ GAMES_PATHS_EXTRA="$GAMES_PATHS_EXTRA"
 GE_CUSTOM_NAME="$GE_CUSTOM_NAME"
 GE_CUSTOM_URL="$GE_CUSTOM_URL"
 RUNNERS_ALOJADOS="$RUNNERS_ALOJADOS"
+PREFIJO_DEFAULT_URL="$PREFIJO_DEFAULT_URL"
+PREFIJO_DEFAULT_OFRECIDO="$PREFIJO_DEFAULT_OFRECIDO"
 # Tamaño de la letra en los menus: 1.0 normal, 1.25 grande, 1.5 muy grande
 FONT_SCALE="$FONT_SCALE"
 # Con 1, la letra sube sola en pantallas de mucha resolucion (4K). Solo sube,
@@ -1347,8 +1371,8 @@ logs_aplicar() {
     return 0
 }
 
-al_url_normalizar() {
-    # UNA URL DE ARCADE LOADER, EN SU FORMA MAS DESNUDA, PARA PODER COMPARARLA.
+url_normalizar() {
+    # UNA URL EN SU FORMA MAS DESNUDA, PARA PODER COMPARARLA CON OTRA.
     #
     # POR QUE HACE FALTA. La lista de "URLs que alguna vez fueron el valor de
     # fabrica" se comparaba con "=", o sea letra por letra. Y el 31/10 llego
@@ -1371,6 +1395,48 @@ al_url_normalizar() {
     u="${u%/file}"         # fuera el "/file" de MediaFire
     u="${u%/}"             # y la barra que pueda quedar debajo
     printf '%s' "$u"
+}
+
+ajuste_url_migrar() {
+    # ¿LO QUE HAY GUARDADO ES UN VALOR DE FABRICA VIEJO? Entonces se actualiza.
+    # $1 = nombre del ajuste, $2 = como se llama al hablar de el,
+    # resto = los valores que FUERON de fabrica alguna vez.
+    #
+    # POR QUE EXISTE ESTO. Los ajustes se guardan en settings.conf la primera
+    # vez que se arranca. Si luego cambia el valor de fabrica -porque el
+    # fichero se ha movido de sitio-, el guardado sigue mandando y la descarga
+    # falla para siempre, con una version nueva instalada que "ya lo arregla".
+    #
+    # Y NO SE PUEDE PISAR SIN MAS: si lo guardado lo puso la persona, es suyo.
+    # Se arregla sabiendo QUE VALORES FUERON ALGUNA VEZ EL DE FABRICA: si el
+    # guardado es uno de esos, no es una eleccion de nadie. Cualquier otra
+    # cosa, no se toca.
+    #
+    # Se compara NORMALIZANDO (ver url_normalizar): el 31/10 llego un registro
+    # con la misma URL de MediaFire pero sin el "/file" del final, y la
+    # comparacion exacta no la reconocia.
+    #
+    # El valor de fabrica actual se lee de <AJUSTE>_FABRICA, que es donde se
+    # guarda aparte al definirlo.
+    local ajuste="${1:-}" comose="${2:-ese ajuste}"; shift 2 2>/dev/null || true
+    [ -n "$ajuste" ] || return 0
+    local actual fabrica viejo
+    eval "actual=\"\${$ajuste:-}\""
+    eval "fabrica=\"\${${ajuste}_FABRICA:-}\""
+    [ -n "$actual" ] && [ -n "$fabrica" ] || return 0
+    # Si ya es el de fabrica, no hay nada que hacer.
+    [ "$actual" = "$fabrica" ] && return 0
+    local act_n; act_n="$(url_normalizar "$actual")"
+    for viejo in "$@"; do
+        [ -n "$viejo" ] || continue
+        if [ "$act_n" = "$(url_normalizar "$viejo")" ]; then
+            eval "$ajuste=\"\$fabrica\""
+            log "ajustes: lo guardado para $comose era un valor de fabrica viejo; se pone el nuevo"
+            save_settings
+            return 0
+        fi
+    done
+    return 0
 }
 
 load_settings() {
@@ -1412,20 +1478,30 @@ load_settings() {
     # 31/10: SE COMPARA NORMALIZANDO, NO LETRA POR LETRA. Un registro de la
     # Deck traia la misma URL de MediaFire pero sin el "/file" del final, y la
     # comparacion exacta no la reconocia: se quedaba con el enlace muerto.
-    # al_url_normalizar quita el "/file", la barra final y el "?...".
-    local _al_vieja _al_act
-    _al_act="$(al_url_normalizar "${ARCADE_LOADER_URL:-}")"
-    for _al_vieja in \
+    # url_normalizar quita el "/file", la barra final y el "?...".
+    # SE HACE PARA LOS TRES AJUSTES QUE GUARDAN UNA URL, con una sola funcion.
+    #
+    # Era un bloque escrito para ARCADE_LOADER_URL. El 31/10 resulto que
+    # GE_CUSTOM_URL (el Proton Frankenstein) y RUNNERS_ALOJADOS tienen
+    # EXACTAMENTE el mismo problema -se guardan en settings.conf y apuntaban a
+    # MediaFire, que ya se demostro que no sirve- asi que hacian falta tres
+    # bloques iguales. Con la funcion es una linea por ajuste, y el cuarto que
+    # aparezca tambien.
+    ajuste_url_migrar ARCADE_LOADER_URL "Arcade Loader" \
         "https://www.mediafire.com/file/ib27k8cya9ng0s8/Arcade_Loader.tar.gz/file" \
         "https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz/file"
-    do
-        if [ "$_al_act" = "$(al_url_normalizar "$_al_vieja")" ]; then
-            ARCADE_LOADER_URL="$ARCADE_LOADER_URL_FABRICA"
-            log "ajustes: la URL de Arcade Loader guardada era un valor de fabrica viejo; se pone la nueva ($ARCADE_LOADER_URL)"
-            save_settings
-            break
-        fi
-    done
+    ajuste_url_migrar GE_CUSTOM_URL "el Proton Frankenstein" \
+        "https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Frankenstein.tar.gz/file"
+    # El prefijo compartido nace ya en la release, asi que todavia no hay
+    # ningun valor de fabrica viejo del que venir. La linea esta puesta para
+    # que el dia que cambie de sitio sea añadir la URL de hoy y nada mas.
+    ajuste_url_migrar PREFIJO_DEFAULT_URL "el prefijo compartido"
+    # RUNNERS_ALOJADOS NO SE MIGRA TODAVIA, Y ES A PROPOSITO.
+    #
+    # Ahi dentro sigue estando Proton-Experimental en MediaFire, que no sirve
+    # por lo mismo que no servia Arcade Loader. Pero ese fichero NO esta en la
+    # release, asi que no hay donde apuntarlo: migrarlo seria cambiarlo por el
+    # mismo valor. Cuando se suba, aqui va una linea mas y ya.
     GAMES_PATH="$(abs_path "$GAMES_PATH")"
     LAST_GAME="$(abs_path "${LAST_GAME:-}")"
     LAST_BROWSE="$(abs_path "${LAST_BROWSE:-}")"
@@ -31036,6 +31112,166 @@ prefijo_enlace_pfx() {
     return 0
 }
 
+prefijo_default_ofrecer() {
+    # OFRECE BAJAR EL PREFIJO COMPARTIDO YA HECHO, LA PRIMERA VEZ.
+    #
+    # Lo pidio Dani (31/10): "tambien he subido el prefijo default para
+    # ofrecerlo para descargar la primera vez que se carga un juego".
+    #
+    # Dentro lleva un prefijo de Proton entero con los redistribuibles ya
+    # pasados, asi que ahorra la primera puesta en marcha: varios minutos, y
+    # alguna libreria puede fallar por el camino.
+    #
+    # SE OFRECE UNA VEZ Y NO SE INSISTE. Son 166 MB: quien diga que no es
+    # porque prefiere que se cree solo, y volver a preguntarselo en cada juego
+    # seria convertir una ayuda en una molestia. Queda apuntado en los ajustes.
+    #
+    # Y SOLO CUANDO DE VERDAD APLICA: con el prefijo COMPARTIDO -el propio de
+    # un juego y el que viene dentro del archivo son otra cosa- y cuando ese
+    # prefijo no existe todavia. Si ya hay uno, no se toca: puede llevar dentro
+    # media biblioteca instalada.
+    local destino="$PREFIX_DIR/default"
+    [ -d "$destino" ] && return 0
+    [ "${PREFIJO_DEFAULT_OFRECIDO:-0}" = 1 ] && return 0
+    [ -n "${PREFIJO_DEFAULT_URL:-}" ] || return 0
+    # SE APUNTA ANTES DE PREGUNTAR, no despues.
+    #
+    # Si se apuntara al final, un "no" por el boton B -o cerrar el dialogo, o
+    # un fallo de la descarga- dejaria el apunte sin poner y la pregunta
+    # volveria en el juego siguiente. Lo que se ofrece una vez se ofrece una
+    # vez, pase lo que pase.
+    PREFIJO_DEFAULT_OFRECIDO=1
+    save_settings
+    if ! ui_ask "¿Bajar el prefijo de Windows ya preparado?
+
+WProton necesita un prefijo de Windows para los juegos, y
+crearlo la primera vez lleva varios minutos: hay que pasar los
+redistribuibles de Microsoft uno a uno.
+
+Hay uno ya hecho y probado, con todo eso dentro. Son 166 MB.
+
+Si dices que no, se crea solo cuando haga falta. Esto no se
+vuelve a preguntar; esta en Biblioteca y preferencias."; then
+        log "prefijo compartido: se ha ofrecido el preparado y se ha dicho que no"
+        say "[i] El prefijo se creara solo cuando haga falta."
+        return 0
+    fi
+    prefijo_default_traer
+}
+
+prefijo_default_traer() {
+    # BAJA EL PREFIJO COMPARTIDO Y LO PONE EN prefixes/default.
+    #
+    # Aparte de prefijo_default_ofrecer para poder llamarla desde el menu sin
+    # volver a preguntar lo mismo.
+    local destino="$PREFIX_DIR/default"
+    local url="${PREFIJO_DEFAULT_URL:-}"
+    [ -n "$url" ] || { ui_error "No hay ninguna URL para el prefijo preparado."; return 1; }
+    local pkg="$RUNTIME_DIR/prefijo_default.tar.gz"
+    rm -f "$pkg"
+    log "prefijo compartido: descargando de $url"
+    progress_stop 2>/dev/null || true
+    install_notice_stop 2>/dev/null || true
+    loading_clear 2>/dev/null || true
+    if ! dl_bruto "$url" "$pkg"; then
+        rm -f "$pkg"
+        # Cancelar no es fallar, igual que en Arcade Loader.
+        if [ "${WP_DL_CANCELADA:-0}" = 1 ]; then
+            ui_info "Descarga cancelada.
+
+No se ha instalado nada. El prefijo se creara solo cuando
+haga falta."
+            return 1
+        fi
+        ui_error "No se ha podido descargar el prefijo preparado.
+
+No pasa nada: se creara solo cuando haga falta. El registro
+trae el enlace que se intento."
+        return 1
+    fi
+    # SE DESCOMPRIME APARTE Y DESPUES SE MUEVE, como Arcade Loader.
+    #
+    # En prefixes/ viven los prefijos de todos los juegos. Un .tar.gz puede
+    # traer dentro lo que quiera -rutas con "..", ficheros en la raiz-, asi que
+    # primero se mira lo que trae y solo entra lo que es.
+    local tmp="$RUNTIME_DIR/prefijo_default_tmp.$$"
+    rm -rf "$tmp"
+    if ! mkdir -p "$tmp"; then
+        rm -f "$pkg"; ui_error "No se pudo crear la carpeta temporal"; return 1
+    fi
+    if ! tar -tzf "$pkg" >/dev/null 2>&1; then
+        rm -rf "$tmp"; rm -f "$pkg"
+        log "prefijo compartido: lo descargado no es un .tar.gz valido" WARN
+        ui_error "Lo descargado no es un .tar.gz valido.
+
+Lo mas probable es que la descarga se cortara a medias."
+        return 1
+    fi
+    if ! run_con_porcentaje "Descomprimiendo el prefijo..." \
+            tar -xzf "$pkg" -C "$tmp"; then
+        rm -rf "$tmp"; rm -f "$pkg"
+        ui_error "No se pudo descomprimir el prefijo. Mira el registro."
+        return 1
+    fi
+    rm -f "$pkg"
+    # LA RAIZ, BUSCADA Y NO SUPUESTA. El tarball de hoy trae una carpeta
+    # "default/" dentro, pero no se da por hecho: se busca lo que PAREZCA un
+    # prefijo, o sea lo que tenga un drive_c.
+    local raiz=""
+    if [ -d "$tmp/drive_c" ]; then
+        raiz="$tmp"
+    else
+        local _dc
+        _dc="$(find -H "$tmp" -mindepth 2 -maxdepth 3 -name drive_c -type d -print -quit 2>/dev/null)"
+        [ -n "$_dc" ] && raiz="$(dirname "$_dc")"
+    fi
+    if [ -z "$raiz" ]; then
+        log "prefijo compartido: lo descargado no trae ningun drive_c. Contenido: $(find "$tmp" -maxdepth 2 | head -n 20 | tr '\n' ' ')" WARN
+        rm -rf "$tmp"
+        ui_error "Lo descargado no parece un prefijo de Windows: no trae
+ningun 'drive_c' dentro.
+
+El registro trae la lista de lo que si traia."
+        return 1
+    fi
+    mkdir -p "$PREFIX_DIR" 2>/dev/null
+    # Si hubiera aparecido uno por el camino, se aparta en vez de borrarlo.
+    if [ -e "$destino" ]; then
+        rm -rf "$destino.anterior" 2>/dev/null
+        mv -- "$destino" "$destino.anterior" 2>/dev/null \
+            && say "[+] El prefijo que habia queda en default.anterior"
+    fi
+    if ! mv -- "$raiz" "$destino" 2>>"$LOG_FILE"; then
+        if ! cp -a -- "$raiz" "$destino" 2>>"$LOG_FILE"; then
+            rm -rf "$tmp"
+            ui_error "No se pudo poner el prefijo en:
+  $destino"
+            return 1
+        fi
+    fi
+    rm -rf "$tmp"
+    if [ ! -d "$destino/drive_c" ]; then
+        ui_error "El prefijo se ha descomprimido pero no tiene drive_c:
+  $destino"
+        return 1
+    fi
+    # EL PREFIJO VIENE DE OTRO EQUIPO: hay que quitarle sus rutas.
+    #
+    # Es lo mismo que se hace con los prefijos que vienen dentro de un
+    # archivo: dentro hay enlaces al runner y unidades de dosdevices de la
+    # maquina donde se hizo, y sin limpiarlos Wine choca con enlaces colgados.
+    local _port _pn _pd
+    _port="$(prefijo_hacer_portable "$destino")" || _port="0 0"
+    _pn="${_port%% *}"; _pd="${_port#* }"
+    if [ "${_pn:-0}" -gt 0 ] || [ "${_pd:-0}" -gt 0 ]; then
+        say "[+] Prefijo adaptado a este equipo: $_pn enlace(s) y $_pd unidad(es)"
+        log "prefijo compartido: hecho portable ($_pn enlaces, $_pd unidades)"
+    fi
+    log "prefijo compartido: instalado en $destino"
+    say "[+] Prefijo de Windows preparado, listo."
+    return 0
+}
+
 prefix_path() {
     # shared = prefixes/default | own = por juego | bundled = el propio montaje
     # (con bundled, las escrituras del registro caen en overlays/<n>/upper/)
@@ -35519,6 +35755,18 @@ export_game_env() {
     local rdir="$_rdir_env"
     local gid="$1"
     export WINEPREFIX; WINEPREFIX="$(prefix_path "$gid")"
+    # EL PREFIJO PREPARADO, OFRECIDO AQUI Y NO EN CADA CAMINO DE LANZAMIENTO.
+    #
+    # Esta es la unica funcion por la que pasan los juegos que NECESITAN un
+    # prefijo de Windows: los de Arcade Loader y los nativos de Linux no
+    # entran, y es justo lo que se quiere -a ellos no les hace falta y
+    # ofrecerles 166 MB seria absurdo-.
+    #
+    # Y solo si el prefijo que toca es el COMPARTIDO: con el propio de un juego
+    # o con el que viene dentro del archivo, este no pinta nada.
+    if [ "$WINEPREFIX" = "$PREFIX_DIR/default" ]; then
+        prefijo_default_ofrecer || true
+    fi
     # UN PREFIJO DE 32 BITS HAY QUE DECLARARLO.
     #
     # Hay paquetes con prefijos de 32 bits -juegos viejos, el PES 6 entre
@@ -39039,33 +39287,7 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arcade Loader se descarga desde GitHub: ahora el enlace es directo.
-
-  Las descargas traen barra de progreso y se pueden cancelar.
-
-  Lo descargado se comprueba antes de instalarlo: tamaño y suma.
-
-  Varias fuentes de descarga, que se prueban en orden.
-
-  Al empaquetar con el prefijo, el juego conserva su ruta en C:\\.
-
-  Y se enlaza en vez de copiarse: con juegos enormes, se nota.
-
-  El mando se vigila durante la partida, no solo al arrancar.
-
-  Una carpeta de juego ya no se confunde con una estanteria.
-
-  El diagnostico de .NET ya no culpa al juego cuando no es suyo.
-
-  Se limpia la letra de unidad que apuntaba dentro del juego.
-
-  Poner un boton del mando en otro, por juego: el Start en la A.
-
-  Y el mando virtual ya se aplica en Arcade Loader y en los nativos.
-
-  Un juego de Arcade Loader se reconoce al añadirlo, y hay casilla.
-
-  Y se trae su configuracion especial del repositorio, si la hay.
+  Arreglados los juegos de TeknoParrot que morian al arrancar.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -41884,7 +42106,11 @@ teknoparrot_prefijo_descargar() {
     # Crearlo desde cero son 15 librerias y varios .NET: entre diez y treinta
     # minutos segun la maquina, y alguna puede fallar. Bajarlo hecho es un
     # rato y ya viene probado.
-    local url="${WP_TKP_PREFIJO_URL:-https://www.mediafire.com/file/8qsnelttsfpfnql/teknoparrot.tar.gz/file}"
+    # EN LA RELEASE DEL REPOSITORIO desde el 31/10, por lo mismo que el resto:
+    # MediaFire no da enlaces directos con esa cuenta. Esta no se guarda en
+    # settings.conf -es solo un valor por defecto que se puede pisar con la
+    # variable de entorno-, asi que no hace falta migrar nada.
+    local url="${WP_TKP_PREFIJO_URL:-https://github.com/stshunz/WProton/releases/download/WProton_Extras/teknoparrot.tar.gz}"
     local destino="$PREFIX_DIR/teknoparrot"
 
     if [ -d "$destino" ]; then
@@ -41898,13 +42124,18 @@ Continuar?" || return 0
     fi
 
     local directo pkg
-    say "[+] Buscando el enlace de descarga..."
+    # El resolvedor sigue en medio a proposito: devuelve TAL CUAL cualquier URL
+    # que no sea de MediaFire -comprobado-, asi que con la de la release no
+    # hace nada, y el dia que alguien ponga otra cosa en WP_TKP_PREFIJO_URL
+    # sigue valiendo.
     if ! directo="$(mediafire_enlace_directo "$url")"; then
-        ui_error "No se ha podido sacar el enlace de descarga de:
+        # EL MENSAJE YA NO HABLA DE MEDIAFIRE. Decia "puede que la pagina haya
+        # cambiado", que era verdad cuando esto venia de MediaFire y ahora
+        # manda a quien lo lea a buscar un problema que no existe.
+        ui_error "No se ha podido preparar la descarga de:
   $url
 
-Puede que la pagina haya cambiado. Bajalo a mano y
-descomprimelo en:
+Si no se arregla, bajalo a mano y descomprimelo en:
   $PREFIX_DIR/"
         return 1
     fi
@@ -41971,6 +42202,45 @@ ni drive_c ni pfx dentro."
     fi
     rm -rf "$tmp"; rm -f "$pkg"
 
+    # VIENE DE OTRO EQUIPO: HAY QUE QUITARLE SUS RUTAS. ESTO FALTABA (01/11).
+    #
+    # El prefijo que se publica trae kernel32.dll -y las demas DLL del runner-
+    # como ENLACES ABSOLUTOS a un runner concreto. Tal cual esta en el tarball
+    # de la release:
+    #
+    #   drive_c/windows/system32/kernel32.dll ->
+    #     /home/deck/Wproton/runtime/proton/GE-Proton11-6-x86_64/files/lib/
+    #       wine/x86_64-windows/kernel32.dll
+    #
+    # En la maquina donde se hizo eso vale. En cualquier otra -o en la misma
+    # jugando con OTRO runner, que es lo normal- ese enlace queda COLGADO. Y
+    # "[ -f ... ]" sigue los enlaces, asi que un enlace colgado se ve como
+    # "no esta el fichero".
+    #
+    # De ahi el registro del tester con Initial D 6 AA (01/11): jugaba con
+    # Proton7-38-Frankenstein, no tenia GE-Proton11-6, y salio
+    #
+    #   proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+    #
+    # seguido de un juego que moria en cinco segundos con
+    #
+    #   wine: failed to open "c:\windows\system32\steam.exe": c0000135
+    #
+    # No le faltaba kernel32: le faltaba el runner al que apuntaba.
+    #
+    # prefijo_hacer_portable quita justo esos enlaces -los absolutos de
+    # drive_c/windows que salen del prefijo- y rehace dosdevices en relativo.
+    # Es la misma limpieza que se hace con los prefijos que viajan dentro de
+    # un archivo y la que ya hace prefijo_default_traer; aqui se habia quedado
+    # sin poner. Sin los enlaces, Proton pone sus propias DLL al arrancar.
+    local _port _pn _pd
+    _port="$(prefijo_hacer_portable "$destino")" || _port="0 0"
+    _pn="${_port%% *}"; _pd="${_port#* }"
+    if [ "${_pn:-0}" -gt 0 ] || [ "${_pd:-0}" -gt 0 ]; then
+        say "[+] Prefijo adaptado a este equipo: $_pn enlace(s) al runner de"
+        say "    donde se hizo y $_pd unidad(es) de dosdevices"
+        log "prefijo de TeknoParrot: hecho portable ($_pn enlaces, $_pd unidades)"
+    fi
     # EL ENLACE QUE BUSCA PROTON, desde ya.
     #
     # El paquete viene en formato Wine (drive_c en la raiz), que es lo que
@@ -42633,6 +42903,24 @@ proton_marcar_prefijo() {
     # kernel32.dll, que es el fichero exacto con el que fallaba Wine cuando el
     # prefijo venia a medias. Con esas dos, Proton puede saltarse copy_pfx sin
     # que falte nada.
+    # LOS ENLACES COLGADOS SE QUITAN ANTES DE JUZGAR EL PREFIJO (01/11).
+    #
+    # Un prefijo traido de otro equipo -o hecho con un runner que ya no esta-
+    # tiene las DLL del runner como enlaces absolutos que no apuntan a nada. Y
+    # "[ -f ]" sigue los enlaces, asi que esos ficheros "no estan" y el prefijo
+    # se ve a medias... con los enlaces muertos todavia puestos, que es lo peor
+    # de los dos mundos: no sirven y encima estorban a quien venga a poner los
+    # buenos.
+    #
+    # Se quitan primero. Si despues el prefijo esta entero, perfecto; y si no,
+    # al menos Proton y Wine lo encuentran limpio para rehacerlo.
+    local _colg
+    _colg="$(prefijo_enlaces_colgados_quitar "$pfx")" || _colg=0
+    if [ "${_colg:-0}" -gt 0 ] 2>/dev/null; then
+        say "[+] Prefijo: quitados $_colg enlace(s) que no apuntaban a nada"
+        say "    (DLL de un runner que no esta en este equipo)"
+        log "proton_marcar_prefijo: quitados $_colg enlace(s) colgados de drive_c/windows; apuntaban a un runner que no esta" WARN
+    fi
     local _pfx_entero=1
     [ -f "$pfx/system.reg" ] || _pfx_entero=0
     [ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || _pfx_entero=0
@@ -42658,6 +42946,52 @@ proton_marcar_prefijo() {
             say "    a medias, asi que Proton TIENE que crearlo)"
         fi
         log "proton_marcar_prefijo: sin centinela; system.reg=$([ -f "$pfx/system.reg" ] && echo si || echo NO) kernel32=$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] && echo si || echo NO)"
+        # Y AQUI SE PARA. A UN PREFIJO A MEDIAS NO SE LE MIENTE (01/11).
+        #
+        # ESTE ERA EL FALLO. Quitar el centinela esta bien, pero mas abajo se
+        # escribian dos cosas mas sin comprobar nada:
+        #
+        #   version            -> Proton lo lee y dice "esta al dia, no lo toco"
+        #   .update-timestamp  -> Wine lo lee y dice lo mismo
+        #
+        # O sea que se quitaba el centinela con una mano y con la otra se les
+        # decia a Proton Y a Wine que el prefijo estaba al dia. Resultado:
+        # NADIE lo reparaba nunca, y el juego moria en cinco segundos con
+        #
+        #   wine: failed to open "c:\windows\system32\steam.exe": c0000135
+        #
+        # que es "no se pudo cargar una DLL", porque efectivamente faltaba.
+        #
+        # Salio en el registro de un tester con Initial D 6 AA y el prefijo de
+        # TeknoParrot (wproton_20261101_102420.log), cuatro lineas seguidas:
+        #
+        #   proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+        #   [+] Prefijo: venia de 'GE-Proton11-11', se marca como 'Proton7-38-...'
+        #   [+] Prefijo marcado como preparado para Proton7-38-Frankenstein
+        #       y con la fecha de wine.inf, para que Wine no lo toque
+        #
+        # Se dice que esta a medias y se marca igual.
+        #
+        # El comentario de arriba ya tenia escrito el principio -"el centinela
+        # es una AFIRMACION... dicho de un prefijo que NO lo esta, es mentira"-
+        # y estas dos son la misma afirmacion. Faltaba aplicarselo a ellas.
+        #
+        # Y SE RETIRAN LAS QUE HUBIERA DE ANTES, por lo mismo que el centinela:
+        # si no, un prefijo que se quedo a medias con la version ya escrita
+        # sigue roto para siempre, porque ni Proton ni Wine lo van a tocar.
+        # Son ficheros de contabilidad de ellos dos, no datos de nadie: sin
+        # ellos, los dos rehacen lo que falte, que es justo lo que se quiere.
+        local _quitadas=""
+        [ -e "$WINEPREFIX/version" ] && rm -f "$WINEPREFIX/version" 2>/dev/null \
+            && _quitadas="version"
+        [ -e "$pfx/.update-timestamp" ] && rm -f "$pfx/.update-timestamp" 2>/dev/null \
+            && _quitadas="${_quitadas:+$_quitadas y }.update-timestamp"
+        say "[i] Prefijo a medias: NO se marca como preparado."
+        say "    Le falta $([ -f "$pfx/system.reg" ] || printf 'el registro; ')$([ -f "$pfx/drive_c/windows/system32/kernel32.dll" ] || printf 'kernel32.dll; ')asi"
+        say "    que Proton y Wine tienen que terminarlo. Tardara mas esta vez."
+        [ -n "$_quitadas" ] && say "    (quitada la marca $_quitadas, que les decia que estaba al dia)"
+        log "proton_marcar_prefijo: el prefijo esta a medias; no se marca y se quitan las marcas viejas (${_quitadas:-no habia}), para que Proton y Wine lo reparen" WARN
+        return 0
     fi
     local _vname_actual _vname_nuevo
     if [ -n "$pver" ]; then
@@ -45433,6 +45767,49 @@ exe_dentro_del_prefijo() {
     # build_runner_cmd, que corre ANTES que esto.
     local _d; _d="$(dirname "$EXE_PATH")"
     [ -d "$_d" ] && export STEAM_COMPAT_INSTALL_PATH="$_d"
+    return 0
+}
+
+prefijo_enlaces_colgados_quitar() {
+    # QUITA DE UN PREFIJO LOS ENLACES QUE NO APUNTAN A NADA. $1 = prefijo.
+    #
+    # Devuelve cuantos ha quitado.
+    #
+    # POR QUE ESTO Y NO prefijo_hacer_portable. Son parecidas y la diferencia
+    # importa: aquella quita TODOS los enlaces absolutos que salen del
+    # prefijo, y eso esta bien al INSTALAR uno que viene de otro equipo. Pero
+    # al LANZAR seria un destrozo: en un prefijo sano hecho en esta maquina,
+    # los enlaces a las DLL del runner son absolutos y salen del prefijo...
+    # porque son los que FUNCIONAN. Borrarlos romperia un prefijo que iba
+    # bien.
+    #
+    # Esto solo quita los que no apuntan a nada. Un enlace colgado no sirve
+    # para nada por definicion, asi que quitarlo es seguro siempre, y es
+    # EXACTAMENTE el daño que deja un prefijo traido de otro equipo -o hecho
+    # con un runner que ya no esta-:
+    #
+    #   drive_c/windows/system32/kernel32.dll ->
+    #     .../runtime/proton/GE-Proton11-6-x86_64/.../kernel32.dll
+    #
+    # Si ese runner no esta, el enlace cuelga. Y "[ -f ]" sigue los enlaces,
+    # asi que el fichero "no esta" aunque el enlace si. Quitandolo, Proton
+    # pone su propia DLL al crear el prefijo.
+    #
+    # Solo en drive_c/windows, que es donde viven los del runner. Una limpieza
+    # no debe pasearse por donde no la han llamado.
+    local pfx="${1:-}" l n=0
+    [ -d "$pfx/drive_c/windows" ] || { printf '0'; return 0; }
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        # -e sigue el enlace: falso si apunta a nada. Y -L confirma que es un
+        # enlace, para no tocar nunca un fichero de verdad.
+        if [ -L "$l" ] && [ ! -e "$l" ]; then
+            rm -f "$l" 2>/dev/null && n=$((n+1))
+        fi
+    done <<EOFCOLG
+$(find "$pfx/drive_c/windows" -type l 2>/dev/null)
+EOFCOLG
+    printf '%s' "$n"
     return 0
 }
 
@@ -71296,9 +71673,30 @@ library_menu() {
             "Generar fotogramas (MAKO): $(mako_estado_global)" \
             "HelixSR (DLSS en FSR 3.1): $(helixsr_estado_global)" \
             "Prefijo de TeknoParrot: $(if [ -f "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_faltan" ]; then printf 'listo, faltan %s' "$(cat "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_faltan")"; elif [ -f "$PREFIX_DIR/teknoparrot/.wp_teknoparrot_listo" ]; then printf 'listo'; else printf 'descargarlo ahora'; fi)" \
+            "Prefijo de Windows (compartido): $([ -d "$PREFIX_DIR/default" ] && printf 'ya lo tienes' || printf 'bajar el preparado')" \
             "<< Volver")" || return
         case "$sel" in
             "<< Volver"|"") return ;;
+            "Prefijo de Windows (compartido):"*)
+                # DE AQUI SE SACA EL PREFIJO PREPARADO CUANDO YA SE DIJO NO.
+                #
+                # La oferta sale UNA vez, al cargar el primer juego, y no se
+                # insiste. Sin esta fila, quien dijera que no -o a quien le
+                # fallara la descarga- no tendria forma de volver a pedirlo.
+                if [ -d "$PREFIX_DIR/default" ]; then
+                    if ui_ask "Ya tienes un prefijo compartido en:
+  $PREFIX_DIR/default
+
+Si bajas el preparado, el que tienes se aparta como
+default.anterior y lo que hubieras instalado en el deja de
+estar en uso.
+
+Continuar?"; then
+                        prefijo_default_traer || true
+                    fi
+                else
+                    prefijo_default_traer || true
+                fi ;;
             "Raton en los menus:"*) raton_menus_menu || true ;;
             "Puntero mientras juegas:"*) cursor_menu || true ;;
             "Menú encima del juego:"*) overlay_menu_cfg || true ;;

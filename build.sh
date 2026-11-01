@@ -140,7 +140,7 @@ PY
     # script generado lleva una pieza de mas o de menos: si un @@INCLUIR@@ se
     # cuela o se pierde en una edicion, el build para aqui en vez de generar un
     # wproton.sh al que le falta medio ayudante.
-    [ "$n" -eq 21 ] || { rojo "Se esperaban 21 inserciones y hubo $n"; exit 1; }
+    [ "$n" -eq 22 ] || { rojo "Se esperaban 22 inserciones y hubo $n"; exit 1; }
 
     # la marca que consulta el script para saber si debe regenerar el helper
     sincronizar_marcas "$tmp"
@@ -159,7 +159,7 @@ sincronizar_marcas() {
     # se acaba de escribir en el fichero, para que el helper se regenere justo
     # cuando cambia su contenido y no cuando alguien se acuerda.
     local f="$1" nombre marca
-    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py sincro.py menu_qt.py mako.py reshade.py trackpad.py isofuse.py; do
+    for nombre in menu_pygame.py mapeador.py steam_add.py menu_gtk.py biblioteca.py mando_virtual.py perfil.py detectar.py dlls.py disco.py teclas.py teknoparrot.py ficha.py sincro.py menu_qt.py mako.py reshade.py trackpad.py isofuse.py helixsr.py; do
         [ -f "$SRC/$nombre" ] || continue
         marca="$(marca_de "$SRC/$nombre")"
         "${PYTHON:-python3}" - "$f" "$nombre" "$marca" <<'PY'
@@ -215,7 +215,8 @@ for var, fin, dest in (('MENU_PYGAME_PY','PGEOF','menu_pygame.py'),
                        ('FICHA_PY','FICEOF','ficha.py'),
                        ('SINCRO_PY','SNCEOF','sincro.py'),
                        ('ISOFUSE_PY','ISOEOF','isofuse.py'),
-                       ('MENU_QT_PY','QTEOF','menu_qt.py')):
+                       ('MENU_QT_PY','QTEOF','menu_qt.py'),
+                       ('HELIXSR_PY','HXSEOF','helixsr.py')):
     st = s.index('cat > "$%s" <<' % var)
     ini = s.index('\n', st) + 1
     en = s.index('\n%s\n' % fin, st)

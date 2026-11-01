@@ -11,6 +11,54 @@ anotadas a propósito para que nadie las repita.
 
 ---
 
+## Pintar una ventana nuestra encima del juego — HIPÓTESIS (el overlay, 20/10)
+
+Tres cosas **verificadas en su día** (están en el código, salieron del teclado
+en pantalla) y una **sin confirmar**, que es la del overlay nuevo.
+
+**Verificado, y por eso el overlay no se hace así:**
+
+1. Una ventana nuestra a pantalla completa delante del juego **le roba el foco
+   del teclado**: las teclas del mapeador y las del teclado real dejan de
+   llegarle, y un juego en ventana parece esconderse detrás. Fue lo que mató al
+   teclado en pantalla, sustituido por el «texto rápido» (sin ventana).
+2. **Mantener una conexión gráfica abierta durante la partida** acaba en
+   `XIO: fatal IO error` cuando gamescope reconfigura su XWayland. Se lleva el
+   proceso por delante, y el proceso es el que cierra el juego con Select.
+3. **Leer el mando por evdev sí funciona sin foco de ventana.** Es lo que hace
+   el vigilante de Select desde siempre, y es lo que permite que un panel se
+   pueda manejar aunque nunca reciba el foco.
+
+**Hipótesis, pendiente de un equipo de verdad:** que marcando la ventana con
+`_NET_WM_WINDOW_TYPE_NOTIFICATION` + `_NET_WM_STATE_ABOVE` + `WM_HINTS
+input = False` y pidiendo `GAMESCOPE_EXTERNAL_OVERLAY = 1` se vea encima del
+juego **sin** robarle el teclado, en el escritorio **y** en el modo Juego.
+
+La parte de EWMH es la vía estándar de los avisos del escritorio y es razonable
+dar por bueno que funciona en KDE/GNOME. La de gamescope es la documentada para
+que una aplicación de fuera pinte encima ([gamescope
+#288](https://github.com/ValveSoftware/gamescope/issues/288), [electron
+#45387](https://github.com/electron/electron/pull/45387)), **pero esa capa la
+coge mangoapp y no la suelta** ([MangoHud
+#775](https://github.com/flightlessmango/MangoHud/issues/775)), y en los
+volcados de ventanas de la Deck aparece su ventana. Así que en el modo Juego
+puede estar ocupada.
+
+**Cómo comprobarlo sin adivinar:** el registro escribe
+`overlay: ventana NNNxNNN, puesto: ...` con la lista de lo que se consiguió
+poner. Si falta `capa de gamescope`, o si el panel no se ve, **antes de tocar
+nada** hay que probar con MangoHud apagado: eso separa «nuestra propiedad no
+vale» de «la capa está ocupada». Los pasos están en `CONTINUAR.md`, apartado
+0 quindecies.
+
+**Lo que ya se sabe que NO se puede hacer desde ahí:** encender MAKO o HelixSR
+en un juego ya arrancado. MAKO es una capa de Vulkan que se inyecta con
+variables de entorno **al lanzar**, y HelixSR es una DLL que el juego carga al
+arrancar. No es una limitación nuestra y no tiene vuelta: el overlay solo puede
+dejarlo puesto para la próxima partida.
+
+---
+
 ## Aliens Armageddon (Raw Thrills, BudgieLoader) — VERIFICADA
 
 Funciona. Registro `wproton_20260913_013605.log`, 13/09/2026: siete minutos de
@@ -978,6 +1026,515 @@ prefijo siga siendo portatil entre equipos.
 
 Se descartan las carpetas que no son de un usuario real (`Public`,
 `All Users`, `Default`), y si ya existe `steamuser` no se toca nada.
+
+---
+
+## El mismo juego va en carpeta y no va empaquetado — ARREGLO RETIRADO (regresion 18/10)
+
+> **OJO: ESTE ARREGLO NO ESTA EN LA VERSION QUE SE ENTREGA.** Se saco en la
+> regresion del 18/10 por la noche: algo del trabajo de ese dia sobre los
+> prefijos hacia que muchos juegos no funcionaran, no se sabia cual, y se volvio
+> a la 2.11 publicada en todo lo que toca prefijos. Lo de abajo sigue siendo
+> cierto como diagnostico -el mecanismo esta medido- y es la especificacion de
+> lo que hay que volver a meter, una pieza a la vez. Ver PENDIENTE-PREFIJOS.md.
+
+
+**Caso real:** The Witcher 3 Wild Hunt Remastered, registro
+`wproton_20261018_092305.log`. En carpeta con su prefijo, perfecto. El mismo
+juego empaquetado en `.wsquashfs` con ese mismo prefijo dentro: arranca, pinta,
+y se queda dando vueltas en la pantalla de carga.
+
+**Causa (VERIFICADA en el registro): Proton no mira `WINEPREFIX`.** El prefijo
+que usa sale de **`STEAM_COMPAT_DATA_PATH`**; umu-launcher solo copia ahí
+`WINEPREFIX` *cuando esa variable viene vacía*, y si trae valor manda el valor.
+
+En el mismo lanzamiento, a cuarenta líneas de distancia en el volcado del
+entorno:
+
+```
+WINEPREFIX=/home/deck/WProton/prefixes/The_Witcher_3_Wild_Hunt_Remastered
+STEAM_COMPAT_DATA_PATH=/home/deck/WProton/wsquashfs/tmp_mount/The_Witcher_3_...
+```
+
+Un `.wsquashfs` con prefijo dentro se prepara en dos tiempos: primero se apunta
+la variable al montaje (correcto, el prefijo está ahí) y después se **saca** el
+prefijo a disco, que cambia `WINEPREFIX`. Nadie volvía a tocar la variable del
+primer paso, así que todo el arreglo del prefijo se hacía en `prefixes/<juego>`
+y el juego arrancaba con el del montaje, al que le faltan las DLL del runner.
+
+**Cómo se reconoce en el registro.** No hay ningún error nuestro. Lo que hay son
+estas líneas, de Wine y por lo bajo, al preparar el prefijo:
+
+```
+Auto-start service L"MountMgr" failed to start: 2      (y PlugPlay, winebus, wineusb...)
+wine: could not load kernel32.dll, status c0000135
+proton_marcar_prefijo: sin centinela; system.reg=si kernel32=NO
+[+] Prefijo: ya marcado como 'GE-Proton11-9' (al dia)
+```
+
+Sin `MountMgr` no hay unidades y sin `PlugPlay` no hay mando: el juego corre
+sobre medio Windows. Y las dos últimas líneas dicen cada una lo contrario de la
+otra.
+
+**Por qué el prefijo llega sin `kernel32.dll`, que no es un fallo:** un prefijo
+de Proton guarda medio `system32` como **enlaces absolutos al runner** del
+equipo donde se hizo (1294 en el registro de un tester). Al empaquetar hay que
+quitarlos, así que **todo** `.wsquashfs` con prefijo de Proton dentro nace
+incompleto a propósito. Lo completa Proton en el equipo donde se juegue… si se
+le deja.
+
+**Arreglo (2.11), cuatro piezas:**
+
+1. `STEAM_COMPAT_DATA_PATH` se **alinea** cada vez que el prefijo puede haber
+   cambiado: con prefijo incluido se fija al prefijo, y con cualquier otro
+   —propio, compartido, sacado del archivo— **se quita** y la deduce umu.
+   Fijarla a mano en esos casos rompió un juego con prefijo compartido
+   (`unable to use parent for game drive, path /home`).
+2. Se **limpia al empezar cada lanzamiento**, también si viene heredada de
+   Steam o de un juego anterior de la misma sesión.
+3. Las tres marcas de «ya estoy listo» —`version`, `.update-timestamp` y
+   `creation_sync_guard`— van juntas y con la misma regla: solo las lleva un
+   prefijo que se sostiene solo (registro y `kernel32.dll`). Antes se quitaba
+   el centinela pero no la `version`, y la `version` sola basta para que Proton
+   no reponga nada.
+4. Al **empaquetar**, si el prefijo sale incompleto, el archivo nace sin esas
+   marcas. Si sale entero (los de Wine a secas) se quedan: quitárselas
+   provocaría el `FileExistsError` de Grandia.
+
+Y en el diagnóstico de antes de lanzar, `prefijo=` y `compatdata=` van ahora una
+debajo de la otra, con aviso si no coinciden.
+
+**Lo que se probó y NO era:**
+
+- *El `wineboot` que falla con `could not load kernel32.dll`.* Es consecuencia,
+  no causa: `wineboot` no repone ese fichero, no es suyo. Ya no se le llama
+  sobre un prefijo a medias.
+- *Que la carpeta del juego fuera de solo lectura.* No lo es: el montaje lleva
+  `fuse-overlayfs` encima, con capa de escritura en
+  `wsquashfs/overlays/<juego>/upper`.
+- *Que `AppData` quedara enlazado al archivo y no se pudiera escribir.* El
+  enlace existe —para no duplicar gigas— pero apunta al montaje **con**
+  overlay, así que se escribe bien.
+- *Que faltara el descodificador de H.264 para el vídeo de presentación.* El
+  registro lo avisa, y conviene instalarlo (`gst-libav`), pero no es esto: en
+  carpeta el juego iba perfecto en el mismo equipo y con el mismo aviso.
+
+**No hace falta volver a empaquetar el juego:** el arreglo actúa al lanzar, así
+que los `.wsquashfs` que ya estén hechos funcionan igual. Lo que cambia al
+reempaquetar es que el archivo nuevo ya no lleva marcas que mientan.
+
+---
+
+## Un prefijo que funciona en carpeta deja de funcionar empaquetado — ARREGLO RETIRADO (regresion 18/10)
+
+> **OJO: ESTE ARREGLO NO ESTA EN LA VERSION QUE SE ENTREGA.** Se saco en la
+> regresion del 18/10 por la noche: algo del trabajo de ese dia sobre los
+> prefijos hacia que muchos juegos no funcionaran, no se sabia cual, y se volvio
+> a la 2.11 publicada en todo lo que toca prefijos. Lo de abajo sigue siendo
+> cierto como diagnostico -el mecanismo esta medido- y es la especificacion de
+> lo que hay que volver a meter, una pieza a la vez. Ver PENDIENTE-PREFIJOS.md.
+
+
+**Síntoma, en palabras de Dani:** *«el juego funciona en modo carpeta con el
+prefijo propio, pero cuando haces el wsquashfs con el prefijo propio que
+funciona deja de funcionar»*.
+
+**Causa (VERIFICADA, y es del empaquetado):** un prefijo de Proton tiene medio
+Windows como **enlaces absolutos al runner**. Está en el código de Proton
+(`pfx_copy` los hace absolutos a propósito cuando apuntan a
+`lib/wine/x86_64-windows`). En el prefijo del Witcher eran **1278**, y el
+empaquetado los borraba todos:
+
+```
+[+] Prefijo hecho portatil: 1278 enlace(s) al runner de este equipo quitados
+```
+
+El archivo salía con un Windows a medias, contando con que Proton lo
+reconstruyera al abrirlo. El mismo prefijo, sin tocar, funcionaba en carpeta.
+
+**Arreglo:** al empaquetar, un enlace que **lleva** a un fichero se sustituye
+por **el fichero de verdad** (el archivo se lleva su Windows dentro); el que no
+lleva a ningún sitio se quita, que es el que rompe `wineboot` con `error=80`.
+Y al **lanzar** ya no se borran los enlaces que funcionan: apuntan al runner de
+ese equipo, que es lo correcto, y borrarlos dejaba el prefijo a medias en cada
+arranque.
+
+**Por qué no ata el archivo a un runner:** una DLL de Wine copiada sigue siendo
+una DLL de Wine —marca `Wine builtin DLL` en el byte `0x40`, que es lo que mira
+`file_is_wine_builtin_dll`—, así que un Proton más nuevo la reconoce y la
+sustituye por la suya al actualizar el prefijo.
+
+**Y un aviso para quien toque la limpieza del empaquetado:** `tracked_files`
+**no** se puede quitar del prefijo. `update_builtin_libs` lo abre con
+`open(..., "r")` sin comprobar que exista, y se ejecuta justo cuando el prefijo
+viene de otro equipo: sin el fichero, Proton muere con `FileNotFoundError`
+antes de lanzar.
+
+---
+
+## The Witcher 3 Remastered desde un `.wsquashfs` — SIN RESOLVER (medido, 18/10/2026)
+
+**Estado: hipótesis con datos, no verificada.** Lo que sí está verificado es
+que las tres causas que se arreglaron antes (la versión del prefijo, el
+`STEAM_COMPAT_DATA_PATH` y el `wineboot` inútil) ya no se dan: el registro del
+18/10 a las 11:26 muestra la cadena nueva funcionando entera.
+
+**Lo que dicen los registros, uno al lado del otro.** El mismo juego, el mismo
+equipo, la misma sesión:
+
+| | carpeta (10:57, «va perfecto») | archivo (11:26, «no va») |
+|---|---|---|
+| prefijo | `Upgrading prefix from None` | marcas quitadas → Proton lo completa |
+| cadenas de intercambio | 4 | 4 |
+| bloques de HDR | 2 | 2 |
+| duración | 80 s, **cerrado a mano** | 98 s, **cerrado a mano** |
+
+Son **idénticos línea por línea**. O sea que el registro no distinguía *«está
+roto»* de *«está leyendo 60 GB comprimidos»*, y en los dos casos el juego se
+cerró antes de llegar a ninguna parte.
+
+**ACTUALIZACIÓN (misma tarde):** la causa apareció y era del empaquetado —los
+1278 enlaces al runner que se borraban; está en la entrada de arriba—. Lo que
+sigue valía mientras no se sabía, y el instrumento que se hizo para medirlo
+sigue sirviendo.
+
+**La hipótesis que quedaba entonces, y por qué era razonable:** un `.wsquashfs` con zstd se
+descomprime en un solo hilo. 45 GB de juego leídos a través de FUSE, en una
+Deck, son varias veces más lentos que la carpeta. 90 segundos pueden no dar ni
+para la pantalla de presentación.
+
+**Y el prefijo ya no es una incógnita:** desde la 2.11 WProton **prueba** el
+prefijo antes de lanzar —ejecuta un programa de Windows dentro con la misma
+cadena del juego, comprueba que Wine no se queje de los servicios y que no le
+falten piezas del runner, y si hace falta lo repara— así que cuando el registro
+dice `[+] Prefijo comprobado: Windows arranca dentro`, el prefijo está
+**descartado con pruebas** y no por suposición. Si no arranca, lo dice antes de
+lanzar y no se pierde el tiempo mirando el juego.
+
+**Cómo se comprueba lo demás sin adivinar:** `diag_carga_juego` toma tres muestras
+(20, 60 y 120 s) de lo que el montaje lee de verdad (`rchar` de squashfuse) y
+del tiempo de CPU y el estado del proceso del juego, y escribe la conclusión en
+el registro:
+
+```
+[carga] 20s de partida: leidos 612 MB del archivo (30 MB/s) | CPU del juego 94% | estado RS
+[carga] ESTA CARGANDO del archivo. Si la pantalla sigue en negro, dale tiempo
+```
+
+Si dice **ESTA CARGANDO**, es lentitud del formato y la respuesta es el formato
+**carpeta** para ese juego. Si dice **está PARADO**, entonces sí hay un fallo
+que buscar, y ya se sabe que no es la velocidad.
+
+**Lo que NO es:**
+
+- *El prefijo.* Las tres causas de esa familia están cerradas, el registro del
+  11:26 las muestra funcionando, y desde la 2.11 además se comprueba ejecutando
+  algo dentro: si el registro dice que arranca, no es el prefijo.
+- *`WARNING: Executable not found: C:\...` y `Proton: Executable is inside wine
+  prefix`.* Aparecieron el 18/10 y parecen la causa, pero son consecuencia de
+  que la conversión a ruta de Windows ahora **sí** se hace (antes `winepath`
+  fallaba porque el prefijo estaba a medias). Lo único que Proton se salta por
+  ahí es montar su unidad para el juego, y esa la crea WProton (`D:`).
+- *El códec H.264.* El registro lo avisa en los dos casos, carpeta incluida.
+
+---
+
+## El juego arranca «recién instalado» (sin idioma ni partidas) — ARREGLO RETIRADO (regresion 18/10)
+
+> **OJO: ESTE ARREGLO NO ESTA EN LA VERSION QUE SE ENTREGA.** Se saco en la
+> regresion del 18/10 por la noche: algo del trabajo de ese dia sobre los
+> prefijos hacia que muchos juegos no funcionaran, no se sabia cual, y se volvio
+> a la 2.11 publicada en todo lo que toca prefijos. Lo de abajo sigue siendo
+> cierto como diagnostico -el mecanismo esta medido- y es la especificacion de
+> lo que hay que volver a meter, una pieza a la vez. Ver PENDIENTE-PREFIJOS.md.
+
+
+**Síntoma:** el juego funciona, pero sale en inglés, con la configuración a
+cero y sin las partidas que tenía. **Ningún error en el registro.**
+
+**Causa:** un enlace del prefijo que ya no lleva a ningún sitio. El de siempre
+es `drive_c/users/<nombre>/AppData`, que en un prefijo sacado de un
+`.wsquashfs` apunta al montaje —a propósito, para no duplicar cientos de
+megas— y se queda colgado en cuanto el juego se convierte a carpeta, se borra
+el archivo o se lanza sin montar nada. Para el sistema ahí no hay ningún
+fallo: hay un enlace, y punto.
+
+Y había tres formas distintas de llegar al mismo sitio, las tres silenciosas:
+
+1. **`find` no entra por un enlace.** Sin `-L`, ni siquiera cuando el enlace es
+   el punto de partida: devuelve el enlace y no baja. Las dos funciones que
+   enlazan el usuario del archivo al que espera el runner decidían con un
+   `find … -type f`, así que veían `AppData` «vacía» y no enlazaban nada.
+   Comprobado:
+
+   ```
+   find users/deck/AppData -type f      -> nada
+   find -L users/deck/AppData -type f   -> los ficheros
+   ```
+
+2. **Al empaquetar se vaciaba.** `cp -a` copia los enlaces, no lo que hay
+   detrás, y la limpieza previa vaciaba todos los que apuntaran fuera del
+   prefijo: el archivo nuevo salía sin `AppData`.
+
+3. **Un enlace colgado se daba por bueno.** `[ -e ]` sigue el enlace, así que
+   decía «no existe»… pero para `ln -s` sí existe y falla con *File exists*.
+   De ahí salían avisos de «no se pudo crear el enlace» sobre prefijos que ya
+   lo tenían.
+
+**Arreglo:** la comprobación de «hay ficheros» está en un solo sitio y va con
+`-L` (`hay_ficheros`); al empaquetar, lo enlazado a la zona de WProton **se
+trae dentro del archivo** y lo enlazado al equipo se vacía
+(`prefijo_enlaces_fuera`, que además **mide** lo que va a traer para pedir
+sitio, porque `du` tampoco sigue los enlaces); y antes de lanzar se recorren
+todos, se escriben en el registro con su destino y los colgados se arreglan
+—carpeta de verdad en el perfil del usuario, fuera en la raíz de `C:`—.
+
+**Cómo se reconoce en el registro:**
+
+```
+enlaces del prefijo: drive_c/users/deck/AppData -> /...  [COLGADO]
+enlaces del prefijo: 14 revisado(s), 1 colgado(s)
+```
+
+**Lo que NO era:** permisos (el montaje lleva `fuse-overlayfs` encima, con capa
+de escritura), ni el usuario del prefijo (`steamuser` contra el del archivo),
+que es un caso distinto y está documentado más arriba.
+
+---
+
+## El prefijo del archivo y las carpetas del usuario — ARREGLO RETIRADO (regresion 18/10)
+
+> **OJO: ESTE ARREGLO NO ESTA EN LA VERSION QUE SE ENTREGA.** Se saco en la
+> regresion del 18/10 por la noche: algo del trabajo de ese dia sobre los
+> prefijos hacia que muchos juegos no funcionaran, no se sabia cual, y se volvio
+> a la 2.11 publicada en todo lo que toca prefijos. Lo de abajo sigue siendo
+> cierto como diagnostico -el mecanismo esta medido- y es la especificacion de
+> lo que hay que volver a meter, una pieza a la vez. Ver PENDIENTE-PREFIJOS.md.
+
+
+**El cierre de "en carpeta va y empaquetado no".** La causa estaba en lo que
+Proton hace DESPUES, con el prefijo que le dejabamos.
+
+**El mecanismo.** `fuse-overlayfs` no puede **renombrar** un directorio de la
+capa inferior. Y `migrate_user_paths` de Proton, que corre en **cada**
+lanzamiento, renombra carpetas del usuario:
+
+```
+drive_c/users/steamuser/Local Settings/Application Data
+  - si es un DIRECTORIO de verdad -> merge_user_dir + os.rename(... " BACKUP")
+  - si no existe                  -> os.symlink("../AppData/Local")
+  - si es un enlace a otro sitio  -> os.remove + os.symlink
+drive_c/users/steamuser/Application Data   -> "./AppData/Roaming"
+drive_c/users/steamuser/My Documents       -> "./Documents"
+```
+
+`prefijo_incluido_a_disco` saca el prefijo del montaje **por este motivo** -lo
+dice su propio comentario- y despues volvia a meter dentro del montaje
+`AppData`, `Local Settings` y `Application Data`: las tres rutas que Proton
+toca.
+
+**Por que a uno le falla y al otro no.** Si en el prefijo de quien empaqueta
+esas rutas ya eran **enlaces**, Proton no renombra nada y pasa de largo. Si en
+el otro equipo son **directorios de verdad**, Proton intenta renombrarlos
+dentro del archivo, el `os.rename` falla y muere antes de lanzar. Mismo
+archivo, dos equipos, dos resultados — y de ahi que el registro de quien
+empaqueto parezca normal.
+
+**El arreglo.** El prefijo que sale del archivo tiene que ser **indistinguible
+de uno hecho en ese equipo**. Dentro del montaje se queda solo lo que no cabe
+copiar -el juego- y eso se decide **por tamaño** (256 MB,
+`WP_PREFIJO_ENLACE_MIN_MB`), no por el nombre de la carpeta. Y al empaquetar se
+normalizan esas rutas y se **revisa** el prefijo antes de comprimir; si algo no
+cuadra, no se comprime.
+
+**Lo que NO era, y se descarto con los registros delante:** el entorno (se
+comparo var por var entre el lanzamiento en carpeta y el del archivo: solo
+cambiaba `STEAM_COMPAT_INSTALL_PATH`), el `Proton: Error: unable to use parent
+for game drive` (sale **tambien** en los lanzamientos en carpeta que funcionan),
+y la version del archivo (el tester empaqueto de cero con la ultima).
+
+**Como se vigila:** `prueba_prefijo.sh` apartados 32 y 33, y sobre todo
+`prueba_quirurgico.py`, que lleva el `migrate_user_paths` de Proton **copiado de
+su fuente** y lo ejecuta contra el prefijo preparado, con el montaje en solo
+lectura de verdad. Si algun dia cambia esa funcion de Proton, esa prueba se
+cambia **mirando su fuente**.
+
+---
+
+## Un archivo con prefijo que no va: lo PRIMERO que hay que mirar — PENDIENTE (regresion 18/10)
+
+> **OJO: ESTE ARREGLO NO ESTA EN LA VERSION QUE SE ENTREGA.** Se saco en la
+> regresion del 18/10 por la noche: algo del trabajo de ese dia sobre los
+> prefijos hacia que muchos juegos no funcionaran, no se sabia cual, y se volvio
+> a la 2.11 publicada en todo lo que toca prefijos. Lo de abajo sigue siendo
+> cierto como diagnostico -el mecanismo esta medido- y es la especificacion de
+> lo que hay que volver a meter, una pieza a la vez. Ver PENDIENTE-PREFIJOS.md.
+
+
+**La pregunta, antes que cualquier teoria: ¿ese archivo se hizo con la 2.11 o
+es de antes?** Un archivo empaquetado con prefijo por una version anterior al
+18/10 lleva medio `system32` en enlaces a un runner que en otro equipo no
+existe, y eso **no se arregla actualizando WProton**: hay que rehacer el
+archivo. El 18/10 se fue una tarde en esto con The Witcher 3.
+
+Desde la 2.11, al abrir un archivo con prefijo se dice solo:
+
+```
+[+] Este archivo lo hizo:
+    WProton 2.11
+    el 2026-10-18 17:40:12
+    runner GE-Proton11-9
+    el prefijo trae su Windows dentro [OK]
+```
+
+Y si no lo lleva:
+
+```
+[i] Este archivo no lleva marca: lo hizo una version anterior a la 2.11.
+[!] EL PREFIJO DE ESTE ARCHIVO NO TRAE SU WINDOWS:
+    system32 tiene 120 DLL de verdad y 400 enlace(s) colgado(s)
+```
+
+**Lo que se mira para decidirlo:** `drive_c/windows/system32` del prefijo del
+archivo. Un `system32` de Proton pasa de **600** DLL; con menos de 200, o con
+**un solo** enlace colgado, ese prefijo depende de un runner ajeno.
+
+**Y si el archivo esta a medias, el juego deberia arrancar igual**: WProton
+repone del runner de este equipo (`prefijo_asegurar`, DXVK y las DLL de Wine que
+piden las de DirectX). Lo que no se puede es dar por bueno el archivo.
+
+**Al revisar un registro de estos, en este orden:**
+
+```
+grep 'Este archivo lo hizo' -A4     con que version se hizo
+grep 'NO TRAE SU WINDOWS'           si su system32 esta a medias
+grep 'Windows del prefijo traido'   si al empaquetarlo se trajo el Windows
+grep '\[carga\]'                    si estaba cargando o estaba parado
+grep 'Prefijo comprobado'           si Windows arranca dentro del prefijo
+grep 'a peticion del usuario'       si lo cerro una persona (¡no es un fallo!)
+```
+
+Esa ultima linea importa mas de lo que parece: en el registro del 18/10 a las
+16:17 el juego **no se cayo**, lo cerro alguien con Select a los 40 s. Un
+registro que acaba en `rc=0` a los 40 s puede ser un fallo o puede ser
+impaciencia, y se escriben casi igual.
+
+---
+
+## HelixSR: lo que hay que saber antes de perseguir un fallo con el
+
+No es un caso cerrado: es lo averiguado al integrarlo (18/10/2026, version
+**1.9.3 experimental**), para no volver a investigarlo.
+
+**Que es.** La red de DLSS (Model E) corriendo como shaders de computo de
+Direct3D 12. Sustituye la DLL de FSR 3.1 **del juego** -
+`amd_fidelityfx_upscaler_dx12.dll`, o `amd_fidelityfx_dx12.dll` en los juegos
+que no traen la primera-, y la del juego se guarda como `*.original.dll`.
+
+**Las tres condiciones. Si falla una, no hay nada que perseguir:**
+
+1. **Direct3D 12.** En Vulkan y en D3D11 no existe. Se comprueba leyendo la
+   tabla de importaciones del `.exe`.
+2. **El juego tiene que traer FSR 3.1.** Si no, no hay DLL que sustituir. Para
+   juegos con DLSS o XeSS hace falta el camino de OptiScaler / HelixSR Scaler.
+3. **Dentro del juego hay que elegir «AMD FSR».** Es por donde entra. Con DLSS
+   o XeSS seleccionado, HelixSR no recibe nada.
+
+**GPUs:** RDNA 1 y posteriores. La **Deck (gfx1033, RDNA 2) entra**, y usa el
+camino int8, unos 15% mas rapido. Vega es experimental y sin probar en hardware
+real; Pascal (GTX 10) "deberia ir" y tampoco esta probado. Lo desarrollan y
+prueban en una **BC-250 (gfx1013) con RADV**.
+
+**La firma de que la red NO corrio:** en el juego se ve **un borde rojo y la
+imagen temblando**. Eso NO es "no hace nada": es que la DLL esta y la red no.
+Lo dice su `helixsr.log`, al lado de la DLL, y WProton lo saca al registro de
+la sesion.
+
+**Lo que no se puede repartir.** La descarga no trae la red: su instalador baja
+la DLL de DLSS de NVIDIA, la construye en el equipo y borra la de NVIDIA. La
+DLL resultante es para ese PC. Por eso WProton la **saca al empaquetar** a
+`.wsquashfs` y la vuelve a poner al jugar. Si alguna vez aparece un
+`amd_fidelityfx_*.dll` con la cadena `HelixSR` dentro de un archivo que se ha
+repartido, eso es un fallo nuestro, no una opcion.
+
+**Dos choques conocidos:**
+
+- **OptiScaler junto al `.exe`** (en WProton, puesto como `dxgi.dll`): puede
+  quedarse las llamadas de FSR del juego y dejar a HelixSR sin trabajo. Lo dice
+  su propio README.
+- **Su instalador y las bibliotecas de Steam**: desde la 1.7, al acabar de
+  construir, busca juegos en `~/.steam` y `~/.local/share/Steam` y ofrece
+  meterse en ellos. WProton lo ejecuta con un `$HOME` propio para que no
+  encuentre ninguna.
+
+**Y una leccion que vale para cualquier cosa que lea un `.exe`:** la tabla de
+importaciones **normal no basta**. Muchisimos juegos piden `d3d12.dll` por la
+tabla de **carga retardada** (delay-load) y, mirando solo la primera, parecen
+de DirectX 11. Los descriptores antiguos de esa tabla guardan **direcciones**
+(ImageBase + RVA) en vez de RVAs, y el bit que lo indica se ve mal en la
+practica: en vez de fiarse del bit, WProton prueba las dos lecturas y se queda
+la que cae dentro de una seccion de verdad.
+
+**Lo que todavia NO esta hecho aqui:** el camino de **HelixSR Scaler /
+OptiScaler**, que es el que da HelixSR en juegos con DLSS, XeSS o FSR 2 sin FSR
+3.1. Hay base (`install_optiscaler`), pero son mas piezas: la DLL va duplicada
+bajo los dos nombres de FSR en una subcarpeta, y hay que escribir
+`Dx12Upscaler=fsr31`, `FfxDx12Path` y `FfxDx12SRPath` en `OptiScaler.ini` con
+rutas de Windows (`Z:\...`).
+
+---
+
+## El cursor del juego sale como una X, y con el mando no sale — CORREGIDO (2.11)
+
+**Síntoma**, tal como lo contó Dani (18/10/2026, registro
+`wproton_20261018_131254.log`, sesión Wayland/KDE):
+
+> «en este juego por defecto aparece la X y si mueves el ratón sale el cursor
+> bien, pero con el mando no sale ese cursor»
+
+Eran **dos** fallos distintos que se veían como uno.
+
+**Causa 1 — el mando como ratón acortaba el escondido.** El vigilante del
+puntero esconde el cursor cuando nadie lo mueve, y mira el mando: si llegan
+eventos del mando, quien juega no está en el ratón, así que con **1 s** quieto
+basta en vez de 3. Correcto… salvo cuando el stick **es** el ratón: entonces
+esos eventos son la mano moviendo el puntero, y el cursor desaparecía justo
+mientras se apunta. En el registro se veía literalmente:
+
+```
+[cursor] 1.0 s sin mover el raton (jugando con el mando): puntero escondido
+```
+
+**Causa 2 — `XUndefineCursor` no devuelve el cursor del juego.** En Wayland el
+puntero lo dibuja el compositor, así que además de `XFixesHideCursor` se pone
+un cursor **transparente** en la ventana bajo el puntero. Al destapar se
+quitaba con `XUndefineCursor`, y eso **no** restaura el cursor que el juego
+tenía: hace que la ventana vuelva a **heredar** el del padre, y subiendo la
+jerarquía se llega a la ventana raíz, **cuyo cursor por omisión es la X**. De
+ahí la X. Al mover el ratón el juego recibe movimiento, Wine le manda
+`WM_SETCURSOR` y el juego repinta el suyo: por eso «con el ratón sale bien».
+
+**Arreglo:**
+
+1. Si el juego lleva el mando como ratón, sus eventos **ya no** acortan la
+   espera. Se sabe por la variable `WP_RATON_MANDO` que pone el lanzador y por
+   la marca `runtime/.raton_mando` que deja el mapeador — la marca hace falta
+   porque el vigilante arranca **antes** que el mapeador, así que al leer el
+   entorno todavía no hay nada que leer. Se consulta como máximo una vez por
+   segundo.
+2. Al destapar se le da al puntero **un empujón de un píxel y se devuelve** con
+   `XWarpPointer`. El juego recibe movimiento y repinta su cursor; la X
+   desaparece sin esperar a que nadie toque nada. Un píxel queda por debajo del
+   umbral de 8 px con el que se decide «lo está moviendo alguien», así que el
+   empujón no se cuenta como movimiento a sí mismo. Solo se hace si habíamos
+   tapado nosotros. Se apaga con `WP_CURSOR_EMPUJON=0`.
+
+En el informe del puntero al cerrar salen las dos cosas: si el mando hacía de
+ratón y cuántos empujones se dieron.
+
+**Lo que NO era:** el tema de cursores del sistema, ni el juego (pone su cursor
+perfectamente; lo que fallaba era que nadie le pedía repintarlo), ni Wayland
+por sí mismo.
 
 ---
 

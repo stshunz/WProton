@@ -544,6 +544,130 @@ def traducir_escritorio(virtual, teclados):
                     virtual.syn()
 
 
+# ----------------------------------------------------------------------------
+# REMAPEAR UN BOTON EN OTRO (31/10)
+# ----------------------------------------------------------------------------
+#
+# LO QUE SE PIDIO: "poner el start en el boton A y que el start siga siendo el
+# start". O sea NO un intercambio: una COPIA en una direccion. Al pulsar A el
+# juego recibe Start, y el Start de verdad sigue haciendo Start.
+#
+# Esto es lo que hace falta en los arcades: muchos piden Start para empezar la
+# partida o para el servicio, y en un mando de mano el Start esta donde esta.
+#
+# POR QUE ENCAJA AQUI Y NO EN EL MAPEADOR .keys. El mapeador convierte el mando
+# en TECLAS, y muchos juegos, al ver un mando activo, dejan de leer el teclado.
+# Esto convierte un mando en OTRO MANDO, que es lo que el juego si lee.
+#
+# COMO SE APLICA. Reusa CAMBIO_BOTONES, el diccionario que ya existia para el
+# intercambio de los sticks, y que se consulta UNA sola vez arriba del bucle.
+# Por eso un remapeo no hay que acordarse de aplicarlo en cada sitio donde se
+# escribe un boton: con meterlo en ese diccionario, ya esta.
+#
+# LA DIFERENCIA CON EL INTERCAMBIO DE STICKS, que es la clave: aquel mete las
+# DOS direcciones ({L: R, R: L}) y por eso intercambia. Un remapeo mete solo
+# UNA ({A: START}), asi que A manda START y START no esta en el diccionario y
+# se queda como esta. El "y que el start siga siendo el start" sale gratis de
+# no poner la vuelta.
+
+# Los nombres que se admiten. Los BTN_* son los de verdad, sin ambiguedad, y
+# son los que escribe el menu de WProton. Los cortos ("a", "start") valen para
+# quien edite el perfil a mano, y van en DISPOSICION XBOX: en un mando Xbox la
+# A esta abajo (BTN_SOUTH). Por eso el menu nunca los usa: con el estilo
+# Batocera la A es la de la derecha y escribir "a" significaria otra cosa.
+NOMBRE_A_BOTON = {}
+
+
+def _poner_nombre(nombre, codigo):
+    if codigo is not None:
+        NOMBRE_A_BOTON[nombre] = codigo
+
+
+def _construir_nombres():
+    g = lambda n: getattr(ecodes, n, None)
+    # Los de la cara, por posicion fisica (lo que no se puede malinterpretar).
+    for n in ("BTN_SOUTH", "BTN_EAST", "BTN_NORTH", "BTN_WEST",
+              "BTN_TL", "BTN_TR", "BTN_TL2", "BTN_TR2",
+              "BTN_SELECT", "BTN_START", "BTN_MODE",
+              "BTN_THUMBL", "BTN_THUMBR",
+              "BTN_DPAD_UP", "BTN_DPAD_DOWN", "BTN_DPAD_LEFT",
+              "BTN_DPAD_RIGHT"):
+        _poner_nombre(n, g(n))
+    # Y los cortos, en disposicion Xbox.
+    cortos = {
+        "a": "BTN_SOUTH", "b": "BTN_EAST", "x": "BTN_WEST", "y": "BTN_NORTH",
+        "l1": "BTN_TL", "r1": "BTN_TR", "l2": "BTN_TL2", "r2": "BTN_TR2",
+        "l3": "BTN_THUMBL", "r3": "BTN_THUMBR",
+        "start": "BTN_START", "select": "BTN_SELECT", "guia": "BTN_MODE",
+        "up": "BTN_DPAD_UP", "down": "BTN_DPAD_DOWN",
+        "left": "BTN_DPAD_LEFT", "right": "BTN_DPAD_RIGHT",
+    }
+    for corto, largo in cortos.items():
+        _poner_nombre(corto, g(largo))
+
+
+def boton_por_nombre(txt):
+    """El codigo de un boton a partir de su nombre. None si no se reconoce."""
+    if not NOMBRE_A_BOTON:
+        _construir_nombres()
+    t = str(txt or "").strip()
+    if not t:
+        return None
+    # Un numero suelto vale: es el codigo tal cual.
+    if t.isdigit():
+        return int(t)
+    if t in NOMBRE_A_BOTON:
+        return NOMBRE_A_BOTON[t]
+    return NOMBRE_A_BOTON.get(t.lower())
+
+
+def leer_remapeo(txt):
+    """Parsea "A=START,BTN_WEST=BTN_SELECT" -> {codigo_origen: codigo_destino}.
+
+    Lo que no se entiende se AVISA y se salta: un nombre mal escrito no puede
+    dejar el mando sin arrancar, pero tampoco puede pasar en silencio o nadie
+    sabra por que su boton no hace nada.
+    """
+    pares = {}
+    for trozo in str(txt or "").replace(";", ",").split(","):
+        trozo = trozo.strip()
+        if not trozo:
+            continue
+        if "=" not in trozo:
+            sys.stderr.write("mando_virtual: remapeo sin '=': %r (se salta)\n"
+                             % trozo)
+            continue
+        izq, der = trozo.split("=", 1)
+        orig = boton_por_nombre(izq)
+        dest = boton_por_nombre(der)
+        if orig is None:
+            sys.stderr.write("mando_virtual: boton de origen desconocido:"
+                             " %r (se salta)\n" % izq.strip())
+            continue
+        if dest is None:
+            sys.stderr.write("mando_virtual: boton de destino desconocido:"
+                             " %r (se salta)\n" % der.strip())
+            continue
+        if orig == dest:
+            # No es un fallo, es que no hace nada. Se dice y se salta, para
+            # que no parezca que se ha aplicado algo.
+            sys.stderr.write("mando_virtual: %r se remapea a si mismo;"
+                             " no se aplica\n" % izq.strip())
+            continue
+        pares[orig] = dest
+    return pares
+
+
+def nombre_de_boton(codigo):
+    """Para los mensajes: el nombre BTN_* de un codigo, o el numero."""
+    if not NOMBRE_A_BOTON:
+        _construir_nombres()
+    for n, c in NOMBRE_A_BOTON.items():
+        if c == codigo and n.startswith("BTN_"):
+            return n
+    return str(codigo)
+
+
 def main():
     modo = sys.argv[1] if len(sys.argv) > 1 else "cruceta_stick"
     # MODO "mandos": no crea nada, solo mira y dice cual se esta usando.
@@ -578,6 +702,9 @@ def main():
     # TODOS los modos: xbox, ds4, clasico y la cruceta al stick.
     cambiar_sticks = str(sys.argv[3] if len(sys.argv) > 3 else "").strip() in (
         "1", "si", "true", "on")
+    # EL REMAPEO, como cuarto argumento y por el mismo motivo que los sticks:
+    # se combina con todos los modos, asi que no puede ser un sufijo del modo.
+    remapeo = leer_remapeo(sys.argv[4] if len(sys.argv) > 4 else "")
 
     # MODO ESCRITORIO: se leen los teclados virtuales de Steam, no un mando.
     if modo.startswith("escritorio"):
@@ -709,6 +836,19 @@ def main():
         # su sitio es dejar la mitad del cambio hecha.
         CAMBIO_BOTONES = {ecodes.BTN_THUMBL: ecodes.BTN_THUMBR,
                           ecodes.BTN_THUMBR: ecodes.BTN_THUMBL}
+    # EL REMAPEO VA DESPUES Y MANDA SOBRE EL INTERCAMBIO.
+    #
+    # Si alguien remapea a mano el clic de un stick, es que quiere eso: lo que
+    # ha pedido explicitamente pesa mas que lo que viene de arrastre con el
+    # intercambio de sticks.
+    #
+    # Y no se mete la vuelta: por eso es una copia y no un intercambio.
+    if remapeo:
+        CAMBIO_BOTONES.update(remapeo)
+        for _o, _d in sorted(remapeo.items()):
+            print("[mando] %s pasa a ser %s (y %s sigue igual)"
+                  % (nombre_de_boton(_o), nombre_de_boton(_d),
+                     nombre_de_boton(_d)), flush=True)
 
     def soltar(*_):
         try:
