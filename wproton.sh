@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.22"
+WPROTON_VERSION="2.23"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -3610,9 +3610,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 311a6103fdf4" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 98dfcf903a9e" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 311a6103fdf4
+# WPROTON_HELPER mapeador.py 98dfcf903a9e
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -4842,6 +4842,74 @@ def _run_teclado(gamepad_device, ids=None, ui_kb=None):
         ui_kb.close()
     pygame.quit()
 
+# ----------------------------------------------------------------------------
+# UN MAPA DE BOTONES A TECLAS, PARA UN JUGADOR
+# ----------------------------------------------------------------------------
+DIR_NOMBRES = (
+    "up", "down", "left", "right",
+    "joystick1up", "joystick1down", "joystick1left", "joystick1right",
+    "joystick2up", "joystick2down", "joystick2left", "joystick2right",
+)
+
+# Hay mandos (Anbernic, Decktroid y similares) cuya cruceta llega como BOTONES
+# sueltos en vez de como eje.
+BTN_CRUCETA = {"up": 544, "down": 545, "left": 546, "right": 547}
+
+
+def mapa_de_jugador(acciones, ids):
+    """Convierte las acciones de UN jugador en sus tres mapas.
+
+    Devuelve (map_normal, map_dirs, map_combos):
+      map_normal  codigo de boton -> lista de teclas
+      map_dirs    "up", "joystick1left"... -> lista de teclas
+      map_combos  [{"req": [codigos], "outs": [teclas], "active": False}]
+
+    POR QUE ESTA FUNCION EXISTE, Y POR QUE EL JUGADOR 1 NO LA USA (TODAVIA).
+
+    El jugador 1 construye sus mapas dentro de main(), enredado con cosas que
+    son SUYAS y de nadie mas: el hotkey, los botones que se sueltan tarde por
+    estar en una combinacion, el teclado en pantalla, el raton. Sacar todo eso
+    de main() para estrenarlo con el jugador 2 seria tocar el unico camino que
+    hoy le funciona a todo el mundo, y no hace falta para lo que se ha pedido.
+
+    Asi que esto es lo MINIMO que necesita un segundo mando: botones, cruceta,
+    sticks y combinaciones. Lo demas no es que se haya olvidado: es que no le
+    toca (ver el manejador del jugador 2 en main()).
+
+    El dia que el jugador 1 se mude aqui, el sitio ya esta hecho.
+    """
+    map_normal, map_combos = {}, []
+    map_dirs = dict((k, []) for k in DIR_NOMBRES)
+    for act in acciones or []:
+        if not isinstance(act, dict):
+            continue
+        if 'trigger' not in act or 'target' not in act:
+            continue
+        trig, target = act['trigger'], act['target']
+        # EL TECLADO EN PANTALLA Y EL TEXTO GUARDADO SON DEL JUGADOR 1.
+        #
+        # Los dos abren una ventana y escriben en ella. Dos jugadores pidiendo
+        # el teclado a la vez es un lio sin dueño, y el segundo mando en un
+        # juego de dos no esta para escribir: esta para jugar.
+        if target in ("TECLADO_VIRTUAL", "ESCRIBIR_TEXTO"):
+            continue
+        t_codes = [getattr(ecodes, t)
+                   for t in (target if isinstance(target, list) else [target])
+                   if hasattr(ecodes, t)]
+        if not t_codes:
+            continue
+        if isinstance(trig, list):
+            map_combos.append({"req": [ids.get(x, x) for x in trig],
+                               "outs": t_codes, "active": False})
+        elif trig in map_dirs:
+            map_dirs[trig] = t_codes
+            if trig in BTN_CRUCETA:
+                map_normal[BTN_CRUCETA[trig]] = t_codes
+        elif trig in ids:
+            map_normal[ids[trig]] = t_codes
+    return map_normal, map_dirs, map_combos
+
+
 def olvidar_botones(pulsados, pendiente, map_combos, map_normal, soltar):
     """Suelta todo y olvida lo pulsado. Para cuando el mando se va.
 
@@ -4919,7 +4987,35 @@ def main():
         try:
             dev = evdev.InputDevice(p)
             dev_name = dev.name.lower()
-            if any(x in dev_name for x in ["motion", "accelerometer", "gyro", "touchpad", "mouse", "keyboard", "mapeador"]):
+            # LOS APARATOS QUE SE INVENTA WPROTON NO SON MANDOS.
+            #
+            # "wproton" es lo que faltaba aqui, y hasta ahora no se habia
+            # notado. El mando virtual de WProton se llama "WProton Xbox 360
+            # pad" (o "WProton Sony Wireless Controller"), declara ejes Y
+            # botones -a proposito: declarar de menos hace que el kernel
+            # descarte en silencio- y ninguna de las demas palabras de esta
+            # lista casa con el. O sea que entraba como un mando mas.
+            #
+            # CON UN SOLO JUGADOR ESO PASABA DESAPERCIBIDO, porque el mapeador
+            # escucha todos los mandos a la vez y ese solo repite lo que ya
+            # habia llegado del fisico. CON DOS SE LO LLEVA TODO POR DELANTE:
+            # el jugador 2 es "el primer mando que no es el del jugador 1", y
+            # con un unico mando fisico ese es el VIRTUAL. Resultado: el
+            # jugador 2 queda enganchado a un mando que WProton se inventa, el
+            # mando de verdad sigue haciendo lo del jugador 1, y desde fuera
+            # "lo del segundo jugador no se ve".
+            #
+            # Y hay mas: "WProton Xbox 360 pad" casa con el perfil XBOX_360
+            # (por el "360"), asi que si llegaba a salir primero en la lista
+            # podia quedarse incluso con el perfil del jugador 1.
+            #
+            # mando_virtual.py ya se guardaba de esto por su lado -tiene
+            # NOMBRES_VIRTUALES "para no leernos a nosotros mismos"-; el
+            # mapeador no. Se filtra por el prefijo del nombre, que es lo
+            # unico fiable: los identificadores de fabricante del mando
+            # virtual son los de un Xbox 360 de verdad, asi que filtrar por
+            # ellos dejaria fuera los mandos buenos.
+            if any(x in dev_name for x in ["motion", "accelerometer", "gyro", "touchpad", "mouse", "keyboard", "mapeador", "wproton"]):
                 continue
             if ecodes.EV_ABS in dev.capabilities() and ecodes.EV_KEY in dev.capabilities():
                 pads.append(dev)
@@ -5089,15 +5185,16 @@ def main():
     # perfiles de VARIOS jugadores: actions_player1, actions_player2... Con un
     # fichero de dos jugadores, el segundo se quedaba sin mapeo y sin aviso.
     #
-    # WProton mapea UN mando (el jugador 1), asi que las acciones de los demas
-    # no se aplican, pero al menos se dice: antes desaparecian en silencio y
-    # nadie sabia por que el segundo mando no respondia.
-    _otros = [k for k in data
-              if k.startswith('actions_player') and k != 'actions_player1']
-    if _otros:
-        print("[keys] El fichero trae tambien %s. WProton mapea el mando del"
-              " jugador 1; el resto no se aplica."
-              % ", ".join(sorted(_otros)), flush=True)
+    # DEL 1 AL 8 YA SE APLICAN (ver el reparto mas abajo). Lo que quede por
+    # encima no, y se sigue diciendo: desaparecer en silencio era el problema.
+    _pasados = sorted(k for k in data
+                      if k.startswith('actions_player')
+                      and k[len('actions_player'):].isdigit()
+                      and int(k[len('actions_player'):]) > 8)
+    if _pasados:
+        print("[keys] El fichero trae tambien %s. Se mapean hasta ocho"
+              " jugadores, como Batocera; el resto no se aplica."
+              % ", ".join(_pasados), flush=True)
     if data.get('actions_gun1'):
         print("[keys] El fichero trae acciones de pistola optica"
               " (actions_gun1): no se aplican.", flush=True)
@@ -5202,7 +5299,184 @@ def main():
     # el kernel DESCARTA EN SILENCIO cualquier tecla que el dispositivo no
     # haya declarado. Se escribia KEY_UP, el registro decia que se habia
     # escrito, y al juego no le llegaba nada. Declarandolas no hay duda.
+    # ── LOS DEMAS JUGADORES (2 a 8) ─────────────────────────────────────────
+    #
+    # COMO LO HACE BATOCERA, que es de donde sale este formato. Lo pidio Dani:
+    # "para los mandos en las keys tendrias que mirar como lo hace Batocera
+    # para tratar varios jugadores".
+    #
+    # Su modelo, en una linea: cada mando tiene un NUMERO DE JUGADOR y se le
+    # aplica actions_player<N>. Y lo que mas importa, porque es lo que yo
+    # tenia distinto: un mando cuyo numero NO tiene seccion en el fichero
+    # se queda SIN NADA. No hereda el mapeo del jugador 1.
+    #
+    # (El evmapy original ni sabe de jugadores: lleva un fichero por
+    # dispositivo, emparejado por el nombre del mando. Los actions_playerN son
+    # cosa de Batocera, que resuelve "jugador N" con su propia asignacion de
+    # mandos. Hasta ocho.)
+    #
+    # LO QUE YO HACIA MAL. El mapeador escucha todos los mandos a la vez, asi
+    # que con un .keys de dos jugadores y TRES mandos, el tercero disparaba
+    # las teclas del jugador 1. En una recreativa eso es un mando que hace
+    # cosas que nadie le ha pedido.
+    #
+    # PERO CON UN SOLO JUGADOR NO SE TOCA NADA, y esto es deliberado: un .keys
+    # normal -que son casi todos- trae solo actions_player1, y ahi WProton
+    # escucha TODOS los mandos a proposito, por lo que ya estaba escrito mas
+    # arriba: "si hay dos mandos de verdad, los dos valen, que es justo lo que
+    # espera quien juega a dobles". Quien tiene una Deck y un mando enchufado
+    # quiere jugar con cualquiera de los dos. Aplicar la regla estricta de
+    # Batocera ahi le quitaria la mitad de sus mandos sin avisar.
+    #
+    # Asi que: un jugador -> como siempre; dos o mas -> cada mando el suyo.
+    #
+    # EL ORDEN. Batocera lo saca de su propia asignacion de mandos, que aqui
+    # no existe. Se usa el orden en que aparecen los mandos (/dev/input/eventN,
+    # que en la practica es el orden en que se enchufaron) y se APUNTA EN EL
+    # REGISTRO cual es cual, que es lo unico que hace falta para saber si hay
+    # que cambiarlos de sitio. Se puede forzar el del jugador 2 con
+    # WP_KEYS_MANDO2 (una ruta o un trozo del nombre).
+    #
+    # Y CADA MANDO TRAE SU PROPIO PERFIL. No se da por hecho que sean iguales:
+    # una recreativa con una Deck y un mando de Xbox tiene la cruceta en
+    # sitios distintos -en una llega como botones, en el otro como eje- y con
+    # un solo perfil el segundo jugador se quedaria sin cruceta.
+    JUGADOR_MAX = 8
+    _declarados = [_n for _n in range(1, JUGADOR_MAX + 1)
+                   if [a for a in (data.get('actions_player%d' % _n) or [])
+                       if isinstance(a, dict)]]
+    _declarados = _declarados or [1]
+    _otros = {}          # ruta del mando -> estado de SU jugador
+    _sin_nada = []       # mandos que no le tocan a ningun jugador
+
+    if len(_declarados) > 1:
+        # EL REPARTO. El jugador 1 se queda con el mando del que salio su
+        # perfil de botones: si se lo quitaramos, seguiria mapeando con los
+        # codigos de un mando que ya no escucha.
+        _orden = [device] + [d for d in pads if d is not device]
+        _forzado = (os.environ.get('WP_KEYS_MANDO2') or '').strip()
+        if _forzado and len(_orden) > 2:
+            for _i, _d in enumerate(_orden[1:], start=1):
+                if _forzado == _d.path or _forzado.lower() in _d.name.lower():
+                    _orden.insert(1, _orden.pop(_i))
+                    break
+            else:
+                print("[keys] WP_KEYS_MANDO2=%r no casa con ningun mando;"
+                      " se reparte por orden" % _forzado, flush=True)
+        elif _forzado and len(_orden) == 2:
+            # Con dos mandos no hay nada que elegir: el que no es del jugador
+            # 1 es el del 2, se pida lo que se pida.
+            if (_forzado != _orden[1].path
+                    and _forzado.lower() not in _orden[1].name.lower()):
+                print("[keys] WP_KEYS_MANDO2=%r: solo hay un mando libre, se"
+                      " usa ese" % _forzado, flush=True)
+
+        print("[keys] Este .keys trae %d jugador(es): %s"
+              % (len(_declarados),
+                 ", ".join(str(_n) for _n in _declarados)), flush=True)
+        for _i, _d in enumerate(_orden):
+            _nj = _i + 1
+            if _nj == 1:
+                print("[keys] JUGADOR 1: \"%s\"" % _d.name, flush=True)
+                continue
+            if _nj not in _declarados:
+                # LA REGLA DE BATOCERA: sin seccion, sin mapeo. Y se dice, que
+                # es la diferencia entre "no responde" y "no le toca".
+                _sin_nada.append(_d)
+                print("[keys] Mando %d (\"%s\"): el fichero no trae"
+                      " actions_player%d, asi que este mando NO se mapea"
+                      " (es lo que hace Batocera). Si tiene que jugar,"
+                      " añadele su seccion al .keys."
+                      % (_nj, _d.name, _nj), flush=True)
+                continue
+            _acc = [a for a in (data.get('actions_player%d' % _nj) or [])
+                    if isinstance(a, dict)]
+            _perf = get_perfil(_d.name)
+            _nomp = next((k for k, v in PERFILES.items() if v is _perf), "?")
+            _idsn = ids_del_mando(_d, _perf["ids"], _nomp)
+            # El estilo de botones es del FICHERO, no del mando: si el .keys
+            # viene de Batocera, a y b estan cambiados para todos.
+            if os.environ.get('WP_KEYS_ESTILO') == 'nintendo':
+                for _pp, _qq in (('a', 'b'), ('x', 'y')):
+                    if _pp in _idsn and _qq in _idsn:
+                        _idsn[_pp], _idsn[_qq] = _idsn[_qq], _idsn[_pp]
+            _mn, _md, _mc = mapa_de_jugador(_acc, _idsn)
+            if not _mn and not _mc and not any(_md.values()):
+                print("[keys] El JUGADOR %d trae %d accion(es) pero ninguna se"
+                      " pudo entender (botones o teclas desconocidos): no se"
+                      " mapea nada." % (_nj, len(_acc)), flush=True)
+                _sin_nada.append(_d)
+                continue
+            _st = {"n": _nj, "dev": _d, "ids": _idsn,
+                   "map_normal": _mn, "map_dirs": _md, "map_combos": _mc,
+                   "pulsados": set(), "ejes_on": {}, "vistas": set(),
+                   "abs_map": dict(_perf["abs_map"]),
+                   "threshold": _perf["threshold"],
+                   "center": _perf["center"],
+                   "umbral": {}, "centro": {},
+                   "dirs_teclas": dict(_md), "gatillos": set()}
+            # LOS GATILLOS LLEGAN COMO EJE, NO COMO BOTON.
+            #
+            # Lo mismo que le pasa al jugador 1: en un mando de Xbox el R2 no
+            # manda una pulsacion, manda ABS_RZ. Sin esto, un .keys que le
+            # ponga una tecla al R2 de este jugador tendria el mapeo cargado y
+            # en el registro, y no dispararia nunca. Se tratan como una
+            # DIRECCION de eje con un solo sentido, igual que el jugador 1 (y
+            # que Batocera).
+            for _nn, _ejes in (
+                    ("l2", (ecodes.ABS_Z, ecodes.ABS_BRAKE, ecodes.ABS_HAT2Y)),
+                    ("r2", (ecodes.ABS_RZ, ecodes.ABS_GAS, ecodes.ABS_HAT2X))):
+                _cd = _idsn.get(_nn)
+                if _cd is not None and _mn.get(_cd):
+                    _nb = "__%s" % _nn
+                    _st["dirs_teclas"][_nb] = _mn[_cd]
+                    for _e in _ejes:
+                        _st["abs_map"][_e] = (None, _nb)
+                        _st["gatillos"].add(_e)
+            _otros[_d.path] = _st
+            print("[keys] JUGADOR %d: \"%s\" -> perfil %s"
+                  % (_nj, _d.name, _nomp), flush=True)
+            for _c2 in sorted(_mn):
+                print("[keys]   j%d: %s (codigo %d) -> %s"
+                      % (_nj, next((k for k, v in _idsn.items() if v == _c2),
+                                   nombre_codigo(_c2)), _c2,
+                         ", ".join(nombre_ev(_t) for _t in _mn[_c2])),
+                      flush=True)
+            for _d2 in DIR_NOMBRES:
+                if _md.get(_d2):
+                    print("[keys]   j%d: %s -> %s"
+                          % (_nj, _d2, ", ".join(nombre_ev(_t)
+                                                 for _t in _md[_d2])),
+                          flush=True)
+            for _k2 in _mc:
+                print("[keys]   j%d: %s -> %s"
+                      % (_nj,
+                         " + ".join(nombre_codigo(_b) for _b in _k2["req"]),
+                         ", ".join(nombre_ev(_t) for _t in _k2["outs"])),
+                      flush=True)
+        # Un .keys que pide mas jugadores de los que hay mandos no es un
+        # fichero roto: es que falta un mando. Antes el mensaje sonaba a
+        # limitacion nuestra.
+        _faltan = [_n for _n in _declarados if _n > len(_orden)]
+        if _faltan:
+            print("[keys] El fichero trae mapeo para el jugador(es) %s, pero"
+                  " solo hay %d mando(s): enchufa los que falten y se"
+                  " aplicara solo."
+                  % (", ".join(str(_n) for _n in _faltan), len(pads)),
+                  flush=True)
+
     _necesarias = set()
+    # LAS TECLAS DE LOS DEMAS JUGADORES TAMBIEN SE DECLARAN.
+    #
+    # El teclado virtual descarta EN SILENCIO cualquier tecla que no se haya
+    # declarado al crearlo. Sin esto, el jugador 2 tendria su mapeo cargado,
+    # el registro diria que se escribe la tecla, y al juego no le llegaria
+    # nada: el fallo mas difuso de todos.
+    for _st in _otros.values():
+        for _lista in list(_st["map_normal"].values()) + list(_st["map_dirs"].values()):
+            _necesarias.update(_lista or [])
+        for _c in _st["map_combos"]:
+            _necesarias.update(_c["outs"] or [])
     for _lista in list(map_normal.values()) + list(map_dirs.values()):
         _necesarias.update(_lista or [])
     for _c in map_combos:
@@ -5429,6 +5703,23 @@ def main():
             _c = ids.get(_n)
             if _c is not None and map_normal.get(_c):
                 return True, "el .keys mapea los gatillos"
+        # Y LO MISMO DEL JUGADOR 2.
+        #
+        # Un .keys de dos jugadores puede traer los atajos en el jugador 1 y
+        # el esquema completo en el 2. Mirando solo al 1 se decidia "son solo
+        # atajos", no se capturaba, y el juego del jugador 2 recibia el mando
+        # crudo Y las teclas a la vez.
+        for _st in _otros.values():
+            _s2 = [k for k in _st["map_dirs"]
+                   if k.startswith('joystick') and _st["map_dirs"][k]]
+            if _s2:
+                return True, ("el .keys mapea los sticks del jugador %d"
+                              % _st["n"])
+            for _n in ("l2", "r2"):
+                _c = _st["ids"].get(_n)
+                if _c is not None and _st["map_normal"].get(_c):
+                    return True, ("el .keys mapea los gatillos del jugador %d"
+                                  % _st["n"])
         return False, "el .keys solo trae atajos, no un esquema de control"
 
     _capturados = []
@@ -5845,8 +6136,151 @@ def main():
 
     pulsados = set()
 
+    _HAT_EJES = (ecodes.ABS_HAT0X, ecodes.ABS_HAT0Y,
+                 ecodes.ABS_HAT1X, ecodes.ABS_HAT1Y,
+                 ecodes.ABS_HAT2X, ecodes.ABS_HAT2Y)
+
+    def _jug_evento(_st, event):
+        """Un evento del mando de un jugador que NO es el 1.
+
+        QUE HACE Y QUE NO HACE, Y POR QUE
+
+        Hace lo que necesita un jugador que no conduce: botones, cruceta,
+        sticks, gatillos y combinaciones -> teclas, por el MISMO teclado
+        virtual que el jugador 1 (que es lo que quiere el juego: un teclado
+        con las teclas de todos).
+
+        NO hace nada de lo que es del jugador 1, y no es un olvido:
+
+          - el menu de WProton y el hotkey. Los demas mandos no pueden abrir
+            el panel ni cerrar el juego: en una partida a dobles eso es el
+            mando de al lado cerrandote la partida. Batocera hace lo mismo
+            -de ahi que exista un servicio aparte para dar los atajos a
+            todos-, asi que esto no es una limitacion nuestra.
+          - el raton y el teclado en pantalla. Hay un solo puntero y una sola
+            ventana; dos jugadores peleandose por ellos no significa nada.
+          - la salida de emergencia (hotkey+start). Es la del jugador 1.
+
+        Su estado tambien es SUYO: su propio conjunto de botones pulsados y
+        sus propias direcciones encendidas. Compartirlo era lo que hacia que
+        con dos mandos una combinacion se pudiera completar entre los dos
+        -pulsar un boton en cada mando- sin que nadie lo hubiera pedido.
+        """
+        _nj = _st["n"]
+        if event.type == ecodes.EV_KEY:
+            if event.value == 1:
+                _st["pulsados"].add(event.code)
+            elif event.value == 0:
+                _st["pulsados"].discard(event.code)
+            else:
+                return                      # value 2 = repeticion, no interesa
+            # LAS COMBINACIONES PRIMERO, y si el boton esta en una que acaba
+            # de activarse, su tecla suelta NO sale: si no, "l3+r3" mandaria
+            # ademas las teclas de l3 y de r3 por su cuenta.
+            _en_activa = False
+            for _c in _st["map_combos"]:
+                _todos = all(_b in _st["pulsados"] for _b in _c["req"])
+                if _todos and not _c["active"]:
+                    _c["active"] = True
+                    for _t in _c["outs"]:
+                        _tecla(_t, True)
+                    print("[keys] j%d: combinacion %s -> %s"
+                          % (_nj,
+                             " + ".join(nombre_codigo(_b) for _b in _c["req"]),
+                             ", ".join(nombre_ev(_t) for _t in _c["outs"])),
+                          flush=True)
+                elif not _todos and _c["active"]:
+                    _c["active"] = False
+                    for _t in _c["outs"]:
+                        _tecla(_t, False)
+                if _c["active"] and event.code in _c["req"]:
+                    _en_activa = True
+            if not _en_activa and event.code in _st["map_normal"]:
+                for _t in _st["map_normal"][event.code]:
+                    _tecla(_t, event.value == 1)
+            return
+
+        if event.type != ecodes.EV_ABS:
+            return
+        _par = _st["abs_map"].get(event.code)
+        if not _par:
+            return
+        _neg, _pos = _par
+        if event.code in _HAT_EJES:
+            # La cruceta no es analogica: manda -1, 0 o +1 y basta el signo.
+            # Con el umbral de los sticks (16000) no se activaria NUNCA.
+            _u = 0
+            _val = event.value
+        else:
+            _u = _st["umbral"].get(event.code)
+            if _u is None:
+                # EL UMBRAL SE LE PREGUNTA AL MANDO DEL JUGADOR 2, no se
+                # hereda del jugador 1: puede ser otro modelo, con otro
+                # recorrido. Con el numero fijo del perfil (16000) un mando de
+                # 0-255 no lo alcanza jamas y el stick no responderia.
+                _u = _st["threshold"]
+                _cen = _st["center"]
+                try:
+                    _ai = _st["dev"].absinfo(event.code)
+                    if event.code in _st["gatillos"]:
+                        # un gatillo reposa en su MINIMO, no en el centro
+                        _cen = _ai.min
+                        _st["centro"][event.code] = _cen
+                    _rec = max(abs(_ai.max - _cen), abs(_cen - _ai.min))
+                    if _rec > 0:
+                        _pc = 25 if event.code in _st["gatillos"] else 35
+                        _u = max(_ai.flat * 3, (_rec * _pc) // 100)
+                except Exception:
+                    pass
+                _st["umbral"][event.code] = _u
+                print("[keys] j%d: umbral de %s = %d (el perfil decia %d)"
+                      % (_nj, ecodes.ABS.get(event.code, event.code), _u,
+                         _st["threshold"]), flush=True)
+            _val = event.value - _st["centro"].get(event.code, _st["center"])
+        for _dir, _act in ((_neg, _val < -_u), (_pos, _val > _u)):
+            if _dir is None:
+                continue                    # el gatillo solo va hacia su maximo
+            if _act == _st["ejes_on"].get(_dir, False):
+                continue
+            _st["ejes_on"][_dir] = _act
+            _marca = (_dir, _act)
+            if _marca not in _st["vistas"]:
+                _st["vistas"].add(_marca)
+                print("[keys] j%d: %s %s (%s = %d, umbral %d)"
+                      % (_nj, _dir, "ON " if _act else "OFF",
+                         ecodes.ABS.get(event.code, event.code),
+                         event.value, _u), flush=True)
+            for _t in _st["dirs_teclas"].get(_dir) or []:
+                _tecla(_t, _act)
+
+    def _otros_olvidar():
+        """Suelta todo lo de los demas jugadores y olvida lo que tenian pulsado.
+
+        Hace falta por lo mismo que en el jugador 1: cuando el mando se cede
+        al panel y vuelve, lo que estuviera pulsado se perdio por el camino y
+        sin esto la tecla se queda metida para siempre.
+        """
+        for _st in _otros.values():
+            for _c in _st["map_combos"]:
+                if _c["active"]:
+                    _c["active"] = False
+                    for _t in _c["outs"]:
+                        _tecla(_t, False)
+            for _dir, _on in list(_st["ejes_on"].items()):
+                if _on:
+                    _st["ejes_on"][_dir] = False
+                    for _t in _st["dirs_teclas"].get(_dir) or []:
+                        _tecla(_t, False)
+            for _cod in list(_st["pulsados"]):
+                for _t in _st["map_normal"].get(_cod, []):
+                    _tecla(_t, False)
+            _st["pulsados"].clear()
+
     def _olvidar_botones(por_que):
         olvidar_botones(pulsados, pendiente, map_combos, map_normal, _tecla)
+        # Y las de los demas jugadores, que si no se les quedan metidas: el
+        # mando se cede entero al panel, no solo el del jugador 1.
+        _otros_olvidar()
         print("[keys] %s: se sueltan las teclas y se olvida lo pulsado"
               % por_que, flush=True)
 
@@ -6034,8 +6468,30 @@ def main():
                     print("[keys] no se pudo atender el mando del panel: %s"
                           % _e, flush=True)
             for _dev in r:
+                # DE QUIEN ES ESTE MANDO.
+                #
+                # Se mira UNA vez por vuelta y no por cada evento: un stick
+                # manda cientos de eventos por segundo y esto esta en el
+                # camino caliente del mapeador.
+                #
+                # Tres respuestas posibles: de un jugador que no es el 1 (va
+                # por su camino), de ninguno (no hace nada, la regla de
+                # Batocera), o del 1 (sigue por todo lo de abajo).
+                _st_dev = _otros.get(_dev.path)
+                _mudo = any(_dev is _d for _d in _sin_nada)
                 try:
                     for event in _dev.read():
+                        # LOS DEMAS JUGADORES VAN POR SU CAMINO Y NO TOCAN
+                        # NADA DE LO DE ABAJO: ni el hotkey, ni el menu, ni el
+                        # raton, ni la salida de emergencia. Solo sus teclas.
+                        if _mudo:
+                            # Un mando al que no le toca ningun jugador no
+                            # hace nada, que es lo que hace Batocera. Antes
+                            # caia aqui y disparaba las teclas del jugador 1.
+                            continue
+                        if _st_dev is not None:
+                            _jug_evento(_st_dev, event)
+                            continue
 
                         # ── Botones digitales ────────────────────────────────
                         if event.type == ecodes.EV_KEY:
@@ -8958,8 +9414,18 @@ remap_botones_lista() {
         printf '%s\n' "A (derecha)|BTN_EAST" "B (abajo)|BTN_SOUTH" \
             "X (arriba)|BTN_NORTH" "Y (izquierda)|BTN_WEST"
     else
+        # OJO: LA X ES BTN_NORTH Y LA Y BTN_WEST, no al reves.
+        #
+        # Estaba cruzado: "X (izquierda)" iba con BTN_WEST, que es el 308, y
+        # en una Deck el 308 es el de ARRIBA. O sea que remapear "la X" movia
+        # el boton de arriba. El 307 (BTN_NORTH) es el que lleva la X.
+        #
+        # Los nombres del kernel enganan aqui: suenan a posicion -"north",
+        # "west"- pero el alias BTN_X vale 307 y es lo que manda el mando. Se
+        # comprobo con el menu: la X abre los ajustes del juego y cuelga del
+        # 307; al moverla al 308 el tester dijo que le salia el buscador.
         printf '%s\n' "A (abajo)|BTN_SOUTH" "B (derecha)|BTN_EAST" \
-            "X (izquierda)|BTN_WEST" "Y (arriba)|BTN_NORTH"
+            "X (izquierda)|BTN_NORTH" "Y (arriba)|BTN_WEST"
     fi
     printf '%s\n' "L1|BTN_TL" "R1|BTN_TR" "L2|BTN_TL2" "R2|BTN_TR2" \
         "L3 (clic stick izq.)|BTN_THUMBL" "R3 (clic stick der.)|BTN_THUMBR" \
@@ -9460,9 +9926,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 90aef72840dc" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 00262664f8da" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 90aef72840dc
+# WPROTON_HELPER menu_pygame.py 00262664f8da
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -15176,16 +15642,31 @@ def overlay_tiempo(desde):
 
 # Los botones del mando, con EL NOMBRE QUE USA WPROTON en los .keys.
 #
-# OJO CON X E Y, que es una trampa de verdad: en evdev los codigos se llaman
-# BTN_NORTH (307) y BTN_WEST (308), y que LETRA les toca depende del mando -en
-# uno de Xbox la de arriba es Y, en uno de Nintendo es X-. WProton ya tomo
-# partido en su editor de teclas y en sus .keys: "x" es la de ARRIBA (307) e
-# "y" la de la IZQUIERDA (308). Aqui se usa exactamente la misma tabla, porque
-# lo que escriba este menu lo tiene que entender el mapeador.
-OV_BOTONES = [('a', 304, 'A (abajo)'),
-              ('b', 305, 'B (derecha)'),
-              ('x', 307, 'X (arriba)'),
-              ('y', 308, 'Y (izquierda)'),
+# OJO CON X E Y, que es una trampa de verdad: en evdev se llaman BTN_NORTH
+# (307) y BTN_WEST (308) -nombres que suenan a posicion- pero el alias BTN_X
+# vale 307 y es lo que manda el mando: en una Steam Deck el 307 es la X, que
+# esta a la IZQUIERDA, y el 308 la Y, que esta ARRIBA.
+#
+# AQUI LA ETIQUETA ESTABA MAL. Decia "X (arriba)" para el 307 y "Y
+# (izquierda)" para el 308, o sea la disposicion de la SNES, mientras que la A
+# y la B seguian la de Xbox. Lo canto un tester con una Deck. Los CODIGOS
+# estaban bien y no se tocan: lo que se arregla es el texto.
+#
+# Y EL NOMBRE CORTO DEPENDE DEL ESTILO DEL .keys, no del mando: con el estilo
+# Batocera el mapeador intercambia a<->b y x<->y, asi que lo que escriba este
+# menu tiene que ir con el mismo nombre que leera el mapeador o se asigna una
+# tecla a un boton y responde otro.
+def _ov_cara():
+    _nin = os.environ.get('WP_KEYS_ESTILO') == 'nintendo'
+    #        codigo  letra en la Deck   nombre en el .keys
+    _cara = ((304, 'A (abajo)',     'b' if _nin else 'a'),
+             (305, 'B (derecha)',   'a' if _nin else 'b'),
+             (307, 'X (izquierda)', 'y' if _nin else 'x'),
+             (308, 'Y (arriba)',    'x' if _nin else 'y'))
+    return [(_nom, _cod, _etq) for _cod, _etq, _nom in _cara]
+
+
+OV_BOTONES = _ov_cara() + [
               ('pageup', 310, 'L1'),
               ('pagedown', 311, 'R1'),
               ('l2', 312, 'L2 (gatillo izq.)'),
@@ -27650,6 +28131,51 @@ diag_video_del_juego() {
     return 0
 }
 
+diag_dependencias_sin_instalar() {
+    # EL JUEGO SE FUE EN CUATRO SEGUNDOS Y TRAE DEPENDENCIAS SIN PONER.
+    #
+    # EL HUECO QUE TAPA. Los dos datos ya estaban en el registro, pero a
+    # trescientas lineas de distancia y sin nada que los una. Caso real
+    # (01/11, pedroap con Anno 1800):
+    #
+    #   11:47:13  MENU [... trae sus propias dependencias: vc_redist.x64.exe
+    #             Instalar estas dependencias?] -> [No]
+    #   ...
+    #   11:48:31  LANZAMIENTO: el subshell termina con rc=1   (9 s)
+    #
+    # Cuatro intentos, los cuatro muertos en nueve segundos, sin UN error de
+    # Wine ni una excepcion: nada que leer. Y la causa estaba escrita arriba.
+    #
+    # POR QUE NO SE AFIRMA QUE SEA ESO. Porque no se sabe: un juego se puede ir
+    # en nueve segundos por diez motivos. Se dice lo que hay -falta esto, y el
+    # juego lo traia- y donde se pone. Eso es una pista; afirmarlo seria
+    # inventar.
+    local dur="${1:-0}"
+    [ "$dur" -lt 60 ] || return 0
+    dependencias_del_juego_buscar "${WP_RAIZ_JUEGO:-}" >/dev/null 2>&1 || return 0
+    dependencias_del_juego_hechas && return 0
+    local _lista _n=0 _i
+    _lista="$(dependencias_del_juego_buscar "${WP_RAIZ_JUEGO:-}" 2>/dev/null)"
+    while IFS= read -r _i; do
+        [ -n "$_i" ] || continue
+        _n=$((_n + 1))
+        say "      - $(basename "$_i")"
+    done <<EOFDSI
+$_lista
+EOFDSI
+    [ "$_n" -gt 0 ] || return 0
+    say "  PISTA: el juego se fue en $dur s y trae $_n instalador(es) propios"
+    say "         SIN pasar (los de arriba). Muchos juegos de Windows no"
+    say "         arrancan sin su Visual C++ o su DirectX, y se van sin decir"
+    say "         nada, que es exactamente lo que ha pasado aqui."
+    if [ "${DEPS_JUEGO:-0}" = 3 ]; then
+        say "         Se preguntaron en el asistente y se dijo que no."
+    fi
+    say "         Se ponen en: Ajustes del juego -> Dependencias del juego"
+    log "post mortem: $_n dependencia(s) del paquete sin instalar y el juego murio en $dur s (DEPS_JUEGO=${DEPS_JUEGO:-0})" WARN
+    return 0
+}
+
 diag_ultimas_del_juego() {
     # LO ULTIMO QUE ESCRIBIO EL JUEGO ANTES DE IRSE.
     #
@@ -27694,6 +28220,7 @@ diag_ultimas_del_juego() {
         log "  Codigo de salida $rc, pero OJO: ese numero lo da el envoltorio"
         log "  (umu/proton), no el juego. Un juego puede reventar y dejar un 0."
         aviso_carpeta_enlace_postmortem
+        diag_dependencias_sin_instalar "$dur"
         diag_cuelgue_sistema "5 min"
     fi
     return 0
@@ -31804,7 +32331,9 @@ Instalar estas dependencias?"; then
         DEPS_JUEGO=1
     else
         # Se apunta el NO para no volver a preguntarlo en cada partida.
-        DEPS_JUEGO=2
+        # 3 = dijo que no. Con 2 -que es "ya esta"- el menu de ajustes le
+        # aseguraba luego que estaban instaladas.
+        DEPS_JUEGO=3
         say "[i] Dependencias del juego: el usuario dijo que no."
         say "    Se pueden instalar luego en Ajustes del juego."
     fi
@@ -39278,6 +39807,10 @@ Que cumplas muchos mas.
     #
     # Hay una suite (prueba_novedades.sh) que comprueba que cada punto es UNA
     # linea, que no se pasa de catorce y que no reaparece lo de los prefijos.
+    #
+    # 01/11, AL SUBIR A LA 2.23: fuera el punto de la 2.22 (TeknoParrot) y
+    # dentro los cinco de esta. La lista se limpia A MANO cada vez, que es
+    # justo lo que no se hizo en la 2.15 y por eso existe la suite.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
 GRACIAS A LOS TESTERS
@@ -39287,7 +39820,15 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arreglados los juegos de TeknoParrot que morian al arrancar.
+  Los .keys ya mapean varios jugadores, hasta ocho, como Batocera.
+
+  El Mayus derecho, y los Ctrl y Alt derechos, ya se pueden asignar.
+
+  Arreglados los textos de la X y la Y, que estaban al reves.
+
+  Las dependencias del juego ya no se dan por instaladas sin estarlo.
+
+  Si un juego se cierra solo, se avisa de las que le falten.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -41266,10 +41807,15 @@ dependencias_primera_vez() {
     # mirando una pantalla parada sin saber por que. Se pregunta una vez, se
     # apunta la respuesta en el perfil, y no se vuelve a preguntar.
     #
-    # DEPS_JUEGO:  0 = no se ha preguntado | 1 = si, hacerlo | 2 = ya esta
+    # DEPS_JUEGO:  0 = no se ha preguntado | 1 = si, hacerlo
+    #              2 = ya esta | 3 = el usuario dijo que NO
+    #
+    # EL 3 ES NUEVO Y HACE FALTA. El "no" se apuntaba tambien como 2, o sea
+    # con el mismo numero que "ya estan instaladas", y de ahi salia que la
+    # ficha de ajustes dijera "instaladas" a quien habia dicho que no.
     local gid="${1:-}" raiz="${2:-}" squash="${3:-}"
     case "${DEPS_JUEGO:-0}" in
-        2) return 0 ;;                       # ya se hizo
+        2|3) return 0 ;;                     # ya se hizo, o dijo que no
         1) ;;                                # el usuario dijo que si
         *)
             dependencias_del_juego_buscar "$raiz" >/dev/null 2>&1 || return 0
@@ -41282,7 +41828,7 @@ Instalar estas dependencias?"; then
             else
                 # Se apunta que NO, para no volver a preguntar en cada
                 # partida: preguntar lo mismo cada vez es una molestia.
-                DEPS_JUEGO=2
+                DEPS_JUEGO=3
                 write_full_profile "$gid"
                 say "[i] Dependencias del juego: el usuario dijo que no."
                 say "    Se pueden instalar luego en Instalar librerias."
@@ -41350,7 +41896,34 @@ $inst
 EOFDEPI
     [ "$barra" = 1 ] && progress_set 100 "Terminado" && progress_stop
     say "[+] Dependencias del juego: $i instalador(es) pasados"
+    # Y SE DEJA LA MARCA EN EL PREFIJO, QUE ES DONDE PASO.
+    #
+    # El perfil guardaba esto en DEPS_JUEGO, y DEPS_JUEGO=2 significaba DOS
+    # COSAS OPUESTAS: "ya estan instaladas" y "el usuario dijo que no". Con lo
+    # cual la ficha de ajustes le decia "Dependencias del juego: instaladas" a
+    # quien acababa de decir que NO. Caso real (01/11, pedroap con Anno 1800):
+    # dijo que no a vc_redist.x64.exe en el asistente y el menu le aseguraba
+    # que estaban puestas, justo la cosa que le faltaba al juego.
+    #
+    # La marca va en el PREFIJO y no en el perfil a proposito: si el prefijo se
+    # rehace o se borra, los instaladores ya no estan, y la marca se va con
+    # ellos. Un numero en el perfil habria seguido diciendo "instaladas".
+    dependencias_del_juego_marcar "$i"
     return 0
+}
+
+dependencias_del_juego_marcar() {
+    # Apunta en el prefijo que los instaladores del paquete ya se pasaron.
+    [ -n "${WINEPREFIX:-}" ] && [ -d "$WINEPREFIX" ] || return 0
+    printf '%s instalador(es) pasados el %s\n' "${1:-0}" "$(date '+%Y-%m-%d %H:%M')" \
+        > "$WINEPREFIX/.wp_deps_juego" 2>/dev/null
+    return 0
+}
+
+dependencias_del_juego_hechas() {
+    # 0 si en ESTE prefijo ya se pasaron los instaladores del paquete.
+    [ -n "${WINEPREFIX:-}" ] || return 1
+    [ -f "$WINEPREFIX/.wp_deps_juego" ]
 }
 
 dependencia_modificadores() {
@@ -46445,10 +47018,10 @@ run_exe_in_game() {
 TECLAS_PY="$RUNTIME_DIR/teclas.py"
 
 write_teclas() {
-    grep -q "WPROTON_HELPER teclas.py 58af64bf530a" "$TECLAS_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER teclas.py 4cf3058d7ccc" "$TECLAS_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$TECLAS_PY" <<'TECEOF'
-# WPROTON_HELPER teclas.py 58af64bf530a
+# WPROTON_HELPER teclas.py 4cf3058d7ccc
 # -*- coding: utf-8 -*-
 # WProton - formato de los ficheros .keys (mapeo de mando a teclado)
 #
@@ -46653,16 +47226,71 @@ def marcar(ruta, gid, forzar=False):
     return guardar(ruta, d)
 
 
-def acciones(datos):
-    """La lista actions_player1, quedandose SOLO con los objetos.
+# JUGADORES. UN .keys PUEDE TRAER VARIOS.
+#
+# El formato de Batocera guarda un perfil por jugador -actions_player1,
+# actions_player2...- y nosotros leiamos solo el primero. Un fichero de dos
+# jugadores se cargaba a medias: el segundo mando se quedaba sin mapeo.
+#
+# Aqui el numero de jugador deja de estar escrito a mano en seis sitios.
+JUGADOR_MAX = 8          # Batocera no pasa de ocho; mas seria inventar
+
+# LA BOLSA DE LO QUE EL EDITOR NO TOCA.
+#
+# componer() arma el .keys final de cero: {"actions_player1": [...]} mas el
+# raton y los sticks. Todo lo demas que hubiera en el fichero DESAPARECIA al
+# guardar. Con un .keys de un jugador eso no se notaba porque no habia nada
+# mas; con uno de dos jugadores es una trampa: editar una tecla del jugador 1
+# desde el menu le borraba al jugador 2 el mapeo entero, sin avisar.
+#
+# Asi que descomponer() guarda aqui dentro lo que no sabe editar -los demas
+# jugadores, actions_gun1, los comentarios del fichero- y componer() lo
+# devuelve a su sitio. La bolsa viaja dentro del temporal de combinaciones,
+# que es el que ya iba y volvia tal cual.
+CAMPO_CONSERVAR = "_wp_conservar"
+
+
+def campo_jugador(n=1):
+    """El nombre del campo de ese jugador: 1 -> actions_player1."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 1
+    if n < 1:
+        n = 1
+    return "actions_player%d" % n
+
+
+def acciones(datos, jugador=1):
+    """La lista de acciones de un jugador, quedandose SOLO con los objetos.
 
     Aqui es donde se filtra lo que hacia saltar AttributeError al guardar: un
     elemento que no sea un objeto no se puede consultar, asi que se ignora.
+
+    El jugador por defecto es el 1 A PROPOSITO: asi las llamadas de siempre
+    -que son casi todas- siguen significando exactamente lo mismo.
     """
-    lista = datos.get("actions_player1") if isinstance(datos, dict) else None
+    lista = (datos.get(campo_jugador(jugador))
+             if isinstance(datos, dict) else None)
     if not isinstance(lista, list):
         return []
     return [a for a in lista if isinstance(a, dict)]
+
+
+def jugadores(datos):
+    """Que jugadores trae el fichero DE VERDAD, en orden: [1], [1, 2]...
+
+    Solo los que traen alguna accion aprovechable. Un "actions_player2": []
+    no cuenta: esta en el fichero pero no mapea nada, y anunciar un jugador
+    que no hace nada manda a buscar un fallo donde no hay ninguno.
+    """
+    if not isinstance(datos, dict):
+        return []
+    fuera = []
+    for n in range(1, JUGADOR_MAX + 1):
+        if acciones(datos, n):
+            fuera.append(n)
+    return fuera
 
 
 def guardar(ruta, datos, sangrado=None):
@@ -46826,16 +47454,24 @@ def sustituye_al_mando(ruta):
 
     Sustituir al mando es mapear los STICKS o los gatillos: ahi el juego esta
     pensado para el teclado.
+
+    Y SE MIRAN TODOS LOS JUGADORES, no solo el primero. Un .keys de dos
+    jugadores puede traer los atajos en el jugador 1 y el esquema completo en
+    el 2 -o al reves-. Mirando solo al 1, el mando no se capturaba y el juego
+    recibia el mando crudo Y las teclas a la vez, que es justo lo que esta
+    comprobacion existe para evitar.
     """
-    for a in acciones(leer(ruta)):
-        t = a.get("trigger")
-        if isinstance(t, list):          # las combinaciones no cuentan
-            continue
-        if str(a.get("type", "")).lower() == "mouse":
-            continue
-        t = str(t or "")
-        if t.startswith("joystick") or t in _MOV:
-            return True
+    datos = leer(ruta)
+    for n in jugadores(datos) or [1]:
+        for a in acciones(datos, n):
+            t = a.get("trigger")
+            if isinstance(t, list):      # las combinaciones no cuentan
+                continue
+            if str(a.get("type", "")).lower() == "mouse":
+                continue
+            t = str(t or "")
+            if t.startswith("joystick") or t in _MOV:
+                return True
     return False
 
 
@@ -46844,8 +47480,12 @@ def sustituye_al_mando(ruta):
 # ----------------------------------------------------------------------------
 
 def componer(destino, fichero_teclas, fichero_combos="", fichero_raton="",
-             fichero_sticks=""):
+             fichero_sticks="", jugador=1):
     """Arma el .keys final a partir de los temporales del editor.
+
+    'jugador' dice a QUE campo van las teclas: actions_player1 por defecto,
+    actions_player2 si se esta editando al segundo. Lo del otro jugador llega
+    en la bolsa (CAMPO_CONSERVAR) y se devuelve tal cual.
 
     - fichero_teclas: lineas "disparo|tecla", una por asignacion simple
     - fichero_combos: un .keys con las combinaciones y teclas compuestas, que
@@ -46857,14 +47497,32 @@ def componer(destino, fichero_teclas, fichero_combos="", fichero_raton="",
       que un .keys con esto sigue valiendo alli.
 
     La salida de emergencia (hotkey+start -> Alt+F4) va siempre la primera y
-    no se duplica.
+    no se duplica... PERO SOLO EN EL JUGADOR 1.
+
+    Ponersela al jugador 2 seria darle al mando de al lado la tecla de cerrar
+    la partida, que es justo lo que no se quiere en un juego a dobles (el
+    mapeador tampoco se la da: ver el manejador del jugador 2).
     """
-    lista = [dict(FIJA)]
+    _j = 1
+    try:
+        _j = int(jugador)
+    except (TypeError, ValueError):
+        _j = 1
+    if _j < 1:
+        _j = 1
+    lista = [dict(FIJA)] if _j == 1 else []
+    _conservado = {}
 
     if fichero_combos:
-        for a in acciones(leer(fichero_combos)):
+        _combos = leer(fichero_combos)
+        for a in acciones(_combos):
             if a.get("trigger") != FIJA["trigger"]:
                 lista.append(a)
+        # Y lo que el editor no toca, de vuelta a su sitio.
+        if isinstance(_combos, dict):
+            _b = _combos.get(CAMPO_CONSERVAR)
+            if isinstance(_b, dict):
+                _conservado = _b
 
     if fichero_teclas:
         try:
@@ -46879,7 +47537,14 @@ def componer(destino, fichero_teclas, fichero_combos="", fichero_raton="",
         except OSError:
             pass
 
-    salida = {"actions_player1": lista}
+    # PRIMERO LO CONSERVADO Y DESPUES LO NUESTRO, no al reves: si el fichero
+    # viejo traia un "mouse" y ahora se esta guardando otro, manda el nuevo.
+    # (La bolsa no puede colarse aqui: lo que se copia es su CONTENIDO, y
+    # descomponer() nunca mete la bolsa dentro de si misma. Habia un pop por
+    # si acaso y se quito: no se podia hacer fallar ni a proposito, asi que
+    # era codigo muerto con pinta de hacer algo.)
+    salida = dict(_conservado)
+    salida[campo_jugador(_j)] = lista
 
     for _campo, _fich in (("mouse", fichero_raton), ("sticks", fichero_sticks)):
         if not _fich:
@@ -47039,27 +47704,48 @@ def resumen(ruta):
     # decir nada, asi que el fichero parecia correcto... y el mapeador moria
     # al arrancar, dejando el juego sin NINGUN boton. Verlo aqui ahorra el
     # viaje de lanzar el juego para descubrirlo.
-    lista = datos.get("actions_player1")
-    for a in (lista if isinstance(lista, list) else []):
-        if not isinstance(a, dict):
-            continue
-        origen = " + ".join(nombre_boton(x) for x in _lista(a.get("trigger")))
-        destino = " + ".join(nombre_tecla(x) for x in _lista(a.get("target")))
-        if origen and destino:
-            filas.append("%-26s ->  %s" % (origen, destino))
-        elif str(a.get("type", "")).lower() == "mouse":
-            # El raton no lleva "target": el destino va implicito en el tipo.
-            filas.append("%-26s ->  %s" % (origen or "(sin boton)",
-                                           "mover el raton"))
-        else:
-            filas.append("%-26s ->  %s" % (origen or "(sin boton)",
-                                           "(SIN TECLA: linea incompleta)"))
+    # TODOS LOS JUGADORES QUE TRAIGA, NO SOLO EL PRIMERO.
+    #
+    # El resumen leia actions_player1 y nada mas. Con un .keys de dos
+    # jugadores, la mitad del fichero no salia por ningun lado: quien lo
+    # abriera desde el menu veia el mapeo del jugador 1 y se iba convencido
+    # de que el del 2 no estaba puesto.
+    #
+    # La cabecera solo aparece si hay mas de uno: en un fichero normal -que
+    # son casi todos- poner "Jugador 1" encima de la lista es ruido.
+    _jugs = [n for n in range(1, JUGADOR_MAX + 1)
+             if isinstance(datos.get(campo_jugador(n)), list)
+             and datos.get(campo_jugador(n))]
+    _jugs = _jugs or [1]
+    for _n in _jugs:
+        lista = datos.get(campo_jugador(_n))
+        if len(_jugs) > 1:
+            if filas:
+                filas.append("")
+            filas.append("-- Jugador %d --" % _n)
+        for a in (lista if isinstance(lista, list) else []):
+            if not isinstance(a, dict):
+                continue
+            origen = " + ".join(nombre_boton(x) for x in _lista(a.get("trigger")))
+            destino = " + ".join(nombre_tecla(x) for x in _lista(a.get("target")))
+            if origen and destino:
+                filas.append("%-26s ->  %s" % (origen, destino))
+            elif str(a.get("type", "")).lower() == "mouse":
+                # El raton no lleva "target": el destino va implicito en el tipo.
+                filas.append("%-26s ->  %s" % (origen or "(sin boton)",
+                                               "mover el raton"))
+            else:
+                filas.append("%-26s ->  %s" % (origen or "(sin boton)",
+                                               "(SIN TECLA: linea incompleta)"))
     return filas, False
 
 
 def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton,
-                fichero_sticks=""):
+                fichero_sticks="", jugador=1):
     """Parte un .keys en los temporales que edita keys_editor.
+
+    'jugador' dice de QUIEN se saca la lista de teclas. Por defecto el 1, que
+    es lo que significaba esto antes de que hubiera jugador 2.
 
     - fichero_teclas: lineas "disparo|tecla" de las asignaciones simples
     - fichero_combos: las combinaciones y teclas compuestas, TAL CUAL
@@ -47088,7 +47774,7 @@ def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton,
         guardar(fichero_sticks, sticks)
 
     editables, conservar = [], []
-    for a in acciones(datos):
+    for a in acciones(datos, jugador):
         disparo, tecla = uno(a.get("trigger")), uno(a.get("target"))
         if disparo is not None and tecla is not None:
             editables.append("%s|%s" % (disparo, tecla))
@@ -47101,7 +47787,24 @@ def descomponer(ruta, fichero_teclas, fichero_combos, fichero_raton,
     except OSError as e:
         sys.stderr.write("teclas: no se pudo escribir %s: %s\n" % (fichero_teclas, e))
         return False
-    return guardar(fichero_combos, {"actions_player1": conservar}, sangrado=2)
+    # LO QUE NO SE EDITA, A LA BOLSA (ver CAMPO_CONSERVAR).
+    #
+    # Se guarda TODO lo que no tenga su propio temporal, no solo los demas
+    # jugadores: el dia que un .keys traiga algo nuevo -una pistola optica,
+    # un comentario- se conserva igual sin tocar nada de aqui.
+    # "Lo suyo" depende del jugador que se este editando: lo del OTRO va a la
+    # bolsa y vuelve intacto. Es lo que permite editar al jugador 2 sin
+    # llevarse por delante al 1.
+    _suyos = (campo_jugador(jugador), "mouse", "sticks", CAMPO_CONSERVAR)
+    _bolsa = dict((k, v) for k, v in datos.items() if k not in _suyos)
+    # El temporal de combinaciones habla SIEMPRE en "actions_player1", sea
+    # quien sea el jugador que se edita: es el formato que entienden
+    # contar_combos() y el resumen del editor. De quien son esas
+    # combinaciones lo sabe quien llama, no el temporal.
+    _salida = {"actions_player1": conservar}
+    if _bolsa:
+        _salida[CAMPO_CONSERVAR] = _bolsa
+    return guardar(fichero_combos, _salida, sangrado=2)
 
 
 # ----------------------------------------------------------------------------
@@ -47443,7 +48146,16 @@ def main(argv):
             sys.stderr.write("teclas.py descomponer: faltan los tres temporales\n")
             return 2
         return 0 if descomponer(fichero, argv[3], argv[4], argv[5],
-                                argv[6] if len(argv) > 6 else "") else 1
+                                argv[6] if len(argv) > 6 else "",
+                                argv[7] if len(argv) > 7 else 1) else 1
+
+    if orden == "jugadores":
+        # Los jugadores que trae el fichero, separados por espacios: "1 2".
+        # El editor lo usa para saber si al OTRO jugador le queda algo puesto
+        # -y entonces guardar es legitimo aunque el que se edita se quede sin
+        # nada-.
+        sys.stdout.write(" ".join(str(n) for n in jugadores(leer(fichero))))
+        return 0
 
     if orden == "sticks":
         return 0 if sticks_cambiados(fichero) else 1
@@ -47465,7 +48177,8 @@ def main(argv):
         return 0 if componer(fichero, argv[3],
                              argv[4] if len(argv) > 4 else "",
                              argv[5] if len(argv) > 5 else "",
-                             argv[6] if len(argv) > 6 else "") else 1
+                             argv[6] if len(argv) > 6 else "",
+                             argv[7] if len(argv) > 7 else 1) else 1
 
     sys.stderr.write("teclas.py: orden desconocida %r\n" % orden)
     return 2
@@ -47970,8 +48683,33 @@ keys_combos_cuantos() {
 
 keys_componer() {
     # Arma el .keys final.
-    # $1 = destino, $2 = teclas, $3 = combos, $4 = raton, $5 = sticks.
-    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" "${5:-}" 2>>"$LOG_FILE"
+    # $1 = destino, $2 = teclas, $3 = combos, $4 = raton, $5 = sticks,
+    # $6 = jugador (1 por defecto).
+    #
+    # EL JUGADOR NO ES UN ADORNO: con un 2, las teclas van a
+    # actions_player2 y lo del jugador 1 se conserva intacto. Sin el, editar
+    # al jugador 2 escribia sus teclas encima de las del 1.
+    teclas_py componer "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "${6:-1}" 2>>"$LOG_FILE"
+}
+
+keys_jugadores() {
+    # Los jugadores que trae un .keys: "1", "1 2"...
+    [ -f "${1:-}" ] || return 1
+    teclas_py jugadores "$1" 2>/dev/null
+}
+
+keys_otro_jugador_tiene() {
+    # 1 si algun jugador DISTINTO de $2 tiene algo puesto en el .keys $1.
+    #
+    # Hace falta para no rechazar un guardado legitimo: si se esta editando al
+    # jugador 2 y se le quitan todas las teclas, el fichero sigue teniendo las
+    # del jugador 1 y guardar tiene todo el sentido. Sin esto saltaba el "No
+    # has asignado nada" y se perdia el trabajo.
+    local f="${1:-}" yo="${2:-1}" j
+    for j in $(keys_jugadores "$f"); do
+        [ "$j" = "$yo" ] || { printf '1'; return 0; }
+    done
+    printf '0'
 }
 
 keys_sustituye_al_mando() {
@@ -57450,11 +58188,13 @@ GUARDIA_PID=""
 # Botones del mando, en el orden en que se ven en la pantalla del editor.
 # El nombre corto es el que entiende el mapeador; el largo, el que lee la
 # gente.
-KEYS_BOTONES="a|A (abajo)
-b|B (derecha)
-x|X (arriba)
-y|Y (izquierda)
-up|Cruceta arriba
+# LOS CUATRO DE LA CARA YA NO ESTAN AQUI: los pone keys_botones_lista(),
+# porque su nombre corto depende del estilo del .keys y su letra de la
+# serigrafia del mando. Esta tabla decia "x|X (arriba)" y "y|Y (izquierda)",
+# o sea la disposicion de la SNES, mientras que "a|A (abajo)" y "b|B
+# (derecha)" eran la de Xbox: medio criterio de cada. Lo canto un tester con
+# una Deck, donde la X esta a la IZQUIERDA y la Y ARRIBA.
+KEYS_BOTONES_RESTO="up|Cruceta arriba
 down|Cruceta abajo
 left|Cruceta izquierda
 right|Cruceta derecha
@@ -57466,6 +58206,25 @@ l3|L3 (stick izquierdo pulsado)
 r3|R3 (stick derecho pulsado)
 start|Start
 select|Select"
+
+keys_botones_lista() {
+    # La lista de botones del editor: "nombre corto|lo que lee la gente".
+    #
+    # Los cuatro de la cara se arman por POSICION, que es el unico dato que no
+    # depende de nada:
+    #
+    #   - la ETIQUETA es la letra serigrafiada en el mando (keys_letra_boton):
+    #     en una Deck la X esta a la IZQUIERDA y la Y ARRIBA;
+    #   - el NOMBRE CORTO es el que hay que escribir en el .keys con el estilo
+    #     de este juego (keys_clave_boton).
+    #
+    # Asi el editor no puede volver a decir "X (arriba)" para la X.
+    local _p
+    for _p in abajo derecha izquierda arriba; do
+        printf '%s|%s\n' "$(keys_clave_boton "$_p")" "$(keys_letra_boton "$_p")"
+    done
+    printf '%s\n' "$KEYS_BOTONES_RESTO"
+}
 
 # LOS STICKS, EN SU PROPIO SUBMENU.
 #
@@ -57491,11 +58250,25 @@ keys_tecla_elegir() {
     # Devuelve el nombre de tecla (KEY_...) que elija el usuario.
     # $1 = boton que se esta configurando (solo para el titulo)
     local sel letra
+    # LOS MODIFICADORES, EN SU PROPIO SUBMENU.
+    #
+    # Antes habia tres filas sueltas -"Shift", "Control", "Alt"- y las tres
+    # daban SIEMPRE la de la izquierda: no habia forma de pedir el Mayus
+    # DERECHO desde aqui, habia que escribir el .keys a mano. Lo pidio un
+    # tester que monta recreativas de dos jugadores, donde lo normal es que
+    # uno vaya por Mayus izquierdo y el otro por Mayus derecho.
+    #
+    # Y VAN AGRUPADOS, no como tres filas mas. La lista estaba en trece filas
+    # y en la pantalla caben unas trece: meter los seis modificadores sueltos
+    # la dejaba en dieciseis y de vuelta al problema que ya se conto con los
+    # sticks -lo que no se ve, no existe-. Agrupados, la lista principal baja
+    # a once y caben de sobra. Es el mismo patron que ya tienen las flechas y
+    # las teclas F.
     sel="$(menu "¿Qué tecla pulsa \"$1\"?" \
         "Escribir una letra o número" \
         "Flechas del teclado" \
         "Enter" "Espacio" "Escape" "Tabulador" "Retroceso" \
-        "Shift" "Control" "Alt" \
+        "Shift, Control y Alt" \
         "Teclas F (F1 a F12)" \
         "Botones del ratón" \
         "-- quitar esta asignación --" \
@@ -57540,11 +58313,35 @@ keys_tecla_elegir() {
                 "Clic central"*)  printf 'BTN_MIDDLE' ;;
                 *) return 1 ;;
             esac ;;
+        "Shift, Control y Alt")
+            # IZQUIERDO Y DERECHO SON TECLAS DISTINTAS, y para un juego no es
+            # lo mismo: una recreativa de dos jugadores suele usar justo esa
+            # diferencia para separar a uno del otro.
+            sel="$(menu "¿Qué modificador pulsa \"$1\"?" \
+                "Mayus (Shift izquierdo)" \
+                "Mayus derecho (Shift derecho)" \
+                "Control (izquierdo)" \
+                "Control derecho" \
+                "Alt (izquierdo)" \
+                "Alt derecho (AltGr)" \
+                "<< Volver")" || return 1
+            case "$sel" in
+                "Mayus derecho"*)   printf 'KEY_RIGHTSHIFT' ;;
+                "Mayus"*)           printf 'KEY_LEFTSHIFT' ;;
+                "Control derecho"*) printf 'KEY_RIGHTCTRL' ;;
+                "Control"*)         printf 'KEY_LEFTCTRL' ;;
+                "Alt derecho"*)     printf 'KEY_RIGHTALT' ;;
+                "Alt"*)             printf 'KEY_LEFTALT' ;;
+                *) return 1 ;;
+            esac ;;
         Enter)      printf 'KEY_ENTER' ;;
         Espacio)    printf 'KEY_SPACE' ;;
         Escape)     printf 'KEY_ESC' ;;
         Tabulador)  printf 'KEY_TAB' ;;
         Retroceso)  printf 'KEY_BACKSPACE' ;;
+        # LAS TRES DE ANTES SE QUEDAN. No salen ya en ningun menu, pero un
+        # .keys viejo o cualquier otra via pueden seguir pidiendolas por su
+        # nombre de siempre, y quitarlas solo serviria para romperlas.
         Shift)      printf 'KEY_LEFTSHIFT' ;;
         Control)    printf 'KEY_LEFTCTRL' ;;
         Alt)        printf 'KEY_LEFTALT' ;;
@@ -57622,20 +58419,42 @@ keys_clave_boton() {
     #
     # Aqui se traduce: el menu habla de botones FISICOS y esto escribe el
     # nombre que toca segun el estilo que tenga el juego.
+    # Y LA X CON LA Y ESTABAN CRUZADAS. Lo canto un tester con Steam Deck:
+    #
+    #   "pone A abajo y B derecha, como en XBOX, pero despues dices X arriba y
+    #    Y izquierda como en nintendo y deberia ser X izquierda y Y arriba
+    #    (...) los textos estan mal porque realmente el mapeo lo hace como
+    #    xbox que es la deck"
+    #
+    # Tenia razon, y era SOLO EL TEXTO: en la Deck el 307 es la X -la de la
+    # IZQUIERDA- y el 308 la Y -la de ARRIBA-, que es lo que ya hacia el
+    # mapeador. Lo que estaba mal era que aqui "arriba" devolvia 'x'.
+    #
+    # COMO SE COMPROBO, porque esto se puede razonar al reves y equivocarse:
+    # en el menu la X abre los ajustes del juego (espacio) y la Y el buscador
+    # (tabulador), y esas dos cuelgan del 307 y del 308. Se cambiaron de sitio
+    # "por posicion" y el tester dijo que pulsando X le salia BUSCAR. O sea
+    # que su X es el 307. Punto. (El estandar del kernel dice que los nombres
+    # son posicionales -BTN_NORTH el de arriba- pero el alias BTN_X vale 307 y
+    # es lo que manda este hardware: el dato de la maquina gana al documento.)
+    #
+    # Con el estilo Batocera el mapeador intercambia x e y, asi que alli el
+    # nombre 'x' cae en el 308 -el de arriba- y por eso las posiciones van al
+    # contrario.
     if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
         case "$1" in
             abajo)     printf 'b' ;;
             derecha)   printf 'a' ;;
-            arriba)    printf 'y' ;;
-            izquierda) printf 'x' ;;
+            arriba)    printf 'x' ;;
+            izquierda) printf 'y' ;;
             *)         printf '%s' "$1" ;;
         esac
     else
         case "$1" in
             abajo)     printf 'a' ;;
             derecha)   printf 'b' ;;
-            arriba)    printf 'x' ;;
-            izquierda) printf 'y' ;;
+            arriba)    printf 'y' ;;
+            izquierda) printf 'x' ;;
             *)         printf '%s' "$1" ;;
         esac
     fi
@@ -57924,25 +58743,18 @@ keys_boton_nombre() {
     case "$1" in
         joystick1) printf 'stick izquierdo' ;;
         joystick2) printf 'stick derecho' ;;
-        a|b)
-            # SOLO a y b. Es lo unico que el estilo intercambia de verdad
-            # ("A y B cambiados" dice el propio mapeador) y lo unico que hay
-            # confirmado: el registro de un tester enseña 304 y 305.
-            #
-            # Con x e y NO se toca nada, porque las dos tablas del proyecto se
-            # contradicen: KEYS_BOTONES dice que "x" es el de arriba, y los
-            # identificadores del perfil le dan el 307, que en evdev es
-            # BTN_NORTH mientras que "y" es 308 = BTN_WEST (izquierda). Sin
-            # saber cual es la buena, cambiarlo seria cambiar un lio por otro.
-            local pos
-            if [ "${KEYS_ESTILO:-xbox}" = nintendo ]; then
-                case "$1" in a) pos=derecha ;; b) pos=abajo ;; esac
-            else
-                case "$1" in a) pos=abajo ;; b) pos=derecha ;; esac
-            fi
-            printf '%s' "$(keys_letra_boton "$pos")" ;;
         *) local n
-           n="$(printf '%s\n' "$KEYS_BOTONES" | awk -F'|' -v d="$1" '$1==d{print $2}')"
+           # LOS CUATRO DE LA CARA SALEN DE LA MISMA LISTA QUE EL EDITOR.
+           #
+           # Aqui habia una rama aparte para a y b, y una nota diciendo que
+           # con x e y no se tocaba nada "porque las dos tablas del proyecto
+           # se contradicen". La contradiccion era real mientras la lista de
+           # botones traia la disposicion de la SNES para x/y; arreglada
+           # aquella, esta busqueda ya devuelve la letra que toca.
+           #
+           # Y se queda en un solo sitio a proposito: con dos tablas diciendo
+           # lo mismo, el dia que se cambie una sin la otra vuelve el lio.
+           n="$(keys_botones_lista | awk -F'|' -v d="$1" '$1==d{print $2}')"
            printf '%s' "${n:-$1}" ;;
     esac
 }
@@ -58088,10 +58900,45 @@ keys_editor() {
     origen="$(find_keys_file "$squash" "$gid")" || origen=""
     [ -n "$origen" ] || { [ -f "$destino" ] && origen="$destino"; }
 
-    if [ -n "$origen" ] && [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ]; then
-        teclas_py descomponer "$origen" "$tmp" "$tmpc" "$tmpr" "$tmps" 2>/dev/null
+    # EL FICHERO DE TRABAJO, Y POR QUE HACE FALTA AHORA.
+    #
+    # Antes se partia del .keys de origen y se guardaba al final: una sola
+    # ida y una sola vuelta. Con dos jugadores eso no basta, porque cambiar
+    # de jugador es rearmar el fichero con lo editado y volver a partirlo por
+    # el otro lado. Si se hiciera contra el .keys de origen, cada cambio de
+    # jugador escribiria en el fichero de verdad y "salir sin guardar"
+    # dejaria de significar nada.
+    #
+    # Asi que se trabaja sobre una COPIA y el .keys real no se toca hasta
+    # GUARDAR.
+    local trabajo _jug=1
+    trabajo="$(mktemp)" || { rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1; }
+    if [ -n "$origen" ] && [ -f "$origen" ]; then
+        cp -f "$origen" "$trabajo" 2>/dev/null \
+            || printf '{"actions_player1": []}' > "$trabajo"
         say "[keys] Partiendo de $(basename "$origen")"
+    else
+        printf '{"actions_player1": []}' > "$trabajo"
     fi
+
+    # Parte el fichero de trabajo por el jugador que toque. Se usa al entrar y
+    # cada vez que se cambia de jugador.
+    keys_ed_partir() {
+        : > "$tmp"
+        printf '{"actions_player1": []}' > "$tmpc"
+        : > "$tmpr"
+        : > "$tmps"
+        [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 0
+        teclas_py descomponer "$trabajo" "$tmp" "$tmpc" "$tmpr" "$tmps" \
+                  "$_jug" 2>/dev/null
+        return 0
+    }
+    # Guarda lo editado en el fichero de trabajo, sin tocar el .keys de verdad.
+    keys_ed_recoger() {
+        [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 0
+        keys_componer "$trabajo" "$tmp" "$tmpc" "$tmpr" "$tmps" "$_jug"
+    }
+    keys_ed_partir
 
     local sel nom largo actual tecla n
     while :; do
@@ -58103,7 +58950,7 @@ keys_editor() {
             opciones="$opciones$largo: ${actual:-—}
 "
         done <<EOFKB
-$KEYS_BOTONES
+$(keys_botones_lista)
 EOFKB
         # Las combinaciones tambien se enseñan, aunque no se puedan cambiar
         # desde aqui: asi se ve de un vistazo TODO lo que tiene el juego y no
@@ -58153,10 +59000,49 @@ EOFSN
         # copia al lanzar.
         opciones="${opciones}Intercambiar los sticks: $(keys_sticks_swap_etq "$tmps")
 "
-        opciones="$opciones$(keys_raton_fila "$tmpr")
+        # LO QUE NO ES DEL JUGADOR 2 NO SE LE OFRECE.
+        #
+        # El raton, el teclado en pantalla y el texto guardado los lleva el
+        # jugador 1 y nadie mas: hay UN puntero y UNA ventana, y dos
+        # jugadores peleandose por ellos no significa nada. El mapeador hace
+        # exactamente lo mismo (ver el manejador del jugador 2), asi que
+        # ofrecerlo aqui seria ofrecer algo que luego no va a pasar.
+        if [ "$_jug" = 1 ]; then
+            opciones="$opciones$(keys_raton_fila "$tmpr")
 $(keys_teclado_fila "$tmpc")
 $(keys_texto_fila "$tmpc")
 Rellenar: juego de teclado y raton   (WASD, flechas, clics)
+"
+        fi
+        # Y LA FILA DEL JUGADOR, LA ULTIMA ANTES DE GUARDAR.
+        #
+        # Va al final a proposito: en un .keys de un jugador -que son casi
+        # todos- no hay que tropezarse con ella para llegar a los botones.
+        # Pero tiene que ESTAR, porque sin esto el jugador 2 no se podia
+        # tocar desde el menu y no habia forma de verlo funcionando sin
+        # escribir el .keys a mano.
+        # LA FILA CICLA POR LOS JUGADORES QUE HAY, MAS UNO.
+        #
+        # Batocera admite hasta ocho (actions_player1..8) y ese es el tope
+        # aqui tambien. Pero no se ofrecen los ocho de golpe: se pasa por los
+        # que el fichero YA tiene y se deja uno mas para poder añadirlo. Asi
+        # quien solo quiere dos no se encuentra seis filas que no va a usar, y
+        # quien monta una recreativa de cuatro llega hasta el cuarto.
+        # UNA SOLA REGLA: se pasa al siguiente, y si ese pasa del tope se
+        # vuelve al 1. El tope es "el ultimo que tiene el fichero, mas uno"
+        # -para poder añadir el siguiente- sin pasar de ocho.
+        #
+        # Estaba escrito con tres comparaciones solapadas y no habia forma de
+        # leer de un vistazo por donde iba a ciclar.
+        local _jmax _jtope _jsig
+        _jmax="$(keys_jugadores "$trabajo" | awk '{print $NF}')"
+        case "$_jmax" in ''|*[!0-9]*) _jmax=1 ;; esac
+        [ "$_jug" -gt "$_jmax" ] && _jmax="$_jug"
+        _jtope=$(( _jmax + 1 ))
+        [ "$_jtope" -gt 8 ] && _jtope=8
+        _jsig=$(( _jug + 1 ))
+        [ "$_jsig" -gt "$_jtope" ] && _jsig=1
+        opciones="${opciones}Jugador que se edita: $_jug  (pasar al $_jsig)
 "
         n="$(grep -c . "$tmp" 2>/dev/null)"
         local titulo="Teclas de $gid  ($n asignadas"
@@ -58164,10 +59050,10 @@ Rellenar: juego de teclado y raton   (WASD, flechas, clics)
         titulo="$titulo)"
         # shellcheck disable=SC2046
         sel="$(IFS=$'\n'; set -f; menu "$titulo" \
-               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1; }
+               $opciones "== GUARDAR ==" "<< Salir sin guardar")" || { rm -f "$tmp" "$tmpc" "$tmpr" "$tmps" "$trabajo"; return 1; }
 
         case "$sel" in
-            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1 ;;
+            "<< Salir sin guardar") rm -f "$tmp" "$tmpc" "$tmpr" "$tmps" "$trabajo"; return 1 ;;
             "== GUARDAR ==") break ;;
             "Raton:"*)
                 keys_raton_editar "$tmpr"
@@ -58180,6 +59066,39 @@ Rellenar: juego de teclado y raton   (WASD, flechas, clics)
                 continue ;;
             "Rellenar: juego de teclado y raton"*)
                 keys_plantilla_teclado "$tmp" "$tmpr"
+                continue ;;
+            "Jugador que se edita:"*)
+                # Lo editado se recoge ANTES de cambiar, o se perderia.
+                if ! keys_ed_recoger; then
+                    ui_error "No se pudo guardar lo editado del jugador $_jug.
+
+No se cambia de jugador para no perderlo."
+                    continue
+                fi
+                # El numero al que se pasa lo dice la propia fila, para que
+                # no haya dos cuentas distintas que se puedan separar.
+                _jug="${sel##*pasar al }"
+                _jug="${_jug%%)*}"
+                case "$_jug" in ''|*[!0-9]*) _jug=1 ;; esac
+                [ "$_jug" -lt 1 ] && _jug=1
+                [ "$_jug" -gt 8 ] && _jug=8
+                keys_ed_partir
+                if [ "$_jug" != 1 ]; then
+                    ui_info "Editando al JUGADOR $_jug.
+
+Sus teclas van a SU mando: el numero $_jug por orden de los
+que haya enchufados (el registro dice cual es cual al
+lanzar, y se puede cambiar).
+
+Y OJO CON ESTO, que es como lo hace Batocera: un mando cuyo
+numero no tenga seccion en el fichero NO se mapea, no hereda
+las teclas del jugador 1. Si enchufas tres mandos y el
+fichero solo trae dos jugadores, el tercero no hara nada.
+
+El raton, el teclado en pantalla y la salida de emergencia
+son del jugador 1 y no salen aqui: en una partida a varios,
+el mando de al lado no cierra la partida."
+                fi
                 continue ;;
             "Añadir: teclado en pantalla"*)
                 keys_teclado_virtual "$tmpc"
@@ -58197,7 +59116,7 @@ Se guardan tal cual al pulsar GUARDAR. Para tocarlas hay que editar el fichero .
         esac
         # de la etiqueta larga al nombre corto
         largo="${sel%%:*}"
-        nom="$(printf '%s' "$KEYS_BOTONES" | grep -m1 "|$largo\$" | cut -d'|' -f1)"
+        nom="$(keys_botones_lista | grep -m1 "|$largo\$" | cut -d'|' -f1)"
         [ -n "$nom" ] || continue
         # EL STICK DERECHO LO USA TAMBIEN EL RATON VIRTUAL.
         #
@@ -58249,11 +59168,20 @@ Asignar la tecla de todas formas?" || continue
     # Es el mismo error que ya se cometio con el raton, y esta arriba contado:
     # cada vez que se añade algo que se puede guardar solo, hay que sumarlo
     # aqui. Lo cubren ahora las pruebas.
-    if [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ] \
+    # Y LO DEL OTRO JUGADOR CUENTA COMO ALGO ASIGNADO.
+    #
+    # Es el mismo error que ya se cometio dos veces -con el raton y con el
+    # intercambio de sticks-: cada vez que se añade algo que se puede guardar
+    # solo, hay que sumarlo aqui. Si se edita al jugador 2 y se le quitan
+    # todas las teclas, el fichero sigue teniendo las del 1 y guardar es
+    # legitimo; sin esto saltaba el "No has asignado nada" y se perdia todo.
+    local _hay_otro
+    _hay_otro="$(keys_otro_jugador_tiene "$trabajo" "$_jug")"
+    if [ "${_hay_otro:-0}" = 0 ] && [ ! -s "$tmp" ] && [ "${n_combos:-0}" = 0 ] && [ ! -s "$tmpr" ] \
        && [ ! -s "$tmps" ]; then
         ui_error "No has asignado nada: ni teclas, ni combinaciones, ni raton,
 ni los sticks intercambiados."
-        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"; return 1
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps" "$trabajo"; return 1
     fi
     # escribir el .keys en el formato que entiende el mapeador
     mkdir -p "$PROFILE_DIR" 2>/dev/null
@@ -58262,17 +59190,23 @@ ni los sticks intercambiados."
     # Un .keys hecho aqui es de este juego por definicion: lo acaba de crear el
     # usuario para el. Dejarlo sin marca lo convertiria en un fichero anonimo
     # mas, que es de donde venia todo el problema.
-    if keys_componer "$destino" "$tmp" "$tmpc" "$tmpr" "$tmps"; then
+    # SE RECOGE EN EL FICHERO DE TRABAJO Y ESE SE MUEVE ENCIMA.
+    #
+    # No se compone directamente sobre "$destino": si fallara a mitad -y
+    # componer escribe en un temporal y lo mueve, pero el jugador puede ser el
+    # 2 y entonces hace falta la bolsa del otro- el .keys bueno se quedaria a
+    # medias. Asi, hasta que el trabajo este entero no se toca nada.
+    if keys_ed_recoger && cp -f "$trabajo" "$destino" 2>/dev/null; then
         keys_marcar "$destino" "$gid"
     else
         ui_error "No se pudo guardar el mapeo en:
 $destino
 
 El fichero anterior sigue intacto."
-        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
+        rm -f "$tmp" "$tmpc" "$tmpr" "$tmps" "$trabajo"
         return 1
     fi
-    rm -f "$tmp" "$tmpc" "$tmpr" "$tmps"
+    rm -f "$tmp" "$tmpc" "$tmpr" "$tmps" "$trabajo"
     if [ -s "$destino" ]; then
         KEYS_FILE="$(basename "$destino")"
         write_full_profile "$gid"
@@ -70486,10 +71420,28 @@ game_config_menu() {
         # demas.
         local r_deps=""
         if dependencias_del_juego_buscar "${WP_RAIZ_JUEGO:-$squash}" >/dev/null 2>&1; then
-            case "${DEPS_JUEGO:-0}" in
-                2) r_deps="Dependencias del juego: instaladas" ;;
-                *) r_deps="Dependencias del juego: SIN INSTALAR" ;;
-            esac
+            # SE MIRA EL PREFIJO, NO SE CREE EL NUMERO.
+            #
+            # Aqui se leia DEPS_JUEGO, y como el 2 valia igual para "ya esta"
+            # que para "dijo que no", esta fila le decia "instaladas" a quien
+            # no habia instalado nada.
+            #
+            # EL CASO DE LOS PERFILES VIEJOS, Y POR QUE SE DICE "SIN INSTALAR".
+            # Un perfil de antes de esto trae un 2 que puede ser cualquiera de
+            # las dos cosas y no hay forma de saberlo. Se elige el lado que no
+            # hace daño: decir SIN INSTALAR como mucho hace que alguien los
+            # vuelva a pasar, y eso ya lo dice el propio menu dos pantallas
+            # mas alla -"No hace daño, los instaladores detectan lo que ya
+            # esta"-. Al contrario, decir "instaladas" sin que lo esten deja
+            # al juego sin arrancar y sin pista. Los perfiles nuevos dejan
+            # marca, asi que la duda solo existe una vez.
+            if dependencias_del_juego_hechas; then
+                r_deps="Dependencias del juego: instaladas"
+            elif [ "${DEPS_JUEGO:-0}" = 3 ]; then
+                r_deps="Dependencias del juego: SIN INSTALAR (dijiste que no)"
+            else
+                r_deps="Dependencias del juego: SIN INSTALAR"
+            fi
         fi
         # LA FILA DE LA COMUNIDAD DICE EN QUE SITUACION ESTAS.
         #
@@ -70627,7 +71579,7 @@ Wine, y el asistente no pregunta por el runner ni el prefijo." \
                 cfg_rendimiento_menu "$gid" "$squash"; continue ;;
             "Dependencias del juego:"*)
                 # Se instalan aqui mismo, con su barra, y queda apuntado.
-                if [ "${DEPS_JUEGO:-0}" = 2 ]; then
+                if dependencias_del_juego_hechas; then
                     ui_ask "Las dependencias de este juego ya se instalaron.
 
 Volver a pasarlas? No hace daño -los instaladores detectan lo
