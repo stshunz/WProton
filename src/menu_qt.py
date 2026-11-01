@@ -1458,6 +1458,7 @@ class Peticion(object):
 
     def cargar_opciones(self):
         self.items = []
+        self.subs = {}
         try:
             with open(self.arg4, encoding='utf-8') as f:
                 for l in f:
@@ -1468,7 +1469,14 @@ class Peticion(object):
                         on, _, txt = l.partition('|')
                         self.items.append([K_PLAIN, txt, on == '1'])
                     else:
-                        self.items.append([K_PLAIN, l, False])
+                        # SEGUNDA LINEA DE LA FILA, detras de un TABULADOR:
+                        # "/ruta/larga\t48.0 GB libres". Se dibuja debajo, en
+                        # pequeño y apagado, y NO forma parte de lo que se
+                        # devuelve al elegir: es informacion, no respuesta.
+                        txt, _tab, sub = l.partition('\t')
+                        if sub.strip():
+                            self.subs[len(self.items)] = sub.strip()
+                        self.items.append([K_PLAIN, txt, False])
         except OSError:
             self.items = []
         self.aplicar_filtro()
@@ -1795,6 +1803,12 @@ class Pantalla(QtWidgets.QWidget):
         self.T_LH = FS(34) if self.T_FONT is self.f_tit else FS(30)
         self.HEAD = int(22 * FSCALE) + len(self.TITLE_LINES) * self.T_LH + 14
         self.ROW = max(TH['row'], int(TH['row'] * FSCALE))
+        # Si alguna fila trae segunda linea, TODAS crecen lo mismo: el alto de
+        # fila es uno solo para toda la lista -de el salen cuantas caben, donde
+        # empieza cada una y donde cae el raton-, asi que hacerlo fila a fila
+        # descuadraria las tres cosas a la vez.
+        self.SUB_H = (self.fm_sm.height() + FS(2)) if getattr(pet, 'subs', None) else 0
+        self.ROW += self.SUB_H
         top = (self.HEAD + 30) if pet.modo == 'browse' else self.HEAD
         if self.PANEL_UI and pet.modo == 'grid':
             # en rejilla no hay panel lateral: todo el ancho para las portadas
@@ -2472,6 +2486,10 @@ class Pantalla(QtWidgets.QWidget):
             else:
                 self.pintar_segmentos(p, self.segmentos(label, color),
                                       self.f_it, tx, ty, tw, activo)
+            sub = getattr(pet, 'subs', {}).get(pet.view[i])
+            if sub:
+                self.texto_fila(p, sub, self.f_sm, DIM, tx,
+                                ty + self.fm_it.height() - FS(2), tw, False)
 
     def pintar_barra_scroll(self, p):
         # Avisa de que hay mas opciones de las que caben en pantalla

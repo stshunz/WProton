@@ -75,12 +75,30 @@ Esos archivos son la forma en que WProton guarda los juegos: **un solo fichero c
 | Un instalador de GOG (`setup_*.exe`) | Lo instala solo, sin ventanas, y lo empaqueta |
 | Una **imagen de disco** (`.iso`, `.img`, `.mdf`, `.nrg`, `.udf`) | La abre, busca su `setup.exe` y te guía por la instalación (ver abajo) |
 | Una carpeta con el juego ya instalado | Te deja probarlo y luego empaquetarlo |
-| Un `.exe` suelto | Igual, tomando su carpeta como raíz |
+| Un `.exe` suelto | Igual, pero antes te pregunta **cuál es la carpeta raíz** (ver abajo) |
 | Un `.bat` o `.cmd` | Igual: algunos juegos arrancan con un script en vez de un ejecutable |
+
+> **La carpeta raíz es la que se empaqueta entera**, así que importa acertar.
+> Muchos juegos reparten sus cosas en varias carpetas —`Binary` con el
+> ejecutable y `Media` con todo lo demás, o `<Juego>/` y `Engine/` en los de
+> Unreal—, y si se toma por raíz la del ejecutable, el archivo sale con el
+> `.exe` y sin el juego. WProton **sube sola** mientras la carpeta sea una
+> pieza (`Binary`, `Bin`, `Media`, `x64`, `Release`…) y te marca esa como
+> primera opción, pero las de arriba siguen saliendo debajo por si tu reparto
+> es otro: la que elijas tú manda.
 
 > Las carpetas que estén **dentro de tu carpeta de juegos** salen solas en la lista, sin tener que añadirlas: basta con que tengan un ejecutable, un `autorun.cmd`, un `drive_c` o que acaben en `.pc`.
 
-> **Una carpeta puede ser una estantería y no un juego.** Si tienes una carpeta `Lucha` con *Street Fighter*, *Mortal Kombat* y *Guilty Gear* dentro, al darle se abre y te deja elegir cuál de los tres. Se reconoce porque **no tiene ningún fichero suyo** en el primer nivel, sólo carpetas (o `.wsquashfs`), y porque dentro hay **dos juegos o más**: un juego de verdad siempre tiene algo en su raíz, aunque el ejecutable esté tres niveles más abajo. La carátula y los textos sueltos no cuentan. Funciona igual al jugar que al abrir los ajustes con X.
+> **Una carpeta puede ser una estantería y no un juego.** Si tienes una carpeta `Lucha` con *Street Fighter*, *Mortal Kombat* y *Guilty Gear* dentro, al darle se abre y te deja elegir cuál de los tres. Se reconoce porque **no tiene ningún fichero suyo** en el primer nivel, sólo carpetas (o `.wsquashfs`), y porque dentro hay **dos juegos o más**: un juego de verdad siempre tiene algo en su raíz, aunque el ejecutable esté tres niveles más abajo. La carátula y los textos sueltos no cuentan.
+>
+> Y **las piezas de un juego no cuentan como juegos**, que es lo que fallaba
+> hasta la 2.15: una carpeta con `EndOfAbyss/` y `Engine/` dentro es un juego
+> de Unreal Engine, no dos juegos. No se cuentan las carpetas que se llaman
+> `Engine`, `Binaries`, `Content`, `_CommonRedist`, `DirectX`, `Soundtrack` o
+> `<Juego>_Data`; tampoco una hija que se llame **como la carpeta que la
+> contiene** (`End of Abyss/EndOfAbyss`); y si hay un `Engine/` con binarios
+> dentro, se da por hecho que es un juego de Unreal entero aunque haya
+> carpetas de DLC al lado. Funciona igual al jugar que al abrir los ajustes con X.
 
 > Empaquetar no es obligatorio: una carpeta o un `.exe` se pueden jugar tal cual, sin convertir nada. Empaquetar solo sirve para tenerlo todo en un fichero, que ocupa menos y es más cómodo de mover.
 
@@ -146,6 +164,13 @@ Reparar carpetas tapadas*.
 Menú principal → **Jugar**. Ahí salen todos los juegos de tu carpeta de juegos, ya sean archivos empaquetados o carpetas. Elige uno con el mando y pulsa **A**.
 
 > ¿Dónde está esa carpeta? La primera vez que abres WProton te pregunta dónde tienes los juegos. Si no eliges ninguna, usa `games/`, dentro de la propia carpeta de WProton. Puedes cambiarla cuando quieras en *Biblioteca y preferencias → Carpeta de juegos*.
+
+> **Los juegos enlazados cuentan.** Si los tienes en otro disco o en la tarjeta
+> y los enlazas en tu carpeta de juegos —lo normal en una Deck, para tener la
+> biblioteca junta sin duplicar gigas—, salen en *Jugar* igual que los demás.
+> Vale tanto para carpetas como para `.wsquashfs`, `.dwarfs` y lanzadores de
+> Linux, y también al navegar para añadir un juego a mano. Un enlace roto no
+> sale: no es un juego.
 
 La primera vez que lances un juego, un asistente te preguntará tres cosas: qué Proton usar, cuál es el ejecutable y unas opciones básicas. Si no sabes qué contestar, acepta lo que viene marcado: funciona en la mayoría de casos.
 
@@ -962,6 +987,63 @@ Prueba en este orden:
 3. **Argumentos.** Algunos juegos necesitan `-novr` u otros parámetros para no arrancar en un modo que no tienes.
 4. **Prefijo propio.** Si sospechas que otro juego le ha ensuciado el prefijo compartido. Con una excepción: si el juego trae **su propio prefijo** (los de Batocera), no lo cambies — trae el registro y las DLL que necesita.
 5. **Mirar el registro.** *Ver el registro de la última sesión*: las últimas líneas suelen decir qué falta (una DLL, una librería…).
+6. **El prefijo de Batocera.** Si el juego va en Batocera y aquí no, haz el prefijo con *su* procedimiento (abajo). Es el paso que descarta —o confirma— que el problema estaba en cómo se creó el prefijo.
+
+### Crear el prefijo como lo hace Batocera
+
+*Ajustes del juego → Prefijo → **Crear prefijo de Batocera***.
+
+> **No lo confundas con el punto anterior.** Un *prefijo que viene de Batocera*
+> es el que trae el propio archivo del juego, ya hecho, y ahí lo único que se
+> hace es enlazar los datos de `root`. Esto otro es **crear uno nuevo** con su
+> procedimiento. Son cosas distintas y no se estorban.
+
+Esto **no** es nuestra forma de crear un prefijo con unos arreglos encima: es
+la de Batocera, leída de su código (`batocera-wine`) y reproducida paso a paso.
+Está aparte a propósito. Si mezcláramos los dos saldría un tercer
+procedimiento que no es ni el nuestro ni el suyo, y entonces «a mí en Batocera
+me funciona» volvería a no poder compararse con nada.
+
+El prefijo se hace en su sitio, con el nombre del runner dentro:
+
+```
+prefixes/<juego>.batocera/<runner>/
+```
+
+Así el de siempre y el de Batocera conviven —puedes volver al otro cuando
+quieras— y cambiar de runner no reutiliza un prefijo hecho con otro.
+
+**Lo que hace, en su orden:**
+
+| Paso | Qué es, y por qué está |
+|---|---|
+| `setPrefixArch` | Lee `#arch=` del propio prefijo y solo acepta `win32` si el runner tiene de verdad `lib/wine/i386-unix/wine`. Es la comprobación que evita el fallo que ellos mismos documentan: un prefijo win32 con un runner que ya no lo admite |
+| `wineboot -u` | Lo hace el wine **de 32 bits**, con `WINEDLLOVERRIDES=winegstreamer=` — lo que Batocera llama *«workaround wine bottle creation issue with debug enabled»* |
+| Esperar al `wineserver` | `wineserver -w`, sin prisa. Es el paso que más se olvida: hasta que no termina, el prefijo está a medio escribir |
+| Si falla, se borra | Nunca queda un prefijo a medias que luego falle de otra manera y no se sepa por qué |
+| DLL del runner | `vkd3d`, `vkd3d-shader`, `icu` enlazadas (no copiadas) en `system32` y `syswow64`, si el runner las trae aparte |
+| Fuentes del runner | Las `.ttf`/`.ttc` que trae el runner, enlazadas en `windows/Fonts`. Si ya hay un fichero con ese nombre y no es un enlace, se deja: ése lo puso el juego |
+| `DisableHidraw` | En `HKLM\System\CurrentControlSet\Services\winebus`. Lo ponen siempre; aquí se respeta lo que el juego tenga pedido en *mando por hidraw* |
+| Carpetas de usuario | `Documentos`, `Música`, `Imágenes`, `Vídeos`, `Descargas`, `Plantillas`… vienen enlazadas a tu carpeta personal de verdad: se convierten en carpetas del prefijo. Solo las que **estaban** enlazadas, porque el Wine viejo usa `My Music` y el nuevo `Music`, y crearlas todas deja las dos |
+
+Si el prefijo ya existe, no se rehace por gusto: compara la fecha del
+`wine.inf` del runner con la que dejó apuntada en `.update-timestamp` y solo si
+cambió quita los enlaces viejos, rehace las DLL y pasa otro `wineboot`. Si
+`user.reg` tiene `mscoree` nativo (alguien instaló .NET con winetricks), ese
+`wineboot` va con `mscoree,mshtml=` para no romperlo — también es cosa suya.
+
+Al terminar, el juego pasa a **prefijo propio** apuntando a ése, y el registro
+trae los pasos uno a uno con su mandato. Si luego cambias de runner, WProton te
+avisa al lanzar: el prefijo de Batocera estaba hecho con el otro y no se usa.
+
+> **El runner sale del perfil del juego**, así que elígelo antes. El prefijo se
+> hace con el mismo wine con el que vas a jugar, que es justo el sentido de que
+> Batocera tenga un prefijo por runner.
+
+**Al instalar una ISO o un GOG** puede hacerse solo: *Instalación y empaquetado
+→ Prefijo de Batocera al instalar*. Con eso el prefijo propio del juego se crea
+con este procedimiento **antes** de que el instalador toque nada, que es el
+caso en el que más se nota.
 
 ### WProton te dice qué hacer
 
@@ -1068,6 +1150,35 @@ Ahí mismo, en el registro, quedan también las salidas que tienes.
    AppImage cuando no pueden montarse, y por eso en esos sistemas los AppImage sí
    abren: no es que FUSE funcione, es que se extraen. Con DwarFS no hay forma:
    ese formato solo se abre montándolo.
+
+### Un mando de Sony y un juego con `.keys`
+
+Si el mando funciona en los menús de WProton pero dentro de un juego **con
+`.keys`** hay botones que no hacen nada, y el mando es de Sony (DualShock 4,
+DualSense) o un Pro Controller de Switch: hasta la 2.15 eso era un fallo
+nuestro, y está arreglado.
+
+El mapeador tenía mal apuntados el **Share** y el **Options** de los mandos de
+Sony: los leía en los códigos de L2 y R2. Así que esos dos botones no mandaban
+su tecla, y L2/R2 mandaban la que les tocaba a ellos. En los menús no se notaba,
+porque los menús leen el mando por otro lado y ahí los códigos siempre
+estuvieron bien.
+
+> **El síntoma que lo delataba**: lanzando WProton desde el escritorio el juego
+> fallaba, y añadiendo WProton a Steam funcionaba perfecto. Con Steam por medio
+> aparece su mando virtual —que se hace pasar por un Xbox 360— y el mapeador
+> cogía de él los códigos, que sí eran los correctos. Mismo equipo, mismo mando
+> y mismo `.keys`, y el resultado dependía de por dónde lanzaras.
+
+Ahora los códigos **se le preguntan al mando**: evdev dice qué botones tiene
+cada aparato y el kernel los nombra igual para todos los fabricantes, así que no
+hace falta adivinarlos por el nombre. En el registro queda dicho cuando la tabla
+y el mando no coinciden:
+
+```
+[keys] El mando declara sus botones y la tabla del perfil SONY_DS4 no coincidia:
+[keys]   select    la tabla decia 312 BTN_TL2 (L2), el mando dice 314 BTN_SELECT (Share / -): manda el mando
+```
 
 ### El mando va en los menús pero no en el juego
 
@@ -1550,7 +1661,130 @@ suele resolverse con una versión del juego más reciente.
 
 ---
 
-## 10. Juegos de TeknoParrot
+## 10. Arcade Loader (arcades nativos de Linux)
+
+**Arcade Loader** es un lanzador de juegos de arcade **nativo de Linux**. Es
+un programa aparte, no parte de WProton.
+
+### Cómo se reconocen sus juegos
+
+**Por un fichero con extensión `.windowsloader` dentro del archivo.** Lo pone
+quien empaqueta el juego, y es la forma buena: no hay que renombrar nada, no se
+pierde al cambiarle el nombre al fichero, y lo decide quien sabe con qué se
+lanza el juego.
+
+```
+Daytona USA 2.squashfs
+   └── daytona-usa-2.windowsloader      ← con esto basta
+```
+
+**El nombre de delante da igual**: `.windowsloader` es una extensión, como
+`.txt`. Normalmente lleva el nombre del juego —el paquete de Nicktoons Nitro
+trae `nicktoons-nitro-racing.windowsloader`—, pero vale cualquiera, en
+mayúsculas o minúsculas. Lo que tiene que hacer es **terminar** ahí: un
+`notas.windowsloader.txt` no cuenta.
+
+WProton mira dentro **sin montar la imagen** (con el 7-Zip portable que ya
+trae), así que no hay que descomprimir un juego de 40 GB para preguntar una
+cosa tan pequeña, y lo que averigua **lo recuerda**: se mira una vez por
+fichero, no en cada arranque. Si cambias el juego o lo vuelves a empaquetar, el
+recuerdo caduca solo.
+
+> Si el 7-Zip no consigue leer la imagen —las versiones viejas de `p7zip` no
+> abren squashfs—, WProton **no da por hecho que no hay marcador**: monta la
+> imagen de solo lectura un momento y lo comprueba de verdad. Tarda un poco
+> más y acierta.
+
+**O por la cadena `[AL]` en el nombre**, que fue la primera convención y sigue
+valiendo:
+
+```
+Daytona USA 2 [AL].squashfs
+```
+
+Vale en cualquier parte del nombre y da igual si está en mayúsculas o
+minúsculas, pero los corchetes tienen que estar cerrados: un
+`Tales of Symphonia [ALL DLC].wsquashfs` **no** es de Arcade Loader.
+
+Da igual por cuál de las dos lo reconozca: si Arcade Loader no está, se ofrece
+descargarlo —con **barra de progreso**, que son unos 200 MB— y en cuanto acaba
+el juego arranca; si ya está, se lanza directamente.
+
+**Y vale igual una carpeta.** Arcade Loader acepta tanto el `.squashfs` como una
+carpeta con el `.windowsloader` dentro de ella, así que WProton le pasa lo que haya sin
+tocarlo.
+
+> En una carpeta el marcador tiene que estar **en su raíz**. Es a propósito: una
+> carpeta de la biblioteca puede ser una *estantería* —«Lucha» con tres juegos
+> dentro—, y si se mirara un nivel más abajo, el marcador de uno de esos juegos
+> haría pasar la estantería entera por un solo juego. Las estanterías siguen
+> funcionando como estanterías, y cada juego de dentro se reconoce por su
+> cuenta.
+
+### Qué no se hace con estos juegos
+
+Nada de lo de Windows: ni runner, ni prefijo, ni buscar un `.exe`, **ni montar
+la imagen**. El archivo se le pasa a él tal cual, que es como funciona:
+
+```
+Arcade_Loader/arcade-launcher run "/ruta/Daytona USA 2 [AL].squashfs"
+```
+
+Sí lleva todo lo demás, igual que un juego nativo: el vigilante de salida con
+el mando, el menú encima del juego, el tiempo jugado y «último jugado».
+
+### El mando lo lleva él
+
+**Del mando se encarga Arcade Loader**, así que WProton no mapea nada en estos
+juegos: el mapeador `.keys` viene **apagado**.
+
+Y es a propósito, no un olvido. Si Arcade Loader lee el mando y a la vez
+nosotros lo mapeamos a teclas, no gana uno: el juego ve los botones dos veces,
+o ninguno si el mapeador lo coge en exclusiva. Visto desde fuera eso parece un
+fallo del juego o del mando, y es de lo más difícil de diagnosticar.
+
+Pero la opción está, por si algún juego pide teclas de teclado que Arcade Loader
+no cubra: *Ajustes del juego → Mapeador `.keys` → **Usar el mapeador en Arcade
+Loader***. Esa fila solo aparece en los juegos `[AL]`, porque en los demás no
+significa nada. Si lo enciendes y notas botones repetidos o que el juego no
+responde, vuelve a apagarlo: son los dos cogiendo el mismo mando.
+
+### Instalarlo
+
+**Se ofrece al lanzar el primer juego `[AL]`** que tengas, y no antes: si no
+tienes ninguno, no te enteras de que existe. Se queda en `Arcade_Loader/`,
+dentro de la carpeta de WProton, y una vez está no vuelve a preguntar.
+
+Si lo quieres antes, o reinstalarlo: *Runners y herramientas → Arcade Loader*.
+
+> **Si la dirección cambia, te llega.** La URL se guarda en tu `settings.conf`,
+> y ese fichero manda sobre el valor que trae WProton — así no se pisa lo que
+> hayas puesto tú. Pero eso significaría que una dirección nueva no te llegaría
+> nunca al actualizar, así que WProton sabe cuáles fueron alguna vez el valor de
+> fábrica: si la tuya es una de ésas, la pone al día y lo dice en el registro.
+> Si la cambiaste tú, se queda como la dejaste.
+
+> **De dónde se descarga es un ajuste.** Hoy está alojado en MediaFire, que no
+> da un enlace directo: lo que se comparte es una página con un botón, así que
+> WProton pide la página y saca el enlace de dentro. Eso se romperá el día que
+> MediaFire cambie su web, y para entonces hay dos salidas sin tocar WProton:
+> cambiar `ARCADE_LOADER_URL` por el enlace nuevo (*Arcade Loader → De dónde se
+> descarga*), o **instalarlo desde un `.tar.gz`** que te hayas bajado tú.
+
+Lo que se descarga se descomprime **aparte y después se mueve**, nunca
+directamente en tu carpeta de WProton: ahí viven tus ajustes, tus perfiles y
+tus juegos. Se comprueba que el archivo trae `arcade-launcher` dentro
+—buscándolo, sin dar por hecho cómo se llame la carpeta— y solo entonces entra.
+Si reinstalas, lo anterior queda en `Arcade_Loader.anterior`.
+
+### Si dices que no
+
+El juego no se lanza, y se dice. **No se intenta con Proton**: un juego de
+Arcade Loader no es un juego de Windows, y lo único que saldría es un fallo
+raro diez pantallas después. Si en realidad era un juego de Windows y el `[AL]`
+está de más, quítaselo del nombre.
+
+## 11. Juegos de TeknoParrot
 
 Los juegos de recreativa que usan **TeknoParrot** funcionan sin preparar nada.
 
@@ -1659,7 +1893,7 @@ Un par de cosas que están ahí y ahorran tiempo:
 
 ---
 
-## 11. Formatos de archivo
+## 12. Formatos de archivo
 
 Al importar un juego, WProton puede dejarlo de tres maneras (*Biblioteca y preferencias → Formato al empaquetar*):
 
@@ -1727,7 +1961,7 @@ Esto importa sobre todo en la Steam Deck: su sistema es de solo lectura, así qu
 
 ---
 
-## 12. Preguntas frecuentes
+## 13. Preguntas frecuentes
 
 **¿Puedo mover WProton a otro sitio o a un pendrive?**
 Sí. Si en `settings.conf` usas una ruta relativa —`GAMES_PATH="games"`— puedes mover la carpeta entera y todo seguirá funcionando.
@@ -2184,7 +2418,7 @@ tocan.
 
 ---
 
-## 13. Salir de un juego con el mando
+## 14. Salir de un juego con el mando
 
 Mantén **Select cinco segundos** durante la partida y el juego se cierra. Son
 cinco y no dos a propósito: es una salida de emergencia y no debe dispararse
@@ -2446,7 +2680,51 @@ juegos donde más falta hace poder asignar una tecla al mando sin salir.
 
 ---
 
-## 14. Actualizar WProton
+### Si el mando falla *mientras* juegas
+
+WProton vigila el mando durante la partida y deja en el registro **solo lo que
+cambia**. No hace falta activar nada.
+
+Apunta dos cosas:
+
+- **Mandos que aparecen o desaparecen**, con el segundo de partida. Sirve para
+  dos casos que desde fuera se parecen mucho: que el mando de la Deck pase a
+  modo escritorio —se hace manteniendo **OPCIONES** (las tres rayas) medio
+  segundo, y es el botón de pausa de muchos juegos— y que Steam recree su mando
+  virtual, dejando al juego hablando con el nodo viejo.
+- **Ejes fuera del centro.** Si un stick marca algo sin que nadie lo toque, el
+  personaje se mueve solo y lo que pulses llega sumado a esa deriva. Es el
+  típico «se mueve solo y va con retraso». La cruceta y los gatillos no cuentan:
+  la primera es un eje de -1 a 1 y los segundos valen el mínimo en reposo, los
+  dos a propósito.
+
+En el registro sale así:
+
+```
+vigilante del mando: EJES TORCIDOS EN REPOSO -> event10: X izq,
+vigilante del mando: ALGO CAMBIO a los 94s de partida
+vigilante del mando:   - DESAPARECIO event10|js|Microsoft X-Box 360 pad 0
+```
+
+Un detalle que ahorra confusión: que los **menús** de un juego funcionen y la
+**partida** no es normal si ese juego navega sus menús con la cruceta y juega
+con los sticks. Lo digital y lo analógico van por caminos distintos, y un eje
+torcido solo se nota en el segundo.
+
+### Cancelar una descarga
+
+Mientras WProton descarga algo —un runner, Arcade Loader, el prefijo de
+TeknoParrot— la barra de progreso dice abajo **«B: cancelar»**. Con el mando es
+**B**; con teclado, **Escape**.
+
+Al cancelar no queda nada a medias: se corta la descarga y se borra el trozo
+que hubiera bajado. Puedes volver a intentarlo cuando quieras.
+
+> Solo se pueden cancelar las **descargas**. La misma barra sale al instalar el
+> runtime o al empaquetar un juego, y ahí no aparece el aviso: cortar eso por
+> la mitad dejaría un prefijo sin terminar o un `.wsquashfs` roto.
+
+## 15. Actualizar WProton
 
 ![Lo que trae la versión instalada](img/novedades.png)
 
@@ -2534,7 +2812,7 @@ Esa última fila de la tabla es la que conviene entender. Si añades WProton a S
 
 **El teclado en pantalla tiene dos distribuciones.** Para **buscar** un juego salen solo letras y números: son menos teclas y cada una está a un paso del mando. Para **escribir texto** —argumentos de lanzamiento, DLL overrides, notas— sale un teclado completo con minúsculas, símbolos (`= % : / \ " | + * @ # $ &`) y una tecla de **mayúsculas** que se queda encendida mientras lo está. Así se puede pegar una línea de ProtonDB tal cual, con su `%command%` incluido. Escribiendo texto, la **Y** acepta lo escrito; buscando, cierra el teclado.
 
-## 15. Llamar a WProton desde la línea de órdenes
+## 16. Llamar a WProton desde la línea de órdenes
 
 Está pensado para frontends —DeckStation lo usa así— y para automatizar cosas.
 Todas las rutas admiten **espacios sin comillas internas**: WProton junta los
@@ -2574,7 +2852,27 @@ la misma línea vale para todos los juegos y la carpeta se puede mover sin
 tocar nada. No es un menú nuevo, es el mismo *Partidas guardadas de [juego]*
 que ya está en *Ajustes del juego*.
 
-## 16. Dónde está cada cosa
+**Las rutas relativas valen.** ES-DE entrega el juego como `./ROMs/windows/Mi
+Juego.pc`, relativo a su propia carpeta, y WProton la convierte en absoluta en
+cuanto entra —contra el directorio desde el que se le llamó, y si por ahí no
+existe, contra su propia carpeta—. No hace falta que el frontend ponga rutas
+completas.
+
+> Esto no era así hasta la 2.15: una ruta relativa llegaba tal cual al cálculo
+> del punto de montaje y WProton se quedaba girando sin llegar a arrancar el
+> juego. Lo encontró y lo documentó un tester con un `.pc` de *Age of Empires
+> Gold* lanzado desde DeckStation. Lo que **no** se hace es resolver los
+> enlaces simbólicos: el identificador del juego sale de su ruta, y a quien
+> tenga la carpeta de juegos enlazada le cambiarían de sitio los perfiles y las
+> partidas de todos sus juegos.
+
+**Y los nombres con espacios, aunque el frontend no entrecomille.** Si llegan
+partidos (`$1="Mi"`, `$2="Juego.pc"`), WProton los vuelve a unir: su CLI toma
+una ruta y nada más, así que todo lo que viene detrás de la opción es la ruta.
+El único caso que no se recupera es un nombre con dos espacios seguidos, porque
+esa información la pierde el propio shell antes de que WProton exista.
+
+## 17. Dónde está cada cosa
 
 | Carpeta | Contiene |
 |---|---|

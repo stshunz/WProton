@@ -24,7 +24,7 @@ Inspirado en lo mejor de cuatro proyectos: los menús y tweaks de **PortProton/P
 - **`.wsquashfs` / `.squashfs`** — montaje con `squashfuse` + `fuse-overlayfs`: el juego queda en solo lectura y **las partidas se guardan aparte**, sin tocar el archivo original.
 - **`.dwarfs`** — igual de rápido de montar, con bastante más compresión.
 - **Carpetas sueltas** (incluidas las `.pc`), **`.exe`** y **`.bat`** — aparecen en la biblioteca y se juegan directamente, sin empaquetar nada.
-- **Varias carpetas de juegos**: útil si los tienes repartidos entre discos.
+- **Varias carpetas de juegos**: útil si los tienes repartidos entre discos. Y los **juegos enlazados** cuentan: si los tienes en la tarjeta y los enlazas en tu carpeta de juegos, salen en la lista igual que los demás (carpetas, `.wsquashfs` y lanzadores de Linux; un enlace roto no).
 - **Empaquetado autosuficiente**: un solo archivo con el juego y su prefijo dentro, listo para llevar a otro equipo.
 - **Importación** de `zip`, `7z`, `rar` (incluido multiparte), `.wtgz` e **instaladores de GOG**, que se convierten al formato que elijas.
 - **Prefijo incluido**: si el archivo trae su propio `drive_c` (estilo Batocera), se puede usar tal cual; si además trae su propio Wine, también. Y lo que traiga en su `drive_c` se ve desde `C:\` aunque el juego use otro prefijo.
@@ -52,6 +52,13 @@ Y con carátulas panorámicas, del estilo de la biblioteca de Steam:
 - Al configurar un juego, muestra **todos** los ejecutables de la carpeta ordenados por probabilidad.
 - **Ficha del juego** con año, editor, géneros y nota de Metacritic (datos de Steam, sin clave).
 
+### Arcade Loader (arcades nativos de Linux)
+**Arcade Loader** es un lanzador de arcades **nativo de Linux**. WProton reconoce sus juegos **por un fichero con extensión `.windowsloader` dentro del archivo** —`nicktoons-nitro-racing.windowsloader`, por ejemplo: el nombre de delante da igual— o por la cadena `[AL]` en el nombre, y los lanza con él en vez de con Proton o Wine: sin runner, sin prefijo y sin montar la imagen, porque es él quien la abre. Mirar dentro se hace **sin montar** (con el 7-Zip portable) y se recuerda por fichero; si el 7-Zip no puede leer la imagen no se da por hecho que no hay marcador, se monta un momento y se comprueba. La descarga, si hace falta, lleva barra de progreso.
+
+- Se **ofrece al lanzar el primer juego de estos** y se queda en `Arcade_Loader/`, dentro de la carpeta de WProton. Si ya está, no vuelve a preguntar; si no tienes ningún juego `[AL]`, no te enteras de que existe.
+- De dónde se descarga es un ajuste (`ARCADE_LOADER_URL`), así que cuando cambie de sitio no hace falta una versión nueva. Admite la página de MediaFire —WProton saca el enlace de dentro— o un enlace directo. Y si eso falla, se puede instalar desde un `.tar.gz` que ya tengas.
+- Lleva lo mismo que un juego nativo: vigilante de salida con el mando, menú encima del juego, tiempo jugado y «último jugado». **Del mando se encarga Arcade Loader**, así que el mapeador `.keys` viene apagado —si los dos cogen el mando, el juego ve los botones dos veces—, con una opción por juego para encenderlo si alguno pide teclas que él no cubra.
+
 ### Runners
 - **Runner propio de WProton** (GE-Custom), que se instala de serie.
 - Descarga desde el menú: **GE-Proton**, **Soda** y **Caffe** (Bottles), **Proton-CachyOS**, **DWProton**, **Wine-LG**, **Proton-LG**, **Wine-GE** y **Kron4ek**.
@@ -68,6 +75,7 @@ Runner, ejecutable, argumentos, prefijo (compartido, propio o incluido), GAMEID 
 - **Idioma del juego** de una lista, en **español por defecto**. Avisa si el sistema no tiene ese idioma generado, que es la causa más común de que un juego siga saliendo en inglés.
 - **HDR**: pone las variables que hacen falta y se lo pide a gamescope. Y dice en el propio menú si va a poder verse: sin gamescope ni sesión Wayland no hay HDR, por mucho que se active.
 - El **asistente de añadir un juego** deja listos también los DLL overrides y el prefijo, sin tener que entrar después por *Configurar*.
+- **Crear prefijo de Batocera**: hace el prefijo con el procedimiento de Batocera —leído de su código, `batocera-wine`, y reproducido paso a paso—, no con el nuestro. Un prefijo por runner, el `wineboot` con el wine de 32 bits y `winegstreamer` desactivado mientras se crea, espera al `wineserver`, borrado si falla, las DLL de vkd3d e icu y las fuentes del runner enlazadas, `DisableHidraw` en el registro y las carpetas de usuario convertidas en carpetas de verdad. Cada paso queda en el registro. Está para los juegos que van en Batocera y aquí no: si uno de esos se arregla con esto, el problema estaba en el prefijo y se sabe dónde. También puede hacerse solo al instalar una ISO o un GOG (*Instalación y empaquetado → Prefijo de Batocera al instalar*).
 
 Además: **notas**, **favoritos**, **estadísticas de tiempo jugado** y **copias de seguridad de las partidas**.
 
@@ -141,7 +149,7 @@ La primera vez te preguntará dónde tienes los juegos; si no indicas nada, usar
 ./wproton.sh --version
 ```
 
-Para integrarlo en un frontend (ES-DE, DeckStation…), apunta el lanzador a `wproton.sh %ROM%`.
+Para integrarlo en un frontend (ES-DE, DeckStation…), apunta el lanzador a `wproton.sh %ROM%`. Vale tal cual: la ruta puede llegar **relativa** (`./ROMs/windows/Mi Juego.pc`, que es lo que entrega ES-DE) y con **espacios sin entrecomillar**, y WProton la recompone y la hace absoluta al entrar.
 
 ## Controles
 

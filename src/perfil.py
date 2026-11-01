@@ -83,6 +83,9 @@ ESQUEMA = [
     ("EXE_OVERRIDE",      "texto",  "",               None),
     ("ARGS_OVERRIDE",     "texto",  "",               None),
     ("PREFIX_MODE",       "opcion", "shared",         ("shared", "own", "bundled", "teknoparrot")),
+    # Si el prefijo propio se hizo con el procedimiento de Batocera, aqui va
+    # el runner con el que se hizo: su prefijo es por runner.
+    ("PREFIX_BATOCERA",   "texto",  "",               None),
     ("PREFIX_ORIGEN",     "opcion", "nuevo",          ("nuevo", "bundled")),
     ("UNIDAD_JUEGO",      "texto",  "",               None),
     ("UNIDAD_CD",         "entero", 0,                None),
@@ -98,14 +101,42 @@ ESQUEMA = [
     # El mando virtual de Steam al lado de uno real: se le esconde al juego.
     ("PAD_FANTASMA",      "opcion", "auto",           ("auto", "1", "0")),
     ("KEYS_ESTILO",       "opcion", "xbox",           ("xbox", "nintendo")),
+    # REMAPEAR UN BOTON EN OTRO (31/10). Lista "origen=destino" separada por
+    # comas, con los nombres de verdad del boton: "BTN_SOUTH=BTN_START".
+    #
+    # Lo pidieron asi: "poner el start en el boton A y que el start siga
+    # siendo el start". O sea una COPIA en una direccion, no un intercambio:
+    # el boton de origen manda el de destino, y el de destino se queda como
+    # esta. Lo aplica mando_virtual.py, que es quien presenta al juego otro
+    # mando; el mapeador .keys no sirve para esto porque convierte el mando en
+    # TECLAS y muchos juegos, al ver un mando, dejan de leer el teclado.
+    ("BOTONES_REMAP",     "texto",  "",               None),
     ("TECLADO_POS",       "opcion", "abajo",          ("abajo", "arriba", "centro")),
     ("KEYS_EXCLUSIVO",    "opcion", "auto",           ("auto", "1", "0")),
+    # ARCADE LOADER: el mapeador .keys, APAGADO por defecto.
+    #
+    # Lo dijo Dani: "Arcade Loader se encarga del mando, pero mejor tener la
+    # opcion de mapear por si acaso". Si los dos cogen el mando a la vez, lo
+    # que pasa no es que uno gane: es que el juego ve botones repetidos o
+    # ninguno, y eso es muy dificil de diagnosticar despues.
+    #
+    # Asi que en los juegos [AL] el mapeador NO se arranca aunque el juego
+    # tenga su .keys. Se enciende aqui, por juego, cuando hace falta.
+    ("KEYS_AL",           "opcion", "0",              ("0", "1")),
+    # ¿ES UN JUEGO DE ARCADE LOADER? La casilla, pedida el 31/10.
+    #
+    # "auto" es lo de siempre: se reconoce solo por el marcador de dentro
+    # (.windowsloader) o por el [AL] del nombre. Pero hay juegos que no traen
+    # marcador -los empaqueto alguien antes de que existiera- y los hay que lo
+    # traen y no se quieren lanzar asi. Con "1" y "0" se decide a mano, por
+    # juego, y lo que se decide manda sobre la deteccion.
+    ("ES_AL",             "opcion", "auto",           ("auto", "1", "0")),
     # MANDO_VIRTUAL crece con cada mando que se añade, asi que va como texto
     # libre: una lista cerrada aqui obligaria a tocar dos sitios cada vez.
     ("MANDO_VIRTUAL",     "texto",  "0",              None),
     ("TEXTO_RAPIDO",      "texto",  "",               None),
     ("TEXTO_ENTER",       "entero", 0,                None),
-    ("PAD_STEAMFIX",      "entero", 0,                None),
+    ("PAD_STEAMFIX",      "opcion", "auto",           ("auto", "1", "0")),
     ("NESTED_GAMESCOPE",  "entero", 0,                None),
     ("NTSYNC",            "entero", 0,                None),
     ("FAVORITO",          "entero", 0,                None),

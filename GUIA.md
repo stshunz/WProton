@@ -85,6 +85,12 @@ Elige el juego de la lista y pulsa **A** (o haz clic). Ya está.
 
 **Para salir de un juego**, mantén **Select cinco segundos**.
 
+**Y mientras juegas, `Select+L1`** (o `Ctrl+Alt+W` en el teclado) abre un panel
+de WProton a la izquierda: **captura de pantalla**, **mandar una tecla al juego**
+(el tabulador, Enter, Alt+Enter…), **asignar una tecla al mando**,
+**copia de la partida guardada**, cerrar el juego y **forzar el cierre** si se ha
+colgado. Se mueve con la cruceta, **A** elige y **B** vuelve al juego.
+
 ---
 
 ## Los ajustes que de verdad vas a tocar

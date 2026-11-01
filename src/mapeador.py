@@ -42,6 +42,46 @@ import json
 import select
 import time
 
+
+def nombre_ev(codigo):
+    """Nombre legible de una tecla o boton del nucleo. SIEMPRE una cadena.
+
+    POR QUE EXISTE, Y POR QUE TIENE QUE USARLA TODO EL MUNDO
+
+    En evdev, un codigo que tiene DOS nombres no devuelve una cadena: devuelve
+    una TUPLA o una lista. El 272 es el caso tipico:
+
+        ecodes.BTN[272] == ('BTN_LEFT', 'BTN_MOUSE')
+
+    Y con eso, un simple ", ".join(...) para escribir el mapa en el registro
+    revienta el mapeador entero antes de empezar a jugar:
+
+        TypeError: sequence item 0: expected str instance, tuple found
+        [keys] Mando liberado
+
+    Paso de verdad, con el .keys de la comunidad del Torrente, que pone el
+    raton en los gatillos. El juego se quedaba sin .keys -ni teclas, ni
+    cruceta, ni raton- y el registro no lo decia en ningun sitio donde se
+    mirara: la unica pista era un Traceback perdido entre lineas de Proton.
+
+    Lo peor del fallo no era el fallo: era que reventaba ESCRIBIENDO EL
+    REGISTRO. Escribir una linea de diagnostico no puede tumbar nunca lo que
+    esta diagnosticando, asi que esto no vuelve a hacerse a mano en ningun
+    sitio: se llama aqui.
+    """
+    try:
+        n = ecodes.KEY.get(codigo)
+        if not n:
+            n = getattr(ecodes, 'BTN', {}).get(codigo)
+        if isinstance(n, (list, tuple)):
+            n = n[0] if n else None
+        if isinstance(n, str) and n:
+            return n
+    except Exception:
+        pass
+    return str(codigo)
+
+
 # Mapeos de ejes analógicos por defecto para mandos estándar
 ABS_ESTANDAR = {
     ecodes.ABS_Y:     ("joystick1up",   "joystick1down"),
@@ -117,13 +157,52 @@ PERFILES = {
         },
         "abs_map": ABS_ESTANDAR, "threshold": 40, "center": 127
     },
+    # LOS DOS DE SONY: CODIGOS DEL KERNEL, NO LOS QUE TENIAMOS.
+    #
+    # EL CASO (28/10): un tester con CachyOS y un DualShock 4 (054c:09cc). Un
+    # juego con .keys le fallaba lanzando WProton desde el escritorio, y
+    # funcionaba perfecto añadiendo WProton a Steam. Mismo equipo, mismo
+    # mando, mismo .keys.
+    #
+    # Los dos registros lo dijeron en una linea. Desde el escritorio:
+    #
+    #     [keys] Mando: "Sony ... Wireless Controller" -> perfil SONY_DS4
+    #     [keys] mapa: select (codigo 312) -> KEY_C
+    #     [keys] mapa: start  (codigo 313) -> KEY_LEFT
+    #     [keys] Combinacion: 312 + 313        <- SIN NOMBRES
+    #
+    # Y desde Steam -donde Steam ofrece su mando virtual, que se hace pasar
+    # por un Xbox 360 y por tanto cae en el perfil XBOX_360-:
+    #
+    #     [keys] mapa: select (codigo 314) -> KEY_C
+    #     [keys] mapa: start  (codigo 315) -> KEY_LEFT
+    #     [keys] Combinacion: Select + Start   <- CON NOMBRES
+    #
+    # En Linux, un DualShock 4 manda el Share como BTN_SELECT (314) y el
+    # Options como BTN_START (315): lo dice el mantenedor de hid-playstation
+    # en la lista del kernel ("the DS4 Share button was mapped to 'Select'
+    # under the Linux gamepad spec"; "the Options button replaced Start").
+    # Nuestros 312 y 313 son BTN_TL2 y BTN_TR2, o sea L2 y R2.
+    #
+    # O sea que con un mando de Sony: el Share y el Options no hacian NADA, y
+    # L2 y R2 mandaban las teclas que les tocaban a ellos. La pista estaba
+    # delante: la combinacion se imprimia como "312 + 313" en vez de
+    # "Select + Start" porque nuestra propia tabla de nombres -la del kernel-
+    # no llama "select" al 312. Dos tablas nuestras diciendo cosas distintas.
+    #
+    # Y lo mismo el DualSense y el mando de Switch: los tres tenian el mismo
+    # error copiado.
+    #
+    # Hoy esto es ademas una RED, no la via principal: los codigos se le
+    # preguntan al mando (ver ids_del_mando). La tabla es el respaldo para un
+    # mando que no declare los estandar.
     "SONY_DS4": {
         "match": ["sony", "playstation", "wireless controller", "dualshock 4", "ps4"],
         "ids": {
             "a": 304, "b": 305, "x": 307, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 316, "r2": 317, "l3": 318, "r3": 319
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -131,9 +210,9 @@ PERFILES = {
         "match": ["dualsense", "ps5"],
         "ids": {
             "a": 304, "b": 305, "x": 307, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 314, "r2": 315, "l3": 317, "r3": 318
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -148,12 +227,16 @@ PERFILES = {
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
     "NINTENDO_SWITCH": {
+        # El cruce de A/B y X/Y es a proposito: es la disposicion de Nintendo.
+        # Lo que estaba mal aqui eran select/start, igual que en los de Sony:
+        # hid-nintendo manda el "-" como BTN_SELECT (314) y el "+" como
+        # BTN_START (315).
         "match": ["nintendo", "switch", "pro controller", "joy-con"],
         "ids": {
             "a": 305, "b": 304, "x": 309, "y": 308,
-            "start": 313, "select": 312, "hotkey": 312,
+            "start": 315, "select": 314, "hotkey": 314,
             "pageup": 310, "pagedown": 311,
-            "l2": 314, "r2": 315, "l3": 317, "r3": 318
+            "l2": 312, "r2": 313, "l3": 317, "r3": 318
         },
         "abs_map": ABS_ESTANDAR, "threshold": 16000, "center": 0
     },
@@ -503,6 +586,129 @@ def abrir_raton_xtest():
     return None
 
 
+# LOS CODIGOS DE BOTON, PREGUNTADOS AL MANDO.
+#
+# POR QUE NO VALE UNA TABLA POR MANDO
+#
+# Teniamos una tabla de codigos por familia de mando, y la de Sony estaba mal:
+# el Share y el Options de un DualShock 4 no hacian nada (ver el comentario de
+# SONY_DS4). Y ese fallo no se puede arreglar "de verdad" corrigiendo la tabla,
+# porque la tabla se va a volver a equivocar con el proximo mando raro: hay
+# cientos, y el nombre con el que se reconocen -"wireless controller"- ni
+# siquiera identifica al fabricante.
+#
+# LO QUE SI ES FIABLE: EL PROPIO MANDO LO DICE
+#
+# evdev declara QUE codigos de tecla tiene cada aparato, y el kernel los nombra
+# segun la "Linux gamepad specification": BTN_SELECT es el Select de cualquier
+# mando, lo fabrique quien sea. Asi que en vez de adivinar por el nombre, se le
+# pregunta: si el mando declara BTN_SELECT, el select es ESE.
+#
+# Es exactamente lo que el mapeador ya hacia con los ejes -"Umbral de ABS_Y: 89
+# (el perfil decia 16000)", leyendo el rango real del mando-, y por lo mismo:
+# el aparato sabe mas de si mismo que nuestra tabla.
+#
+# La tabla se queda como RESPALDO, para un mando que declare codigos fuera de
+# la especificacion.
+CODIGOS_ESTANDAR = {
+    "a":        ecodes.BTN_SOUTH,    # 304
+    "b":        ecodes.BTN_EAST,     # 305
+    "x":        ecodes.BTN_NORTH,    # 307
+    "y":        ecodes.BTN_WEST,     # 308
+    "pageup":   ecodes.BTN_TL,       # 310  L1
+    "pagedown": ecodes.BTN_TR,       # 311  R1
+    "l2":       ecodes.BTN_TL2,      # 312
+    "r2":       ecodes.BTN_TR2,      # 313
+    "select":   ecodes.BTN_SELECT,   # 314  Share en un DS4, "-" en un Switch
+    "start":    ecodes.BTN_START,    # 315  Options en un DS4, "+" en un Switch
+    "l3":       ecodes.BTN_THUMBL,   # 317
+    "r3":       ecodes.BTN_THUMBR,   # 318
+}
+
+
+# Los nombres, escritos aqui y no sacados de evdev.
+#
+# La forma de la tabla de nombres de evdev ha cambiado entre versiones -unas
+# dan una cadena, otras una lista- y una linea de registro no merece un
+# "if hasattr": lo unico que hace falta son estos trece codigos, y de paso se
+# dice a que boton FISICO corresponde cada uno, que es el dato que hacia falta
+# para entender el fallo del DualShock 4.
+NOMBRES_CODIGO = {
+    304: "304 BTN_SOUTH (A / Cross)",
+    305: "305 BTN_EAST (B / Circle)",
+    306: "306 BTN_C",
+    307: "307 BTN_NORTH (X / Triangle)",
+    308: "308 BTN_WEST (Y / Square)",
+    310: "310 BTN_TL (L1)",
+    311: "311 BTN_TR (R1)",
+    312: "312 BTN_TL2 (L2)",
+    313: "313 BTN_TR2 (R2)",
+    314: "314 BTN_SELECT (Share / -)",
+    315: "315 BTN_START (Options / +)",
+    316: "316 BTN_MODE (PS / Home)",
+    317: "317 BTN_THUMBL (L3)",
+    318: "318 BTN_THUMBR (R3)",
+}
+
+
+def nombre_codigo(c):
+    """El codigo con su nombre, para el registro. Si no se conoce, el numero."""
+    return NOMBRES_CODIGO.get(c, str(c))
+
+
+def ids_del_mando(dev, ids_tabla, nombre_perfil=""):
+    """Los codigos de boton de ESTE mando, preguntandoselos a el.
+
+    $dev = el aparato evdev, ids_tabla = lo que dice el perfil.
+    Devuelve un diccionario nuevo: la tabla NO se toca.
+    """
+    ids = dict(ids_tabla)
+    try:
+        hay = set(dev.capabilities().get(ecodes.EV_KEY, []))
+    except Exception as e:
+        print("[keys] no se han podido leer los botones que declara el mando"
+              " (%s): se usa la tabla del perfil %s" % (e, nombre_perfil),
+              flush=True)
+        return ids
+    if not hay:
+        return ids
+    # ¿El hotkey iba pegado al select? Entonces lo sigue.
+    hotkey_era_select = (ids.get("hotkey") is not None
+                         and ids.get("hotkey") == ids.get("select"))
+    cambiados, confirmados = [], 0
+    for nombre, codigo in CODIGOS_ESTANDAR.items():
+        if nombre not in ids:
+            continue
+        if codigo not in hay:
+            # El mando no declara el estandar: manda la tabla, que para eso
+            # esta. Un mando raro puede poner el Select donde quiera.
+            continue
+        if ids[nombre] != codigo:
+            cambiados.append((nombre, ids[nombre], codigo))
+            ids[nombre] = codigo
+        else:
+            confirmados += 1
+    if hotkey_era_select and "select" in ids:
+        ids["hotkey"] = ids["select"]
+    # LO QUE SE HA CAMBIADO, DICHO. Y con nombre y numero, porque es justo lo
+    # que hacia falta para encontrar el fallo del DualShock 4: el registro
+    # decia "mapa: select (codigo 312)" y nadie podia saber que 312 no es el
+    # Select de ese mando.
+    if cambiados:
+        print("[keys] El mando declara sus botones y la tabla del perfil %s no"
+              " coincidia:" % (nombre_perfil or "?"), flush=True)
+        for nombre, viejo, nuevo in cambiados:
+            print("[keys]   %-9s la tabla decia %s, el mando dice %s:"
+                  " manda el mando"
+                  % (nombre, nombre_codigo(viejo), nombre_codigo(nuevo)),
+                  flush=True)
+    else:
+        print("[keys] Los %d boton(es) del perfil %s coinciden con lo que"
+              " declara el mando" % (confirmados, nombre_perfil or "?"),
+              flush=True)
+    return ids
+
+
 def get_perfil(dev_name):
     name = dev_name.lower()
     for p in PERFILES.values():
@@ -539,6 +745,44 @@ def teclas_de_texto(texto):
     return out
 
 
+def tecleo_ms():
+    """Cuanto se mantiene pulsada una tecla que mandamos NOSOTROS, en ms.
+
+    UN SOLO CRITERIO PARA TODO EL PROGRAMA, Y ESTA FUNCION EXISTE PARA ESO.
+
+    Habia dos sitios que mandan teclas sin que nadie las mantenga: el texto
+    rapido (escribir_texto) y las teclas DIFERIDAS -las de un boton que
+    tambien forma parte de una combinacion, que se mandan al soltarlo-. El
+    primero ya mantenia la tecla 60 ms; el segundo la pulsaba y la soltaba
+    seguido, y en un juego que mira el teclado una vez por fotograma eso no se
+    ve. Mismo problema, un sitio arreglado y el otro no.
+
+    Se afina con WP_TECLEO_MS. 60 ms son casi cuatro fotogramas a 60 FPS.
+    """
+    try:
+        return max(20, min(500, int(os.environ.get('WP_TECLEO_MS') or 60)))
+    except ValueError:
+        return 60
+
+
+def sueltas_vencidas(cola, ahora):
+    """Separa la cola de teclas pendientes de soltar.
+
+    Devuelve (vencidas, quedan). La cola son pares (cuando_soltar, [codigos]).
+
+    POR QUE UNA COLA Y NO UN sleep: dormir en el bucle del mapeador lo deja
+    SORDO justo mientras alguien juega. Se apunta cuando toca soltar cada
+    tecla y se sigue leyendo el mando.
+    """
+    vencidas, quedan = [], []
+    for cuando, codigos in cola or []:
+        if cuando <= ahora:
+            vencidas.append((cuando, codigos))
+        else:
+            quedan.append((cuando, codigos))
+    return vencidas, quedan
+
+
 def escribir_texto(ui, texto):
     """Teclea un texto guardado, sin abrir ninguna ventana.
 
@@ -559,10 +803,7 @@ def escribir_texto(ui, texto):
     # eso mapear una tecla a un boton SI funcionaba: la mantiene el usuario.
     #
     # Se puede afinar con WP_TECLEO_MS si algun juego necesita mas.
-    try:
-        _ms = max(20, min(500, int(os.environ.get('WP_TECLEO_MS') or 60)))
-    except ValueError:
-        _ms = 60
+    _ms = tecleo_ms()
     _hold = _ms / 1000.0
     escrito = 0
     for ch in texto or '':
@@ -986,6 +1227,61 @@ def _run_teclado(gamepad_device, ids=None, ui_kb=None):
         ui_kb.close()
     pygame.quit()
 
+def olvidar_botones(pulsados, pendiente, map_combos, map_normal, soltar):
+    """Suelta todo y olvida lo pulsado. Para cuando el mando se va.
+
+    HACE FALTA PORQUE EL MANDO SE PRESTA. Mientras el panel de WProton lo tiene
+    capturado, al mapeador no le llega ni un evento. Si el usuario soltaba
+    SELECT con el panel abierto, ese soltar no se ve, y al recuperar el mando
+    SELECT sigue constando como pulsado. Con un .keys que lleve
+    SELECT+START -> Alt+F4, el siguiente START cierra el juego sin que nadie
+    haya pedido cerrarlo. Paso de verdad el 21/10, jugando a 88 Heroes.
+
+    Y DE PASO SE SUELTAN LAS TECLAS YA MANDADAS: un boton que se solto mientras
+    el panel estaba abierto dejaria su tecla pulsada en el juego para siempre.
+    Es el mismo fallo por el otro lado, y se arregla en el mismo sitio.
+
+    "soltar" es la funcion que suelta una tecla; se pasa para poder probar esto
+    sin un teclado virtual de verdad.
+    """
+    for boton in sorted(pulsados):
+        for tecla in map_normal.get(boton, []):
+            soltar(tecla, False)
+    pulsados.clear()
+    pendiente.clear()
+    for c in map_combos:
+        c["active"] = False
+
+
+def resincronizar_botones(dispositivos, pulsados, pendiente, map_combos):
+    """Vuelve a leer del mando que botones estan pulsados DE VERDAD.
+
+    Al recuperar el mando no se puede suponer nada: lo ultimo que sabiamos es
+    de antes de prestarlo. El nucleo si sabe el estado real -lo da
+    active_keys()-, asi que se pregunta en vez de adivinar: un boton que el
+    usuario siga apretando sigue constando, y lo que solto, no.
+
+    Devuelve la lista de dispositivos que no supieron contestar, para poder
+    decirlo en el registro.
+    """
+    fallaron = []
+    pulsados.clear()
+    pendiente.clear()
+    for d in dispositivos:
+        try:
+            for codigo in d.active_keys():
+                pulsados.add(codigo)
+        except Exception:
+            fallaron.append(getattr(d, "path", "?"))
+    # UNA COMBINACION CUYOS BOTONES YA ESTEN PULSADOS SE DA POR DISPARADA. Si
+    # no, el siguiente boton que se pulse la haria saltar sin que el usuario
+    # haya hecho la combinacion, que es justo el fallo que se esta arreglando.
+    for c in map_combos:
+        c["active"] = bool(c.get("req")) and all(b in pulsados
+                                                 for b in c["req"])
+    return fallaron
+
+
 def main():
     try:
         os.nice(-10)
@@ -1128,7 +1424,15 @@ def main():
           % ("como eje (ABS_HAT0)"
              if (ecodes.ABS_HAT0X in _ejes or ecodes.ABS_HAT0Y in _ejes)
              else "como botones"), flush=True)
-    ids            = perfil_actual["ids"]
+    # LOS CODIGOS, DEL MANDO. Y UNA COPIA, QUE ANTES NO HABIA.
+    #
+    # "ids" era el diccionario de la tabla TAL CUAL. Mas abajo, el estilo
+    # Nintendo intercambia a/b y x/y ahi dentro... o sea que modificaba la
+    # tabla global PERFILES de este proceso. Hoy da igual porque el mapeador
+    # mapea una vez y muere, pero es una mina: el dia que se mapee dos veces
+    # en el mismo proceso, el segundo juego saldria con los botones cruzados
+    # sin que nadie lo haya pedido. Con la copia, no.
+    ids            = ids_del_mando(device, perfil_actual["ids"], _nom_perfil)
     abs_map_actual = perfil_actual["abs_map"]
     threshold      = perfil_actual["threshold"]
     center         = perfil_actual["center"]
@@ -1329,7 +1633,7 @@ def main():
                               name="Mapeador_KB_Portable")
             print("[keys] Teclado virtual con %d tecla(s) declarada(s): %s"
                   % (len(_necesarias),
-                     ", ".join(sorted(ecodes.KEY.get(_k, str(_k))
+                     ", ".join(sorted(nombre_ev(_k)
                                       for _k in _necesarias))), flush=True)
         else:
             ui = evdev.UInput(name="Mapeador_KB_Portable")
@@ -1513,6 +1817,15 @@ def main():
         return False, "el .keys solo trae atajos, no un esquema de control"
 
     _capturados = []
+    # LO QUE SE LE DEBE AL PANEL, O LO QUE EL PANEL NOS DEBE.
+    #
+    # Dos casos, y los dos acaban aqui:
+    #   - el panel pidio el mando prestado y se le cedio;
+    #   - al arrancar no se pudo capturar PORQUE LO TENIA EL PANEL.
+    # En los dos, el mando se coge en cuanto el panel diga "coge". Se declaran
+    # arriba del todo porque el segundo caso pasa antes de entrar en el bucle.
+    _mando_cedido = []
+    _mando_desde = [0.0]
     # Y AL RECIBIR LA SEÑAL DE CIERRE.
     #
     # El mapeador no termina solo: lo mata WProton al acabar el juego. Sin
@@ -1535,6 +1848,10 @@ def main():
         except Exception:
             pass
 
+    # El cierre y el menu de WProton cuando el mando acaba capturado AQUI. Se
+    # rellenan mas abajo, y solo si de verdad se captura; se declaran antes
+    # para que el bucle pueda preguntar por ellos sin saber como acabo la cosa.
+    _ov_marca, _ov_req, _ov_ultimo = '', [], [0.0]
     _modo_grab = (os.environ.get('WP_KEYS_GRAB') or 'auto').strip().lower()
     if _modo_grab in ('auto', ''):
         _capturar, _porque = _hace_falta_capturar()
@@ -1543,16 +1860,54 @@ def main():
     else:
         _capturar = (_modo_grab == '1')
     if _capturar:
+        import errno as _errno
+        import time as _t0
         for _d in pads:
             try:
                 _d.grab()
                 _capturados.append(_d)
             except Exception as _e:
-                print("[keys] No se pudo capturar %s: %s" % (_d.path, _e),
+                # OCUPADO NO ES QUE NO: ES "AHORA NO".
+                #
+                # Si el mando esta ocupado, casi siempre lo tiene EL PANEL de
+                # WProton, que es quien lo pide prestado mientras esta abierto.
+                # Y el caso normal es justo ese: el panel asigna una tecla, eso
+                # reinicia el mapeador, y el mapeador arranca con el panel
+                # todavia abierto.
+                #
+                # Darse por vencido ahi dejaba al juego con el mando crudo Y
+                # las teclas para el resto de la partida: el .keys no servia
+                # de nada en cuanto se abria el menu una vez. Ahora se apunta
+                # el mando como "pendiente" y se coge en cuanto el panel lo
+                # devuelva (o solo, a los 180 s, si el panel no lo devuelve).
+                if getattr(_e, 'errno', None) == _errno.EBUSY:
+                    _mando_cedido.append(_d)
+                    print("[keys] %s esta ocupado (lo tiene el panel): se"
+                          " cogera en cuanto lo suelte" % _d.path, flush=True)
+                else:
+                    print("[keys] No se pudo capturar %s: %s" % (_d.path, _e),
+                          flush=True)
+        if _mando_cedido:
+            _mando_desde[0] = _t0.monotonic()
+        # PENDIENTE CUENTA COMO CAPTURADO, Y ESTO NO ES UN DETALLE.
+        #
+        # Todo lo de aqui dentro -la salida de emergencia con Select y la
+        # vigilancia de la combinacion del menu- existe porque, con el mando
+        # capturado AQUI, el guardian no recibe nada. Si se montara solo
+        # cuando el mando ya esta en la mano, un mapeador que arranca con el
+        # panel abierto no lo montaria... y en cuanto el panel le devolviera
+        # el mando, el guardian se quedaria sordo y NADIE vigilaria ni el
+        # cierre ni la combinacion del menu: el menu no se podria volver a
+        # abrir en toda la partida.
+        if _capturados or _mando_cedido:
+            if _capturados:
+                print("[keys] Mando capturado en exclusiva (%d): el juego solo"
+                      " vera el teclado, como en Batocera" % len(_capturados),
                       flush=True)
-        if _capturados:
-            print("[keys] Mando capturado en exclusiva (%d): el juego solo vera"
-                  " el teclado, como en Batocera" % len(_capturados), flush=True)
+            else:
+                print("[keys] El mando lo tiene el panel ahora mismo; se coge"
+                      " en cuanto lo suelte (%d)" % len(_mando_cedido),
+                      flush=True)
             # SALIDA DE EMERGENCIA, PORQUE EL GUARDIAN SE QUEDA SORDO.
             #
             # El guardian (mantener Select 2s para cerrar) es OTRO proceso y
@@ -1591,9 +1946,54 @@ def main():
             print("[keys] Mantener Select %g s cierra el juego (lo vigila el"
                   " mapeador, que es quien tiene el mando capturado)"
                   % _salida_seg, flush=True)
+            # Y LO MISMO CON EL MENU DE DENTRO DEL JUEGO, por la misma razon.
+            #
+            # EL AGUJERO QUE ESTO TAPA: el panel de WProton lo abre el
+            # guardian, que lee los mismos dispositivos. Con el mando
+            # capturado aqui, el guardian no recibe NADA, asi que la
+            # combinacion del menu no funcionaba... justo en los juegos que
+            # tienen un .keys propio, que son los que mas falta les hace poder
+            # colgarle una tecla a un boton sin salir.
+            #
+            # No se abre desde aqui -el panel es del guardian, que es quien
+            # sabe pintarlo-: se le avisa por un fichero, igual que el cierre.
+            _ov_marca = os.environ.get('WP_OVERLAY_MARCA', '')
+            _ov_combo = (os.environ.get('WP_OVERLAY_COMBO') or '').strip()
+            _ov_req = []
+            if _ov_marca and _ov_combo and _ov_combo not in ('no', 'off'):
+                # Los mismos nombres que usa el panel, traducidos a los
+                # codigos de ESTE mando con su propia tabla de ids: en un
+                # mando raro L1 no tiene por que ser 310.
+                #
+                # OJO CON "guide", QUE AQUI ESTABA MAL: el boton de Steam es
+                # el 316 y NINGUN perfil le pone nombre, asi que traducirlo
+                # por "hotkey" -como se escribio primero- lo convertia en el
+                # 314, que es SELECT. O sea: elegir "el boton Steam" habria
+                # hecho que Select a secas abriera el panel en cualquier juego
+                # con .keys. Por eso los codigos sueltos van tal cual y solo
+                # los que tienen nombre pasan por la tabla del mando.
+                _ov_partes = {'select_l1': ('select', 'pageup'),
+                              'select_r1': ('select', 'pagedown'),
+                              'select_l3': ('select', 'l3'),
+                              'select_y': ('select', 'y'),
+                              'l3r3': ('l3', 'r3'),
+                              'guide': (316,)}.get(_ov_combo, ())
+                _ov_req = [(ids[_n] if isinstance(_n, str) else _n)
+                           for _n in _ov_partes
+                           if not isinstance(_n, str) or _n in (ids or {})]
+                if len(_ov_req) != len(_ov_partes):
+                    print("[keys] El menu de WProton no se puede vigilar: este"
+                          " mando no tiene todos los botones de %s"
+                          % _ov_combo, flush=True)
+                    _ov_req = []
+            if _ov_req:
+                print("[keys] %s abre el menu de WProton (lo vigila el"
+                      " mapeador, que tiene el mando capturado)"
+                      % _ov_combo, flush=True)
         else:
             print("[keys] AVISO: no se pudo capturar ningun mando. Si el juego"
                   " soporta mando, puede que ignore las teclas.", flush=True)
+
     else:
         print("[keys] Mando NO capturado (WP_KEYS_GRAB=0): el juego lo vera"
               " ademas del teclado", flush=True)
@@ -1613,6 +2013,22 @@ def main():
         print("[keys] %d accion(es) del .keys ignoradas por estar incompletas"
               % _saltadas, flush=True)
     print("[keys] Botones cargados: %d" % len(map_normal), flush=True)
+    # EL MAPA, EN PALABRAS, Y DICIENDO CUAL VA DIFERIDA.
+    #
+    # "Botones cargados: 3" no sirve para contestar a "lo mapeo y no funciona":
+    # no dice QUE boton, ni a QUE tecla, ni -lo que de verdad importaba aqui-
+    # si esa tecla se manda al pulsar o se espera a soltar el boton por formar
+    # parte de una combinacion. Ahora el registro lo dice antes de jugar.
+    _nom_btn_id = {}
+    for _n, _c in (ids or {}).items():
+        _nom_btn_id.setdefault(_c, _n)
+    for _cod in sorted(map_normal):
+        _teclas_txt = ", ".join(nombre_ev(_t) for _t in map_normal[_cod])
+        print("[keys] mapa: %s (codigo %d) -> %s%s"
+              % (_nom_btn_id.get(_cod, "boton"), _cod, _teclas_txt,
+                 "  [se manda AL SOLTAR: el boton tambien esta en una combinacion]"
+                 if _cod in btn_en_combo else ""),
+              flush=True)
     # Las combinaciones, con los CODIGOS que esperan.
     #
     # Sin esto, una combinacion que no casa con lo que pulsa el usuario no se
@@ -1631,7 +2047,7 @@ def main():
     for _c in map_combos:
         _que = "teclado en pantalla" if _c.get("kb") else (
                "escribir texto" if _c.get("txt") else
-               ",".join(ecodes.KEY.get(_k, str(_k)) for _k in _c["outs"]))
+               ",".join(nombre_ev(_k) for _k in _c["outs"]))
         _btns = " + ".join(_POS.get(_k, str(_k)) for _k in _c["req"])
         print("[keys] Combinacion: %s  (codigos %s)  ->  %s"
               % (_btns, _c["req"], _que), flush=True)
@@ -1743,20 +2159,12 @@ def main():
     def _nombre_btn(codigo):
         """Nombre legible de una tecla o boton.
 
-        ecodes.BTN no existe en todas las versiones de evdev, asi que se
-        consulta con cuidado: un fallo aqui solo por escribir un nombre en el
-        registro seria absurdo.
+        Lo hace nombre_ev(), arriba del todo: aqui habia una segunda copia de
+        la misma idea, y la de alla abajo -la que escribia el mapa- era una
+        TERCERA que no contemplaba las tuplas y tumbaba el mapeador. Una sola
+        regla, en un solo sitio.
         """
-        n = ecodes.KEY.get(codigo)
-        if n:
-            return n if isinstance(n, str) else str(n)
-        try:
-            n = getattr(ecodes, 'BTN', {}).get(codigo)
-            if n:
-                return n if isinstance(n, str) else str(n)
-        except Exception:
-            pass
-        return str(codigo)
+        return nombre_ev(codigo)
 
     def _tecla(codigo, encendida):
         """Pulsa o suelta una tecla que pueden mandar VARIOS controles.
@@ -1804,7 +2212,7 @@ def main():
                     _avisadas.add(codigo)
                     print("[keys] %s la mandan varios controles a la vez; "
                           "se repulsa para que el juego lo note"
-                          % ecodes.KEY.get(codigo, codigo), flush=True)
+                          % nombre_ev(codigo), flush=True)
         else:
             n = _ref.get(codigo, 0)
             if n <= 0:
@@ -1821,11 +2229,195 @@ def main():
                      _nombre_btn(codigo)), flush=True)
 
     pulsados = set()
+
+    def _olvidar_botones(por_que):
+        olvidar_botones(pulsados, pendiente, map_combos, map_normal, _tecla)
+        print("[keys] %s: se sueltan las teclas y se olvida lo pulsado"
+              % por_que, flush=True)
+
+    def _resincronizar_botones(dispositivos, por_que):
+        fallaron = resincronizar_botones(dispositivos, pulsados, pendiente,
+                                         map_combos)
+        for ruta in fallaron:
+            print("[keys] no se pudo releer el estado de %s" % ruta, flush=True)
+        print("[keys] %s: pulsados de verdad = %s"
+              % (por_que, sorted(pulsados) or "ninguno"), flush=True)
+
     ejes_on  = {k: False for k in list(DIR_KEYS) + list(dirs_teclas)}
+    # CUANTO SE MANTIENE PULSADA UNA TECLA QUE MANDAMOS NOSOTROS.
+    #
+    # El mismo ajuste que usa escribir_texto (WP_TECLEO_MS), a proposito: dos
+    # criterios distintos para lo mismo es lo que hace que una cosa se arregle
+    # y la otra se quede atras. 60 ms son casi cuatro fotogramas a 60 FPS.
+    import time as _tiempo
+    _HOLD_MS = tecleo_ms()
+    _soltar_luego = []   # [(cuando_soltar, [codigos])]
+    # El fichero por el que el panel de WProton pide "manda esta tecla". Se
+    # mira cada 80 ms como mucho: es un fichero que casi nunca esta, y
+    # preguntar por el en cada vuelta del bucle seria un stat cada milisegundo.
+    _tecla_marca = os.environ.get('WP_TECLA_MARCA', '')
+    _tecla_ult = [0.0]
+    if _tecla_marca:
+        try:
+            os.remove(_tecla_marca)      # de una partida anterior, si quedo
+        except OSError:
+            pass
+        print("[keys] el panel puede pedir teclas por %s" % _tecla_marca,
+              flush=True)
+
+    # EL MANDO PRESTADO AL PANEL.
+    #
+    # La captura de evdev es excluyente: la tiene uno o la tiene el otro. Si
+    # este mapeador la tiene, el panel de WProton abre SIN MANDO -"overlay
+    # ABIERTO (0 de 2 dispositivo(s) capturados)" en el registro de la prueba
+    # de Dani- y no se puede ni bajar por el menu. Asi que el panel la pide
+    # prestada: escribe "suelta" en este fichero, aqui se suelta, el panel la
+    # coge, y al cerrarse escribe "coge" y se recupera.
+    #
+    # Se mira con el mismo reloj que las teclas (80 ms): es un fichero que casi
+    # nunca esta y preguntar por el cada milisegundo seria un stat por vuelta.
+    _mando_marca = os.environ.get('WP_MANDO_MARCA', '')
+    _mando_ult = [0.0]
+    # Lo que se cedio, para saber si hay que recuperarlo y para no recuperar
+    # nada si nunca se capturo (un .keys de solo atajos no captura).
+    if _mando_marca:
+        try:
+            os.remove(_mando_marca)      # de una partida anterior, si quedo
+        except OSError:
+            pass
+        print("[keys] el panel puede pedir el mando prestado por %s"
+              % _mando_marca, flush=True)
 
     try:
         while True:
             r, _, _ = select.select(pads, [], [], 0.001)
+            # LAS TECLAS QUE TOCA SOLTAR YA. Ver el comentario de
+            # "_soltar_luego" mas abajo: se mantienen pulsadas un rato para que
+            # un juego que mira el teclado una vez por fotograma las vea, y se
+            # sueltan aqui sin parar el bucle.
+            if _soltar_luego:
+                _vencidas, _quedan = sueltas_vencidas(_soltar_luego,
+                                                      _tiempo.monotonic())
+                for _cuando, _codigos in _vencidas:
+                    for _t in _codigos:
+                        _tecla(_t, False)
+                    ui.syn()
+                _soltar_luego[:] = _quedan
+            # ¿NOS PIDE EL PANEL QUE MANDEMOS UNA TECLA?
+            #
+            # POR QUE ESTO ESTA AQUI Y NO EN EL PANEL. El panel la mandaba por
+            # XTEST, y eso funciona -cuando funciona- solo en X11: en Wayland
+            # el juego va por XWayland y en la prueba de Dani el registro dijo
+            # "mandada, pero el servidor X no la dio por pulsada". Un teclado
+            # de kernel (uinput) lo lee el compositor igual en X11 que en
+            # Wayland, y aqui ya hay uno abierto. Asi que la tecla la manda
+            # quien puede: nosotros.
+            #
+            # Se mira un fichero y no se abre un socket ni nada parecido
+            # porque es lo que ya se hace con el cierre y con el menu: tres
+            # ficheros y ninguna sorpresa.
+            if _tecla_marca and _tiempo.monotonic() - _tecla_ult[0] > 0.08:
+                _tecla_ult[0] = _tiempo.monotonic()
+                try:
+                    if os.path.exists(_tecla_marca):
+                        with open(_tecla_marca) as _fh:
+                            _pedida = _fh.read().strip()
+                        os.remove(_tecla_marca)
+                        _cods = []
+                        for _n in _pedida.split('+'):
+                            _n = _n.strip()
+                            _c = ecodes.ecodes.get(_n) if _n else None
+                            if _c is None:
+                                print("[keys] el panel pidio '%s' y no se "
+                                      "reconoce" % _n, flush=True)
+                                _cods = []
+                                break
+                            _cods.append(_c)
+                        if _cods:
+                            for _c in _cods:
+                                _tecla(_c, True)
+                            ui.syn()
+                            # Se suelta por la misma cola que todo lo demas:
+                            # mantenida el tiempo que un juego necesita para
+                            # verla, y sin dormir el bucle.
+                            _soltar_luego.append(
+                                (_tiempo.monotonic() + _HOLD_MS / 1000.0,
+                                 list(reversed(_cods))))
+                            print("[keys] el panel pidio %s: mandada por el "
+                                  "teclado virtual" % _pedida, flush=True)
+                except OSError as _e:
+                    print("[keys] no se pudo atender la tecla del panel: %s"
+                          % _e, flush=True)
+            # ¿NOS PIDE EL PANEL EL MANDO PRESTADO?
+            if _mando_marca and _tiempo.monotonic() - _mando_ult[0] > 0.08:
+                _mando_ult[0] = _tiempo.monotonic()
+                # RED DE SEGURIDAD: SI EL PANEL NO LO DEVUELVE, SE RECUPERA.
+                #
+                # El panel lo devuelve al cerrarse, y lo hace en un "finally",
+                # asi que se devuelve tambien si revienta. Pero si lo matan de
+                # golpe (kill -9) no llega a escribir nada, y sin esto el
+                # mapeador se quedaria sin mando el resto de la partida. El
+                # tope del panel es de 120 s de inactividad: con 180 s no se le
+                # quita a nadie que lo este usando.
+                if (_mando_cedido
+                        and _tiempo.monotonic() - _mando_desde[0] > 180.0):
+                    print("[keys] el panel no ha devuelto el mando en 180 s:"
+                          " se recupera", flush=True)
+                    for _d in list(_mando_cedido):
+                        try:
+                            _d.grab()
+                            _capturados.append(_d)
+                        except Exception:
+                            pass
+                    del _mando_cedido[:]
+                    _resincronizar_botones(_capturados,
+                                           "mando recuperado por tiempo")
+                try:
+                    if os.path.exists(_mando_marca):
+                        with open(_mando_marca) as _fh:
+                            _orden = _fh.read().strip().lower()
+                        os.remove(_mando_marca)
+                        if _orden == 'suelta':
+                            # Se apunta ANTES de soltar: si el ungrab falla en
+                            # uno de los dos mandos, el otro ya esta suelto y
+                            # hay que recordar que se le debe al mapeador.
+                            for _d in list(_capturados):
+                                _mando_cedido.append(_d)
+                                try:
+                                    _d.ungrab()
+                                except Exception:
+                                    pass
+                            del _capturados[:]
+                            _mando_desde[0] = _tiempo.monotonic()
+                            _olvidar_botones("el panel se lleva el mando")
+                            if _mando_cedido:
+                                print("[keys] mando cedido al panel de WProton"
+                                      " (%d)" % len(_mando_cedido), flush=True)
+                            else:
+                                print("[keys] el panel pidio el mando y aqui no"
+                                      " estaba capturado: no hay nada que"
+                                      " ceder", flush=True)
+                        elif _orden == 'coge':
+                            for _d in list(_mando_cedido):
+                                try:
+                                    _d.grab()
+                                    _capturados.append(_d)
+                                except Exception as _e2:
+                                    print("[keys] no se pudo recuperar %s: %s"
+                                          % (_d.path, _e2), flush=True)
+                            if _mando_cedido:
+                                print("[keys] mando recuperado del panel (%d de"
+                                      " %d)" % (len(_capturados),
+                                                len(_mando_cedido)), flush=True)
+                            del _mando_cedido[:]
+                            _resincronizar_botones(_capturados,
+                                                   "mando recuperado")
+                        else:
+                            print("[keys] el panel pidio '%s' con el mando y no"
+                                  " se reconoce" % _orden, flush=True)
+                except OSError as _e:
+                    print("[keys] no se pudo atender el mando del panel: %s"
+                          % _e, flush=True)
             for _dev in r:
                 try:
                     for event in _dev.read():
@@ -1836,6 +2428,30 @@ def main():
                                 pulsados.add(event.code)
                             elif event.value == 0:
                                 pulsados.discard(event.code)
+
+                            # EL MENU DE WPROTON, cuando el mando lo tenemos
+                            # capturado nosotros y el guardian no oye nada.
+                            #
+                            # No se abre desde aqui: se deja una marca y el
+                            # guardian -que es quien sabe pintar el panel- la
+                            # ve en su siguiente vuelta. Con un tiempo muerto
+                            # de dos segundos, porque mientras el panel esta
+                            # abierto los botones siguen llegando aqui y
+                            # pedirlo otra vez seria pedirlo cien veces.
+                            if (_ov_req and _ov_marca and event.value == 1
+                                    and all(_b in pulsados for _b in _ov_req)):
+                                import time as _t3
+                                if _t3.time() - _ov_ultimo[0] > 2.0:
+                                    _ov_ultimo[0] = _t3.time()
+                                    try:
+                                        with open(_ov_marca, 'w') as _fh:
+                                            _fh.write('abrir')
+                                        print("[keys] combinacion del menu: se"
+                                              " le pide al guardian que abra"
+                                              " el panel", flush=True)
+                                    except OSError as _e:
+                                        print("[keys] no se pudo pedir el menu:"
+                                              " %s" % _e, flush=True)
 
                             # Combos → teclado / acciones especiales
                             for c in map_combos:
@@ -1947,11 +2563,41 @@ def main():
                                     pendiente.add(event.code)
                                 elif event.value == 0 and event.code in pendiente:
                                     pendiente.discard(event.code)
+                                    # LA TECLA SE MANTIENE PULSADA UN RATO, NO
+                                    # SE PULSA Y SE SUELTA SEGUIDO.
+                                    #
+                                    # ESTE ERA EL FALLO DE "LO MAPEO Y NO
+                                    # FUNCIONA". Aqui se mandaba el pulsar y
+                                    # el soltar con microsegundos de por medio,
+                                    # y un juego que mira el teclado una vez
+                                    # por fotograma (16 ms a 60 FPS) no ve
+                                    # nada. Es el MISMO fallo que ya estaba
+                                    # arreglado en escribir_texto, con su
+                                    # mismo comentario: "por eso mapear una
+                                    # tecla a un boton SI funcionaba: la
+                                    # mantiene el usuario".
+                                    #
+                                    # Y por este camino NO la mantiene el
+                                    # usuario. Por aqui pasa todo boton que
+                                    # ADEMAS forme parte de una combinacion...
+                                    # o sea Select y Start SIEMPRE, porque
+                                    # WProton pone la combinacion hotkey+start
+                                    # en todos los juegos y hotkey ES Select.
+                                    # Resultado: mapear Select a una tecla no
+                                    # funcionaba en juegos antiguos. Lo conto
+                                    # un tester con El Torrente, que necesita
+                                    # el tabulador.
+                                    #
+                                    # NO SE DUERME EL BUCLE: se apunta cuando
+                                    # hay que soltarla y sigue leyendo el
+                                    # mando. Dormir 60 ms aqui dejaria sordo al
+                                    # mapeador justo mientras alguien juega.
                                     for t in map_normal[event.code]:
                                         _tecla(t, True)
                                     ui.syn()
-                                    for t in map_normal[event.code]:
-                                        _tecla(t, False)
+                                    _soltar_luego.append(
+                                        (_tiempo.monotonic() + _HOLD_MS / 1000.0,
+                                         list(map_normal[event.code])))
                             elif event.value == 0:
                                 pendiente.discard(event.code)
 
@@ -2175,7 +2821,7 @@ def main():
                                                 print("[keys] %s -> %s %s "
                                                       "(la tienen %d control(es))"
                                                       % (direction,
-                                                         ecodes.KEY.get(t, t),
+                                                         nombre_ev(t),
                                                          "PULSAR" if active else "soltar",
                                                          _ref.get(t, 0)),
                                                       flush=True)

@@ -482,6 +482,19 @@ K_HDR, K_UP2, K_CANCEL, K_DIR, K_FILE, K_PLAIN = range(6)
 HEADER_KINDS = (K_HDR, K_UP2, K_CANCEL)
 
 items = []          # [tipo, texto, marcado]
+# SEGUNDA LINEA DE UNA FILA: el dato corto que acompaña a la opcion.
+#
+# Viene en la misma linea del fichero de opciones, detras de un TABULADOR:
+#
+#     /home/dani/Descargas/WProton/games\t48.0 GB libres
+#
+# Y se dibuja debajo del texto, en pequeño y apagado. Sin esto, una fila como
+# "/ruta/larga  [48.0 GB libres]" se partia en cuatro filas -la ruta, "[48.0",
+# "GB" y "libres]"- porque quien la construia no podia saber que no cabia.
+#
+# Lo que se devuelve al elegir sigue siendo SOLO el texto de la primera linea:
+# el dato es informacion, no parte de la respuesta.
+SUBS = {}           # indice de fila -> segunda linea
 view = []           # indices visibles según el filtro de busqueda
 cur_path = ''
 sel, scroll = 0, 0
@@ -522,7 +535,10 @@ def load_options():
                 on, _, txt = l.partition('|')
                 items.append([K_PLAIN, txt, on == '1'])
             else:
-                items.append([K_PLAIN, l, False])
+                txt, _tab, sub = l.partition('\t')
+                if sub.strip():
+                    SUBS[len(items)] = sub.strip()
+                items.append([K_PLAIN, txt, False])
     apply_filter()
 
 def load_dir(path):
@@ -611,6 +627,7 @@ def load_request_data():
     sel = scroll = 0
     kb_open = False
     kb_r = kb_c = 0
+    SUBS.clear()
     if MODE in ('progress', 'text', 'canvas'):
         return
     if MODE == 'browse':
@@ -2575,6 +2592,7 @@ T_FONT = None
 T_LH = 30
 HEAD = 70
 ROW = 40
+SUB_H = 0
 PANEL_UI = False
 ARCADE = False
 TOP = HEAD
@@ -2588,11 +2606,18 @@ def compute_layout():
     # Recalcula todo lo que depende del titulo y del modo de esta peticion
     global TITLE_LINES, T_FONT, T_LH, HEAD, ROW, PANEL_UI, ARCADE, TOP
     global LIST_X, LIST_Y, LIST_W, LIST_H, SIDE_X, SIDE_W, VIS_FULL, VIS_KB
+    global SUB_H
     T_FONT = f_tit if len(TITLE) < 60 else f_it
     TITLE_LINES = wrap_title(TITLE, T_FONT, 912)
     T_LH = FS(34) if T_FONT is f_tit else FS(30)
     HEAD = int(22 * FSCALE) + len(TITLE_LINES) * T_LH + 14
     ROW = max(TH['row'], int(TH['row'] * FSCALE))
+    # Si alguna fila trae segunda linea, TODAS las filas crecen lo mismo: el
+    # alto de fila es uno solo para toda la lista -de el salen cuantas caben,
+    # donde empieza cada una y donde cae el raton-, asi que hacerlo por filas
+    # descuadraria las tres cosas a la vez.
+    SUB_H = (f_sm.get_height() + FS(2)) if SUBS else 0
+    ROW += SUB_H
     PANEL_UI = TH.get('layout') in ('panel', 'arcade')
     ARCADE = TH.get('layout') == 'arcade'
     TOP = (HEAD + 30) if MODE == 'browse' else HEAD
@@ -3428,12 +3453,44 @@ def run_session():
 
     if MODE == 'progress':
         # Ventana de espera: lee "pct|texto" del fichero de estado hasta DONE
+        #
+        # Y SE PUEDE CANCELAR, SI QUIEN LA ABRIO LO PERMITE.
+        #
+        # Lo pidio Dani (30/10): "estaria bien un boton de cancelar descarga,
+        # en este momento me estoy dando conexion desde el movil a la Deck, por
+        # eso la descarga es lenta, asi que estaria bien poder probar que coge
+        # la descarga y cancelar".
+        #
+        # SOLO donde tiene sentido. Esta misma ventana la usan tambien la
+        # instalacion del runtime y el empaquetado, y cortar eso por la mitad
+        # deja cosas a medias. Por eso hace falta que quien la abre pase
+        # "cancelable": hoy solo lo hacen las descargas, que se pueden tirar y
+        # volver a empezar sin consecuencias.
+        #
+        # El aviso va por un fichero aparte -el de estado lo reescribe bash
+        # cada segundo y se llevaria por delante lo que escribieramos aqui-.
+        cancelable = (len(sys.argv) > 5 and sys.argv[5] == 'cancelable')
+        cancel_f = ARG4 + '.cancel'
+        cancelando = False
         bar_pct, bar_txt = 0, L('Preparando...', 'Preparing...')
         clock2 = pygame.time.Clock()
         while True:
             for ev in eventos():
                 if ev.type == pygame.QUIT:
                     pygame.quit(); sys.exit(0)
+                # B en el mando llega aqui como ESCAPE: lo traduce el lector
+                # de /dev/input (RAW_BTN), asi que con mirar la tecla valen
+                # las dos cosas, mando y teclado.
+                if (cancelable and not cancelando
+                        and ev.type == pygame.KEYDOWN
+                        and ev.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE)):
+                    try:
+                        with open(cancel_f, 'w', encoding='utf-8') as fh:
+                            fh.write('1\n')
+                        cancelando = True
+                    except Exception as e:
+                        sys.stderr.write('menu_pygame: no se pudo pedir la '
+                                         'cancelacion (%s)\n' % e)
             try:
                 with open(ARG4, encoding='utf-8') as fh:
                     raw = fh.readline().rstrip('\n')
@@ -3463,7 +3520,15 @@ def run_session():
                                  (bx + max(0, min(bw - 140, xx - 70)), by, 140, bh), border_radius=RAD)
             if bar_pct:
                 screen.blit(f_sm.render('%d%%' % bar_pct, True, DIM), (bx, by + bh + 8))
-            screen.blit(f_sm.render(L('Espera, esto puede tardar...', 'Please wait, this may take a while...'), True, DIM), (24, H - 40))
+            if cancelando:
+                _pie = L('Cancelando...', 'Cancelling...')
+            elif cancelable:
+                _pie = L('Espera, esto puede tardar...   B: cancelar',
+                         'Please wait, this may take a while...   B: cancel')
+            else:
+                _pie = L('Espera, esto puede tardar...',
+                         'Please wait, this may take a while...')
+            screen.blit(f_sm.render(_pie, True, DIM), (24, H - 40))
             if SCANSURF is not None:
                 screen.blit(SCANSURF, (0, 0))
             pygame.display.flip()
@@ -4013,6 +4078,10 @@ def run_session():
                 draw_row_text(label, f_it, color, _tx, _ty, _tw, i == sel)
             else:
                 draw_segments(row_segments(label, color), f_it, _tx, _ty, _tw, i == sel)
+            _sub = SUBS.get(view[i])
+            if _sub:
+                draw_row_text(_sub, f_sm, DIM, _tx, _ty + f_it.get_height() - FS(2),
+                              _tw, False)
         if not view and FILTER:
             screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
                         (LIST_X + 14, LIST_Y + 14))
@@ -4626,8 +4695,15 @@ def cursor_pantallas():
     return nombres
 
 
-def cursor_abrir():
+def cursor_abrir(runtime=None):
     """Prepara el escondido del puntero mientras se juega. Devuelve estado o None.
+
+    $runtime = carpeta runtime/ de WProton, para poder mirar la marca
+    ".raton_mando" que deja el mapeador cuando el stick hace de raton. Va por
+    FICHERO y no solo por variable de entorno porque el vigilante arranca
+    ANTES que el mapeador: cuando se lee el entorno, el mapeador todavia no ha
+    dicho nada. Con el fichero se entera igual, y ademas si el mapeador se
+    para a mitad de partida.
 
     LA TERCERA, Y ESTA VEZ MIRANDO LO QUE PASA DE VERDAD
     ====================================================
@@ -4683,12 +4759,34 @@ def cursor_abrir():
         umbral = 8
     if umbral < 0:
         umbral = 0
+    # ¿EL MANDO ESTA HACIENDO DE RATON EN ESTE JUEGO?
+    #
+    # Lo pone WProton al lanzar (WP_RATON_MANDO=1) cuando el juego lleva el
+    # stick o el trackpad mapeados como raton: o por su .keys, o porque se
+    # activo "el mando como raton" para un lanzador que hay que pulsar.
+    #
+    # CAMBIA LA REGLA DE ARRIBA DEL TODO, y por eso hay que saberlo aqui.
+    # La norma "si llegan eventos del mando, quien juega no esta en el raton,
+    # con un segundo quieto basta" es correcta... salvo justo en este caso,
+    # donde el mando ES el raton: ahi los eventos del mando son la persona
+    # moviendo el puntero, y esconderselo al segundo es lo contrario de lo que
+    # hace falta.
+    #
+    # Lo conto Dani con un juego en el que el lanzador se maneja con el stick:
+    # "por defecto aparece la X y si mueves el raton sale el cursor bien, pero
+    # con el mando no sale ese cursor".
+    raton_mando = os.environ.get('WP_RATON_MANDO') in ('1', 'si', 'yes', 'on')
+    marca_raton = os.path.join(runtime, '.raton_mando') if runtime else None
     nombres = cursor_pantallas()
     if not nombres:
         return None
     try:
         import ctypes, ctypes.util
         x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+        # Un error de PROTOCOLO de X no se devuelve: Xlib llama a exit(). Esto
+        # lo desactiva, y hace falta aqui tambien: este proceso tiene que
+        # sobrevivir a que X se queje, porque es el que cierra el juego.
+        x_errores_callados(x11)
         fixes = ctypes.CDLL(ctypes.util.find_library('Xfixes') or 'libXfixes.so.3')
         x11.XOpenDisplay.restype = ctypes.c_void_p
         x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
@@ -4809,13 +4907,19 @@ def cursor_abrir():
         return None
     sys.stderr.write('menu_pygame: el puntero se escondera tras %.1f s sin '
                      'moverlo mas de %d px, y volvera en cuanto lo muevas; '
-                     'con el mando en la mano, a 1 s. En %d pantalla(s): %s\n'
-                     % (segundos, umbral, len(pantallas),
+                     '%s. En %d pantalla(s): %s\n'
+                     % (segundos, umbral,
+                        'el mando hace de raton, asi que sus eventos NO lo '
+                        'esconden antes' if raton_mando
+                        else 'con el mando en la mano, a 1 s',
+                        len(pantallas),
                         '; '.join('%s [%s]' % (p['nombre'], p['version'])
                                   for p in pantallas)))
     return {'ctypes': ctypes, 'x11': x11, 'fixes': fixes,
             'pantallas': pantallas, 'segundos': segundos, 'umbral': umbral,
             'wayland': wayland, 'sesion': sesion or 'x11', 'err': guardia_err,
+            'raton_mando': raton_mando, 'marca_raton': marca_raton,
+            'marca_vista': None, 'marca_hay': False,
             'fallos': fallos,
             'pos': None, 'quieto_desde': None, 'oculto': False,
             'mirado': None, 'mando': 0, 'mando_desde': None,
@@ -4955,7 +5059,26 @@ def cursor_tapar(estado, p):
 
 
 def cursor_destapar(estado, p):
-    """Quita el cursor transparente para que el juego vuelva a poner el suyo."""
+    """Quita el cursor transparente para que el juego vuelva a poner el suyo.
+
+    Y LE DA UN EMPUJON DE UN PIXEL AL PUNTERO, QUE NO ES UN ADORNO
+    ==============================================================
+    XUndefineCursor no "devuelve" el cursor que el juego tenia: lo que hace es
+    que la ventana vuelva a HEREDAR el del padre, y el padre, subiendo, es la
+    ventana raiz... cuyo cursor por omision es LA X de las X. De ahi sale la
+    queja de Dani, literal: "en este juego por defecto aparece la X y si mueves
+    el raton sale el cursor bien, pero con el mando no sale ese cursor".
+
+    Cuando mueves el raton, el juego recibe movimiento, Wine le manda
+    WM_SETCURSOR y el juego vuelve a poner el suyo: la X desaparece. O sea que
+    lo que hace falta es justo eso, un movimiento, y no hay que esperar a que
+    lo haga la persona: se mueve el puntero UN pixel y se devuelve.
+
+    Un pixel esta por debajo del umbral con el que esta funcion decide si "lo
+    esta moviendo alguien" (8 px), asi que este empujon no se cuenta a si mismo
+    como movimiento y no reinicia nada. Y se hace SOLO cuando habiamos tapado
+    el cursor nosotros: si no lo tapamos, no hay nada que devolver.
+    """
     if not p.get('tapada'):
         return
     ctypes = estado['ctypes']
@@ -4965,6 +5088,29 @@ def cursor_destapar(estado, p):
     except Exception:
         pass
     p['tapada'] = 0
+    if os.environ.get('WP_CURSOR_EMPUJON') == '0':
+        return
+    try:
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        if not estado['x11'].XQueryPointer(
+                ctypes.c_void_p(p['dpy']), p['raiz'],
+                ctypes.byref(rr), ctypes.byref(cr),
+                ctypes.byref(rx), ctypes.byref(ry),
+                ctypes.byref(wx), ctypes.byref(wy), ctypes.byref(mk)):
+            return
+        x, y = rx.value, ry.value
+        estado['x11'].XWarpPointer(ctypes.c_void_p(p['dpy']), 0, p['raiz'],
+                                   0, 0, 0, 0, x + 1, y)
+        estado['x11'].XWarpPointer(ctypes.c_void_p(p['dpy']), 0, p['raiz'],
+                                   0, 0, 0, 0, x, y)
+        estado['x11'].XFlush(ctypes.c_void_p(p['dpy']))
+        estado['empujones'] = estado.get('empujones', 0) + 1
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo empujar el puntero para que '
+                         'el juego repinte su cursor (%s)\n' % e)
 
 
 def cursor_poner(estado, oculto):
@@ -5031,14 +5177,44 @@ def cursor_informe(estado, ahora, pos):
         '%d. Si los movimientos no paran de subir, algo mueve el raton solo '
         '(Steam Input, un trackpad haciendo de raton o un stick que deriva) y '
         'por eso no se esconde: sube CURSOR_UMBRAL. Si NO suben, es que se '
-        'manda esconder y algo lo vuelve a pintar.\n'
+        'manda esconder y algo lo vuelve a pintar. El mando como raton: %s; '
+        'empujones de un pixel para que el juego repinte su cursor: %d.\n'
         % (ahora - estado['t0'], estado['sesion'],
            ahora - estado['quieto_desde'],
            estado['segundos'], estado['movidas'], estado['umbral'],
            estado['temblores'],
            ', '.join('%s=%s' % (p['nombre'], q)
                      for p, q in zip(estado['pantallas'], pos or ())),
-           estado['mando'], estado['fallos'][0]))
+           estado['mando'], estado['fallos'][0],
+           'SI (no se esconde por sus eventos)'
+           if cursor_raton_mando(estado, ahora) else 'no',
+           estado.get('empujones', 0)))
+
+
+def cursor_raton_mando(estado, ahora):
+    """¿El mando esta haciendo de raton ahora mismo?
+
+    Dos fuentes y basta con una:
+      - WP_RATON_MANDO=1, que pone WProton al lanzar cuando ya lo sabe.
+      - la marca ".raton_mando" de la carpeta runtime, que escribe el mapeador
+        al arrancar con un .keys que trae bloque de raton. Hace falta porque el
+        vigilante arranca ANTES que el mapeador.
+
+    La marca se mira como mucho una vez por segundo: esto se llama cinco veces
+    por segundo y un stat cada vuelta es gasto para nada.
+    """
+    if estado.get('raton_mando'):
+        return True
+    f = estado.get('marca_raton')
+    if not f:
+        return False
+    if estado['marca_vista'] is None or ahora - estado['marca_vista'] >= 1.0:
+        estado['marca_vista'] = ahora
+        try:
+            estado['marca_hay'] = os.path.exists(f)
+        except Exception:
+            estado['marca_hay'] = False
+    return estado['marca_hay']
 
 
 def cursor_vigilar(estado, ahora, mando=0):
@@ -5109,8 +5285,16 @@ def cursor_vigilar(estado, ahora, mando=0):
         # movimiento de verdad, en vez de reiniciar la cuenta cada vez.
         estado['temblores'] += 1
     espera = estado['segundos']
-    if estado['mando_desde'] is not None and ahora - estado['mando_desde'] < 5:
-        # Con el mando en la mano no hay que esperar tanto.
+    if (estado['mando_desde'] is not None
+            and ahora - estado['mando_desde'] < 5
+            and not cursor_raton_mando(estado, ahora)):
+        # Con el mando en la mano no hay que esperar tanto...
+        #
+        # ...PERO NO CUANDO EL MANDO ES EL RATON. Ahi los eventos del mando
+        # son la persona moviendo el puntero: acortar la espera a 1 s hacia
+        # que el cursor desapareciera justo mientras se apunta a un boton del
+        # lanzador, que es exactamente para lo que se puso el stick como
+        # raton. Con WP_RATON_MANDO=1 manda la espera normal.
         espera = min(espera, 1.0)
     if not estado['oculto'] and ahora - estado['quieto_desde'] >= espera:
         if cursor_poner(estado, True):
@@ -5182,7 +5366,3071 @@ def reloj_salida(desde, pulsado, soltado, ahora, segundos):
     return (desde, ahora - desde >= segundos)
 
 
-def guardia(marca, segundos=5.0, combo='select'):
+# ===========================================================================
+# EL OVERLAY: un menu encima del juego SIN quitarle el teclado
+# ===========================================================================
+#
+# QUE RESUELVE
+#
+# Jugando no hay forma de llegar a WProton. Para cambiar algo -o para cerrar
+# un juego que se ha colgado- hay que salir, y en el modo Juego de la Deck,
+# sin teclado, "salir" a veces es apagar. Esto pone un panel a la izquierda
+# que se invoca con una combinacion y tiene a mano lo que hace falta ahi.
+#
+# LOS DOS DESASTRES ANTERIORES, QUE ES POR LO QUE ESTO SE HACE ASI
+#
+# Ya hubo dos intentos de poner algo nuestro delante del juego -el teclado en
+# pantalla- y los dos acabaron mal:
+#
+#   1. UNA VENTANA A PANTALLA COMPLETA LE ROBA EL FOCO AL JUEGO. Las teclas
+#      del mapeador y las del teclado real dejaban de llegarle, y un juego en
+#      ventana parecia esconderse detras. Por eso el teclado en pantalla se
+#      sustituyo por el "texto rapido", que no abre ventana.
+#
+#   2. MANTENER UNA CONEXION GRAFICA ABIERTA DURANTE LA PARTIDA acababa en
+#      "XIO: fatal IO error" cuando gamescope reconfigura su XWayland (lo hace
+#      al entrar y salir de un juego). Se lleva el proceso por delante.
+#
+# Asi que aqui:
+#
+#   - la ventana es ESTRECHA y solo existe mientras el menu esta abierto. Se
+#     crea al invocarlo y se destruye al cerrarlo. Fuera de eso, el guardia
+#     sigue siendo lo que era: un lector de /dev/input sin ventana.
+#   - se le pide al gestor de ventanas que NO le de el foco, por la via
+#     documentada (EWMH): tipo NOTIFICATION, estado ABOVE y WM_HINTS con
+#     input=False. Eso es lo que usan los avisos del escritorio para flotar
+#     encima sin robar el teclado.
+#   - con gamescope se pide ademas su capa de overlay externo
+#     (GAMESCOPE_EXTERNAL_OVERLAY=1), que es la via documentada para que una
+#     aplicacion de fuera pinte encima del juego; es la que usa mangoapp.
+#     OJO: mangoapp la coge y no la suelta (fallo conocido de MangoHud), asi
+#     que en el modo Juego puede estar ocupada. Si no se consigue, la ventana
+#     sale por la via normal y el menu se usa igual.
+#   - se navega POR EVDEV, no por los eventos de la ventana. Asi funciona
+#     aunque la ventana no reciba el foco nunca, que es justo lo que le
+#     estamos pidiendo al gestor de ventanas.
+#   - y mientras el menu esta abierto se CAPTURA el mando y el teclado
+#     (EVIOCGRAB), para que moverte por el menu no mueva tambien al personaje.
+#     Al cerrar se suelta; y si el proceso muere, el nucleo lo suelta solo al
+#     cerrarse los descriptores, asi que no puede quedarse un mando muerto.
+#
+# LO QUE NO PUEDE HACER, Y CONVIENE QUE ESTE ESCRITO
+#
+# MAKO y HelixSR NO se pueden encender en un juego ya arrancado: MAKO es una
+# capa de Vulkan que se inyecta con variables de entorno AL LANZAR, y HelixSR
+# es una DLL dentro de la carpeta del juego que se carga al arrancar. Las filas
+# del menu dicen "para la proxima partida" porque es la verdad; lo que hacen es
+# apuntarlo, y WProton lo aplica al terminar la partida.
+
+# Los dispositivos que creamos NOSOTROS por uinput, por su nombre en
+# minusculas. El mapeador crea estos teclados y raton virtuales; leerlos seria
+# leer lo que nosotros mismos escribimos.
+PROPIOS = ('mapeador_kb', 'tecladovirtual_ds', 'mapeador_mouse',
+           'wproton_raton')
+
+# Codigos de boton del mando (linux/input-event-codes.h)
+# OJO: X=307 (la de ARRIBA) e Y=308 (la de la IZQUIERDA), que es la
+# convencion que ya usan el editor de teclas y los .keys de WProton. En
+# evdev estos codigos se llaman BTN_NORTH y BTN_WEST, y que letra les toca
+# depende del mando; aqui manda lo que ya estaba escrito en el proyecto,
+# porque el nombre que ensene este menu tiene que ser el mismo que el del
+# editor o nadie entendera que ha asignado.
+BTN_A, BTN_B, BTN_X, BTN_Y = 304, 305, 307, 308
+BTN_L1, BTN_R1 = 310, 311
+BTN_SELECT, BTN_START, BTN_GUIDE = 314, 315, 316
+BTN_L3, BTN_R3 = 317, 318
+# ...y de tecla
+K_ESC, K_W, K_M, K_ENTER = 1, 17, 50, 28
+K_LCTRL, K_LSHIFT, K_LALT = 29, 42, 56
+K_F12, K_UP, K_DOWN, K_KPENTER = 88, 103, 108, 96
+
+# Combinaciones del mando para abrir el overlay. Se eligen en los ajustes.
+#
+# POR QUE NINGUNA ES UN BOTON SOLO (salvo Guide): el mando se lo esta
+# comiendo el juego. Cualquier boton suelto que valga para abrir el menu es un
+# boton que el juego ya usa para algo. Con dos, y uno de ellos Select, no se
+# pisa nada: Select en un juego o no hace nada o abre el mapa.
+OVERLAY_COMBOS = {
+    'select_l1': ((BTN_SELECT, BTN_L1), 'Select+L1'),
+    'select_r1': ((BTN_SELECT, BTN_R1), 'Select+R1'),
+    'select_l3': ((BTN_SELECT, BTN_L3), 'Select+L3'),
+    'select_y':  ((BTN_SELECT, BTN_Y), 'Select+Y'),
+    'l3r3':      ((BTN_L3, BTN_R3), 'L3+R3'),
+    # El boton de Steam/Guide a secas. En el ESCRITORIO es perfecto -no lo usa
+    # nadie-, pero en el modo Juego lo captura Steam y aqui no llega nunca.
+    'guide':     ((BTN_GUIDE,), 'el boton Steam'),
+}
+# Y por teclado, para quien juega en el escritorio con teclado y raton.
+OVERLAY_TECLAS = {
+    'ctrl_alt_w':  ((K_LCTRL, K_LALT, K_W), 'Ctrl+Alt+W'),
+    'ctrl_alt_m':  ((K_LCTRL, K_LALT, K_M), 'Ctrl+Alt+M'),
+    'shift_f12':   ((K_LSHIFT, K_F12), 'Mayus+F12'),
+    'ctrl_esc':    ((K_LCTRL, K_ESC), 'Ctrl+Esc'),
+}
+
+
+def overlay_combo(nombre, cuales=None):
+    """Traduce el nombre de una combinacion a (codigos, como se escribe).
+
+    Devuelve (None, '') si esta apagada o no se reconoce, que es lo que mira
+    quien llama para no vigilarla.
+    """
+    tabla = OVERLAY_COMBOS if cuales is None else cuales
+    if not nombre or nombre in ('no', 'off', '0', 'ninguna'):
+        return None, ''
+    par = tabla.get(nombre)
+    if not par:
+        return None, ''
+    return par[0], par[1]
+
+
+def find_raw_keys():
+    """Los TECLADOS, igual que find_raw_pads hace con los mandos.
+
+    Hace falta porque la combinacion del overlay tambien se puede pulsar en el
+    teclado, y durante la partida no tenemos ventana donde recibir teclas: hay
+    que leer /dev/input como hacemos con el mando.
+
+    Se cogen los dispositivos con manejador "kbd" y se deja UNO por aparato
+    fisico, igual que con los mandos. Entran cosas que no son teclados -el
+    boton de encendido, el bus de video, los botones de un portatil- y no
+    pasa nada: la combinacion tiene que llegar ENTERA del mismo dispositivo, y
+    de un boton de encendido no va a salir nunca un Ctrl+Alt+W.
+
+    Los mandos se quedan FUERA aunque digan "kbd": algunos (los de Steam) se
+    anuncian a la vez como teclado, y si entraran por aqui se leerian dos
+    veces.
+
+    Y NUESTROS PROPIOS TECLADOS, TAMBIEN FUERA. El mapeador crea teclados por
+    uinput para convertir el mando en pulsaciones ("Mapeador_KB_Portable",
+    "TecladoVirtual_DS"). Son dispositivos de teclado como cualquier otro, asi
+    que entrarian aqui, y entonces estariamos leyendo lo que nosotros mismos
+    escribimos: un fichero .keys que mandara Ctrl, Alt y W -o el texto rapido
+    pasando por ahi- podria abrir el menu sin que nadie entendiera por que. La
+    combinacion del overlay se espera de un teclado DE VERDAD.
+    """
+    teclados = []
+    vistos = set()
+    try:
+        bloques = open('/proc/bus/input/devices').read().split('\n\n')
+    except OSError:
+        return teclados
+    for b in bloques:
+        nombre, ev, es_kbd, es_js, phys = '', None, False, False, ''
+        for linea in b.split('\n'):
+            if linea.startswith('N:'):
+                nombre = linea.lower()
+            elif linea.startswith('P:'):
+                phys = linea.split('=', 1)[-1].strip().split('/')[0]
+            elif linea.startswith('H:'):
+                l2 = linea.replace('=', ' ')
+                if ' kbd' in l2:
+                    es_kbd = True
+                if ' js' in l2:
+                    es_js = True
+                for tok in l2.split():
+                    if tok.startswith('event'):
+                        ev = tok
+        if not (es_kbd and ev) or es_js:
+            continue
+        if any(k in nombre for k in BAD_DEV + PROPIOS):
+            continue
+        clave = phys or ev
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        teclados.append('/dev/input/' + ev)
+    return teclados
+
+
+# EVIOCGRAB: el ioctl que pide un dispositivo en exclusiva.
+#
+# _IOW('E', 0x90, int) = 0x40044590. Se calcula a mano porque no hay modulo
+# que lo traiga en una instalacion pelada de python.
+EVIOCGRAB = 0x40044590
+
+
+def overlay_capturar(fds, tomar, quejarse=True):
+    """Pide (o suelta) los dispositivos en exclusiva. Devuelve cuantos cogio.
+
+    POR QUE HACE FALTA: mientras el menu esta abierto, el mando sigue llegando
+    al juego. Sin esto, bajar por el menu baja tambien por el inventario del
+    juego, y pulsar A elige en los dos sitios.
+
+    POR QUE NO ES PELIGROSO: la captura vive en el DESCRIPTOR. Si este proceso
+    muere -incluso con un kill -9-, el nucleo cierra los descriptores y la
+    suelta. No hay forma de dejar el mando muerto.
+
+    Es "lo mejor que se pueda": si un dispositivo no se deja capturar se
+    apunta y se sigue. Un menu que se mueve de dos en dos es molesto; un menu
+    que no abre es inservible.
+    """
+    import fcntl
+    n = 0
+    for p, fd in list(fds.items()):
+        try:
+            fcntl.ioctl(fd, EVIOCGRAB, 1 if tomar else 0)
+            n += 1
+        except (OSError, IOError) as e:
+            # $quejarse: los reintentos mientras el mapeador suelta el mando
+            # pasan por aqui veinte veces, y veinte lineas iguales en el
+            # registro no cuentan nada que no contara la primera.
+            if quejarse:
+                sys.stderr.write('menu_pygame: overlay: no se pudo %s %s (%s)\n'
+                                 % ('capturar' if tomar else 'soltar', p, e))
+    return n
+
+
+def overlay_mando_pedir(marca, orden):
+    """Le dice al mapeador 'suelta' o 'coge' el mando. Devuelve si pudo."""
+    if not marca:
+        return False
+    try:
+        tmp = marca + '.tmp'
+        with open(tmp, 'w') as fh:
+            fh.write(orden)
+        os.replace(tmp, marca)
+        return True
+    except OSError as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo pedir el mando al '
+                         'mapeador (%s): %s\n' % (orden, e))
+        return False
+
+
+def overlay_mando_coger(fds, marca='', espera=1.5):
+    """Coge los mandos; si los tiene el mapeador, se los pide prestados.
+
+    POR QUE HACE FALTA. La captura de evdev es excluyente: la tiene uno o la
+    tiene el otro. Si el .keys captura el mando -o si el panel acaba de
+    arrancar el mapeador para asignar una tecla-, el panel abria asi:
+
+      menu_pygame: overlay: no se pudo capturar /dev/input/event8 (busy)
+      menu_pygame: overlay ABIERTO (0 de 2 dispositivo(s) capturados)
+
+    Un panel abierto que no responde al mando. Era lo que describio Dani:
+    "al activarlo es cuando luego pierde el foco al invocar el menu de nuevo".
+
+    Asi que se le pide: el mapeador suelta, y aqui se reintenta hasta que
+    entra. $espera es el tope; si no llega a tiempo se abre con lo que haya,
+    porque un menu a medias sigue siendo mejor que ningun menu.
+
+    Devuelve (cuantos se cogieron, si se le pidio prestado). Lo segundo hace
+    falta para devolverselo al cerrar: si no se le pidio nada, no hay que
+    decirle que lo coja -se quedaria capturando un mando que el .keys no
+    queria capturar-.
+    """
+    cogidos = overlay_capturar(fds, True, quejarse=False)
+    if not fds or cogidos >= len(fds):
+        return cogidos, False
+    if not marca or not overlay_mapeador_vivo():
+        # Nadie a quien pedirselo: se avisa de lo que no se cogio y se sigue.
+        return overlay_capturar(fds, True), False
+    if not overlay_mando_pedir(marca, 'suelta'):
+        return overlay_capturar(fds, True), False
+    sys.stderr.write('menu_pygame: overlay: el mapeador tiene el mando; se le '
+                     'pide prestado\n')
+    t0 = time.time()
+    while time.time() - t0 < espera:
+        time.sleep(0.05)
+        cogidos = overlay_capturar(fds, True, quejarse=False)
+        if cogidos >= len(fds):
+            sys.stderr.write('menu_pygame: overlay: mando prestado por el '
+                             'mapeador tras %.2f s\n' % (time.time() - t0))
+            return cogidos, True
+    # Se queja una sola vez, al final, y de lo que de verdad no entro.
+    return overlay_capturar(fds, True), True
+
+
+def overlay_estado_leer(ruta):
+    """Lee el fichero de estado que deja WProton al lanzar el juego.
+
+    CLAVE=valor por linea. Lo escribe bash porque el guardia arranca en un
+    proceso aparte y no ve sus variables; por fichero se entera igual, y
+    ademas se puede releer si cambia a mitad de partida.
+    """
+    d = {}
+    try:
+        with open(ruta) as fh:
+            for linea in fh:
+                linea = linea.strip()
+                if not linea or linea.startswith('#') or '=' not in linea:
+                    continue
+                k, v = linea.split('=', 1)
+                d[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return d
+
+
+def overlay_tiempo(desde):
+    """"1h 23m" a partir del instante en que arranco el juego."""
+    try:
+        seg = time.time() - float(desde)
+    except (TypeError, ValueError):
+        return ''
+    if seg < 0 or seg > 60 * 60 * 72:
+        return ''
+    m = int(seg // 60)
+    if m < 1:
+        return 'acabas de empezar'
+    if m < 60:
+        return '%d min' % m
+    return '%dh %02dm' % (m // 60, m % 60)
+
+
+# ---------------------------------------------------------------------------
+# MANDAR TECLAS AL JUEGO, Y ASIGNAR UNA TECLA AL MANDO SIN SALIR
+# ---------------------------------------------------------------------------
+#
+# DE DONDE SALE ESTO: de un informe de tester que seguia abierto.
+#
+#   "En el torrente hay que usar el tabulador y no puedo remapearlo, lo mapeo
+#    pero no funciona, no se que pasa"
+#
+# El .keys ya se arreglo por otro lado -las teclas se mantenian pulsadas
+# microsegundos-, pero quedaba el problema de fondo: para probar un mapeo hay
+# que salir del juego, editarlo, volver a entrar, y repetir. Desde aqui se
+# hace en caliente y se ve al momento si funciona.
+#
+# POR QUE XTEST Y NO UN TECLADO uinput
+#
+# Un teclado de kernel (uinput) es lo que usa el mapeador y funciona en el
+# escritorio, pero en el modo Juego el XWayland del juego NO recibe nada de un
+# dispositivo de kernel: esta contado entero en mapeador.py (RatonXTest).
+# XTEST inyecta el evento DENTRO del servidor X, asi que llega a la ventana
+# que tenga el foco, que es el juego.
+#
+# Y UNA HONESTIDAD SOBRE EL INTENTO ANTERIOR: el raton por XTEST se probo y
+# salio PEOR, pero por una razon que no se traslada a las teclas. El puntero
+# que se VE en el modo Juego no es el del XWayland del juego, asi que mover
+# ese movia uno invisible. Una tecla no tiene ese problema: no hay "dos
+# teclados", hay una ventana con el foco. Aun asi no se da por supuesto: cada
+# envio se COMPRUEBA preguntandole al servidor X si la tecla consta como
+# pulsada (XQueryKeymap), y lo que se vea se dice en el panel y en el
+# registro.
+
+# Los botones del mando, con EL NOMBRE QUE USA WPROTON en los .keys.
+#
+# OJO CON X E Y, que es una trampa de verdad: en evdev los codigos se llaman
+# BTN_NORTH (307) y BTN_WEST (308), y que LETRA les toca depende del mando -en
+# uno de Xbox la de arriba es Y, en uno de Nintendo es X-. WProton ya tomo
+# partido en su editor de teclas y en sus .keys: "x" es la de ARRIBA (307) e
+# "y" la de la IZQUIERDA (308). Aqui se usa exactamente la misma tabla, porque
+# lo que escriba este menu lo tiene que entender el mapeador.
+OV_BOTONES = [('a', 304, 'A (abajo)'),
+              ('b', 305, 'B (derecha)'),
+              ('x', 307, 'X (arriba)'),
+              ('y', 308, 'Y (izquierda)'),
+              ('pageup', 310, 'L1'),
+              ('pagedown', 311, 'R1'),
+              ('l2', 312, 'L2 (gatillo izq.)'),
+              ('r2', 313, 'R2 (gatillo der.)'),
+              ('l3', 317, 'L3 (stick izq. pulsado)'),
+              ('r3', 318, 'R3 (stick der. pulsado)'),
+              ('start', 315, 'Start'),
+              ('select', 314, 'Select')]
+
+# Las teclas que se pueden mandar. Tres datos por tecla:
+#
+#   - el nombre KEY_*, que es el que entienden los .keys y el mapeador. Asi lo
+#     que se asigna aqui se puede GUARDAR para la proxima partida sin traducir
+#     nada.
+#   - como se llama en cristiano.
+#   - sus keysym de X, que es lo que necesita XTEST. Una tupla, porque hay
+#     entradas de dos teclas (Alt+Enter).
+# TODAS las teclas, por grupos. Lo pidio Dani al probarlo: "estaria bien poder
+# elegir todas las teclas y no solo unas pocas porque asi se podria mapear al
+# vuelo". Antes habia quince; ahora estan las que un juego puede pedir.
+#
+# POR GRUPOS Y NO EN UNA LISTA: con letras, numeros y signos son mas de
+# noventa, y noventa filas en un panel estrecho no se recorren con la cruceta.
+#
+# Cada tecla lleva tres datos:
+#
+#   - el nombre KEY_*, que es el que entienden los .keys y el mapeador. Asi lo
+#     que se asigna aqui se puede GUARDAR sin traducir nada.
+#   - como se llama en cristiano.
+#   - sus keysym de X, que es lo que necesita XTEST para mandarla. Una tupla,
+#     porque hay entradas de dos teclas (Alt+Enter).
+#
+# Los keysym de las letras y los numeros son su propio codigo ASCII, y los de
+# las teclas con nombre estan en X11/keysymdef.h.
+
+# Etiqueta interna del grupo que NO es un grupo: las teclas que se ensenan
+# sueltas en la primera pantalla. No se ensena nunca este texto.
+OV_DIRECTAS = 'Directas'
+
+
+def _ov_teclas_tabla():
+    """Arma la tabla de teclas. Devuelve [(grupo, nombre, etiqueta, keysyms)]."""
+    t = []
+    # Letras y numeros: el keysym es el ASCII de la minuscula.
+    for c in 'abcdefghijklmnopqrstuvwxyz':
+        t.append(('Letras', 'KEY_%s' % c.upper(), c.upper(), (ord(c),)))
+    for c in '0123456789':
+        t.append(('Numeros', 'KEY_%s' % c, c, (ord(c),)))
+    # Las teclas F.
+    for n in range(1, 13):
+        t.append(('Teclas F', 'KEY_F%d' % n, 'F%d' % n, (0xFFBE + n - 1,)))
+    # LAS CINCO QUE MAS SE BUSCAN NO VAN EN NINGUN GRUPO: se ensenan sueltas en
+    # la primera pantalla, antes de los grupos.
+    #
+    # Estaban en un grupo llamado "Las de siempre" y Dani lo corto: "no me
+    # gusta el termino las de siempre, es demasiado vago". Y el problema de
+    # fondo era peor que el nombre: no son una categoria de nada -¿que tienen
+    # en comun un tabulador y un retroceso?-, asi que cualquier nombre iba a
+    # ser vago. Sueltas arriba se ahorran una pulsacion y no hay que
+    # bautizarlas.
+    #
+    # El grupo "Directas" es solo una etiqueta interna para saber cuales son:
+    # no se ensena nunca, porque no tienen fila de grupo.
+    for nom, etq, ks in (('KEY_TAB', 'Tabulador', 0xFF09),
+                         ('KEY_ENTER', 'Enter', 0xFF0D),
+                         ('KEY_ESC', 'Escape', 0xFF1B),
+                         ('KEY_SPACE', 'Espacio', 0x0020),
+                         ('KEY_BACKSPACE', 'Retroceso', 0xFF08)):
+        t.append((OV_DIRECTAS, nom, etq, (ks,)))
+    # Flechas y navegacion.
+    for nom, etq, ks in (('KEY_UP', 'Flecha arriba', 0xFF52),
+                         ('KEY_DOWN', 'Flecha abajo', 0xFF54),
+                         ('KEY_LEFT', 'Flecha izquierda', 0xFF51),
+                         ('KEY_RIGHT', 'Flecha derecha', 0xFF53),
+                         ('KEY_HOME', 'Inicio', 0xFF50),
+                         ('KEY_END', 'Fin', 0xFF57),
+                         ('KEY_PAGEUP', 'Pagina arriba', 0xFF55),
+                         ('KEY_PAGEDOWN', 'Pagina abajo', 0xFF56),
+                         ('KEY_INSERT', 'Insertar', 0xFF63),
+                         ('KEY_DELETE', 'Suprimir', 0xFFFF)):
+        t.append(('Flechas y navegacion', nom, etq, (ks,)))
+    # Modificadores. Sueltos tienen sentido: hay juegos que piden mantener
+    # Shift para correr o Ctrl para agacharse.
+    for nom, etq, ks in (('KEY_LEFTSHIFT', 'Mayus (izq.)', 0xFFE1),
+                         ('KEY_RIGHTSHIFT', 'Mayus (der.)', 0xFFE2),
+                         ('KEY_LEFTCTRL', 'Control (izq.)', 0xFFE3),
+                         ('KEY_RIGHTCTRL', 'Control (der.)', 0xFFE4),
+                         ('KEY_LEFTALT', 'Alt (izq.)', 0xFFE9),
+                         ('KEY_RIGHTALT', 'Alt Gr', 0xFFEA),
+                         ('KEY_LEFTMETA', 'Tecla Windows', 0xFFEB),
+                         ('KEY_CAPSLOCK', 'Bloq Mayus', 0xFFE5)):
+        t.append(('Modificadores', nom, etq, (ks,)))
+    # Signos: los nombres KEY_* son los de evdev y los keysym, su ASCII.
+    for nom, etq, ks in (('KEY_MINUS', 'Guion  -', ord('-')),
+                         ('KEY_EQUAL', 'Igual  =', ord('=')),
+                         ('KEY_LEFTBRACE', 'Corchete  [', ord('[')),
+                         ('KEY_RIGHTBRACE', 'Corchete  ]', ord(']')),
+                         ('KEY_SEMICOLON', 'Punto y coma  ;', ord(';')),
+                         ('KEY_APOSTROPHE', 'Comilla  \'', ord("'")),
+                         ('KEY_GRAVE', 'Acento grave  `', ord('`')),
+                         ('KEY_BACKSLASH', 'Barra invertida  \\', 0x5C),
+                         ('KEY_COMMA', 'Coma  ,', ord(',')),
+                         ('KEY_DOT', 'Punto  .', ord('.')),
+                         ('KEY_SLASH', 'Barra  /', ord('/'))):
+        t.append(('Signos', nom, etq, (ks,)))
+    # El teclado numerico, que algunos juegos antiguos usan para todo.
+    for n in range(0, 10):
+        t.append(('Teclado numerico', 'KEY_KP%d' % n, 'Num %d' % n,
+                  (0xFFB0 + n,)))
+    for nom, etq, ks in (('KEY_KPENTER', 'Num Enter', 0xFF8D),
+                         ('KEY_KPPLUS', 'Num +', 0xFFAB),
+                         ('KEY_KPMINUS', 'Num -', 0xFFAD),
+                         ('KEY_KPASTERISK', 'Num *', 0xFFAA),
+                         ('KEY_KPSLASH', 'Num /', 0xFFAF),
+                         ('KEY_KPDOT', 'Num .', 0xFFAE)):
+        t.append(('Teclado numerico', nom, etq, (ks,)))
+    # Los clics del raton. El mapeador los sabe mandar desde hace tiempo -crea
+    # el raton virtual el solo al verlos en un .keys-, asi que se pueden
+    # ASIGNAR. Mandarlos "ahora" es otra llamada de XTEST distinta y no se
+    # ofrece: un clic sin saber donde esta el puntero no sirve de nada.
+    for nom, etq in (('BTN_LEFT', 'Clic izquierdo'),
+                     ('BTN_RIGHT', 'Clic derecho'),
+                     ('BTN_MIDDLE', 'Clic central (rueda)')):
+        t.append(('Raton', nom, etq, ()))
+    # Y las de dos teclas: se pueden mandar, pero no guardar en un .keys -alli
+    # cada accion manda UNA tecla-.
+    for nom, etq, ks in (('ALT_ENTER', 'Alt+Enter (pantalla completa)',
+                          (0xFFE9, 0xFF0D)),
+                         ('ALT_F4', 'Alt+F4 (cerrar la ventana)',
+                          (0xFFE9, 0xFFC1)),
+                         ('CTRL_S', 'Control+S (guardar)',
+                          (0xFFE3, ord('s')))):
+        t.append(('Combinaciones', nom, etq, ks))
+    return t
+
+
+OV_TECLAS_TODAS = _ov_teclas_tabla()
+# Los grupos, en el orden en que se ensenan. "Las de siempre" primero porque
+# es donde esta el tabulador, que es el caso que trajo todo esto.
+OV_GRUPOS = []
+for _g, _n, _e, _k in OV_TECLAS_TODAS:
+    if _g != OV_DIRECTAS and _g not in OV_GRUPOS:
+        OV_GRUPOS.append(_g)
+# La tabla sin el grupo, que es como la usa el resto del codigo.
+OV_TECLAS = [(n, e, k) for _g, n, e, k in OV_TECLAS_TODAS]
+
+
+def ov_grupo_de(nombre):
+    """A que grupo pertenece una tecla. '' si no esta."""
+    for g, n, _e, _k in OV_TECLAS_TODAS:
+        if n == nombre:
+            return g
+    return ''
+
+
+def ov_tecla(nombre):
+    """Busca una tecla de la tabla por su nombre. Devuelve la fila o None."""
+    for fila in OV_TECLAS:
+        if fila[0] == nombre:
+            return fila
+    return None
+
+
+def ov_tecla_asignable(nombre):
+    """¿Se puede ASIGNAR esta tecla a un boton y guardarla en el .keys?
+
+    Los clics del raton SI: el mapeador los manda desde hace tiempo y crea el
+    raton virtual el solo al verlos en un .keys.
+
+    Lo que NO cabe en un .keys son las combinaciones: alli cada accion manda
+    UNA tecla, asi que Alt+Enter se puede mandar en el momento pero no
+    asignar, y el menu no la ofrece para eso.
+    """
+    f = ov_tecla(nombre)
+    if not f:
+        return False
+    if nombre.startswith('BTN_'):
+        return True
+    return nombre.startswith('KEY_') and len(f[2]) == 1
+
+
+def ov_tecla_enviable(nombre):
+    """¿Se puede MANDAR ahora mismo por XTEST?
+
+    Las teclas si. Los clics del raton no se ofrecen: un clic sin saber donde
+    esta el puntero no sirve de nada, y mandarlo es otra llamada distinta.
+    """
+    f = ov_tecla(nombre)
+    return bool(f) and bool(f[2])
+
+
+def overlay_tecla_por_mapeador(marca, nombre):
+    """Le pide al mapeador que mande la tecla por su teclado virtual.
+
+    Devuelve True si se le pidio (no si el juego la recibio: eso no se puede
+    saber desde aqui).
+
+    POR QUE ESTA ES LA VIA BUENA Y XTEST EL RESPALDO. Un teclado de kernel
+    (uinput) lo lee el compositor igual en X11 que en Wayland; XTEST solo
+    existe en X11, y en la prueba de Dani -Wayland con KDE- el servidor X ni
+    siquiera daba la tecla por pulsada. El mapeador ya tiene un teclado
+    virtual abierto, asi que la manda quien puede.
+
+    Hace falta que el mapeador este en marcha. Si no lo esta no hay nada que
+    pedirle, y quien llama se va a XTEST.
+    """
+    if not marca:
+        return False
+    try:
+        with open(marca, 'w') as fh:
+            fh.write(nombre + '\n')
+        sys.stderr.write('menu_pygame: overlay: %s pedida al mapeador (teclado '
+                         'virtual)\n' % nombre)
+        return True
+    except OSError as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo pedir %s al '
+                         'mapeador (%s)\n' % (nombre, e))
+        return False
+
+
+def overlay_mapeador_vivo():
+    """¿Hay un mapeador corriendo al que pedirle teclas?
+
+    Se mira el /proc en vez de fiarse de un fichero de marca: el mapeador
+    puede haberse caido, y pedirle una tecla a un proceso que no esta seria
+    escribir un fichero que nadie lee y decirle al usuario que ya esta.
+    """
+    try:
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit():
+                continue
+            try:
+                with open('/proc/%s/cmdline' % pid, 'rb') as fh:
+                    trozos = fh.read().split(b'\0')
+            except OSError:
+                continue
+            # SE MIRA ARGUMENTO POR ARGUMENTO, no la linea entera como texto.
+            #
+            # Buscar la subcadena "mapeador.py" en la linea de ordenes da
+            # falsos positivos con cualquier proceso que NOMBRE el fichero -un
+            # editor, un grep, una prueba-, y entonces el panel le pediria la
+            # tecla a un mapeador que no existe y diria que ya esta. Lo pillo
+            # la suite: una orden de shell que mencionaba el fichero bastaba.
+            for t in trozos:
+                if t.rsplit(b'/', 1)[-1] == b'mapeador.py':
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def overlay_tecla_enviar(display, nombre):
+    """Manda una tecla al juego por XTEST. Devuelve (ok, lo que paso).
+
+    EL ENVIO SE COMPRUEBA, no se da por hecho. Entre la pulsacion y la
+    soltada se le pregunta al servidor X si esa tecla consta como pulsada
+    (XQueryKeymap). Asi, cuando alguien diga "le doy y el juego no hace nada",
+    el registro ya distingue los tres casos que importan:
+
+      - no se pudo inyectar          -> es nuestro (o no hay XTEST)
+      - se inyecto y el servidor la da por pulsada, pero el juego no reacciona
+                                     -> es del juego, o del foco, o de la
+                                        pantalla equivocada
+      - no hay keycode para esa tecla -> el teclado de esa pantalla no la tiene
+
+    Sin esto, los tres se parecen desde fuera y se tarda una tarde en
+    separarlos. Con esto lo dice el registro de la primera partida.
+    """
+    import ctypes
+    import ctypes.util
+    fila = ov_tecla(nombre)
+    if not fila:
+        return (False, 'esa tecla no esta en la tabla')
+    keysyms = fila[2]
+    if not keysyms:
+        return (False, 'un clic del raton no se manda desde aqui; asignalo a '
+                       'un boton')
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+        # Un error de PROTOCOLO de X no se devuelve: Xlib llama a exit(). Esto
+        # lo desactiva, y hace falta aqui tambien: este proceso tiene que
+        # sobrevivir a que X se queje, porque es el que cierra el juego.
+        x_errores_callados(x11)
+        xtst = ctypes.CDLL(ctypes.util.find_library('Xtst') or 'libXtst.so.6')
+    except OSError as e:
+        return (False, 'faltan libX11 o libXtst (%s)' % e)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XKeysymToKeycode.restype = ctypes.c_ubyte
+    x11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    xtst.XTestQueryExtension.argtypes = ([ctypes.c_void_p]
+                                         + [ctypes.POINTER(ctypes.c_int)] * 4)
+    xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                       ctypes.c_int, ctypes.c_ulong]
+    dpy = x11.XOpenDisplay(display.encode() if display else None)
+    if not dpy:
+        return (False, 'no se pudo abrir la pantalla %s' % (display or '(la de siempre)'))
+    try:
+        a, b, c, d = (ctypes.c_int() for _ in range(4))
+        if not xtst.XTestQueryExtension(dpy, ctypes.byref(a), ctypes.byref(b),
+                                        ctypes.byref(c), ctypes.byref(d)):
+            return (False, 'la pantalla %s no tiene XTEST'
+                    % (display or '(la de siempre)'))
+        codigos = []
+        for ks in keysyms:
+            kc = int(x11.XKeysymToKeycode(dpy, ctypes.c_ulong(ks)))
+            if kc == 0:
+                return (False, 'el teclado de esa pantalla no tiene la tecla '
+                               '%s' % nombre)
+            codigos.append(kc)
+        # Pulsar en orden (los modificadores primero, por eso el orden de la
+        # tabla importa) y soltar al reves.
+        for kc in codigos:
+            xtst.XTestFakeKeyEvent(dpy, kc, 1, 0)
+        x11.XSync(dpy, 0)
+        # LA COMPROBACION: ¿consta pulsada?
+        mapa = ctypes.create_string_buffer(32)
+        consta = False
+        try:
+            x11.XQueryKeymap(dpy, mapa)
+            kc = codigos[-1]
+            consta = bool(mapa.raw[kc >> 3] & (1 << (kc & 7)))
+        except Exception:
+            consta = False
+        for kc in reversed(codigos):
+            xtst.XTestFakeKeyEvent(dpy, kc, 0, 0)
+        x11.XFlush(dpy)
+        x11.XSync(dpy, 0)
+        if consta:
+            return (True, 'mandada y el servidor X la dio por pulsada')
+        # NO CONSTA: aqui es donde hay que dejar escrito TODO lo que se sabe,
+        # porque es el caso que paso en la prueba de Dani y el que no se puede
+        # diagnosticar desde fuera. El dato que lo decide es QUIEN TIENE EL
+        # FOCO en esta pantalla: si el foco es de una ventana del juego, el
+        # envio esta llegando donde debe y el problema es otro; si no hay foco
+        # o es de otra, estamos inyectando en el sitio equivocado.
+        try:
+            x11.XGetInputFocus.argtypes = [ctypes.c_void_p,
+                                           ctypes.POINTER(ctypes.c_ulong),
+                                           ctypes.POINTER(ctypes.c_int)]
+            _w = ctypes.c_ulong(); _r = ctypes.c_int()
+            x11.XGetInputFocus(dpy, ctypes.byref(_w), ctypes.byref(_r))
+            _nom = ctypes.c_char_p()
+            x11.XFetchName.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                       ctypes.POINTER(ctypes.c_char_p)]
+            x11.XFetchName(dpy, _w, ctypes.byref(_nom))
+            _t = (_nom.value or b'').decode('utf-8', 'replace')
+            if _nom:
+                try:
+                    x11.XFree(ctypes.cast(_nom, ctypes.c_void_p))
+                except Exception:
+                    pass
+            sys.stderr.write('menu_pygame: overlay: la tecla %s (keycode %d) no '
+                             'consta pulsada en %s. El foco lo tiene la ventana '
+                             '0x%x%s\n'
+                             % (nombre, codigos[-1],
+                                display or '(la de siempre)', _w.value,
+                                ' ("%s")' % _t if _t else ' (sin titulo)'))
+        except Exception as _e:
+            sys.stderr.write('menu_pygame: overlay: la tecla %s no consta '
+                             'pulsada y no se pudo mirar el foco (%s)\n'
+                             % (nombre, _e))
+        return (True, 'mandada, pero el servidor X no la dio por pulsada')
+    except Exception as e:
+        return (False, 'fallo al mandar la tecla (%s)' % e)
+    finally:
+        try:
+            x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
+
+def overlay_orden_mandar(marca, orden, espera=3.0):
+    """Le pasa una orden a WProton por la marca. Devuelve True si la cogio.
+
+    LA MARCA ES DE UN SOLO HUECO y WProton la mira cada 0,4 s, asi que dos
+    ordenes seguidas se pisarian: la segunda machacaria la primera antes de que
+    nadie la hubiera leido. Aqui se espera a que desaparezca -que es como
+    WProton dice "leida"- antes de escribir la siguiente, y si no desaparece
+    se dice en vez de perder la orden en silencio.
+    """
+    t0 = time.time()
+    while os.path.exists(marca):
+        if time.time() - t0 > espera:
+            sys.stderr.write('menu_pygame: overlay: WProton no ha leido la '
+                             'orden anterior; "%s" no se manda\n' % orden)
+            return False
+        time.sleep(0.05)
+    try:
+        with open(marca, 'w') as fh:
+            fh.write(orden + '\n')
+        sys.stderr.write('menu_pygame: overlay: pedido a WProton: %s\n' % orden)
+        return True
+    except OSError as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo pedir "%s" (%s)\n'
+                         % (orden, e))
+        return False
+
+def overlay_filas_de(pantalla, estado, asignadas=None, grupo=''):
+    """Las filas de CADA pantalla del menu. Devuelve (filas, titulo).
+
+    El panel tiene cuatro pantallas y no una: la principal, la lista de teclas
+    para mandar una al juego, la misma lista para asignarla, y la lista de
+    botones al que asignarsela. Se hace con listas de filas y no con cuatro
+    funciones de dibujo porque la pintura ya sabe pintar una lista.
+
+    AQUI HUBO DOS FILAS MAS -MAKO y HelixSR "para la proxima partida"- Y SE
+    HAN QUITADO. Lo dijo Dani: "lo de Mako y Helix lo quitaria porque da igual
+    hacerlo de opciones de juego". Y tenia razon: no se pueden encender en un
+    juego ya arrancado -MAKO es una capa de Vulkan que se inyecta al lanzar y
+    HelixSR una DLL que se carga al arrancar-, asi que la fila solo podia
+    APUNTARLO para la siguiente, que es exactamente lo que ya hace el menu de
+    ajustes del juego. Dos sitios para lo mismo, y el de aqui el peor: en
+    medio de la partida y sin poder ver el resto de los ajustes.
+
+    LA REGLA QUE DEJA ESTO, y que decide que entra y que no: en este menu va
+    lo que solo se puede hacer DURANTE la partida. Lo que se puede hacer igual
+    de bien antes o despues, se queda en los ajustes del juego.
+    """
+    # LAS TECLAS, EN DOS NIVELES: primero el grupo y luego la tecla.
+    #
+    # Son 104, porque Dani pidio que estuvieran todas -"asi se podria mapear al
+    # vuelo"-. Ciento cuatro filas en un panel estrecho no se recorren con la
+    # cruceta ni con paciencia, asi que primero se elige el grupo. "Las de
+    # siempre" va primero: ahi esta el tabulador, que es el caso que trajo
+    # todo esto.
+    if pantalla == 'mandar_grupo':
+        filas = [('volver_menu', '<< Volver')]
+        # Las cinco que mas se buscan, SUELTAS y arriba: una pulsacion menos y
+        # sin tener que bautizarlas con un nombre vago.
+        filas += [('tecla:%s' % n, etq) for g, n, etq, _k in OV_TECLAS_TODAS
+                  if g == OV_DIRECTAS and ov_tecla_enviable(n)]
+        for g in OV_GRUPOS:
+            if any(gg == g and ov_tecla_enviable(n)
+                   for gg, n, _e, _k in OV_TECLAS_TODAS):
+                filas.append(('grupo_m:%s' % g, g + ' >>'))
+        return filas, 'Mandar una tecla al juego'
+    if pantalla == 'mandar':
+        filas = [('volver_menu', '<< Volver')]
+        filas += [('tecla:%s' % n, etq) for g, n, etq, _k in OV_TECLAS_TODAS
+                  if g == grupo and ov_tecla_enviable(n)]
+        return filas, 'Mandar: %s' % grupo
+    if pantalla == 'asignar_grupo':
+        filas = [('volver_menu', '<< Volver')]
+        filas += [('atecla:%s' % n, etq) for g, n, etq, _k in OV_TECLAS_TODAS
+                  if g == OV_DIRECTAS and ov_tecla_asignable(n)]
+        for g in OV_GRUPOS:
+            if any(gg == g and ov_tecla_asignable(n)
+                   for gg, n, _e, _k in OV_TECLAS_TODAS):
+                filas.append(('grupo_a:%s' % g, g + ' >>'))
+        return filas, 'Que tecla le asignas al mando'
+    if pantalla == 'asignar_tecla':
+        filas = [('volver_menu', '<< Volver')]
+        filas += [('atecla:%s' % n, etq) for g, n, etq, _k in OV_TECLAS_TODAS
+                  if g == grupo and ov_tecla_asignable(n)]
+        return filas, 'Asignar: %s' % grupo
+    if pantalla == 'asignar_boton':
+        filas = [('volver_menu', '<< Volver')]
+        for corto, _cod, etq in OV_BOTONES:
+            ya = (asignadas or {}).get(corto)
+            filas.append(('aboton:%s' % corto,
+                          etq + (' (ahora: %s)' % ya if ya else '')))
+        return filas, 'A que boton'
+    # La principal.
+    filas = [('volver', 'Volver al juego'),
+             ('foto', 'Captura de pantalla'),
+             ('mandar', 'Mandar una tecla al juego >>'),
+             ('asignar', 'Asignar una tecla al mando >>')]
+    if asignadas:
+        filas.append(('quitar', 'Quitar las %d tecla(s) asignadas'
+                      % len(asignadas)))
+    filas.append(('copia', 'Copia de la partida guardada'))
+    filas.append(('salir', 'Cerrar el juego'))
+    filas.append(('matar', 'Forzar el cierre (el juego no responde)'))
+    return filas, ''
+
+
+def overlay_ventana_filas(n, sel, cuantas_caben):
+    """Que trozo de una lista larga se ensena. Devuelve (primera, ultima+1).
+
+    La lista de teclas no cabe en el panel, asi que se ensena una ventana
+    alrededor de lo seleccionado. Sin esto, elegir F12 era imposible: la fila
+    estaba pintada por debajo del borde del panel.
+    """
+    if cuantas_caben <= 0 or n <= cuantas_caben:
+        return 0, n
+    # Se deja lo elegido mas o menos en el centro, sin salirse por los bordes.
+    ini = sel - cuantas_caben // 2
+    ini = max(0, min(ini, n - cuantas_caben))
+    return ini, ini + cuantas_caben
+
+
+# ===========================================================================
+# LO QUE ESTA PASANDO EN LA MAQUINA
+# ===========================================================================
+#
+# CPU, memoria, temperatura y bateria, para ensenarlos en la cabecera del
+# panel. En una maquina de mano eso no es adorno: saber que quedan diez
+# minutos de bateria, o que la CPU lleva un rato clavada al 100%, cambia lo
+# que uno hace a continuacion, y el panel es justo el sitio donde ya se
+# decide (cerrar el juego, hacer una copia de la partida).
+#
+# TODO SE LEE DE /proc Y DE /sys, A MANO, Y ESO ES A PROPOSITO.
+#
+# La forma comoda seria psutil, pero psutil es una dependencia que hay que
+# instalar, y WProton tiene que funcionar tal cual se descomprime. Leer estos
+# cuatro datos son unas ochenta lineas de biblioteca estandar, asi que no hay
+# nada que decidir: no se mete una dependencia para ahorrarse ochenta lineas.
+#
+# Y NADA DE ESTO PUEDE REVENTAR EL MENU. Un fichero que no existe -una maquina
+# sin bateria, un nucleo sin ese sensor, un contenedor sin /sys- devuelve None
+# y esa linea no sale. El menu tiene que poder cerrar un juego colgado aunque
+# no haya ni un sensor en la maquina.
+#
+# El parametro "raiz" solo existe para poder probar esto: con una carpeta de
+# mentira delante se puede comprobar que un Ryzen con Tctl, una Deck con
+# bateria o un /proc raro se leen bien, sin depender de la maquina donde se
+# ejecuten las pruebas.
+# ---------------------------------------------------------------------------
+_SIS = {'cuando': 0.0, 'trozos': [], 'cpu_antes': None,
+        'apuntados': False}
+
+# LOS SENSORES, EN DOS GRUPOS Y POR ESE ORDEN, y el orden es lo que importa.
+#
+# Primero los que miden LA CPU y nada mas: en AMD k10temp (o zenpower, el
+# modulo de fuera), en Intel coretemp. Si hay uno de esos, es el bueno.
+SIS_HWMON_CPU = ('k10temp', 'zenpower', 'zenpower3', 'coretemp', 'cpu_thermal')
+# Y si no hay ninguno, el del conjunto: en una Steam Deck la CPU y la GPU son
+# la misma pieza -una APU- y no hay k10temp; lo que hay es el sensor del chip
+# entero (amdgpu) y el de la placa (steamdeck_hwmon). Estos van DESPUES a
+# proposito: en un sobremesa con grafica dedicada, amdgpu es la GPU y no la
+# CPU, asi que solo se usa cuando no hay nada mejor.
+SIS_HWMON_SOC = ('amdgpu', 'steamdeck_hwmon', 'acpitz', 'soc_thermal',
+                 'thermal-fan-est')
+# Y dentro del sensor, la etiqueta buena, por este orden. En un Ryzen, temp1
+# puede ser Tctl -la que importa- o un sensor de otra cosa segun el modelo; y
+# en una APU la que vale es "edge" o "APU".
+SIS_ETIQUETAS = ('Tctl', 'Tdie', 'Package id 0', 'CPU', 'APU', 'edge',
+                 'junction')
+
+
+def _sis_leer(ruta):
+    """El contenido de un fichero de /proc o /sys, o None. No revienta nunca."""
+    try:
+        with open(ruta) as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+
+
+def sistema_cpu(raiz=''):
+    """Cuanto se esta usando la CPU, en tanto por ciento. None si no se sabe.
+
+    SE MIDE POR DIFERENCIA, porque /proc/stat no da un porcentaje: da el tiempo
+    acumulado desde que arranco la maquina. Asi que la primera llamada no puede
+    contestar -no hay con que comparar- y devuelve None; de la segunda en
+    adelante, si. Por eso tambien conviene llamarla siempre al mismo ritmo: si
+    se llamara cada 30 ms, el porcentaje saltaria como un loco.
+    """
+    crudo = _sis_leer(raiz + '/proc/stat')
+    if not crudo:
+        return None
+    primera = crudo.split('\n', 1)[0].split()
+    if len(primera) < 5 or primera[0] != 'cpu':
+        return None
+    try:
+        n = [int(v) for v in primera[1:11]]
+    except ValueError:
+        return None
+    total = sum(n)
+    # Parado es "idle" mas "iowait": en los dos, la maquina no esta haciendo
+    # cuentas. Meter iowait en el lado ocupado daria 100% a un juego que solo
+    # esta esperando al disco, que es justo lo contrario de lo que pasa.
+    quieto = n[3] + n[4]
+    antes = _SIS['cpu_antes']
+    _SIS['cpu_antes'] = (total, quieto)
+    if antes is None or total < antes[0]:
+        return None
+    d_total = total - antes[0]
+    d_quieto = quieto - antes[1]
+    if d_total <= 0:
+        return None
+    return max(0, min(100, int(round(100.0 * (d_total - d_quieto) / d_total))))
+
+
+def sistema_ram(raiz=''):
+    """(usados, total) en GB. None si no se sabe."""
+    crudo = _sis_leer(raiz + '/proc/meminfo')
+    if not crudo:
+        return None
+    datos = {}
+    for linea in crudo.split('\n'):
+        partes = linea.split()
+        if len(partes) >= 2 and partes[0].endswith(':'):
+            try:
+                datos[partes[0][:-1]] = int(partes[1])
+            except ValueError:
+                pass
+    total = datos.get('MemTotal')
+    libre = datos.get('MemAvailable')
+    if libre is None:
+        # Los nucleos anteriores a 2014 no traen MemAvailable. Se aproxima con
+        # lo que si traen; no es exacto, pero es mejor que no ensenar nada.
+        libre = datos.get('MemFree')
+        if libre is not None:
+            libre += datos.get('Cached', 0) + datos.get('Buffers', 0)
+    if not total or libre is None:
+        return None
+    return ((total - libre) / 1048576.0, total / 1048576.0)
+
+
+def _sis_grados(ruta):
+    """Un fichero tempN_input, en grados. None si no vale."""
+    crudo = _sis_leer(ruta)
+    if crudo is None:
+        return None
+    try:
+        v = int(crudo.strip())
+    except ValueError:
+        return None
+    # Vienen en milesimas de grado. Un valor absurdo -0, o 200 grados- es un
+    # sensor que no esta midiendo nada, y ensenarlo seria peor que callarse.
+    v = v / 1000.0
+    if v < 5 or v > 150:
+        return None
+    return v
+
+
+def _sis_temp_de(d):
+    """La temperatura de UN hwmon concreto. None si ese no sirve."""
+    try:
+        ficheros = sorted(os.listdir(d))
+    except OSError:
+        return None
+    # Las etiquetas primero, que es lo fiable, y en el orden de SIS_ETIQUETAS:
+    # si un sensor ofrece Tctl y edge, Tctl es la buena.
+    etiquetas = {}
+    for f in ficheros:
+        if f.endswith('_label'):
+            nombre = (_sis_leer(d + '/' + f) or '').strip()
+            if nombre:
+                etiquetas.setdefault(nombre, f[:-len('_label')] + '_input')
+    for e in SIS_ETIQUETAS:
+        if e in etiquetas:
+            v = _sis_grados(d + '/' + etiquetas[e])
+            if v is not None:
+                return v
+    # Y si ese sensor no etiqueta nada, el primero que haya.
+    for f in ficheros:
+        if f.startswith('temp') and f.endswith('_input'):
+            v = _sis_grados(d + '/' + f)
+            if v is not None:
+                return v
+    return None
+
+
+def sistema_temp(raiz=''):
+    """La temperatura en grados. None si no hay ningun sensor que valga.
+
+    DOS PASADAS Y EN ESTE ORDEN: primero los sensores que miden solo la CPU, y
+    solo si no hay ninguno, el del chip entero. En una Steam Deck no hay
+    k10temp -la CPU y la GPU son la misma pieza- y lo que hay es amdgpu; en un
+    sobremesa con grafica dedicada, amdgpu es la GPU y seria un numero
+    equivocado. Con las dos pasadas, cada equipo da el suyo.
+    """
+    base = raiz + '/sys/class/hwmon'
+    try:
+        hwmons = sorted(os.listdir(base))
+    except OSError:
+        return None
+    nombres = [(h, (_sis_leer(base + '/' + h + '/name') or '').strip())
+               for h in hwmons]
+    for grupo in (SIS_HWMON_CPU, SIS_HWMON_SOC):
+        for h, nombre in nombres:
+            if nombre in grupo:
+                v = _sis_temp_de(base + '/' + h)
+                if v is not None:
+                    return v
+    return None
+
+
+def sistema_sensores(raiz=''):
+    """Todo lo que hay en /sys/class/hwmon, para el registro.
+
+    POR QUE SE APUNTA ESTO. Los sensores se llaman distinto en cada maquina, y
+    cuando en un equipo no sale la temperatura no hay forma de saber por que
+    sin mirar lo que ese equipo tiene. Pedirle a quien prueba que abra una
+    terminal y liste /sys es justo lo que WProton existe para evitar: se apunta
+    solo, una vez, y el registro ya lo dice.
+    """
+    base = raiz + '/sys/class/hwmon'
+    salida = []
+    try:
+        hwmons = sorted(os.listdir(base))
+    except OSError:
+        return salida
+    for h in hwmons:
+        d = base + '/' + h
+        nombre = (_sis_leer(d + '/name') or '').strip() or '?'
+        medidas = []
+        try:
+            ficheros = sorted(os.listdir(d))
+        except OSError:
+            ficheros = []
+        for f in ficheros:
+            if not (f.startswith('temp') and f.endswith('_input')):
+                continue
+            etq = (_sis_leer(d + '/' + f[:-len('_input')] + '_label')
+                   or '').strip() or f[:-len('_input')]
+            v = _sis_grados(d + '/' + f)
+            medidas.append((etq, v))
+        salida.append((h, nombre, medidas))
+    return salida
+
+
+# El ayudante con permisos de SteamOS. Steam lo usa para tocar el limite de
+# potencia y otras cosas del sistema desde un proceso sin privilegios.
+SIS_AYUDANTE_VALVE = '/usr/bin/steamos-polkit-helpers/steamos-priv-write'
+
+
+def sistema_tdp(raiz=''):
+    """Lo que se puede saber del limite de potencia. None si no hay ninguno.
+
+    Devuelve (ruta, vatios, minimo, maximo, se_puede_escribir).
+
+    POR QUE ESTO ESTA AQUI Y NO HAY TODAVIA UN AJUSTE DE TDP: porque lo que
+    decide si se puede hacer no es el codigo, son los PERMISOS, y eso cambia de
+    una maquina a otra. El fichero es de root; que un proceso normal pueda
+    escribirlo depende de si la distribucion trae una regla de udev que lo
+    abra. Averiguarlo preguntandole a quien prueba "ejecuta esto en una
+    terminal" es justo lo que WProton existe para evitar, asi que se mira solo
+    y se apunta en el registro. Con esa linea se decide; sin ella se adivina.
+
+    OJO CON EL ULTIMO CAMPO: os.access dice si ESTE proceso puede escribir, y
+    root puede escribir cualquier cosa. Como WProton corre como usuario normal
+    la respuesta es la buena, pero si alguien lo lanzara como root el registro
+    diria que si sin que eso signifique que un usuario pueda.
+    """
+    base = raiz + '/sys/class/hwmon'
+    try:
+        hwmons = sorted(os.listdir(base))
+    except OSError:
+        return None
+
+    def microvatios(ruta):
+        crudo = _sis_leer(ruta)
+        if crudo is None:
+            return None
+        try:
+            return int(crudo.strip())
+        except ValueError:
+            return None
+
+    for h in hwmons:
+        ruta = base + '/' + h + '/power1_cap'
+        ahora = microvatios(ruta)
+        if ahora is None:
+            continue
+        bajo = microvatios(base + '/' + h + '/power1_cap_min')
+        alto = microvatios(base + '/' + h + '/power1_cap_max')
+        return (ruta, ahora / 1000000.0,
+                None if bajo is None else bajo / 1000000.0,
+                None if alto is None else alto / 1000000.0,
+                os.access(ruta, os.W_OK))
+    return None
+
+
+def sistema_bateria(raiz=''):
+    """(porcentaje, estado) de la bateria. None si el equipo no tiene."""
+    base = raiz + '/sys/class/power_supply'
+    try:
+        nombres = sorted(os.listdir(base))
+    except OSError:
+        return None
+    for n in nombres:
+        if not n.upper().startswith('BAT'):
+            continue
+        crudo = _sis_leer('%s/%s/capacity' % (base, n))
+        if crudo is None:
+            continue
+        try:
+            pct = int(crudo.strip())
+        except ValueError:
+            continue
+        estado = (_sis_leer('%s/%s/status' % (base, n)) or '').strip()
+        return (max(0, min(100, pct)), estado)
+    return None
+
+
+def sistema_resumen(raiz='', fps=None, cada=1.0, ahora=None):
+    """Trozos cortos con lo que pasa en la maquina, para la cabecera del panel.
+
+    SE MIDE UNA VEZ POR SEGUNDO Y NO EN CADA VUELTA. El panel da treinta
+    vueltas por segundo, y leer /proc treinta veces para ensenar el mismo
+    numero es trabajo tirado. Ademas la CPU se mide por diferencia: medirla
+    cada 30 ms daria un porcentaje inutil.
+    """
+    if ahora is None:
+        ahora = time.time()
+    if _SIS['trozos'] and (ahora - _SIS['cuando']) < cada:
+        return _SIS['trozos']
+    _SIS['cuando'] = ahora
+    if not _SIS['apuntados']:
+        _SIS['apuntados'] = True
+        try:
+            for h, nombre, medidas in sistema_sensores(raiz):
+                sys.stderr.write(
+                    'menu_pygame: sensor %s (%s): %s\n'
+                    % (h, nombre, ', '.join(
+                        '%s=%s' % (e, ('%.1f' % v) if v is not None else '-')
+                        for e, v in medidas) or 'sin medidas'))
+            # Y EL LIMITE DE POTENCIA, que es la otra pregunta pendiente: leerlo
+            # se puede siempre, pero escribirlo depende de los permisos de cada
+            # maquina. Apuntar las dos cosas es lo que permite decidir si se
+            # puede ofrecer un ajuste de TDP sin tener el equipo delante.
+            _tdp = sistema_tdp(raiz)
+            if _tdp is None:
+                sys.stderr.write('menu_pygame: limite de potencia: no hay '
+                                 'ninguno que se pueda leer\n')
+            else:
+                _r, _w, _min, _max, _puedo = _tdp
+                sys.stderr.write(
+                    'menu_pygame: limite de potencia: %.1f W (rango %s-%s) en '
+                    '%s; escribible por nosotros: %s; ayudante de SteamOS: %s\n'
+                    % (_w,
+                       '?' if _min is None else '%.1f' % _min,
+                       '?' if _max is None else '%.1f' % _max,
+                       _r, 'SI' if _puedo else 'no',
+                       'si' if os.path.exists(SIS_AYUDANTE_VALVE) else 'no'))
+        except Exception:
+            pass
+    trozos = []
+    try:
+        cpu = sistema_cpu(raiz)
+        if cpu is not None:
+            trozos.append('CPU %d%%' % cpu)
+        ram = sistema_ram(raiz)
+        if ram is not None:
+            trozos.append(('RAM %.1f/%.1f GB' % ram).replace('.', ','))
+        temp = sistema_temp(raiz)
+        if temp is not None:
+            trozos.append('%d °C' % int(round(temp)))
+        bat = sistema_bateria(raiz)
+        if bat is not None:
+            pct, estado = bat
+            if estado == 'Charging':
+                trozos.append('batería %d%% (cargando)' % pct)
+            elif estado == 'Full':
+                trozos.append('batería al 100%')
+            else:
+                trozos.append('batería %d%%' % pct)
+        if fps:
+            trozos.append('%d FPS' % fps)
+    except Exception as e:
+        # Que un sensor raro tumbe el menu seria absurdo: el menu existe para
+        # poder cerrar un juego colgado.
+        sys.stderr.write('menu_pygame: no se pudo leer el estado de la '
+                         'maquina (%s)\n' % e)
+    _SIS['trozos'] = trozos
+    return trozos
+
+
+def overlay_pintar(sup, filas, sel, estado, aviso='', titulo=''):
+    """Dibuja el panel. Mismo aspecto que los menus: panel oscuro y acento.
+
+    SOBRE LA TRANSPARENCIA, con honestidad: quien decide si una ventana se ve
+    translucida es el COMPOSITOR, no nosotros. Aqui se pide por la via
+    estandar (_NET_WM_WINDOW_OPACITY) y la pinta un escritorio con
+    composicion -KDE, GNOME- la aplica. Con gamescope puede no aplicarla.
+    Para que en ese caso siga leyendose como un panel encima del juego y no
+    como una ventana opaca, el fondo se pinta con el degradado de la marca y
+    el panel deja un margen alrededor.
+    """
+    W0, H0 = sup.get_size()
+    sup.fill((0, 0, 0))
+    # EL FONDO ES NUESTRO, SIEMPRE.
+    #
+    # Aqui hubo una foto de la pantalla debajo del panel: era lo que hacia que
+    # se viera el juego a traves cuando el panel era una ventana y el
+    # compositor no aplicaba transparencia. Con la capa de Vulkan eso no tiene
+    # sentido: la capa COPIA estos pixeles sobre el fotograma del juego, sin
+    # mezclar, asi que lo que se pinte aqui es lo que se ve. Y copiar una foto
+    # del juego encima del juego no enseña nada que no estuviera ya.
+    try:
+        sup.blit(fondo_cristal(W0, H0), (0, 0))
+    except Exception:
+        sup.fill(TH['bg'])
+    m = max(10, int(W0 * 0.04))
+    panel = pygame.Rect(m, m, W0 - 2 * m, H0 - 2 * m)
+    # El panel se pinta AQUI y no con draw_panel/draw_selection de los menus:
+    # esas dibujan sobre la pantalla global del menu, que en el guardia no
+    # existe. Son cuatro llamadas; no merece la pena enredar las de alla.
+    rad = TH.get('radius', 8)
+    capa = pygame.Surface(panel.size, pygame.SRCALPHA)
+    capa.fill((0, 0, 0, 0))
+    base = TH.get('card') or TH['bg']
+    # CASI OPACO: debajo solo esta nuestro propio degradado, asi que dejarlo
+    # translucido no enseñaria nada y solo restaria contraste al texto.
+    pygame.draw.rect(capa, (base[0], base[1], base[2], 232),
+                     capa.get_rect(), border_radius=rad)
+    pygame.draw.rect(capa, TH.get('border', (60, 64, 74)), capa.get_rect(),
+                     width=1, border_radius=rad)
+    sup.blit(capa, panel.topleft)
+    # Una franja del acento en el borde izquierdo: se reconoce de un vistazo
+    # que esto es WProton y no un aviso del sistema.
+    pygame.draw.rect(sup, TH['acc'], (panel.x, panel.y + rad, 3,
+                                      panel.h - 2 * rad))
+    x = panel.x + max(8, int(W0 * 0.03))
+    ancho = panel.w - 2 * (x - panel.x)
+    y = panel.y + max(8, int(H0 * 0.02))
+    # Cabecera: WProton, el juego y el tiempo que llevas jugando.
+    t = f_tit.render('WProton', True, TH['acc'])
+    sup.blit(t, (x, y))
+    y += t.get_height() + 2
+    nombre = estado.get('NOMBRE', '')
+    if nombre:
+        for trozo in overlay_cortar(nombre, f_sm, ancho)[:2]:
+            s = f_sm.render(trozo, True, TH['fg'])
+            sup.blit(s, (x, y))
+            y += s.get_height()
+    tiempo = overlay_tiempo(estado.get('INICIO', ''))
+    if tiempo:
+        s = f_sm.render('jugando: ' + tiempo, True, TH['dim'])
+        sup.blit(s, (x, y))
+        y += s.get_height()
+    # COMO VA LA MAQUINA. Debajo del tiempo de partida, porque es informacion
+    # del mismo tipo: no se elige, se mira. Si no hay ningun dato -una maquina
+    # sin sensores- no ocupa ni una linea.
+    for _linea in overlay_repartir(sistema_resumen(fps=capa_fps()), f_sm, ancho):
+        s = f_sm.render(_linea, True, TH['dim'])
+        sup.blit(s, (x, y))
+        y += s.get_height()
+    # El titulo de la pantalla en la que estamos, si no es la principal: sin
+    # esto, la lista de teclas es una lista de teclas sin decir para que.
+    if titulo:
+        for trozo in overlay_cortar(titulo, f_sm, ancho)[:2]:
+            s = f_sm.render(trozo, True, TH['acc'])
+            sup.blit(s, (x, y))
+            y += s.get_height()
+    y += max(6, int(H0 * 0.015))
+    pygame.draw.line(sup, TH.get('border', (60, 64, 74)),
+                     (x, y), (x + ancho, y), 1)
+    y += max(6, int(H0 * 0.015))
+    # Las filas, y SOLO LAS QUE CABEN.
+    alto = f_it.get_height() + max(8, int(H0 * 0.012))
+    # Lo que queda libre hasta el pie (dos lineas de ayuda y el aviso).
+    _libre = (panel.bottom - max(8, int(H0 * 0.02))
+              - f_sm.get_height() * (2 + (3 if aviso else 0)) - y)
+    _caben = max(1, int(_libre // alto))
+    _ini, _fin = overlay_ventana_filas(len(filas), sel, _caben)
+    if _ini > 0:
+        s = f_sm.render('/\\  mas arriba', True, TH['dim'])
+        sup.blit(s, (x, y))
+        y += s.get_height()
+    for i, (_orden, texto) in list(enumerate(filas))[_ini:_fin]:
+        fila = pygame.Rect(x - 6, y, ancho + 12, alto)
+        if i == sel:
+            pygame.draw.rect(sup, TH['sel_bg'], fila,
+                             border_radius=TH.get('radius', 6))
+            col = TH['sel_fg']
+        else:
+            col = TH['fg']
+        trozos = overlay_cortar(texto, f_it, ancho - 8)
+        s = f_it.render(trozos[0], True, col)
+        sup.blit(s, (x, y + (alto - s.get_height()) // 2))
+        y += alto
+        # Una segunda linea para los textos largos, con la letra pequena.
+        if len(trozos) > 1:
+            s = f_sm.render(' '.join(trozos[1:]), True,
+                            TH['sel_fg'] if i == sel else TH['dim'])
+            sup.blit(s, (x + 10, y))
+            y += s.get_height() + 2
+    if _fin < len(filas):
+        s = f_sm.render('\\/  mas abajo', True, TH['dim'])
+        sup.blit(s, (x, y))
+    # Pie: que hace cada boton, y el aviso si hay algo que decir.
+    y = panel.bottom - max(8, int(H0 * 0.02))
+    if aviso:
+        for trozo in reversed(overlay_cortar(aviso, f_sm, ancho)[:3]):
+            s = f_sm.render(trozo, True, TH.get('warn', (230, 180, 90)))
+            y -= s.get_height()
+            sup.blit(s, (x, y))
+        y -= 4
+    for texto in ('B / Esc: volver al juego',):
+        s = f_sm.render(texto, True, TH['dim'])
+        y -= s.get_height()
+        sup.blit(s, (x, y))
+    s = f_sm.render('A / Enter: elegir', True, TH['dim'])
+    y -= s.get_height()
+    sup.blit(s, (x, y))
+
+
+def overlay_repartir(trozos, fuente, ancho, sep=' · ', max_lineas=2):
+    """Reparte trozos cortos en lineas que caben, SIN partir un trozo.
+
+    overlay_cortar parte por palabras, y con una lista separada por puntos eso
+    deja el separador colgando al final de la linea -"bateria 89% ·"- y el
+    siguiente dato empezando solo en la de abajo. Aqui se mete un trozo entero
+    o no se mete: el separador solo aparece ENTRE dos datos de la misma linea.
+    """
+    lineas, actual = [], ''
+    for t in trozos:
+        if not t:
+            continue
+        prueba = (actual + sep + t) if actual else t
+        if actual and fuente.size(prueba)[0] > ancho:
+            lineas.append(actual)
+            if len(lineas) >= max_lineas:
+                return lineas
+            actual = t
+        else:
+            actual = prueba
+    if actual and len(lineas) < max_lineas:
+        lineas.append(actual)
+    return lineas
+
+
+def overlay_cortar(texto, fuente, ancho):
+    """Parte un texto en lineas que caben en $ancho. Devuelve siempre >= 1."""
+    palabras = (texto or '').split()
+    if not palabras:
+        return ['']
+    lineas, actual = [], palabras[0]
+    for p in palabras[1:]:
+        if fuente.size(actual + ' ' + p)[0] <= ancho:
+            actual += ' ' + p
+        else:
+            lineas.append(actual)
+            actual = p
+    lineas.append(actual)
+    return lineas
+
+# EL MANEJADOR DE ERRORES DE X, Y POR QUE ES LO PRIMERO DE TODO
+# ===========================================================================
+#
+# ESTO NOS COSTO UNA PARTIDA DE UN TESTER, y el registro lo dice entero:
+#
+#   menu_pygame: combinacion del overlay -> se abre el menu
+#   X Error of failed request:  BadMatch (invalid parameter attributes)
+#     Major opcode of failed request:  73 (X_GetImage)
+#
+# Y ahi se acabo el vigilante: ni panel ni cierre con Select durante el resto
+# de la partida. Dani: "funciono perfecto al pulsar select+L1 y pude poner la
+# tecla enter en el start, pero luego ya no podia invocar de nuevo ese menu ni
+# salir del juego con select".
+#
+# LO QUE NO SABIA: un error de PROTOCOLO de X no se devuelve a quien hizo la
+# llamada. Xlib lo manda a su manejador por defecto, que imprime el mensaje de
+# arriba y llama a exit(). Asi que no hay try/except de python que lo atrape:
+# el proceso se muere y punto. Por eso una llamada a X envuelta en try/except
+# NO esta protegida, aunque lo parezca.
+#
+# Se instala un manejador propio que se los come. Y se guarda la referencia en
+# una lista de modulo A PROPOSITO: si el objeto de ctypes se recoge, la
+# siguiente vez que X falle se salta a una direccion que ya no existe, que es
+# peor que el exit().
+_X_ERRHAND = []
+
+
+def x_errores_callados(x11):
+    """Instala el manejador que se come los errores de X. SIEMPRE, cada vez.
+
+    Devuelve True si quedo puesto.
+
+    Y AQUI VA LA SEGUNDA MITAD DE LA HISTORIA, QUE COSTO OTRA PRUEBA.
+    =================================================================
+    Esto estaba escrito como idempotente -"si ya esta puesto, no hagas nada"-
+    y esa "optimizacion" ERA el fallo. En el registro de la segunda prueba se
+    ve clarisimo: la PRIMERA vez que se abre el panel la foto falla y NO
+    revienta ("la pantalla no da imagen; el panel se pinta opaco": nuestro
+    manejador estaba puesto); la SEGUNDA revienta con el BadMatch de siempre.
+    Lo que pasa entre una y otra es que se abre la ventana, y
+    pygame.display.init() hace que SDL REINSTALE SU PROPIO manejador de
+    errores de X -que es el de Xlib por defecto, el que imprime y llama a
+    exit()-. Con la guarda de idempotencia, el nuestro no se volvia a poner
+    jamas.
+    LA REGLA: el manejador de errores de X es GLOBAL Y AJENO. Cualquiera que
+    use Xlib en este proceso -SDL, Tk, lo que sea- puede cambiarlo cuando le
+    parezca. Asi que no se pregunta si esta puesto: se pone, cada vez, justo
+    antes de cada trabajo nuestro con X. Poner un puntero a funcion cuesta
+    nanosegundos; perder el vigilante del juego cuesta una partida.
+    """
+    import ctypes
+    try:
+        TIPO = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _callar(_dpy, _ev):
+            # No se escribe nada aqui: este manejador puede saltar en medio de
+            # cualquier cosa y lo que hace falta es que NO mate el proceso.
+            # Quien hizo la llamada ya se da cuenta -le llega un puntero nulo o
+            # un resultado vacio- y es alli donde se apunta en el registro.
+            return 0
+
+        # EL OBJETO SE CREA UNA VEZ Y SE REUSA; lo que se repite es
+        # INSTALARLO. Si se creara uno nuevo en cada llamada, la lista que los
+        # mantiene vivos crecería sin parar -y esto se llama en cada tecla que
+        # se manda-.
+        if not _X_ERRHAND:
+            _X_ERRHAND.append(TIPO(_callar))
+        cb = _X_ERRHAND[0]
+        x11.XSetErrorHandler.restype = ctypes.c_void_p
+        x11.XSetErrorHandler.argtypes = [ctypes.c_void_p]
+        x11.XSetErrorHandler(ctypes.cast(cb, ctypes.c_void_p))
+        return True
+    except Exception as e:
+        sys.stderr.write('menu_pygame: no se pudo poner el manejador de '
+                         'errores de X (%s)\n' % e)
+        return False
+
+
+# El DISPLAY que teniamos antes de abrir el panel, para dejarlo como estaba.
+# De modulo porque lo pone overlay_abrir y lo repone overlay_cerrar.
+# La foto de lo que hay DEBAJO del panel, para que se vea a traves. La saca
+# overlay_abrir -antes de crear la ventana, o nos fotografiariamos a nosotros-
+# y la usa overlay_pintar.
+# Y la de la PANTALLA ENTERA, de la que sale la de arriba recortando. Se
+# guarda porque es, tal cual, la captura de pantalla del juego: la fila
+# "Captura de pantalla" no fotografia nada nuevo, escribe esta en un PNG.
+_OV_COMPLETA = [None]
+# ¿SE PUEDE FOTOGRAFIAR LA PANTALLA EN ESTA SESION? None = todavia no se sabe.
+#
+# En el equipo del tester es que NO, y por una razon de fondo: esta en WAYLAND
+# (KDE). El juego va por XWayland y ahi XGetImage sobre la ventana raiz no
+# devuelve nada. Asi que no se insiste: se prueba UNA vez por sesion y, si no
+# sale, no se vuelve a intentar.
+#
+# No es solo ahorrarse el trabajo: esa llamada es justo la que se llevo por
+# delante al vigilante dos veces, asi que cuanto menos se repita, mejor.
+_OV_FOTO_VALE = [None]
+# Que herramienta de captura le quito el foco al juego, si alguna. Se enseña
+# una vez en el panel: si no, el usuario ve que el panel cambia de aspecto a
+# mitad de partida y no sabe por que.
+# La foto se ha apagado NOSOTROS a proposito (Wayland), no es que falte la
+# herramienta. Son dos motivos distintos y el panel tiene que decir el bueno.
+_OV_FOTO_APAGADA = [False]
+# LA VENTANA DEL JUEGO, RECORDADA. [id, titulo]
+#
+# POR QUE NO VALE "LO QUE TENIA EL FOCO HACE UN INSTANTE". En el registro de
+# Dani, la tercera vez que abrio el panel el foco ya no era del juego:
+#
+#   overlay: la ventana del panel se llevo el foco
+#            (era 0x11600001 "Virtual Toys", paso a 0x1060000a)   <- 1a y 2a vez
+#   overlay: la ventana del panel se llevo el foco
+#            (era 0x200000, paso a 0x1060000a)                    <- 3a vez
+#
+# Ese 0x200000 sin titulo no es el juego: es donde fue a parar el foco al
+# destruir nuestra ventana anterior. Devolverselo a EL deja el juego sin foco
+# igual, y el juego sigue sin pintar. Por eso se recuerda cual es la ventana
+# del juego la primera vez que se ve, y se le devuelve SIEMPRE a esa.
+# La pantalla X donde esta el juego, tal como se midio la ultima vez que se
+# abrio el panel. La usan los envios de tecla por XTEST: mandarla a la nuestra
+# seria mandarla a una pantalla que nadie esta mirando.
+_OV_PANTALLA = [None]
+# Las teclas asignadas a un boton EN ESTA PARTIDA: codigo de boton -> KEY_*.
+# Lo rellena el menu y lo lee el bucle del guardia, que es quien ve los
+# botones mientras se juega.
+_OV_ASIGNADAS = {}
+
+
+def overlay_foto(nombre, x, y, ancho, alto):
+    """Una foto de lo que hay en la pantalla, para que el panel se vea a traves.
+
+    POR QUE ESTO EXISTE: lo que se pidio fue un menu SEMITRANSPARENTE, y la
+    transparencia de una ventana no la decidimos nosotros, la decide el
+    compositor. `_NET_WM_WINDOW_OPACITY` -que tambien se pide- la aplican KDE y
+    GNOME, pero gamescope pinta a su manera y ahi lo mas probable es que la
+    ventana salga opaca.
+
+    Asi que se hace por el otro lado: se fotografia el trozo de pantalla que el
+    panel va a tapar y se pinta esa foto, oscurecida, DENTRO del panel. El
+    resultado se ve igual -el juego se transparenta debajo del menu- y no
+    depende de que haya composicion.
+
+    Si no se puede -no hay X11, la pantalla no contesta, el formato de la
+    imagen no es el que sabemos leer-, devuelve None y el panel se pinta con el
+    fondo de la marca. Que es lo de antes: se pierde el efecto, no el menu.
+    """
+    import ctypes
+    import ctypes.util
+
+    # LA TABLA DE FUNCIONES DE XImage TAMBIEN SE DECLARA, Y HAY UN MOTIVO.
+    #
+    # Para liberar la imagen, lo que todo el mundo escribe es XDestroyImage().
+    # Pero XDestroyImage NO ES UNA FUNCION: es una macro de Xutil.h que llama a
+    # ximage->f.destroy_image(ximage). No existe tal simbolo en libX11, asi que
+    # buscarlo con ctypes falla en silencio y la imagen -mas de un mega por
+    # apertura del menu- se queda sin liberar. Se declara la tabla y se llama
+    # al puntero, que es lo que hace la macro.
+    _destruir = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
+    _crear = ctypes.CFUNCTYPE(ctypes.c_void_p)
+
+    class XImageFuncs(ctypes.Structure):
+        _fields_ = [('create_image', _crear),
+                    ('destroy_image', _destruir),
+                    ('get_pixel', _crear),
+                    ('put_pixel', _crear),
+                    ('sub_image', _crear),
+                    ('add_pixel', _crear)]
+
+    class XImage(ctypes.Structure):
+        _fields_ = [('width', ctypes.c_int), ('height', ctypes.c_int),
+                    ('xoffset', ctypes.c_int), ('format', ctypes.c_int),
+                    ('data', ctypes.c_void_p),
+                    ('byte_order', ctypes.c_int),
+                    ('bitmap_unit', ctypes.c_int),
+                    ('bitmap_bit_order', ctypes.c_int),
+                    ('bitmap_pad', ctypes.c_int),
+                    ('depth', ctypes.c_int),
+                    ('bytes_per_line', ctypes.c_int),
+                    ('bits_per_pixel', ctypes.c_int),
+                    ('red_mask', ctypes.c_ulong),
+                    ('green_mask', ctypes.c_ulong),
+                    ('blue_mask', ctypes.c_ulong),
+                    ('obdata', ctypes.c_void_p),
+                    ('f', XImageFuncs)]
+
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+    except OSError as e:
+        sys.stderr.write('menu_pygame: overlay: sin libX11 para la foto (%s)\n' % e)
+        return None
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XGetImage.restype = ctypes.POINTER(XImage)
+    x11.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                              ctypes.c_int, ctypes.c_int,
+                              ctypes.c_uint, ctypes.c_uint,
+                              ctypes.c_ulong, ctypes.c_int]
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                 ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_int),
+                                 ctypes.POINTER(ctypes.c_int),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint)]
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    # El manejador, ANTES de la primera llamada: un BadMatch aqui mataba el
+    # proceso entero y se llevaba por delante el cierre del juego.
+    x_errores_callados(x11)
+    dpy = x11.XOpenDisplay((nombre or '').encode() or None)
+    if not dpy:
+        return None
+    img = None
+    try:
+        raiz = x11.XDefaultRootWindow(dpy)
+        ZPixmap, AllPlanes = 2, 0xFFFFFFFF
+        # EL TAMANO SE LE PREGUNTA A LA PANTALLA, no se da por sabido.
+        #
+        # AQUI ESTABA EL FALLO QUE MATO AL VIGILANTE: se le pedia la foto con
+        # el tamano que dice pygame (1920x1080 en el equipo del tester), y el
+        # servidor X del juego puede ser de otro tamano. Pedir un rectangulo
+        # que no cabe en la ventana raiz es un BadMatch, y un error de
+        # protocolo de X no se devuelve: mata el proceso.
+        _rr = ctypes.c_ulong(); _rx = ctypes.c_int(); _ry = ctypes.c_int()
+        _rw = ctypes.c_uint(); _rh = ctypes.c_uint()
+        _rb = ctypes.c_uint(); _rd = ctypes.c_uint()
+        if not x11.XGetGeometry(dpy, raiz, ctypes.byref(_rr), ctypes.byref(_rx),
+                                ctypes.byref(_ry), ctypes.byref(_rw),
+                                ctypes.byref(_rh), ctypes.byref(_rb),
+                                ctypes.byref(_rd)):
+            sys.stderr.write('menu_pygame: overlay: la pantalla no dice su '
+                             'tamano; sin foto\n')
+            return None
+        _pw, _ph = int(_rw.value), int(_rh.value)
+        x = max(0, min(int(x), max(0, _pw - 1)))
+        y = max(0, min(int(y), max(0, _ph - 1)))
+        ancho = max(1, min(int(ancho), _pw - x))
+        alto = max(1, min(int(alto), _ph - y))
+        if (ancho, alto) != (int(_rw.value), int(_rh.value)):
+            sys.stderr.write('menu_pygame: overlay: la pantalla X mide %dx%d; '
+                             'la foto se recorta a %dx%d en %d,%d\n'
+                             % (_pw, _ph, ancho, alto, x, y))
+        img = x11.XGetImage(dpy, raiz, int(x), int(y), int(ancho), int(alto),
+                            AllPlanes, ZPixmap)
+        # Y SE SINCRONIZA AQUI MISMO, con nuestro manejador puesto: un error de
+        # X llega cuando llega, y si se queda en la cola salta en la SIGUIENTE
+        # llamada a X -que es lo que paso: la foto fallo la primera vez
+        # devolviendo nada, y el error salto la segunda-.
+        x11.XSync(dpy, 0)
+        if not img:
+            sys.stderr.write('menu_pygame: overlay: la pantalla no da imagen; '
+                             'el panel se pinta opaco\n')
+            return None
+        im = img.contents
+        if im.bits_per_pixel != 32 or not im.data:
+            sys.stderr.write('menu_pygame: overlay: imagen de %d bits, no se '
+                             'sabe leer; el panel se pinta opaco\n'
+                             % im.bits_per_pixel)
+            return None
+        # El orden de los bytes se deduce de las mascaras y no se supone: en
+        # un X11 normal de 32 bits el rojo esta en 0x00FF0000, y en memoria
+        # little-endian eso es B,G,R,A.
+        if im.red_mask == 0x00FF0000:
+            modo = 'BGRA'
+        elif im.red_mask == 0x000000FF:
+            modo = 'RGBA'
+        else:
+            sys.stderr.write('menu_pygame: overlay: mascara de color %#x '
+                             'desconocida; el panel se pinta opaco\n'
+                             % im.red_mask)
+            return None
+        # Hay que copiar fila a fila: bytes_per_line puede traer relleno al
+        # final, y pygame espera las filas pegadas.
+        util = im.width * 4
+        if im.bytes_per_line == util:
+            crudo = ctypes.string_at(im.data, util * im.height)
+        else:
+            trozos = []
+            for f in range(im.height):
+                trozos.append(ctypes.string_at(im.data + f * im.bytes_per_line,
+                                               util))
+            crudo = b''.join(trozos)
+        foto = pygame.image.frombuffer(crudo, (im.width, im.height), modo)
+        # Se queda en una copia nuestra: el buffer original se va con
+        # XDestroyImage y frombuffer NO copia.
+        foto = foto.copy()
+        sys.stderr.write('menu_pygame: overlay: foto del fondo %dx%d (%s)\n'
+                         % (im.width, im.height, modo))
+        return foto
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo fotografiar el '
+                         'fondo (%s); el panel se pinta opaco\n' % e)
+        return None
+    finally:
+        # Se libera por el puntero de la propia imagen, como hace la macro. Y
+        # si por lo que sea no hay puntero, a mano: primero los pixeles y
+        # despues la estructura, que es lo que destroy_image hace dentro.
+        try:
+            if img:
+                liberada = False
+                try:
+                    if img.contents.f.destroy_image:
+                        img.contents.f.destroy_image(
+                            ctypes.cast(img, ctypes.c_void_p))
+                        liberada = True
+                except Exception:
+                    liberada = False
+                if not liberada:
+                    if img.contents.data:
+                        x11.XFree(img.contents.data)
+                    x11.XFree(ctypes.cast(img, ctypes.c_void_p))
+        except Exception as e:
+            sys.stderr.write('menu_pygame: overlay: no se pudo liberar la foto '
+                             '(%s)\n' % e)
+        try:
+            x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
+
+def overlay_ventanas_grandes(nombre):
+    """Cuantas ventanas que ocupan casi la pantalla hay en la pantalla X $nombre.
+
+    Sirve para UNA sola cosa: saber en que pantalla esta el juego.
+
+    POR QUE HAY QUE AVERIGUARLO (y es el mismo fallo que ya nos costo el
+    puntero): el guardia hereda el DISPLAY del WProton que lo lanzo, pero el
+    juego no siempre pinta ahi. Con gamescope por medio, gamescope levanta su
+    propio XWayland -otra pantalla, normalmente :1- y es EL JUEGO el que se
+    muda alli. Si el panel se abre en NUESTRA pantalla, se pinta en una que
+    nadie esta mirando: el usuario pulsa la combinacion y no ve nada.
+
+    Se cuenta con XQueryTree + XGetGeometry y no con XGetWindowAttributes
+    porque la primera pareja devuelve enteros sueltos y la segunda una
+    estructura de 23 campos que habria que declarar campo a campo en ctypes
+    para leer uno. Para "¿hay aqui una ventana del tamano de la pantalla?"
+    sobra con la geometria.
+
+    Devuelve (cuantas, lado_mayor) o (0, 0) si la pantalla no contesta.
+    """
+    import ctypes
+    import ctypes.util
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+        # Un error de PROTOCOLO de X no se devuelve: Xlib llama a exit(). Esto
+        # lo desactiva, y hace falta aqui tambien: este proceso tiene que
+        # sobrevivir a que X se queje, porque es el que cierra el juego.
+        x_errores_callados(x11)
+    except OSError:
+        return (0, 0)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XFree.argtypes = [ctypes.c_void_p]
+    x11.XQueryTree.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                               ctypes.POINTER(ctypes.c_ulong),
+                               ctypes.POINTER(ctypes.c_ulong),
+                               ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+                               ctypes.POINTER(ctypes.c_uint)]
+    x11.XGetGeometry.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                 ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_int),
+                                 ctypes.POINTER(ctypes.c_int),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint)]
+    dpy = x11.XOpenDisplay(nombre.encode())
+    if not dpy:
+        return (0, 0)
+    try:
+        raiz = x11.XDefaultRootWindow(dpy)
+        rr = ctypes.c_ulong()
+        pp = ctypes.c_ulong()
+        hijos = ctypes.POINTER(ctypes.c_ulong)()
+        n = ctypes.c_uint()
+        rx, ry = ctypes.c_int(), ctypes.c_int()
+        rw, rh = ctypes.c_uint(), ctypes.c_uint()
+        rb, rd = ctypes.c_uint(), ctypes.c_uint()
+        if not x11.XGetGeometry(dpy, raiz, ctypes.byref(rr), ctypes.byref(rx),
+                                ctypes.byref(ry), ctypes.byref(rw),
+                                ctypes.byref(rh), ctypes.byref(rb),
+                                ctypes.byref(rd)):
+            return (0, 0)
+        pw, ph = int(rw.value), int(rh.value)
+        if pw <= 0 or ph <= 0:
+            return (0, 0)
+        if not x11.XQueryTree(dpy, raiz, ctypes.byref(rr), ctypes.byref(pp),
+                              ctypes.byref(hijos), ctypes.byref(n)):
+            return (0, 0)
+        grandes, mayor = 0, 0
+        try:
+            for i in range(int(n.value)):
+                w = hijos[i]
+                if not x11.XGetGeometry(dpy, w, ctypes.byref(rr),
+                                        ctypes.byref(rx), ctypes.byref(ry),
+                                        ctypes.byref(rw), ctypes.byref(rh),
+                                        ctypes.byref(rb), ctypes.byref(rd)):
+                    continue
+                cw, ch = int(rw.value), int(rh.value)
+                if cw >= pw * 0.5 and ch >= ph * 0.5:
+                    grandes += 1
+                    mayor = max(mayor, cw * ch)
+        finally:
+            if hijos:
+                x11.XFree(ctypes.cast(hijos, ctypes.c_void_p))
+        return (grandes, mayor)
+    except Exception:
+        return (0, 0)
+    finally:
+        try:
+            x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# FOTOGRAFIAR LA PANTALLA EN X11 Y EN WAYLAND
+# ---------------------------------------------------------------------------
+#
+# POR QUE UNA ESCALERA Y NO UNA FORMA. Lo pidio Dani despues de ver que en su
+# equipo la foto no salia: "habria que hacerla compatible con wayland y x11,
+# cada uno tiene un sistema y hay que hacer sea compatible con todos". Y la
+# frase da en el clavo mas de lo que parece: no hay "un sistema de Wayland",
+# hay uno por escritorio. En X11 cualquiera puede leer la pantalla
+# (XGetImage); en Wayland eso esta prohibido a proposito y cada compositor
+# ofrece su propia puerta.
+#
+# Asi que se prueban por orden y se recuerda la que funciono:
+#
+#   x11               XGetImage. Gratis, sin lanzar procesos, y la unica que
+#                     no tarda nada. En Wayland devuelve nada: el juego va por
+#                     XWayland y ahi la ventana raiz no tiene la imagen.
+#   spectacle         KDE, y vale en Wayland Y en X11. "-b" sin interfaz, "-n"
+#                     sin notificacion.
+#   grim              los compositores wlroots (Sway, Hyprland...).
+#   gnome-screenshot  GNOME.
+#
+# EL PORTAL DEL ESCRITORIO (xdg-desktop-portal) SE QUEDA FUERA A PROPOSITO: en
+# KDE pide permiso al usuario, y abrir un dialogo encima de una partida es
+# exactamente lo que nos ha costado ya dos fallos. Si algun dia hace falta
+# -porque no haya ninguna de las de arriba- se habla antes de meterlo.
+#
+# Y SE MIDE LO QUE TARDA. Una herramienta externa son un par de cientos de
+# milisegundos, y eso retrasa la apertura del panel. No se decide por nosotros
+# si eso es aceptable: se apunta en el registro con el numero delante, y quien
+# quiera lo apaga con WP_OVERLAY_FOTO=0.
+
+# metodo -> orden a ejecutar, con @RUTA@ donde va el fichero de salida.
+# 'x11' no lleva orden: es la via interna.
+OV_CAPTURA_METODOS = [
+    ('x11', None),
+    ('spectacle', ['spectacle', '-b', '-n', '-o', '@RUTA@']),
+    ('grim', ['grim', '@RUTA@']),
+    ('gnome-screenshot', ['gnome-screenshot', '-f', '@RUTA@']),
+]
+# Lo aprendido en esta sesion: que metodo vale y cuanto tarda.
+_OV_CAPTURA = {'metodo': None, 'ms': 0, 'probados': False}
+
+
+def overlay_captura_orden(metodo):
+    """La orden de ese metodo, o None si es el interno o no se reconoce."""
+    for nom, orden in OV_CAPTURA_METODOS:
+        if nom == metodo:
+            return list(orden) if orden else None
+    return None
+
+
+def overlay_captura_hay(metodo):
+    """¿Esta disponible ese metodo en este equipo?"""
+    if metodo == 'x11':
+        # Hace falta una pantalla X. En Wayland la hay (XWayland), asi que
+        # esto no distingue: lo que distingue es si la foto sale, y eso se
+        # prueba de verdad mas abajo.
+        return bool(os.environ.get('DISPLAY'))
+    orden = overlay_captura_orden(metodo)
+    if not orden:
+        return False
+    try:
+        import shutil
+        return bool(shutil.which(orden[0]))
+    except Exception:
+        return False
+
+
+def overlay_captura_externa(metodo, ruta):
+    """Lanza la herramienta de captura. Devuelve True si dejo el fichero.
+
+    Se le pone un tope de tiempo: una herramienta que se queda esperando -un
+    portal pidiendo permiso, por ejemplo- no puede dejar el panel colgado a
+    mitad de una partida.
+    """
+    import subprocess
+    orden = overlay_captura_orden(metodo)
+    if not orden:
+        return False
+    orden = [ruta if a == '@RUTA@' else a for a in orden]
+    try:
+        r = subprocess.run(orden, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, timeout=8)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write('menu_pygame: overlay: %s tardo demasiado; se '
+                         'descarta\n' % metodo)
+        return False
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo lanzar %s (%s)\n'
+                         % (metodo, e))
+        return False
+    if r.returncode != 0:
+        _err = (r.stderr or b'').decode('utf-8', 'replace').strip()
+        sys.stderr.write('menu_pygame: overlay: %s fallo (rc=%d)%s\n'
+                         % (metodo, r.returncode,
+                            ': ' + _err.split('\n')[0] if _err else ''))
+        return False
+    try:
+        return os.path.getsize(ruta) > 0
+    except OSError:
+        sys.stderr.write('menu_pygame: overlay: %s dijo que si pero no dejo '
+                         'fichero\n' % metodo)
+        return False
+
+
+def overlay_pantalla_captura(pw, ph):
+    """Una foto de la pantalla entera. Devuelve una superficie o None.
+
+    Prueba los metodos por orden la primera vez y luego va derecha al que
+    funciono. Si ninguno vale, lo dice una vez y no se vuelve a intentar: esa
+    llamada es la que se llevo por delante al vigilante dos veces, asi que
+    cuanto menos se repita, mejor.
+    """
+    if _OV_CAPTURA['metodo'] == 'ninguno':
+        return None
+    candidatos = ([_OV_CAPTURA['metodo']] if _OV_CAPTURA['metodo']
+                  else [m for m, _o in OV_CAPTURA_METODOS])
+    tmp = os.path.join(os.environ.get('XDG_RUNTIME_DIR') or '/tmp',
+                       'wproton-captura-%d.png' % os.getpid())
+    for m in candidatos:
+        if not overlay_captura_hay(m):
+            if not _OV_CAPTURA['probados']:
+                sys.stderr.write('menu_pygame: overlay: %s no esta en este '
+                                 'equipo\n' % m)
+            continue
+        t0 = time.time()
+        foto = None
+        if m == 'x11':
+            foto = overlay_foto(os.environ.get('DISPLAY'), 0, 0, pw, ph)
+        elif overlay_captura_externa(m, tmp):
+            try:
+                # SIN .convert(). Convertir una imagen al formato de la
+                # pantalla necesita que YA haya pantalla, y aqui todavia no la
+                # hay: la foto se hace ANTES de abrir la ventana, porque es la
+                # foto de lo que hay debajo. En la prueba de Dani eso tiraba la
+                # unica via que le funcionaba:
+                #
+                #   overlay: spectacle dejo una imagen que no se puede leer
+                #            (No video mode has been set)
+                #
+                # Y con eso el panel se pintaba opaco y la captura de pantalla
+                # no se podia hacer, en un KDE Wayland donde spectacle SI
+                # fotografia la pantalla. Sin convertir va igual: pygame la
+                # convierte al pintarla.
+                foto = pygame.image.load(tmp)
+            except Exception as e:
+                sys.stderr.write('menu_pygame: overlay: %s dejo una imagen '
+                                 'que no se puede leer (%s)\n' % (m, e))
+                foto = None
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if foto is not None:
+            ms = int((time.time() - t0) * 1000)
+            if _OV_CAPTURA['metodo'] != m:
+                sys.stderr.write('menu_pygame: overlay: la pantalla se '
+                                 'fotografia con %s (%d ms)%s\n'
+                                 % (m, ms,
+                                    '. Es lo que tarda en abrirse el panel; '
+                                    'con WP_OVERLAY_FOTO=0 se quita'
+                                    if ms > 400 else ''))
+            _OV_CAPTURA['metodo'] = m
+            _OV_CAPTURA['ms'] = ms
+            _OV_CAPTURA['probados'] = True
+            return foto
+        sys.stderr.write('menu_pygame: overlay: %s no da imagen aqui\n' % m)
+    _OV_CAPTURA['probados'] = True
+    if _OV_CAPTURA['metodo'] is None:
+        _OV_CAPTURA['metodo'] = 'ninguno'
+        sys.stderr.write('menu_pygame: overlay: en este equipo no hay forma de '
+                         'fotografiar la pantalla (se probaron: %s). El panel '
+                         'se pinta opaco y la captura de pantalla no podra '
+                         'hacerse. En Wayland hace falta la herramienta del '
+                         'escritorio: spectacle (KDE), grim (Sway/Hyprland) o '
+                         'gnome-screenshot\n'
+                         % ', '.join(m for m, _o in OV_CAPTURA_METODOS))
+    else:
+        # El que funcionaba ha dejado de funcionar. Se olvida para volver a
+        # probar la escalera entera la proxima vez.
+        _OV_CAPTURA['metodo'] = None
+    return None
+
+def overlay_pantalla(pantallas=None):
+    """En que pantalla X hay que abrir el panel. Devuelve el nombre o None.
+
+    None = quedarse con la que ya tenemos (el DISPLAY heredado).
+
+    EL ORDEN DE DECISION, y por que es este:
+
+      1. WP_OVERLAY_PANTALLA, si esta puesta. Manda siempre: es la salida de
+         emergencia para un equipo raro, y asi un fallo de aqui no deja a nadie
+         sin overlay esperando una version nueva.
+      2. La pantalla con la ventana MAS GRANDE mapeada: esa es la del juego.
+         Es una medida, no una suposicion.
+      3. Si ninguna contesta o ninguna tiene ventanas -no hay X11 que consultar,
+         o estamos en un escritorio sin nada a pantalla completa-, la nuestra.
+
+    Y SE DEJA TODO APUNTADO en el registro. Si un dia el panel "no sale", el
+    registro tiene que decir cuantas pantallas habia y que se vio en cada una;
+    sin eso, el siguiente que mire esto va a adivinar igual que adivinamos con
+    el puntero.
+    """
+    forzada = os.environ.get('WP_OVERLAY_PANTALLA', '').strip()
+    if forzada:
+        sys.stderr.write('menu_pygame: overlay: pantalla forzada a %s\n' % forzada)
+        return forzada
+    try:
+        nombres = pantallas if pantallas is not None else cursor_pantallas()
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudieron listar las '
+                         'pantallas (%s)\n' % e)
+        return None
+    propia = os.environ.get('DISPLAY')
+    # SE DICE SIEMPRE CUANTAS HAY, aunque haya una sola.
+    #
+    # Antes, con una sola pantalla esto se iba en silencio, y en el registro
+    # del tester no habia forma de saber si el envio de teclas habia ido a la
+    # pantalla buena o si solo habia una. Ese es justo el dato que separa
+    # "pantalla equivocada" de "pantalla buena y el juego la ignoro".
+    sys.stderr.write('menu_pygame: overlay: pantallas X de la sesion: %s '
+                     '(la nuestra: %s)\n'
+                     % (', '.join(nombres) or 'ninguna', propia or '?'))
+    if len(nombres) <= 1:
+        return None
+    mejor, mejor_area = None, 0
+    for n in nombres:
+        try:
+            cuantas, area = overlay_ventanas_grandes(n)
+        except Exception as e:
+            sys.stderr.write('menu_pygame: overlay: %s no se pudo mirar (%s)\n'
+                             % (n, e))
+            continue
+        sys.stderr.write('menu_pygame: overlay: pantalla %s%s: %d ventana(s) '
+                         'grande(s)\n'
+                         % (n, ' (la nuestra)' if n == propia else '', cuantas))
+        if area > mejor_area:
+            mejor, mejor_area = n, area
+    if mejor is None or mejor == propia:
+        return None
+    sys.stderr.write('menu_pygame: overlay: el juego parece estar en %s (y no '
+                     'en %s); el panel se abre alli\n' % (mejor, propia))
+    return mejor
+
+
+def raton_virtual_abrir():
+    """Crea un raton de kernel (uinput). Devuelve el descriptor o None.
+
+    POR QUE UINPUT Y NO XWarpPointer, QUE ES LO QUE HABIA
+
+    Porque en Wayland XWarpPointer no hace nada. El puntero es del compositor,
+    y mover el puntero desde un cliente de X esta restringido a proposito: el
+    empujon se mandaba, no daba ningun error, y no pasaba nada. Dani lo probo:
+    "No funciono".
+
+    Un dispositivo de uinput es otra cosa: es un raton DE VERDAD para el
+    nucleo. libinput lo lee, el compositor lo procesa como procesa el raton
+    fisico, repinta, y XWayland le hace llegar el movimiento al juego. Es el
+    mismo razonamiento que ya valio para las teclas: uinput cruza en X11 y en
+    Wayland; XTEST solo existe en X11.
+
+    SE DECLARA CON UN BOTON ADEMAS DE LOS EJES porque un dispositivo que solo
+    tiene movimiento relativo no siempre se clasifica como raton; con BTN_LEFT
+    no hay duda. El boton no se pulsa nunca.
+    """
+    if _OV_RATON[1]:
+        return _OV_RATON[0]
+    _OV_RATON[1] = True
+    if os.environ.get('WP_OVERLAY_EMPUJON') == '0':
+        return None
+    import fcntl
+    import struct as _st
+    # _IOW('U', n, int) y _IO('U', n). 'U' = 0x55.
+    UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_RELBIT = 0x40045564, 0x40045565, 0x40045566
+    UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
+    EV_SYN, EV_KEY, EV_REL = 0, 1, 2
+    REL_X, REL_Y, BTN_LEFT = 0, 1, 0x110
+    try:
+        fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
+    except OSError as e:
+        sys.stderr.write('menu_pygame: overlay: sin raton virtual (%s). Al '
+                         'cerrar el panel se intentara mover el puntero por '
+                         'X11, que en Wayland puede no servir\n' % e)
+        return None
+    try:
+        for peticion, valor in ((UI_SET_EVBIT, EV_REL), (UI_SET_EVBIT, EV_KEY),
+                                (UI_SET_EVBIT, EV_SYN), (UI_SET_RELBIT, REL_X),
+                                (UI_SET_RELBIT, REL_Y),
+                                (UI_SET_KEYBIT, BTN_LEFT)):
+            fcntl.ioctl(fd, peticion, valor)
+        # struct uinput_user_dev: nombre[80] + input_id (4 x u16) +
+        # ff_effects_max (u32) + cuatro tablas de 64 enteros (ABS_CNT).
+        nombre = b'WProton_Raton_Virtual'
+        dev = (nombre.ljust(80, b'\x00')
+               + _st.pack('HHHH', 3, 0x1209, 0x7072, 1)   # BUS_USB
+               + _st.pack('I', 0)
+               + b'\x00' * (4 * 64 * 4))
+        os.write(fd, dev)
+        fcntl.ioctl(fd, UI_DEV_CREATE)
+        _OV_RATON[0] = fd
+        sys.stderr.write('menu_pygame: raton virtual listo: al cerrar el '
+                         'panel se le dara al juego un empujon de un pixel '
+                         'para que vuelva a pintar\n')
+        return fd
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo crear el raton '
+                         'virtual (%s)\n' % e)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return None
+
+
+def raton_virtual_cerrar():
+    """Quita el raton virtual. El nucleo lo quitaria igual al morir el proceso."""
+    fd = _OV_RATON[0]
+    if fd is None:
+        return
+    import fcntl
+    try:
+        fcntl.ioctl(fd, 0x5502)        # UI_DEV_DESTROY
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    _OV_RATON[0] = None
+
+
+# EL RATON VIRTUAL DEL PANEL. [descriptor, ya se intento]
+#
+# Se abre UNA VEZ por partida y se queda abierto: un dispositivo de uinput
+# recien creado tarda un momento en que el compositor lo abra -udev de por
+# medio-, asi que crearlo en el momento de usarlo perderia justo el primer
+# empujon, que es el que hace falta.
+_OV_RATON = [None, False]
+
+def overlay_empujon_raton():
+    """Mueve el puntero UN pixel y lo devuelve. True si se pudo.
+
+    POR QUE, LITERAL DE DANI:
+
+        "Ahora ya no pierde el foco, pero tengo que hacer un movimiento con el
+         raton real para que la imagen vuelva a activarse"
+
+    O sea: al cerrar el panel el juego esta ahi, con el foco y todo, pero no
+    vuelve a pintar hasta que le llega un evento de entrada. Y lo que lo
+    despierta es exactamente eso: mover el raton. No hay que pedirle a nadie
+    que lo haga a mano, se hace aqui.
+
+    Un pixel y vuelta: esta por debajo del umbral con el que el vigilante del
+    puntero decide si "lo esta moviendo alguien" (8 px), asi que este empujon
+    no se cuenta a si mismo como movimiento ni saca el cursor de su escondite.
+
+    Es el mismo truco que ya se usaba para que el juego repintara su cursor al
+    volver del mando (ver cursor_destapar). Aqui se repite porque aquello vive
+    en el vigilante del puntero -con su estado y sus pantallas- y esto tiene
+    que poder hacerse al cerrar el panel aunque el vigilante no exista.
+    """
+    import ctypes
+    import ctypes.util
+    if os.environ.get('WP_OVERLAY_EMPUJON') == '0':
+        return False
+    # PRIMERO EL RATON DE KERNEL, que es el que cruza en Wayland.
+    fd = raton_virtual_abrir()
+    if fd is not None:
+        import struct as _st
+        try:
+            # (segundos, microsegundos, tipo, codigo, valor) x5: un pixel a la
+            # derecha, y otro a la izquierda para dejarlo donde estaba.
+            ev = b''.join(_st.pack('llHHi', 0, 0, t, c, v) for t, c, v in
+                          ((2, 0, 1), (0, 0, 0), (2, 0, -1), (0, 0, 0)))
+            os.write(fd, ev)
+            return True
+        except OSError as e:
+            sys.stderr.write('menu_pygame: overlay: el raton virtual no '
+                             'responde (%s); se prueba por X11\n' % e)
+    # Y SI NO HAY, lo de antes: en X11 funciona, en Wayland casi seguro que no.
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library('X11') or 'libX11.so.6')
+        x_errores_callados(x11)
+    except OSError:
+        return False
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    dpy = x11.XOpenDisplay(None)
+    if not dpy:
+        return False
+    try:
+        raiz = x11.XDefaultRootWindow(dpy)
+        rr = ctypes.c_ulong(); cr = ctypes.c_ulong()
+        rx = ctypes.c_int(); ry = ctypes.c_int()
+        wx = ctypes.c_int(); wy = ctypes.c_int()
+        mk = ctypes.c_uint()
+        x11.XQueryPointer.argtypes = [
+            ctypes.c_void_p, ctypes.c_ulong,
+            ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.c_ulong),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint)]
+        if not x11.XQueryPointer(dpy, raiz, ctypes.byref(rr), ctypes.byref(cr),
+                                 ctypes.byref(rx), ctypes.byref(ry),
+                                 ctypes.byref(wx), ctypes.byref(wy),
+                                 ctypes.byref(mk)):
+            return False
+        x, y = rx.value, ry.value
+        x11.XWarpPointer.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                     ctypes.c_ulong, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_uint,
+                                     ctypes.c_uint, ctypes.c_int, ctypes.c_int]
+        x11.XWarpPointer(dpy, 0, raiz, 0, 0, 0, 0, x + 1, y)
+        x11.XWarpPointer(dpy, 0, raiz, 0, 0, 0, 0, x, y)
+        x11.XFlush(dpy)
+        x11.XSync(dpy, 0)
+        return True
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo empujar el raton '
+                         '(%s)\n' % e)
+        return False
+    finally:
+        try:
+            x11.XCloseDisplay(dpy)
+        except Exception:
+            pass
+
+
+# EL PANEL DENTRO DEL JUEGO: la via de la capa de Vulkan
+# ===========================================================================
+#
+# POR QUE EXISTE ESTA VIA
+#
+# El panel se dibujaba en una VENTANA encima del juego, y eso es lo que fallo
+# la noche del 20/10 de tres formas distintas:
+#
+#   - en KDE el juego se quedaba congelado al abrirlo -sonando, pero
+#     congelado- y volvia al mover el raton de verdad;
+#   - en SteamOS no se veia y colgaba WProton;
+#   - y antes de eso el juego perdia el foco y se minimizaba.
+#
+# Lo dijo Dani: "nuestro overlay se apodera de la imagen y no deberia ser asi,
+# sino se desincroniza el juego". Y es exacto: el compositor tiene que sacar al
+# juego de su camino directo a pantalla para poder componer nuestra ventana
+# encima, y el juego se queda esperando un fotograma que no llega.
+#
+# Asi que por esta via NO HAY VENTANA. El menu se dibuja igual que siempre
+# -mismas filas, mismas fuentes, mismo codigo de overlay_pintar- pero sobre una
+# superficie que no esta en ninguna pantalla, y los pixeles se mandan a un
+# fichero de memoria compartida que lee la capa de Vulkan DENTRO del juego. La
+# capa los copia encima del fotograma justo antes de presentarlo.
+#
+# Sin ventana no hay nada que el compositor tenga que reorganizar, no hay foco
+# que robar, no hay nada que minimizar y no hace falta fotografiar la pantalla:
+# lo que hay debajo del panel es el propio juego, de verdad.
+#
+# Y ESTA ES YA LA UNICA VIA. La de la ventana se quito entera -setecientas
+# lineas- despues de que en el modo Juego no se viera siquiera: iba a la capa
+# de overlay de gamescope, que suele tener cogida MangoHud. No se veia Y
+# colgaba el juego.
+#
+# Y SI LA CAPA NO ESTA, NO SE USA ESTA VIA. Un juego que no use Vulkan, o uno
+# de 32 bits en un equipo sin la capa de 32, no tiene a nadie dentro que pinte.
+# Por eso la capa deja un LATIDO -un fichero con el tamano de la pantalla que
+# reescribe una vez por segundo-, y aqui se mira antes de decidir: si hay
+# latido reciente se pinta dentro; si no, no hay menu en esa partida y se
+# dice. La decision es un stat(), no una suposicion.
+#
+# EL FORMATO, que tiene que coincidir con wproton_capa.c:
+#
+#   64 bytes de cabecera, nueve enteros de 32 bits y relleno, y despues los
+#   pixeles de corrido, 4 bytes por pixel, en orden RGBA. Se manda RGBA y no
+#   BGRA porque pygame siempre sabe dar RGBA; la capa cambia el orden si el
+#   swapchain del juego lo quiere al reves, que le cuesta un suspiro.
+#
+#   Nada de bloqueos entre los dos procesos: aqui se escriben los pixeles y
+#   DESPUES se sube "generacion". La capa se queda con la generacion que vio.
+#   Si pilla un fotograma a medias, el peor caso es un parpadeo de una franja
+#   durante 16 ms, y por evitar eso no merece la pena un semaforo entre
+#   procesos.
+#
+# Y HAY DOS CONTADORES, no uno, porque son dos preguntas distintas:
+#
+#   - "generacion" sube SOLO cuando los pixeles cambian de verdad. Con el menu
+#     abierto y quieto son los mismos medio millon de pixeles treinta veces por
+#     segundo; la capa compara la generacion y, si es la misma, no vuelve a
+#     copiarlos ni a cambiarles el orden de los bytes.
+#   - "latido" sube en CADA vuelta, cambien los pixeles o no. Hace falta porque
+#     la capa pinta mientras "visible" sea 1: si este proceso se muriera sin
+#     poder poner el cero, el panel se quedaria pegado en la pantalla del juego
+#     el resto de la partida. Con el latido, la capa lo nota a los cinco
+#     segundos y deja de pintar sola.
+# ---------------------------------------------------------------------------
+CAPA_RUTA = os.environ.get('WPROTON_CAPA_PANEL') or ''
+CAPA_CABEZA = 64
+CAPA_MAGIA = 0x4e505057          # "WPPN" en little-endian
+CAPA_VERSION = 1
+CAPA_ORDEN_RGBA = 1
+
+# fd del fichero, tamano del panel, donde va y por que generacion vamos.
+_CAPA = {'fd': -1, 'ancho': 0, 'alto': 0, 'x': 0, 'y': 0, 'gen': 0,
+         'latido': 0, 'ultimos': None}
+
+
+def capa_viva(frescura=6.0):
+    """(ancho, alto) de la pantalla del juego, si la capa esta pintando.
+
+    None significa "no hay nadie dentro del juego", y entonces no hay panel: no
+    queda otra via. Seis segundos de margen porque la capa late una vez por
+    segundo y un juego que va a 10 FPS tambien tiene derecho a menu.
+    """
+    if not CAPA_RUTA:
+        return None
+    vivo = CAPA_RUTA + '.vivo'
+    try:
+        st = os.stat(vivo)
+    except OSError:
+        return None
+    edad = time.time() - st.st_mtime
+    if edad > frescura:
+        sys.stderr.write('menu_pygame: capa: el latido es de hace %.1f s; '
+                         'la capa ya no esta pintando, no se abre el panel\n'
+                         % edad)
+        return None
+    try:
+        with open(vivo) as f:
+            partes = f.read().split()
+        ancho, alto = int(partes[0]), int(partes[1])
+    except Exception as e:
+        sys.stderr.write('menu_pygame: capa: no se entiende el latido (%s)\n' % e)
+        return None
+    if ancho < 200 or alto < 200:
+        sys.stderr.write('menu_pygame: capa: el latido dice %dx%d, que no '
+                         'parece una pantalla\n' % (ancho, alto))
+        return None
+    return (ancho, alto)
+
+
+def capa_activa():
+    """¿Esta el panel abierto POR la capa ahora mismo?"""
+    return _CAPA['fd'] >= 0
+
+
+# Lo ultimo que se leyo del latido, para poder restar.
+_CAPA_FPS = {'antes': None, 'fps': None, 'cuando': 0.0}
+
+
+def capa_fps(cada=0.5, ahora=None):
+    """Los fotogramas por segundo del juego. None si no se sabe.
+
+    ES UN DATO QUE SOLO TENEMOS NOSOTROS, y conviene entender por que. Desde
+    fuera, un proceso no puede saber a cuantos fotogramas va un juego: lo unico
+    que se ve desde fuera es una ventana. Los fotogramas los cuenta quien esta
+    DENTRO del bucle de dibujo, y ahi esta nuestra capa, que ya los apunta en
+    el latido. Por eso MangoHud tambien se mete dentro: no hay otra forma.
+
+    Se calcula restando dos latidos -fotogramas y reloj-, asi que la primera
+    lectura no puede contestar y devuelve None. Y si el latido es de una capa
+    anterior, que solo escribia el tamano, tambien: mejor no ensenar nada que
+    ensenar un numero inventado.
+    """
+    if not CAPA_RUTA:
+        return None
+    # NO SE MIRA EL FICHERO EN CADA VUELTA DEL PANEL. La capa lo reescribe una
+    # vez por segundo, asi que leerlo treinta veces por segundo son veintinueve
+    # lecturas que devuelven exactamente lo mismo.
+    if ahora is None:
+        ahora = time.time()
+    if (ahora - _CAPA_FPS['cuando']) < cada:
+        return _CAPA_FPS['fps']
+    _CAPA_FPS['cuando'] = ahora
+    try:
+        with open(CAPA_RUTA + '.vivo') as f:
+            partes = f.read().split()
+        fotogramas, segundos = int(partes[2]), float(partes[3])
+    except (OSError, ValueError, IndexError):
+        return None
+    antes = _CAPA_FPS['antes']
+    _CAPA_FPS['antes'] = (fotogramas, segundos)
+    if antes is None:
+        return None
+    d_fot = fotogramas - antes[0]
+    d_seg = segundos - antes[1]
+    # Si el juego se reinicio -o la capa empezo de nuevo- los contadores bajan.
+    # Entonces no se resta nada: se empieza a contar otra vez desde aqui.
+    if d_fot < 0 or d_seg <= 0.05:
+        return _CAPA_FPS['fps']
+    _CAPA_FPS['fps'] = int(round(d_fot / d_seg))
+    return _CAPA_FPS['fps']
+
+
+def _capa_cabecera(visible):
+    """Los 64 bytes de cabecera. El orden es el de struct cabecera_panel."""
+    def n(v):
+        return int(v & 0xffffffff).to_bytes(4, 'little')
+    b = b''.join((n(CAPA_MAGIA), n(CAPA_VERSION),
+                  n(_CAPA['ancho']), n(_CAPA['alto']),
+                  n(_CAPA['x']), n(_CAPA['y']),
+                  n(1 if visible else 0), n(_CAPA['gen']),
+                  n(CAPA_ORDEN_RGBA), n(_CAPA['latido'])))
+    return b + b'\x00' * (CAPA_CABEZA - len(b))
+
+
+def capa_abrir(pw, ph, ancho_frac=0.30):
+    """Prepara el fichero del panel y devuelve la superficie donde dibujar.
+
+    Devuelve None si algo no sale, y entonces quien llama abre la ventana de
+    siempre: esta via es una mejora, no un requisito.
+    """
+    if not CAPA_RUTA:
+        return None
+    # La misma geometria que la ventana, para que el menu se vea igual por las
+    # dos vias: a la izquierda, casi todo el alto, centrado en vertical.
+    ancho = max(320, min(int(pw * ancho_frac), int(pw * 0.6)))
+    alto = max(300, int(ph * 0.94))
+    arriba = max(0, (ph - alto) // 2)
+    try:
+        sup = pygame.Surface((ancho, alto))
+    except Exception as e:
+        sys.stderr.write('menu_pygame: capa: no se pudo crear la superficie '
+                         '(%s)\n' % e)
+        return None
+    fd = -1
+    try:
+        fd = os.open(CAPA_RUTA, os.O_RDWR | os.O_CREAT, 0o600)
+        os.ftruncate(fd, CAPA_CABEZA + ancho * alto * 4)
+    except OSError as e:
+        sys.stderr.write('menu_pygame: capa: no se pudo preparar %s (%s)\n'
+                         % (CAPA_RUTA, e))
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return None
+    _CAPA['fd'] = fd
+    _CAPA['ancho'] = ancho
+    _CAPA['alto'] = alto
+    _CAPA['x'] = 0
+    _CAPA['y'] = arriba
+    # Lo ultimo que se mando ya no sirve de referencia: la superficie es otra, y
+    # si el panel cambio de tamano ni siquiera mide lo mismo.
+    _CAPA['ultimos'] = None
+    # La generacion NO se reinicia a cero entre aperturas: la capa compara la
+    # que vio con la que hay, y volver a cero la haria creer que no ha cambiado
+    # nada. Se sigue subiendo desde donde iba.
+    try:
+        os.pwrite(fd, _capa_cabecera(False), 0)
+    except OSError as e:
+        sys.stderr.write('menu_pygame: capa: no se pudo escribir la cabecera '
+                         '(%s)\n' % e)
+        capa_cerrar()
+        return None
+    sys.stderr.write('menu_pygame: capa: panel de %dx%d en %s (pantalla del '
+                     'juego %dx%d); SIN ventana\n'
+                     % (ancho, alto, CAPA_RUTA, pw, ph))
+    return sup
+
+
+def _capa_bytes(sup):
+    """Los pixeles de la superficie en RGBA, con el nombre que tenga la
+    funcion en esta version de pygame."""
+    f = getattr(pygame.image, 'tobytes', None) or \
+        getattr(pygame.image, 'tostring', None)
+    if f is None:
+        return None
+    return f(sup, 'RGBA')
+
+
+def capa_enviar(sup):
+    """Manda la superficie al juego. Devuelve False si se perdio el camino."""
+    if _CAPA['fd'] < 0:
+        return False
+    datos = _capa_bytes(sup)
+    if datos is None:
+        sys.stderr.write('menu_pygame: capa: esta version de pygame no sabe '
+                         'dar los pixeles\n')
+        return False
+    esperado = _CAPA['ancho'] * _CAPA['alto'] * 4
+    if len(datos) != esperado:
+        sys.stderr.write('menu_pygame: capa: la superficie da %d bytes y se '
+                         'esperaban %d\n' % (len(datos), esperado))
+        return False
+    # EL LATIDO SIEMPRE, LOS PIXELES SOLO SI HAN CAMBIADO.
+    #
+    # El menu da una vuelta cada 30 ms y casi todas son iguales a la anterior:
+    # nadie esta moviendo el mando todo el rato. Escribir dos megas y pico en
+    # cada vuelta -y hacer que la capa los vuelva a copiar dentro del juego- es
+    # trabajo tirado, asi que se compara con lo ultimo que se mando.
+    _CAPA['latido'] = (_CAPA['latido'] + 1) & 0x7fffffff
+    cambio = datos != _CAPA['ultimos']
+    if cambio:
+        _CAPA['gen'] = (_CAPA['gen'] + 1) & 0x7fffffff
+    try:
+        # LOS PIXELES PRIMERO Y LA CABECERA DESPUES, en este orden y no al
+        # reves: la capa solo mira los pixeles cuando ve una generacion nueva,
+        # asi que la cabecera es la senal de "ya estan todos".
+        if cambio:
+            os.pwrite(_CAPA['fd'], datos, CAPA_CABEZA)
+        os.pwrite(_CAPA['fd'], _capa_cabecera(True), 0)
+    except OSError as e:
+        sys.stderr.write('menu_pygame: capa: no se pudo mandar el panel '
+                         '(%s)\n' % e)
+        return False
+    if cambio:
+        _CAPA['ultimos'] = datos
+    return True
+
+
+def capa_cerrar():
+    """Dice a la capa que deje de pintar y cierra el fichero.
+
+    Lo importante es la cabecera con visible=0: mientras este a 1, la capa
+    sigue copiando el panel sobre cada fotograma. Si este proceso muriera sin
+    pasar por aqui, el panel se quedaria pegado en la pantalla del juego; por
+    eso se escribe el cero ANTES de cerrar, y por eso WProton borra el fichero
+    al terminar la partida.
+    """
+    if _CAPA['fd'] < 0:
+        return
+    try:
+        os.pwrite(_CAPA['fd'], _capa_cabecera(False), 0)
+    except OSError as e:
+        sys.stderr.write('menu_pygame: capa: al apagar el panel (%s)\n' % e)
+    try:
+        os.close(_CAPA['fd'])
+    except OSError:
+        pass
+    _CAPA['fd'] = -1
+    sys.stderr.write('menu_pygame: capa: panel apagado\n')
+
+
+def overlay_presentar(sup):
+    """Le manda a la capa lo dibujado. Devuelve False si se rompio.
+
+    Hubo un "si no hay capa, pygame.display.flip()" para la ventana. Ya no hay
+    ventana: si no hay capa, el panel ni se abre.
+    """
+    return capa_enviar(sup)
+
+
+def overlay_abrir(ancho_frac=0.30):
+    """Prepara el panel DENTRO del juego. Devuelve la superficie o None.
+
+    AQUI HUBO UNA VENTANA, Y YA NO LA HAY.
+
+    La primera version del overlay abria una ventana X11 encima del juego, con
+    todo lo que eso arrastra: elegir en que pantalla (con gamescope el juego no
+    esta en la nuestra), apagar y encender el video de SDL para cambiarla,
+    pedirle al gestor que no robe el foco -y comprobar si lo habia robado
+    igual, y devolverlo-, fotografiar la pantalla para poder pintar el panel
+    semitransparente, y recortar esa foto por donde la ventana hubiera acabado
+    de verdad. Quinientas lineas, y cada una de ellas una forma distinta de
+    fallar segun el escritorio.
+
+    Y no era solo complejidad: era el fallo. Una ventana encima de un juego a
+    pantalla completa obliga al compositor a sacarlo de su camino directo a
+    pantalla, y la imagen se congela -el sonido sigue- hasta que algo la fuerza
+    a repintarse. En el modo Juego, ademas, la ventana va a la capa de overlay
+    de gamescope, que suele tener cogida MangoHud: ni se veia.
+
+    Ahora el panel va SIEMPRE por dentro del juego, como el de Steam y el de
+    MangoHud: la capa de Vulkan lo copia sobre el fotograma antes de que se
+    enseñe. Sin ventana no hay foco que robar, ni compositor al que molestar,
+    ni pantalla que elegir, ni foto que recortar.
+
+    SI LA CAPA NO ESTA, NO HAY MENU, y se dice. Antes habia una vuelta por la
+    ventana, y era peor el remedio que la enfermedad: en el modo Juego no se
+    veia y encima colgaba el juego.
+    """
+    _OV_COMPLETA[0] = None
+    _vivo = capa_viva()
+    if not _vivo:
+        sys.stderr.write(
+            'menu_pygame: overlay: la capa de Vulkan NO esta en este juego, '
+            'asi que no hay donde pintar el panel. Puede ser que el juego no '
+            'use Vulkan, o que falte la capa de 32 bits si el juego es de 32. '
+            'Mira el -capa.log de la carpeta de registros\n')
+        return None
+    sup = capa_abrir(_vivo[0], _vivo[1], ancho_frac)
+    if sup is None:
+        sys.stderr.write('menu_pygame: overlay: la capa esta pero no se pudo '
+                         'preparar el panel; no se abre\n')
+        return None
+    # EN QUE PANTALLA X ESTA EL JUEGO. No para ninguna ventana -no hay
+    # ventana-, sino para las teclas que se mandan desde el menu: XTEST las
+    # inyecta en UNA pantalla, y con gamescope por medio el juego no esta en la
+    # nuestra. Esto solo PREGUNTA por X11; no enciende ni apaga nada de SDL,
+    # asi que no arrastra nada de lo que la ventana arrastraba.
+    try:
+        _OV_PANTALLA[0] = overlay_pantalla() or os.environ.get('DISPLAY')
+    except Exception as _e:
+        _OV_PANTALLA[0] = os.environ.get('DISPLAY')
+        sys.stderr.write('menu_pygame: capa: no se pudo averiguar la pantalla '
+                         'del juego (%s); se usa la nuestra\n' % _e)
+    # LA CAPTURA DE PANTALLA, QUE SIGUE SIENDO UNA FILA DEL MENU.
+    #
+    # Es lo unico que sobrevive de la maquinaria de la foto. Se hace AHORA,
+    # antes de mandarle el panel a la capa, porque lo que hay que guardar es el
+    # juego y no el panel tapandolo.
+    #
+    # Y CON LA MISMA REGLA DE ANTES: en Wayland no se lanza una aplicacion del
+    # escritorio para fotografiar -spectacle y companía congelan el juego, que
+    # es justo lo que veniamos a evitar-. En X11 la saca el propio panel con
+    # XGetImage, sin lanzar nada. Si no se puede, la fila lo dira; una captura
+    # de menos no vale una partida.
+    _wl = bool(os.environ.get('WAYLAND_DISPLAY')) or \
+        (os.environ.get('XDG_SESSION_TYPE') or '').lower() == 'wayland'
+    _foto_cfg = os.environ.get('WP_OVERLAY_FOTO')
+    if _foto_cfg == '0':
+        return sup
+    if _wl and _foto_cfg != '1' and _OV_CAPTURA['metodo'] not in ('x11',):
+        if not _OV_CAPTURA['probados']:
+            sys.stderr.write(
+                'menu_pygame: overlay: sesion Wayland: la captura de pantalla '
+                'queda apagada. Aqui solo se puede fotografiar lanzando una '
+                'aplicacion del escritorio, y eso congela el juego. Con '
+                'WP_OVERLAY_FOTO=1 se intenta igual\n')
+        _OV_CAPTURA['metodo'] = 'ninguno'
+        _OV_CAPTURA['probados'] = True
+        _OV_FOTO_APAGADA[0] = True
+        return sup
+    try:
+        _OV_COMPLETA[0] = overlay_pantalla_captura(_vivo[0], _vivo[1])
+    except Exception as _e:
+        _OV_COMPLETA[0] = None
+        sys.stderr.write('menu_pygame: overlay: no se pudo fotografiar la '
+                         'pantalla (%s); la captura no estara\n' % _e)
+    _OV_FOTO_VALE[0] = _OV_COMPLETA[0] is not None
+    return sup
+
+
+def overlay_cerrar():
+    """Deja de pintar el panel y devuelve el juego a como estaba.
+
+    AQUI HUBO SESENTA LINEAS para deshacer lo que la ventana hacia: destruirla,
+    reponer el DISPLAY si se habia cambiado de pantalla, devolverle el foco al
+    juego -al destruir una ventana con foco, X no se lo da a quien estaba
+    antes, se lo da al padre o a la raiz, y el juego dejaba de pintar- y tirar
+    las fotos del fondo.
+
+    Sin ventana no hay nada de eso. Se le dice a la capa que deje de pintar y
+    ya esta.
+    """
+    capa_cerrar()
+    # EL EMPUJON DE UN PIXEL AL RATON SE QUEDA.
+    #
+    # No es cosa de la ventana: mientras el panel esta abierto, el mando esta
+    # capturado y al juego no le llega ni un evento. Hay juegos que, sin
+    # eventos de entrada, no vuelven a pintar hasta que les llega uno. Se le
+    # manda: un pixel y vuelta.
+    overlay_empujon_raton()
+    _OV_COMPLETA[0] = None
+    _OV_PANTALLA[0] = None
+
+
+def overlay_mover(datos, filas, sel):
+    """Traduce eventos de evdev en movimiento del menu.
+
+    Devuelve (sel, orden, cerrar). "orden" es lo elegido; "cerrar" dice que
+    hay que salir del menu.
+
+    Se mira SOLO lo que llega: pulsaciones de boton y el cruceta/stick como
+    eventos de eje. No hay repeticion automatica a proposito -el menu tiene
+    cinco filas- y asi no hay nada que se dispare solo.
+
+    EN CUANTO HAY UNA DECISION SE PARA, y el resto de la tanda se tira.
+    Importa: en una sola lectura puede venir "A" y detras "B" -se vacia la
+    cola entera cada vuelta-, y sin esto ganaba el ultimo, asi que elegir
+    "Cerrar el juego" y rozar B despues no cerraba nada. Lo pillo la prueba
+    del menu completo. Manda la PRIMERA decision, que es la que tomo la
+    persona; lo que venga detras ya no tiene a quien contarselo, porque el
+    menu se esta cerrando.
+    """
+    orden, cerrar = '', False
+    for (t, c, v) in datos:
+        if orden or cerrar:
+            break
+        if t == 3:                       # EV_ABS: cruceta y sticks
+            # La cruceta es ABS_HAT0Y (17) y vale -1/0/1; el stick es ABS_Y
+            # (1) y llega a decenas de miles, asi que se pide bastante
+            # recorrido para que no cuente un roce.
+            if c == 17:
+                paso = -1 if v < 0 else (1 if v > 0 else 0)
+            elif c == 1:
+                paso = -1 if v < -16000 else (1 if v > 16000 else 0)
+            else:
+                continue
+            if paso and filas:
+                sel = (sel + paso) % len(filas)
+            continue
+        if t != 1 or v != 1:             # solo pulsaciones de tecla/boton
+            continue
+        if c in (BTN_A, K_ENTER, K_KPENTER):
+            orden = filas[sel][0] if filas else 'volver'
+        elif c in (BTN_B, K_ESC):
+            cerrar = True
+        elif c in (K_UP,):
+            if filas:
+                sel = (sel - 1) % len(filas)
+        elif c in (K_DOWN,):
+            if filas:
+                sel = (sel + 1) % len(filas)
+    return sel, orden, cerrar
+
+
+def overlay_guardar_foto(estado):
+    """Escribe la captura de pantalla del juego. Devuelve el nombre o ''.
+
+    LA CAPTURA SALIO GRATIS, y conviene que quede dicho por que: el panel ya
+    fotografia la pantalla entera cada vez que se abre -es lo que hace que se
+    vea a traves-. Esa foto ES la captura del juego. Esta fila no fotografia
+    nada nuevo: escribe en un PNG la que ya estaba hecha.
+
+    Y POR ESO LA IMAGEN ES LA DEL INSTANTE EN QUE SE ABRIO EL MENU, no la de
+    cuando se pulsa la fila. Es lo que se quiere: lo que hay que guardar es el
+    juego, no el panel tapandolo. Si se volviera a fotografiar al pulsar, en la
+    captura saldria nuestro propio menu.
+    """
+    foto = _OV_COMPLETA[0]
+    if foto is None:
+        return ''
+    carpeta = estado.get('CAPTURAS') or ''
+    if not carpeta:
+        return ''
+    nombre = (estado.get('NOMBRE') or 'juego').strip()
+    # El nombre del fichero, limpio: de un titulo con espacios, dos puntos o
+    # barras sale un nombre que no se puede escribir en medio sistema.
+    limpio = ''.join(c if (c.isalnum() or c in '-_') else '_' for c in nombre)
+    limpio = limpio.strip('_') or 'juego'
+    try:
+        os.makedirs(carpeta, exist_ok=True)
+        base = '%s_%s' % (limpio[:60], time.strftime('%Y%m%d_%H%M%S'))
+        ruta = os.path.join(carpeta, base + '.png')
+        n = 2
+        while os.path.exists(ruta):
+            ruta = os.path.join(carpeta, '%s_%d.png' % (base, n))
+            n += 1
+        pygame.image.save(foto, ruta)
+        sys.stderr.write('menu_pygame: overlay: captura -> %s\n' % ruta)
+        return os.path.basename(ruta)
+    except Exception as e:
+        sys.stderr.write('menu_pygame: overlay: no se pudo guardar la captura '
+                         '(%s)\n' % e)
+        return ''
+
+
+def overlay_menu(marca, fds, estado_path, segundos_max=120.0,
+                 asignadas=None, tecla_marca='', mando_marca=''):
+    """El menu encima del juego. Devuelve la orden final ('' si solo se cerro).
+
+    $fds = los descriptores que el guardia YA tiene abiertos (mandos y
+    teclados). No se abre nada nuevo: leer dos veces el mismo mando es como se
+    duplicaban las pulsaciones en los menus.
+
+    $segundos_max es una red de seguridad, y se cuenta DESDE LO ULTIMO QUE
+    LLEGO: si el menu se queda abierto sin que llegue nada -porque la ventana
+    no se ve, por ejemplo-, se cierra solo y devuelve el mando al juego. Jamas
+    se queda el juego con el mando capturado y nadie mirando. Pero a quien se
+    para a leer el menu no se le cierra: cualquier cosa del mando o del teclado
+    pone el reloj a cero.
+    """
+    import struct
+    FMT = 'llHHi'
+    SZ = struct.calcsize(FMT)
+    estado = overlay_estado_leer(estado_path)
+    # $asignadas = las teclas asignadas a un boton EN ESTA PARTIDA. Es el mismo
+    # diccionario que usa el guardia en su bucle, asi que lo que se asigne aqui
+    # funciona en cuanto se cierra el menu.
+    if asignadas is None:
+        asignadas = {}
+    pantalla = 'principal'
+    # Por donde se ha venido, para que "<< Volver" suba UN nivel y no caiga a
+    # la principal: con los grupos de teclas hay dos niveles.
+    pila = []
+    grupo = ''
+    filas, titulo = overlay_filas_de(pantalla, estado, asignadas)
+    tecla_elegida = ''
+    # Una orden que WProton esta atendiendo y de la que se espera respuesta
+    # (la copia de la partida puede tardar). (orden, desde cuando).
+    esperando = [None, 0.0]
+    resultado = os.path.join(os.path.dirname(estado_path) or '.',
+                             '.overlay_resultado')
+    sel, aviso, orden_final = 0, '', ''
+    sup = overlay_abrir()
+    if sup is None:
+        # SIN CAPA NO HAY PANEL, y no hay nada que deshacer: no se ha abierto
+        # ninguna ventana ni se ha tocado nada del juego. Se deja escrito en
+        # el registro -overlay_abrir ya ha dicho por que- y se vuelve.
+        return ''
+    cogidos, prestado = overlay_mando_coger(fds, mando_marca)
+    # En una lista porque el "finally" de abajo lo mira, y asi no hace falta
+    # declararlo "nonlocal" ni arrastrarlo por el bucle.
+    mando_prestado = [prestado]
+    sys.stderr.write('menu_pygame: overlay ABIERTO (%d de %d dispositivo(s) '
+                     'capturados%s)\n'
+                     % (cogidos, len(fds),
+                        ', prestados por el mapeador' if prestado else ''))
+    t0 = time.time()
+    try:
+        while True:
+            ahora = time.time()
+            # EL TOPE ES DE INACTIVIDAD, no de duracion.
+            #
+            # La red de seguridad esta para el caso de "nadie esta ahi" o "el
+            # panel no se ve": si el mando esta capturado y nadie puede
+            # decidir, hay que devolverlo al juego. Pero medido desde que se
+            # abrio el menu, cerraba tambien a quien se para a leerlo dos
+            # minutos, que es un cierre inexplicable desde fuera. Cualquier
+            # cosa que llegue del mando o del teclado pone el reloj a cero.
+            if ahora - t0 > segundos_max:
+                sys.stderr.write('menu_pygame: overlay: %.0fs sin que llegue '
+                                 'nada; se cierra y se devuelve el mando al '
+                                 'juego\n' % segundos_max)
+                break
+            datos = []
+            for p, fd in list(fds.items()):
+                crudo = b''
+                try:
+                    while True:
+                        trozo = os.read(fd, SZ * 256)
+                        if not trozo:
+                            break
+                        crudo += trozo
+                        if len(trozo) < SZ * 256:
+                            break
+                except (BlockingIOError, OSError):
+                    pass
+                for i in range(0, len(crudo) - SZ + 1, SZ):
+                    _s, _us, t, c, v = struct.unpack(FMT, crudo[i:i + SZ])
+                    datos.append((t, c, v))
+            if datos:
+                t0 = ahora          # hay alguien ahi: el reloj, a cero
+            sel, orden, cerrar = overlay_mover(datos, filas, sel)
+            if cerrar:
+                break
+            if orden:
+                if orden == 'volver':
+                    break
+                if orden in ('salir', 'matar'):
+                    orden_final = orden
+                    break
+                if orden == 'foto':
+                    # LA CAPTURA LA HACE EL OVERLAY, no WProton: la foto ya
+                    # esta sacada aqui y mandarla por la marca significaria
+                    # pasarle varios megas de imagen a bash por un fichero.
+                    # El menu se queda abierto y dice como se llama.
+                    _n = overlay_guardar_foto(estado)
+                    if _n:
+                        aviso = 'Guardada: %s' % _n
+                    elif _OV_CAPTURA['metodo'] == 'ninguno':
+                        # EL MOTIVO DE VERDAD Y QUE HACER, no un "no se pudo" a
+                        # secas, que mandaria a buscar un fallo nuestro que no
+                        # existe. Y son DOS motivos distintos: que no haya
+                        # herramienta, o que la haya y no se use a proposito.
+                        if _OV_FOTO_APAGADA[0]:
+                            aviso = ('Aqui la foto congela el juego, asi que '
+                                     'esta apagada. Para volver a intentarlo: '
+                                     'WP_OVERLAY_FOTO=1 en settings.conf.')
+                        else:
+                            aviso = ('No hay con que: instala spectacle (KDE), '
+                                     'grim (Sway/Hyprland) o gnome-screenshot.')
+                    elif os.environ.get('WP_OVERLAY_FOTO') == '0':
+                        aviso = 'La foto esta apagada (WP_OVERLAY_FOTO=0).'
+                    else:
+                        aviso = ('No se pudo guardar la captura (mira el '
+                                 'registro).')
+                elif orden in ('mandar', 'asignar'):
+                    pila.append(pantalla)
+                    pantalla = ('mandar_grupo' if orden == 'mandar'
+                                else 'asignar_grupo')
+                    sel, aviso = 0, ''
+                elif orden.startswith('grupo_m:') or orden.startswith('grupo_a:'):
+                    pila.append(pantalla)
+                    grupo = orden.split(':', 1)[1]
+                    pantalla = ('mandar' if orden.startswith('grupo_m:')
+                                else 'asignar_tecla')
+                    sel, aviso = 0, ''
+                elif orden == 'volver_menu':
+                    # UNA PANTALLA ATRAS, no directo a la principal: con los
+                    # grupos hay dos niveles, y volver del todo obligaba a
+                    # recorrer el menu entero otra vez para probar la tecla de
+                    # al lado.
+                    pantalla = pila.pop() if pila else 'principal'
+                    sel, aviso = 0, ''
+                elif orden.startswith('tecla:'):
+                    # MANDARLA AHORA. El menu se queda abierto a proposito:
+                    # asi se puede probar una y otra sin reabrirlo. Pero la
+                    # tecla va al juego, que esta DETRAS del panel, asi que lo
+                    # que se ve es lo que diga el aviso.
+                    #
+                    # PRIMERO EL MAPEADOR Y DESPUES XTEST, y el orden importa:
+                    # el teclado virtual del mapeador lo lee el compositor
+                    # igual en X11 que en Wayland; XTEST solo existe en X11 y
+                    # en la prueba de Dani -Wayland con KDE- ni el servidor X
+                    # daba la tecla por pulsada.
+                    _n = orden.split(':', 1)[1]
+                    _etq = (ov_tecla(_n) or ('', '?', ()))[1]
+                    if (tecla_marca and overlay_mapeador_vivo()
+                            and overlay_tecla_por_mapeador(tecla_marca, _n)):
+                        aviso = '%s: mandada por el teclado del mapeador.' % _etq
+                        _ok, _det = True, 'por el mapeador'
+                    else:
+                        _ok, _det = overlay_tecla_enviar(_OV_PANTALLA[0], _n)
+                        aviso = '%s: %s' % (_etq, _det)
+                    sys.stderr.write('menu_pygame: overlay: tecla %s -> %s '
+                                     '(%s)\n' % (_n, 'ok' if _ok else 'FALLO',
+                                                 _det))
+                elif orden.startswith('atecla:'):
+                    tecla_elegida = orden.split(':', 1)[1]
+                    pila.append(pantalla)
+                    pantalla, sel, aviso = 'asignar_boton', 0, ''
+                elif orden.startswith('aboton:'):
+                    _b = orden.split(':', 1)[1]
+                    _cod = dict((c, k) for c, k, _e in OV_BOTONES).get(_b)
+                    if _cod and tecla_elegida:
+                        asignadas[_b] = tecla_elegida
+                        _OV_ASIGNADAS[_cod] = tecla_elegida
+                        # Y QUE DURE: se le pide a WProton que lo escriba en
+                        # las teclas de este juego. Lo de ahora lo hace el
+                        # menu; lo de la proxima partida, el mapeador.
+                        _g = overlay_orden_mandar(marca, 'asignar:%s:%s'
+                                                  % (_b, tecla_elegida))
+                        if _g:
+                            # Se espera la respuesta: puede decir que de ahora
+                            # en adelante lo hace el mapeador.
+                            try:
+                                os.remove(resultado)
+                            except OSError:
+                                pass
+                            esperando[0] = 'asignar:%s' % _b
+                            esperando[1] = ahora
+                        _etq = (ov_tecla(tecla_elegida) or ('', '?', ()))[1]
+                        aviso = ('Hecho: %s manda %s. El boton sigue haciendo '
+                                 'lo suyo en el juego.%s'
+                                 % (_b, _etq,
+                                    '' if _g else ' (no se pudo guardar para '
+                                    'la proxima)'))
+                    else:
+                        aviso = 'No se pudo asignar (mira el registro).'
+                    pantalla, sel, tecla_elegida = 'principal', 0, ''
+                    del pila[:]
+                elif orden == 'quitar':
+                    _n = len(asignadas)
+                    asignadas.clear()
+                    _OV_ASIGNADAS.clear()
+                    aviso = ('Quitadas las %d tecla(s) de esta partida. Lo que '
+                             'se guardo en las teclas del juego sigue ahi.' % _n)
+                    sel = 0
+                elif orden == 'copia':
+                    if overlay_orden_mandar(marca, 'copia'):
+                        try:
+                            os.remove(resultado)
+                        except OSError:
+                            pass
+                        esperando[0], esperando[1] = 'copia', ahora
+                        aviso = 'Copiando la partida guardada...'
+                    else:
+                        aviso = 'WProton no cogio la orden (mira el registro).'
+                filas, titulo = overlay_filas_de(pantalla, estado, asignadas,
+                                                 grupo)
+                sel = min(sel, max(0, len(filas) - 1))
+            # ¿HA CONTESTADO WPROTON? Lo que tarda no se puede saber de
+            # antemano -una copia de partidas puede ser de dos megas o de
+            # dos gigas-, asi que se pregunta por un fichero en cada vuelta en
+            # vez de quedarse esperando: el menu sigue usandose mientras.
+            if esperando[0]:
+                if os.path.exists(resultado):
+                    try:
+                        with open(resultado) as fh:
+                            aviso = fh.read().strip() or 'Hecho.'
+                    except OSError:
+                        aviso = 'Hecho (no se pudo leer la respuesta).'
+                    # ¿LO HACE YA EL MAPEADOR? Entonces el panel tiene que
+                    # DEJAR DE MANDAR esa tecla, o se manda dos veces: una por
+                    # el teclado del mapeador y otra por XTEST desde aqui.
+                    if aviso.startswith('@MAPEADOR@'):
+                        aviso = aviso[len('@MAPEADOR@'):].strip()
+                        _b = (esperando[0] or '').split(':', 1)
+                        if len(_b) == 2 and _b[0] == 'asignar':
+                            asignadas.pop(_b[1], None)
+                            _c = dict((c, k) for c, k, _e in OV_BOTONES).get(_b[1])
+                            if _c is not None:
+                                _OV_ASIGNADAS.pop(_c, None)
+                            filas, titulo = overlay_filas_de(pantalla, estado,
+                                                             asignadas, grupo)
+                            sel = min(sel, max(0, len(filas) - 1))
+                    try:
+                        os.remove(resultado)
+                    except OSError:
+                        pass
+                    esperando[0] = None
+                elif ahora - esperando[1] > 180:
+                    aviso = ('Sigue trabajando. Puedes volver al juego: '
+                             'terminara igual.')
+                    esperando[0] = None
+            try:
+                overlay_pintar(sup, filas, sel, estado, aviso=aviso,
+                               titulo=titulo)
+                if not overlay_presentar(sup):
+                    sys.stderr.write('menu_pygame: overlay: se perdio el '
+                                     'camino del panel; se cierra\n')
+                    break
+            except Exception as e:
+                sys.stderr.write('menu_pygame: overlay: fallo al dibujar '
+                                 '(%s); se cierra\n' % e)
+                break
+            # Los eventos de la ventana se vacian para que el gestor no la crea
+            # colgada. NO se usan para navegar: no tenemos el foco.
+            try:
+                pygame.event.pump()
+            except Exception:
+                pass
+            time.sleep(0.03)
+    finally:
+        overlay_capturar(fds, False)
+        # Y SE AVISA DE QUE EL MANDO VUELVE A ESTAR LIBRE. SIEMPRE.
+        #
+        # Antes esto solo se hacia si se lo habiamos pedido prestado, y se
+        # quedaba corto: el caso de verdad es otro. Al asignar una tecla, el
+        # panel REINICIA el mapeador mientras sigue abierto, asi que el
+        # mapeador nuevo intenta capturar el mando, lo encuentra ocupado -lo
+        # tiene este panel- y se queda esperando. Si al cerrarse el panel no le
+        # dijera nada, ese mapeador se quedaria sin mando el resto de la
+        # partida y el .keys no traduciria nada.
+        #
+        # Decirlo siempre es seguro: el mapeador solo coge lo que ya era suyo
+        # -lo que cedio, o lo que no pudo capturar por estar ocupado-, asi que
+        # a uno que no queria capturar esto no le hace capturar nada.
+        #
+        # Va en el "finally" a proposito: si el panel revienta a mitad, el
+        # mapeador recupera el mando igual. Y si lo matan de golpe y no llega a
+        # escribirse, el mapeador lo recupera solo a los 180 s.
+        if mando_marca:
+            overlay_mando_pedir(mando_marca, 'coge')
+        overlay_cerrar()
+        sys.stderr.write('menu_pygame: overlay cerrado%s\n'
+                         % (' -> %s' % orden_final if orden_final else ''))
+    if orden_final:
+        try:
+            with open(marca, 'w') as fh:
+                fh.write(orden_final + '\n')
+        except Exception as e:
+            sys.stderr.write('menu_pygame: overlay: no se pudo escribir la '
+                             'orden (%s)\n' % e)
+    return orden_final
+
+def guardia(marca, segundos=5.0, combo='select', ov_combo='select_l1',
+            ov_tecla='ctrl_alt_w'):
     # Vigila los mandos DURANTE la partida esperando la combinacion de salida.
     #
     # Combinaciones (ajuste PAD_EXIT_COMBO):
@@ -5202,8 +8450,69 @@ def guardia(marca, segundos=5.0, combo='select'):
         REQ, nombre_combo = (L3, R3), 'L3+R3'
     elif combo == 'start':
         REQ, nombre_combo = (SELECT, START), 'Select+Start'
+    elif combo in ('no', 'off', 'ninguna'):
+        # SIN COMBINACION DE CIERRE, pero el vigilante sigue corriendo.
+        #
+        # Hace falta desde que existe el overlay: el menu lo dibuja ESTE
+        # proceso, asi que quien apague el cierre con el mando se quedaba
+        # tambien sin menu, sin que nada lo explicara. Ahora se puede tener uno
+        # sin el otro.
+        REQ, nombre_combo = (), 'ninguna'
     else:
         REQ, nombre_combo = (SELECT,), 'Select'
+    # EL OVERLAY: su combinacion, y la del teclado si la hay.
+    #
+    # Se resuelven aqui, una vez, y no dentro del bucle: si el nombre no se
+    # reconoce o esta apagado, OV_* queda en None y no se vigila nada.
+    OV_PAD, ov_pad_nombre = overlay_combo(ov_combo)
+    OV_TEC, ov_tec_nombre = overlay_combo(ov_tecla, OVERLAY_TECLAS)
+    # Y UNA COMPROBACION QUE AHORRA UN FALLO RARISIMO DE DIAGNOSTICAR: que la
+    # combinacion del overlay no sea la MISMA que la de salida. Con l3r3 en
+    # las dos, abrir el menu y cerrar el juego serian el mismo gesto, y el
+    # usuario veria el juego cerrarse "solo" al abrir el menu.
+    if OV_PAD and set(OV_PAD) == set(REQ):
+        sys.stderr.write('menu_pygame: la combinacion del overlay (%s) es la '
+                         'MISMA que la de cierre; se desactiva el overlay del '
+                         'mando\n' % ov_pad_nombre)
+        OV_PAD, ov_pad_nombre = None, ''
+    # Las carpetas de los ficheros con los que habla WProton. Se derivan de la
+    # marca para no depender de mas argumentos.
+    _rt = os.path.dirname(marca) or '.'
+    ov_estado = os.path.join(_rt, '.juego_estado')
+    # La marca con la que el MAPEADOR pide abrir el panel: existe porque,
+    # con el mando capturado por el, aqui no llega ni un evento.
+    ov_abrir = os.path.join(_rt, '.overlay_abrir')
+    # Y la marca por la que se le piden teclas al mapeador, que es quien tiene
+    # el teclado virtual. Es el mismo fichero que WProton le pasa a el en
+    # WP_TECLA_MARCA.
+    ov_tecla_marca = os.path.join(_rt, '.overlay_tecla')
+    # Y la marca por la que se le pide el MANDO prestado: el mapeador y el
+    # panel no pueden tenerlo capturado los dos a la vez. Mismo fichero que
+    # WProton le pasa a el en WP_MANDO_MARCA.
+    ov_mando_marca = os.path.join(_rt, '.overlay_mando')
+    # EL RATON VIRTUAL, AHORA Y NO AL USARLO.
+    #
+    # Un dispositivo de uinput recien creado tarda un momento en que el
+    # compositor lo abra -udev de por medio-, asi que crearlo en el momento de
+    # darle el empujon perderia justo el primero, que es el que hace falta.
+    raton_virtual_abrir()
+    try:
+        os.remove(ov_abrir)       # de la partida anterior, si quedo
+    except OSError:
+        pass
+    if OV_PAD or OV_TEC:
+        sys.stderr.write('menu_pygame: overlay disponible con %s\n'
+                         % ' / '.join(x for x in (ov_pad_nombre, ov_tec_nombre) if x))
+    else:
+        sys.stderr.write('menu_pygame: overlay desactivado\n')
+    # De que tipo es cada dispositivo abierto. El mando y el teclado se leen
+    # igual, pero la combinacion de CIERRE solo se busca en los mandos: en un
+    # teclado no existe el codigo de Select, y preguntarselo solo gasta.
+    tipo = {}
+    # Las teclas asignadas a un boton en esta partida, por el nombre corto que
+    # usa WProton ("a", "pageup"...). El menu lo ensena y lo edita; el bucle de
+    # aqui abajo trabaja con _OV_ASIGNADAS, que es lo mismo pero por codigo.
+    _ov_asig_cortos = {}
     # Los botones se cuentan POR DISPOSITIVO, no en un monton comun.
     #
     # Un mismo mando puede aparecer como varios dispositivos, y ademas Steam
@@ -5216,14 +8525,18 @@ def guardia(marca, segundos=5.0, combo='select'):
     desde = None
     avisado = set()
     ultimo_escaneo = 0.0
-    sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para cerrar)\n'
-                     % (nombre_combo, segundos))
+    if REQ:
+        sys.stderr.write('menu_pygame: guardia activo (%s durante %.0fs para '
+                         'cerrar)\n' % (nombre_combo, segundos))
+    else:
+        sys.stderr.write('menu_pygame: guardia activo SIN combinacion de '
+                         'cierre (solo para el overlay)\n')
     # EL PUNTERO: un movimiento minimo, repartido en los primeros segundos.
     #
     # El cursor es lo MENOS importante del guardia: si algo va mal ahi, no
     # puede llevarse por delante el cierre del juego.
     try:
-        _cursor = cursor_abrir()
+        _cursor = cursor_abrir(os.path.dirname(marca) or None)
     except Exception as e:
         sys.stderr.write('menu_pygame: fallo preparando el puntero (%s)\n' % e)
         _cursor = None
@@ -5240,19 +8553,44 @@ def guardia(marca, segundos=5.0, combo='select'):
                 if p not in fds:
                     try:
                         fds[p] = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+                        tipo[p] = 'pad'
                         sys.stderr.write('menu_pygame: guardia vigilando %s\n' % p)
                     except OSError as e:
                         if p not in avisado:
                             avisado.add(p)
                             sys.stderr.write('menu_pygame: guardia no puede leer %s (%s)\n'
                                              % (p, e))
-        if not fds:
+            # LOS TECLADOS, solo si el overlay tiene una combinacion de
+            # teclado. Si no, no se abren: no hay ninguna razon para que el
+            # vigilante este leyendo lo que escribe nadie.
+            if OV_TEC:
+                for p in find_raw_keys():
+                    if p not in fds:
+                        try:
+                            fds[p] = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+                            tipo[p] = 'tec'
+                            sys.stderr.write('menu_pygame: guardia vigilando el '
+                                             'teclado %s (para %s)\n'
+                                             % (p, ov_tec_nombre))
+                        except OSError as e:
+                            if p not in avisado:
+                                avisado.add(p)
+                                sys.stderr.write('menu_pygame: guardia no puede '
+                                                 'leer el teclado %s (%s)\n' % (p, e))
+        if not any(t == 'pad' for t in tipo.values()):
             if 'sin_mandos' not in avisado:
                 avisado.add('sin_mandos')
                 sys.stderr.write('menu_pygame: guardia SIN MANDOS que leer: '
                                  'el cierre con el mando no funcionara\n')
-            time.sleep(1.0)
-            continue
+            # OJO: NO se corta la vuelta si hay teclados.
+            #
+            # Antes aqui habia un "continue" a secas, porque lo unico que
+            # hacia el vigilante era esperar la combinacion del mando. Con el
+            # overlay ya no: en un sobremesa con teclado y sin mando, esto
+            # dejaba Ctrl+Alt+W sin vigilar y el menu no abria nunca.
+            if not fds:
+                time.sleep(1.0)
+                continue
         for p, fd in list(fds.items()):
             # SE VACIA LA COLA ENTERA, NO 32 EVENTOS.
             #
@@ -5307,12 +8645,40 @@ def guardia(marca, segundos=5.0, combo='select'):
                     # parar, asi que se comian el cupo de 12 antes de que
                     # nadie pulsara nada y no se registraba ni un boton. En
                     # los registros de un tester no habia ni una linea.
-                    if _btn_log[0] < 12:
+                    #
+                    # Y SOLO DE LOS MANDOS. Desde que el vigilante lee tambien
+                    # el teclado -para la combinacion del overlay-, apuntar
+                    # "boton 17" seria apuntar lo que la persona ESCRIBE. Eso
+                    # no se registra: no hace falta para nada y no es nuestro.
+                    if _btn_log[0] < 12 and tipo.get(p) == 'pad':
                         _btn_log[0] += 1
                         sys.stderr.write('menu_pygame: guardia: boton %d en %s '
                                          '(la combinacion espera %s)\n'
                                          % (c, p, list(REQ)))
-                    if c in REQ:
+                    # ¿ESTE BOTON LLEVA COLGADA UNA TECLA? Lo que se asigno
+                    # desde el panel se manda AQUI, que es el unico sitio que
+                    # ve los botones mientras se juega.
+                    #
+                    # Va envuelto y no puede cortar la vuelta: una tecla que no
+                    # se pueda mandar no tiene por que llevarse por delante el
+                    # cierre del juego, que es lo importante de este bucle.
+                    if tipo.get(p) == 'pad' and c in _OV_ASIGNADAS:
+                        try:
+                            _ok, _det = overlay_tecla_enviar(_OV_PANTALLA[0],
+                                                             _OV_ASIGNADAS[c])
+                            sys.stderr.write('menu_pygame: boton %d -> %s '
+                                             '(%s)\n'
+                                             % (c, _OV_ASIGNADAS[c], _det))
+                            if not _ok:
+                                del _OV_ASIGNADAS[c]
+                                sys.stderr.write('menu_pygame: se deja de '
+                                                 'mandar esa tecla: no se '
+                                                 'pudo\n')
+                        except Exception as _e:
+                            sys.stderr.write('menu_pygame: fallo mandando la '
+                                             'tecla del boton %d (%s)\n'
+                                             % (c, _e))
+                    if c in REQ and tipo.get(p) == 'pad':
                         # SI YA ESTABA PULSADO, NO SE REINICIA EL RELOJ, pero
                         # se apunta: dos pulsaciones seguidas sin soltada por
                         # medio son la firma de una soltada perdida, que es lo
@@ -5377,12 +8743,89 @@ def guardia(marca, segundos=5.0, combo='select'):
                              'dispositivo(s). Revisa los permisos de '
                              '/dev/input (Runners y herramientas -> Arreglar '
                              'permisos del mando)\n' % len(fds))
-        # combinacion de cierre: entera en UN dispositivo
+        # EL OVERLAY, ANTES QUE EL CIERRE.
+        #
+        # Va primero a proposito: la combinacion del overlay lleva Select, que
+        # tambien es la de cierre. Si el reloj de cierre corriera antes, abrir
+        # el menu y dejarlo abierto cinco segundos cerraria el juego.
+        ov_cual = None
+        # ¿NOS LO HA PEDIDO EL MAPEADOR? Cuando el .keys hace que el mapeador
+        # capture el mando en exclusiva, aqui no llega NI UN evento: la
+        # combinacion del panel no se podria ver. En ese caso la vigila el
+        # mapeador y nos deja esta marca, igual que ya hace con el cierre.
+        if (OV_PAD or OV_TEC) and os.path.exists(ov_abrir):
+            try:
+                os.remove(ov_abrir)
+            except OSError:
+                pass
+            ov_cual = 'el mapeador (tiene el mando capturado)'
+            sys.stderr.write('menu_pygame: el mapeador pide abrir el panel\n')
+        if ov_cual is None and (OV_PAD or OV_TEC):
+            for p, aqui in pulsados.items():
+                if not aqui:
+                    continue
+                esperado = OV_PAD if tipo.get(p) == 'pad' else OV_TEC
+                if esperado and all(b in aqui for b in esperado):
+                    ov_cual = p
+                    break
+        if ov_cual is not None:
+            sys.stderr.write('menu_pygame: combinacion del overlay en %s -> se '
+                             'abre el menu\n' % ov_cual)
+            _orden = ''
+            try:
+                _orden = overlay_menu(marca, fds, ov_estado,
+                                      asignadas=_ov_asig_cortos,
+                                      tecla_marca=ov_tecla_marca,
+                                      mando_marca=ov_mando_marca)
+            except Exception as e:
+                # EL OVERLAY NO PUEDE LLEVARSE POR DELANTE EL CIERRE DEL
+                # JUEGO. Es lo mismo que se hace con el puntero: si falla, se
+                # apunta, se desactiva y el vigilante sigue siendo lo que era.
+                sys.stderr.write('menu_pygame: el overlay fallo (%s); se '
+                                 'desactiva y se sigue vigilando el cierre\n' % e)
+                OV_PAD, OV_TEC = None, None
+                try:
+                    overlay_cerrar()
+                except Exception:
+                    pass
+            # SE OLVIDA LO PULSADO AL VOLVER.
+            #
+            # Al salir del menu, Select puede seguir fisicamente apretado. Sin
+            # esto, el reloj de cierre contaria desde antes de abrir el menu y
+            # el juego se cerraria al poco de volver a jugar. Olvidarlo obliga
+            # a soltar y volver a pulsar, que es el lado seguro.
+            pulsados.clear()
+            _desde.clear()
+            desde = None
+            _soltado_req[0] = False
+            # Y EL RELOJ DEL AVISO "60s SIN RECIBIR NADA", TAMBIEN.
+            #
+            # Mientras el panel esta abierto, este bucle no lee los mandos: los
+            # lee el panel. Con el reloj corriendo, un minuto de menu disparaba
+            # un aviso que manda a arreglar los permisos de /dev/input cuando
+            # no pasa absolutamente nada. Salio en el registro de Dani entre
+            # dos lineas que decian que el mando iba perfectamente.
+            _t0 = time.time()
+            avisado.discard('mudo')
+            if _orden:
+                sys.stderr.write('menu_pygame: el overlay pidio "%s"\n' % _orden)
+                cursor_cerrar(_cursor)
+                return 0
+            continue
+        # combinacion de cierre: entera en UN dispositivo, y SOLO de un mando
+        #
+        # OJO CON LA LISTA VACIA: "all(... for b in ())" es True, asi que sin
+        # el "if REQ" de abajo, apagar la combinacion de cierre haria que se
+        # cumpliera SIEMPRE y el juego se cerraria a los cinco segundos de
+        # empezar. Es el tipo de fallo que no se ve leyendo la linea.
         cual = None
-        for p, aqui in pulsados.items():
-            if all(b in aqui for b in REQ):
-                cual = p
-                break
+        if REQ:
+            for p, aqui in pulsados.items():
+                if tipo.get(p) != 'pad':
+                    continue
+                if all(b in aqui for b in REQ):
+                    cual = p
+                    break
         desde, _cerrar = reloj_salida(desde, cual is not None,
                                       _soltado_req[0], time.time(), segundos)
         _soltado_req[0] = False
@@ -5411,6 +8854,8 @@ def guardia(marca, segundos=5.0, combo='select'):
             # combinacion, se apunta su codigo. Asi, si en algun mando los
             # botones no son los estandar, el registro lo dice.
             for p, aqui in pulsados.items():
+                if tipo.get(p) != 'pad':
+                    continue          # del teclado no se apunta lo pulsado
                 if aqui and 'mantiene_%s' % p not in avisado:
                     avisado.add('mantiene_%s' % p)
                     sys.stderr.write('menu_pygame: guardia: %s mantiene %s '
@@ -5421,7 +8866,9 @@ def guardia(marca, segundos=5.0, combo='select'):
 if sys.argv[1] == 'guardia':
     sys.exit(guardia(sys.argv[2],
                      float(sys.argv[3]) if len(sys.argv) > 3 else 5.0,
-                     sys.argv[4] if len(sys.argv) > 4 else 'select'))
+                     sys.argv[4] if len(sys.argv) > 4 else 'select',
+                     sys.argv[5] if len(sys.argv) > 5 else 'select_l1',
+                     sys.argv[6] if len(sys.argv) > 6 else 'ctrl_alt_w'))
 
 if sys.argv[1] == 'logo':
     sys.exit(generar_imagenes(sys.argv[2]))
