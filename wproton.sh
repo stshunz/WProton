@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.23"
+WPROTON_VERSION="2.24"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -363,6 +363,7 @@ OVERLAY_TECLA=ctrl_alt_w                 # ctrl_alt_w|ctrl_alt_m|shift_f12|ctrl_
 # seguridad, no un ajuste para trastear: con 0 se monta como antes de octubre
 # del 26, por si un fuse-overlayfs raro no tragara el esquema nuevo.
 MONTAJE_ANIDADO=1                        # 1 = el juego cuelga de dentro del montaje
+MONTAJE_RUTA_CORTA=0                     # 1 = montar en una ruta lo mas corta posible
 # EL MENU DENTRO DEL JUEGO (capa de Vulkan). Apagado por omision porque hay que
 # compilar la capa una vez (Ajustes -> Menu encima del juego), y porque hasta
 # que no se confirme en varios equipos no se enciende sola a nadie.
@@ -684,6 +685,7 @@ OVERLAY="$OVERLAY"
 OVERLAY_COMBO="$OVERLAY_COMBO"
 OVERLAY_TECLA="$OVERLAY_TECLA"
 MONTAJE_ANIDADO="$MONTAJE_ANIDADO"
+MONTAJE_RUTA_CORTA="$MONTAJE_RUTA_CORTA"
 CAPA_VULKAN="$CAPA_VULKAN"
 # --------------------------------------------------------------------------
 # CARPETAS DE JUEGOS ADICIONALES
@@ -1439,10 +1441,66 @@ ajuste_url_migrar() {
     return 0
 }
 
+ruta_largo() { printf '%s' "${#1}"; }
+ruta_niveles() { printf '%s' "$(printf '%s' "$1" | tr -cd '/' | wc -c | tr -d ' ')"; }
+
+montaje_ruta_corta_aplicar() {
+    # MONTAR EN UNA RUTA CORTA, SI SE PIDE.
+    #
+    # QUE PROBLEMA RESUELVE
+    #
+    # Un juego viejo -los arcades sobre todo- puede guardar las rutas de sus
+    # datos en un buffer de tamano FIJO. Si la ruta que le damos es mas larga
+    # que ese buffer, la ruta se corta, el fichero no se abre y el juego dice
+    # que le falta un dato suyo. Nunca dice que la ruta sea larga: dice que no
+    # tiene el dato.
+    #
+    # Y nosotros le damos una ruta MUCHO mas larga cuando el juego viene de un
+    # archivo que cuando viene de una carpeta. Medido con el caso de Jurassic
+    # Park (02/11):
+    #
+    #   carpeta:  .../ROMs/windows/JurassicPark                     58
+    #   montaje:  .../wsquashfs/tmp_mount/JurassicPark/upper        84
+    #
+    # 26 caracteres y 3 niveles mas, por el mismo juego. Con un fichero de
+    # datos dentro, 78 contra 104.
+    #
+    # POR QUE ESTO ES UN AJUSTE Y NO EL COMPORTAMIENTO NORMAL
+    #
+    # Porque saca el punto de montaje FUERA de la carpeta portable, y eso es
+    # justo lo que WProton evita. Montar en /tmp no instala nada ni escribe
+    # datos ahi -los saves siguen en overlays/, que no se toca- pero deja un
+    # directorio fuera. De fabrica va apagado: solo se enciende quien tenga un
+    # juego con esta pinta.
+    #
+    # Y SE COMPRUEBA ANTES DE USARLO: hay sistemas con /tmp montado "noexec",
+    # y ahi el juego no podria ni arrancar. Mejor quedarse como siempre que
+    # cambiar un fallo por otro peor.
+    [ "${MONTAJE_RUTA_CORTA:-0}" = 1 ] || return 0
+    local _base="/tmp/wp-$(id -u 2>/dev/null || printf '0')"
+    mkdir -p "$_base" 2>/dev/null || {
+        log "ruta corta: no se puede crear $_base; se sigue en $MOUNT_BASE" WARN; return 0; }
+    # ¿Se puede EJECUTAR algo ahi?
+    local _t="$_base/.prueba_exec"
+    printf '#!/bin/sh\nexit 7\n' > "$_t" 2>/dev/null
+    chmod +x "$_t" 2>/dev/null
+    "$_t" >/dev/null 2>&1
+    local _rc=$?
+    rm -f "$_t" 2>/dev/null
+    if [ "$_rc" != 7 ]; then
+        log "ruta corta: $_base no deja ejecutar (noexec?); se sigue en $MOUNT_BASE" WARN
+        return 0
+    fi
+    log "ruta corta: montaje en $_base ($(ruta_largo "$_base") caracteres) en vez de $MOUNT_BASE ($(ruta_largo "$MOUNT_BASE")); los saves NO se mueven, siguen en $OVERLAY_BASE"
+    MOUNT_BASE="$_base"
+    return 0
+}
+
 load_settings() {
     # shellcheck disable=SC1090
     [ -f "$SETTINGS_FILE" ] && . "$SETTINGS_FILE"
     [ -f "$SETTINGS_FILE" ] || save_settings   # crear el fichero la primera vez
+    montaje_ruta_corta_aplicar
     # EL AJUSTE QUE CAMBIO DE NOMBRE.
     #
     # Hasta la 2.10 se llamaba CRACK_NOMBRE; ahora es ISO_USUARIO, que es como
@@ -2831,6 +2889,398 @@ steam_abrir() {
     sleep 1
     loading_clear
     return 0
+}
+
+PROPIEDADES_PY="$RUNTIME_DIR/propiedades.py"
+
+write_propiedades() {
+    grep -q "WPROTON_HELPER propiedades.py dc44b8991314" "$PROPIEDADES_PY" 2>/dev/null && return 0
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    cat > "$PROPIEDADES_PY" <<'PROPEOF'
+# WPROTON_HELPER propiedades.py dc44b8991314
+# WPROTON_HELPER propiedades.py PENDIENTE
+# -*- coding: utf-8 -*-
+# WProton - en que NO se parece un montaje a una carpeta
+#
+# Copyright (C) 2026  stshunz y colaboradores
+#
+# DE DONDE SALE ESTE MODULO
+#
+# De la pregunta de Dani el 02/11, que es la que habia que hacerse desde el
+# principio: "¿por que el wsquashfs no tiene las mismas propiedades que la
+# carpeta cuando lo unico que deberia hacer es montar el fichero?".
+#
+# Pues porque no las tiene. Un squashfs con un fuse-overlayfs encima NO es una
+# carpeta transparente, y hay varias diferencias que producen EXACTAMENTE el
+# sintoma de Jurassic Park Arcade: un dato que el juego dice no tener, sin un
+# solo error de fichero por medio.
+#
+#   - d_type de readdir. En ext4, readdir dice de cada entrada si es fichero o
+#     directorio. Un FUSE puede devolver DT_UNKNOWN (0), y un programa que se
+#     fie de ese campo en vez de llamar a stat() no encuentra NADA. Es el
+#     sospechoso numero uno para un motor que recorre su carpeta de datos para
+#     cargar sus "programas".
+#   - st_nlink de los directorios. En ext4 vale 2 + numero de subdirectorios, y
+#     hay codigo viejo que cuenta subdirectorios asi. Un FUSE suele devolver 1
+#     o 2 siempre: cero subdirectorios.
+#   - El espacio libre. Un squashfs es de solo lectura y declara 0 bytes
+#     libres. Un juego que comprueba si le cabe algo antes de cargarlo se
+#     encuentra un disco lleno.
+#   - mmap y O_DIRECT, que sobre FUSE pueden fallar donde en disco funcionan.
+#   - Los numeros de inodo y la precision de las fechas.
+#
+# NO SE ELIGE ENTRE ELLAS: se miden las dos carpetas y se apunta todo. Es lo
+# unico que convierte "tiene pinta de" en un dato.
+#
+# Uso:  propiedades.py <carpeta_del_montaje> [carpeta_de_disco]
+# La primera sale como A, la segunda como B. Todo va a la salida estandar, una
+# linea por cosa, para que el registro de WProton se lo coma tal cual.
+import ctypes
+import mmap
+import os
+import stat
+import sys
+
+TOPE_ENTRADAS = 80       # cuantas entradas de readdir se miran
+TOPE_INODOS = 4000      # cuantos ficheros se miran para buscar inodos compartidos
+TOPE_VUELTAS = 40        # cuanto se baja buscando un fichero con contenido
+
+NOMBRE_TIPO = {0: "DESCONOCIDO", 4: "directorio", 8: "fichero", 10: "enlace"}
+
+
+class Dirent(ctypes.Structure):
+    # La de Linux/glibc (dirent64). Hace falta a mano porque Python no deja
+    # ver d_type: os.scandir lo usa por dentro y, si vale DT_UNKNOWN, llama a
+    # stat() sin decirlo. O sea que justo el caso que buscamos queda tapado.
+    _fields_ = [
+        ("d_ino", ctypes.c_uint64),
+        ("d_off", ctypes.c_int64),
+        ("d_reclen", ctypes.c_uint16),
+        ("d_type", ctypes.c_uint8),
+        ("d_name", ctypes.c_char * 256),
+    ]
+
+
+def tipos_de_readdir(ruta):
+    """Que dice readdir del tipo de cada entrada. Devuelve un texto."""
+    try:
+        lib = ctypes.CDLL(None, use_errno=True)
+        lib.opendir.restype = ctypes.c_void_p
+        lib.opendir.argtypes = [ctypes.c_char_p]
+        lib.readdir.restype = ctypes.POINTER(Dirent)
+        lib.readdir.argtypes = [ctypes.c_void_p]
+        lib.closedir.argtypes = [ctypes.c_void_p]
+        mano = lib.opendir(ruta.encode("utf-8"))
+        if not mano:
+            return "no se pudo abrir el directorio"
+        cuenta = {}
+        vistas = 0
+        try:
+            while vistas < TOPE_ENTRADAS:
+                ent = lib.readdir(ctypes.c_void_p(mano))
+                if not ent:
+                    break
+                nombre = ent.contents.d_name.decode("utf-8", "replace")
+                if nombre in (".", ".."):
+                    continue
+                tipo = ent.contents.d_type
+                cuenta[tipo] = cuenta.get(tipo, 0) + 1
+                vistas += 1
+        finally:
+            lib.closedir(ctypes.c_void_p(mano))
+        if not cuenta:
+            return "vacio"
+        return ", ".join("%s=%d" % (NOMBRE_TIPO.get(k, "tipo%d" % k), v)
+                         for k, v in sorted(cuenta.items()))
+    except Exception as ex:                                   # noqa: BLE001
+        return "no se pudo medir (%s)" % ex
+
+
+def un_fichero_con_algo(raiz):
+    """El primer fichero no vacio que se encuentre, para las pruebas."""
+    vueltas = 0
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for f in ficheros:
+            ruta = os.path.join(aqui, f)
+            try:
+                if os.path.getsize(ruta) > 0:
+                    return ruta
+            except OSError:
+                continue
+        vueltas += 1
+        if vueltas > TOPE_VUELTAS:
+            break
+    return None
+
+
+def inodos_repetidos(raiz, tope=TOPE_INODOS):
+    """¿Hay ficheros DISTINTOS con el mismo numero de inodo?
+
+    LO QUE SE MIDE, Y UN FALLO QUE TUVO ESTA FUNCION (corregido el 03/11)
+
+    Si dos ficheros distintos comparten el par (dispositivo, inodo), ese par
+    deja de identificar un fichero, y hay programas que lo usan como
+    identidad. El cargador de glibc es uno: decide si un .so ya esta cargado
+    comparando l_ino y l_dev (elf/dl-load.c).
+
+    EL FALLO: esto usaba os.stat(), que SIGUE LOS ENLACES. Asi que un enlace
+    y su destino -libGLEW.so y libGLEW.so.1.3, que es lo normal en cualquier
+    carpeta de bibliotecas- salian como "dos ficheros con el mismo inodo", y
+    no lo son: es UN fichero con dos nombres, y en una carpeta de disco pasa
+    exactamente igual.
+
+    Con ese fallo, el montaje de Jurassic Park declaraba 4 inodos compartidos
+    -que eran sus 6 enlaces simbolicos- y se le echo la culpa a la
+    deduplicacion de mksquashfs. Era falso por dos lados: la deduplicacion de
+    squashfs comparte los BLOQUES DE DATOS, no el inodo, asi que no produce
+    inodos compartidos; y al reempaquetar con -no-duplicates los 4 seguian
+    ahi, que es la prueba de que no venian de ahi.
+
+    Ahora se usa os.lstat() y los enlaces no se cuentan. Lo que quede contado
+    aqui son ficheros de verdad con el mismo inodo, que es lo unico que
+    significa algo.
+
+    Devuelve (mirados, cuantos_inodos_compartidos, ejemplos).
+    """
+    vistos = {}
+    mirados = 0
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for f in ficheros:
+            ruta = os.path.join(aqui, f)
+            try:
+                est = os.lstat(ruta)
+            except OSError:
+                continue
+            # Un enlace no es otro fichero: es otro nombre del mismo. Fuera.
+            if stat.S_ISLNK(est.st_mode):
+                continue
+            ino = est.st_ino
+            vistos.setdefault(ino, []).append(ruta)
+            mirados += 1
+            if mirados >= tope:
+                break
+        if mirados >= tope:
+            break
+    compartidos = {k: v for k, v in vistos.items() if len(v) > 1}
+    ejemplos = []
+    for ino, rutas in list(compartidos.items())[:3]:
+        ejemplos.append("inodo %d lo comparten: %s"
+                        % (ino, ", ".join(os.path.basename(r) for r in rutas[:4])))
+    return mirados, len(compartidos), ejemplos
+
+
+def lo_que_escribio(upper):
+    """Que hay en la capa de escritura del montaje. Para saber que escribe el
+    juego de verdad, en vez de suponerlo.
+
+    Un .wsquashfs es de solo lectura; lo que el juego escribe acaba en
+    overlays/<juego>/upper. Si el juego toca un fichero que ya venia en la
+    imagen, overlayfs lo COPIA ahi primero (copy-up), asi que esta lista dice
+    las dos cosas: lo que el juego creo y lo que modifico.
+    """
+    if not upper or not os.path.isdir(upper):
+        return ["sin capa de escritura que mirar: %s" % upper]
+    lineas = []
+    total_f = total_d = 0
+    muestra = []
+    for aqui, dirs, ficheros in os.walk(upper):
+        total_d += len(dirs)
+        total_f += len(ficheros)
+        for f in ficheros:
+            if len(muestra) < 25:
+                rel = os.path.relpath(os.path.join(aqui, f), upper)
+                try:
+                    tam = os.path.getsize(os.path.join(aqui, f))
+                except OSError:
+                    tam = -1
+                muestra.append("%s (%d bytes)" % (rel, tam))
+    lineas.append("el juego ha escrito %d fichero(s) en %d carpeta(s) de la capa de escritura"
+                  % (total_f, total_d))
+    for m in muestra:
+        lineas.append("  escrito: %s" % m)
+    if total_f > len(muestra):
+        lineas.append("  ...y %d mas" % (total_f - len(muestra)))
+    return lineas
+
+
+NOMBRES_DE_LOG = ("errorlog", "error_log", "gamelog", "game_log", "log")
+EXT_DE_LOG = (".txt", ".log")
+TOPE_LOG_BYTES = 4 * 1024 * 1024   # cuanto se lee del final de cada log
+TOPE_REPETIDAS = 8                 # cuantas lineas repetidas se ensenan
+TOPE_ULTIMAS = 12                  # cuantas lineas del final
+
+
+def parece_un_log(nombre):
+    bajo = nombre.lower()
+    if not bajo.endswith(EXT_DE_LOG):
+        return False
+    return any(x in bajo for x in NOMBRES_DE_LOG)
+
+
+def pistas_de_los_logs(upper):
+    """LO QUE EL PROPIO JUEGO ESCRIBE SOBRE SU FALLO.
+
+    POR QUE ESTO ES LO PRIMERO QUE HAY QUE LEER
+
+    El 02/11, el registro de WProton decia que el juego habia escrito
+    g5/dino/pmuser/errorlog.txt con 6.143.794 bytes. Seis megas del juego
+    explicando que le pasa, y nadie los habia abierto: se andaba midiendo el
+    sistema de ficheros mientras el juego lo contaba por escrito al lado.
+
+    Un log de seis megas en veinte segundos de partida es una linea repetida
+    miles de veces, asi que lo que sirve no es el final: es QUE linea se
+    repite. Se saca lo uno y lo otro.
+    """
+    if not upper or not os.path.isdir(upper):
+        return []
+    lineas = []
+    encontrados = []
+    for aqui, _dirs, ficheros in os.walk(upper):
+        for f in ficheros:
+            if parece_un_log(f):
+                encontrados.append(os.path.join(aqui, f))
+    if not encontrados:
+        return ["el juego no ha dejado ningun log propio en la capa de escritura"]
+    # El mas gordo primero: es el que mas tiene que contar.
+    def tam(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return 0
+    encontrados.sort(key=tam, reverse=True)
+    for ruta in encontrados[:4]:
+        total = tam(ruta)
+        lineas.append("%s (%d bytes) -- lo escribio el juego" % (os.path.relpath(ruta, upper), total))
+        try:
+            with open(ruta, "rb") as fh:
+                if total > TOPE_LOG_BYTES:
+                    fh.seek(total - TOPE_LOG_BYTES)
+                    fh.readline()          # la primera queda cortada
+                datos = fh.read(TOPE_LOG_BYTES)
+        except OSError as ex:
+            lineas.append("  no se pudo leer: %s" % ex)
+            continue
+        texto = datos.decode("utf-8", "replace")
+        todas = [l.strip() for l in texto.splitlines() if l.strip()]
+        if not todas:
+            lineas.append("  vacio o sin lineas legibles")
+            continue
+        cuenta = {}
+        for l in todas:
+            cuenta[l] = cuenta.get(l, 0) + 1
+        repes = sorted(cuenta.items(), key=lambda kv: kv[1], reverse=True)
+        lineas.append("  %d linea(s) leidas, %d distintas. Las que mas se repiten:" % (len(todas), len(cuenta)))
+        for texto_l, veces in repes[:TOPE_REPETIDAS]:
+            lineas.append("    x%d  %s" % (veces, texto_l[:300]))
+        lineas.append("  y las ultimas:")
+        for l in todas[-TOPE_ULTIMAS:]:
+            lineas.append("    %s" % l[:300])
+    return lineas
+
+
+def mide_fichero(etiqueta, ruta):
+    lineas = ["%s   fichero de prueba: %s" % (etiqueta, ruta)]
+    try:
+        est = os.stat(ruta)
+        lineas.append(
+            "%s     ino=%d nlink=%d blksize=%d permisos=%o fecha_con_fraccion=%s"
+            % (etiqueta, est.st_ino, est.st_nlink, est.st_blksize,
+               stat.S_IMODE(est.st_mode), (est.st_mtime % 1) != 0))
+    except OSError as ex:
+        lineas.append("%s     stat fallo: %s" % (etiqueta, ex))
+    try:
+        descriptor = os.open(ruta, os.O_RDONLY)
+    except OSError as ex:
+        lineas.append("%s     no se pudo abrir: %s" % (etiqueta, ex))
+        return lineas
+    try:
+        for nombre, acceso in (("mmap solo lectura", mmap.ACCESS_READ),
+                               ("mmap privado escribible", mmap.ACCESS_COPY)):
+            try:
+                mapa = mmap.mmap(descriptor, 0, access=acceso)
+                try:
+                    _ = mapa[:1]
+                finally:
+                    mapa.close()
+                lineas.append("%s     %s: SI" % (etiqueta, nombre))
+            except Exception as ex:                           # noqa: BLE001
+                lineas.append("%s     %s: NO (%s)" % (etiqueta, nombre, ex))
+    finally:
+        os.close(descriptor)
+    # O_DIRECT: en FUSE falla con EINVAL donde en disco va.
+    try:
+        descriptor = os.open(ruta, os.O_RDONLY | getattr(os, "O_DIRECT", 0x4000))
+        os.close(descriptor)
+        lineas.append("%s     O_DIRECT: SI" % etiqueta)
+    except OSError as ex:
+        lineas.append("%s     O_DIRECT: NO (%s)" % (etiqueta, ex))
+    return lineas
+
+
+def mide(etiqueta, ruta):
+    try:
+        est = os.stat(ruta)
+    except OSError as ex:
+        return ["%s %s -> no se puede ni mirar: %s" % (etiqueta, ruta, ex)]
+    lineas = ["%s %s" % (etiqueta, ruta)]
+    try:
+        subdirs = sum(1 for e in os.scandir(ruta) if e.is_dir(follow_symlinks=False))
+    except OSError:
+        subdirs = -1
+    lineas.append(
+        "%s   nlink del directorio=%d (con %d subdirectorios; en ext4 seria %s)"
+        % (etiqueta, est.st_nlink, subdirs,
+           subdirs + 2 if subdirs >= 0 else "?"))
+    lineas.append("%s   d_type de readdir: %s" % (etiqueta, tipos_de_readdir(ruta)))
+    try:
+        vfs = os.statvfs(ruta)
+        lineas.append(
+            "%s   espacio libre=%.1f MB  bloques=%d  bsize=%d  nombre_max=%d  solo_lectura=%s"
+            % (etiqueta, vfs.f_bavail * vfs.f_frsize / 1048576.0, vfs.f_blocks,
+               vfs.f_bsize, vfs.f_namemax, bool(vfs.f_flag & os.ST_RDONLY)))
+    except OSError as ex:
+        lineas.append("%s   statvfs fallo: %s" % (etiqueta, ex))
+    lineas.append("%s   dev=%d blksize=%d permisos=%o"
+                  % (etiqueta, est.st_dev, est.st_blksize, stat.S_IMODE(est.st_mode)))
+    fichero = un_fichero_con_algo(ruta)
+    if not fichero:
+        lineas.append("%s   sin ficheros con contenido que probar" % etiqueta)
+        return lineas
+    lineas += mide_fichero(etiqueta, fichero)
+    mirados, repes, ejemplos = inodos_repetidos(ruta)
+    lineas.append("%s     inodos compartidos por ficheros distintos: %d (de %d ficheros mirados)"
+                  % (etiqueta, repes, mirados))
+    for e in ejemplos:
+        lineas.append("%s       %s" % (etiqueta, e))
+    return lineas
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.stderr.write(
+            "uso: propiedades.py <carpeta_del_montaje> [carpeta_de_disco] [capa_de_escritura]\n")
+        return 2
+    salida = []
+    for i, ruta in enumerate(argv[1:3]):
+        salida += mide("A" if i == 0 else "B", ruta)
+    if len(argv) > 3:
+        salida += ["W " + l for l in lo_que_escribio(argv[3])]
+        # Y LO QUE EL JUEGO CUENTA DE SU PROPIO FALLO, que es lo que de verdad
+        # hay que leer antes de seguir midiendo nada.
+        salida += ["L " + l for l in pistas_de_los_logs(argv[3])]
+    sys.stdout.write("\n".join(salida) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+PROPEOF
+}
+
+propiedades_py() {
+    [ -n "${PY_BIN:-}" ] && [ -x "$PY_BIN" ] || return 127
+    write_propiedades || return 127
+    "$PY_BIN" "$PROPIEDADES_PY" "$@"
 }
 
 FICHA_PY="$RUNTIME_DIR/ficha.py"
@@ -27413,9 +27863,9 @@ cleanup_mount() {
     rmdir "$MOUNT_BASE"/*/* 2>/dev/null
     rmdir "$MOUNT_BASE"/* 2>/dev/null
     if [ -z "$(ls -A "$MOUNT_BASE" 2>/dev/null)" ]; then
-        log "tmp_mount vacio tras el desmontaje [OK]"
+        log "$MOUNT_BASE vacio tras el desmontaje [OK]"
     else
-        log "tmp_mount aún contiene: $(ls -A "$MOUNT_BASE" 2>/dev/null | tr '\n' ' ')" WARN
+        log "$MOUNT_BASE aún contiene: $(ls -A "$MOUNT_BASE" 2>/dev/null | tr '\n' ' ')" WARN
     fi
     MOUNT_OK=0
 }
@@ -32103,7 +32553,16 @@ wizard_prefijo() {
     opts+=("Propio del juego - prefixes/<juego>, aislado")
     opts+=("TeknoParrot - compartido entre los de TeknoParrot, con sus librerias")
     if has_bundled_prefix "$root"; then
-        opts+=("El que trae el wsquashfs - registro y DLLs propios del juego")
+        # EL TEXTO NO PUEDE DECIR SOLO "wsquashfs": esto vale tambien para una
+        # carpeta .wine, y decirle "el que trae el wsquashfs"
+        # a quien tiene una carpeta es mandarle a buscar algo que no tiene.
+        # El case de abajo casa por "El que trae"*, asi que el texto se puede
+        # cambiar sin tocar nada mas.
+        if [ "${WP_PREFIJO_EN_CARPETA:-0}" = 1 ]; then
+            opts+=("El que trae la carpeta - registro y DLLs propios del juego")
+        else
+            opts+=("El que trae el wsquashfs - registro y DLLs propios del juego")
+        fi
     fi
     sel="$(menu "Prefijo para este juego" "${opts[@]}")" || return 0
     case "$sel" in
@@ -39811,6 +40270,18 @@ Que cumplas muchos mas.
     # 01/11, AL SUBIR A LA 2.23: fuera el punto de la 2.22 (TeknoParrot) y
     # dentro los cinco de esta. La lista se limpia A MANO cada vez, que es
     # justo lo que no se hizo en la 2.15 y por eso existe la suite.
+    #
+    # 03/11, AL SUBIR A LA 2.24: fuera los cinco de la 2.23 y dentro los seis
+    # de esta. Son seis y no mas porque son los que se NOTAN jugando; el resto
+    # -la sonda que mide el montaje, el ruido del trap en el registro- esta
+    # contado en el fichero de novedades y no se promete aqui.
+    #
+    # OJO CON EL PUNTO DEL PREFIJO INCLUIDO. En la 2.15 se prometio dos veces
+    # que eso estaba arreglado cuando se habia SACADO por la regresion del
+    # 18/10, y de ahi viene esta suite. Esta vez el punto entra porque un
+    # tester lo ha confirmado funcionando (Football Life 2027, 03/11), y
+    # porque es trabajo NUEVO y distinto del que sigue fuera: la tanda del
+    # 18/10 sigue en PENDIENTE-PREFIJOS.md y no se promete nada de ella.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
 GRACIAS A LOS TESTERS
@@ -39820,15 +40291,17 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Los .keys ya mapean varios jugadores, hasta ocho, como Batocera.
+  Los juegos en carpeta .wine, con su prefijo dentro, ya se pueden usar.
 
-  El Mayus derecho, y los Ctrl y Alt derechos, ya se pueden asignar.
+  El prefijo que trae el juego dentro ya arranca a la primera.
 
-  Arreglados los textos de la X y la Y, que estaban al reves.
+  Y ya no se copia a disco: se usa donde esta, sin duplicar gigas.
 
-  Las dependencias del juego ya no se dan por instaladas sin estarlo.
+  Si un juego de Linux se cierra solo, WProton lo dice.
 
-  Si un juego se cierra solo, se avisa de las que le falten.
+  Al empaquetar se avisa de los enlaces que se quedarian colgando.
+
+  Los .keys de la comunidad se bajan aunque el nombre lleve un apostrofo.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -40013,8 +40486,17 @@ community_keys_fetch() {
     # repositorio puede llamarse distinto y entonces no lo encontraria nadie.
     local name="$1" gid="$2"
     [ -n "$gid" ] || return 1
-    community_tiene_keys "$name" || return 1
+    # SI NO HAY .keys, SE DICE. Antes se volvia en silencio absoluto.
+    #
+    # Y eso dejaba sin diagnosticar el caso que conto Dani el 03/11: de un
+    # juego cuyo perfil se baja y cuyas teclas no, el registro no decia NADA.
+    # No habia forma de distinguir "el repositorio no tiene .keys para este"
+    # de "lo intento y fallo", que son dos problemas distintos.
     local base="${name%.conf}"
+    if ! community_tiene_keys "$name"; then
+        log "comunidad: no hay $base.keys para '$name' (ni en la copia local ni en la lista del repositorio)"
+        return 1
+    fi
     local dest="$PROFILE_DIR/$gid.keys"
     local tmp; tmp="$(mktemp)" || return 1
     # La copia local primero, igual que con el .conf.
@@ -40022,12 +40504,51 @@ community_keys_fetch() {
         cat "$COMMUNITY_DIR/$base.keys" > "$tmp" 2>/dev/null
         log "comunidad: $base.keys sale de la copia local (comunidad/)"
     else
-        local url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles/$(url_escapar "$base.keys")"
-        if ! curl -fsSL --max-time 60 "$url" -o "$tmp" 2>>"$LOG_FILE"; then
-            rm -f "$tmp"
-            log "comunidad: no se pudo descargar $base.keys" WARN
-            return 1
+        # LA MISMA URL QUE EL .conf, Y LUEGO LA ESCAPADA SI HACE FALTA.
+        #
+        # EL CASO (03/11, Dani): un perfil con un apostrofo en el nombre
+        # -Teenage_Mutant_Ninja_Turtles_Shredder's_Revenge- bajaba el .conf y
+        # no el .keys. Y la UNICA diferencia entre los dos caminos que depende
+        # del nombre era justo esta linea: el .conf pide
+        #
+        #   .../profiles/$name                      (el nombre TAL CUAL)
+        #
+        # y el .keys pedia
+        #
+        #   .../profiles/$(url_escapar "$base.keys")   (el apostrofo como %27)
+        #
+        # El del .conf funciona con apostrofo -lo dice Dani, le baja-, asi que
+        # se pide igual. Y si eso falla, se reintenta con la forma escapada,
+        # que es la que hace falta cuando el nombre lleva algo que de verdad
+        # no vale en una URL (un espacio, una #, una ?).
+        #
+        # Y LAS DOS DEJAN RASTRO. Antes el fallo era una linea sin la URL ni el
+        # codigo de curl, asi que de "no se pudo descargar" no se sacaba nada.
+        local _raiz_url="https://raw.githubusercontent.com/$WPROTON_REPO/main/profiles"
+        local _u1="$_raiz_url/$base.keys"
+        local _u2="$_raiz_url/$(url_escapar "$base.keys")"
+        local _rc1 _rc2
+        curl -fsSL --max-time 60 "$_u1" -o "$tmp" 2>>"$LOG_FILE"; _rc1=$?
+        if [ "$_rc1" != 0 ]; then
+            log "comunidad: $base.keys no salio con el nombre tal cual (curl rc=$_rc1): $_u1" WARN
+            if [ "$_u2" != "$_u1" ]; then
+                curl -fsSL --max-time 60 "$_u2" -o "$tmp" 2>>"$LOG_FILE"; _rc2=$?
+                if [ "$_rc2" != 0 ]; then
+                    rm -f "$tmp"
+                    log "comunidad: tampoco con el nombre escapado (curl rc=$_rc2): $_u2" WARN
+                    return 1
+                fi
+                log "comunidad: $base.keys bajado con el nombre escapado: $_u2"
+            else
+                rm -f "$tmp"
+                log "comunidad: no se pudo descargar $base.keys y no hay nada que escapar en el nombre" WARN
+                return 1
+            fi
         fi
+        [ -s "$tmp" ] || {
+            rm -f "$tmp"
+            log "comunidad: $base.keys se descargo vacio" WARN
+            return 1; }
     fi
     # QUE SEA UN .keys DE VERDAD.
     #
@@ -43270,63 +43791,137 @@ prefijo_usuario_enlazar() {
     return 0
 }
 
-prefijo_appdata_enlazar() {
-    # Enlaza SOLO AppData del usuario que espera el runner al del archivo.
-    # $1 = carpeta del prefijo.
+prefijo_datos_usuario_enlazar() {
+    # Enlaza las carpetas de DATOS del usuario que espera el runner a las del
+    # usuario que trae el archivo. $1 = carpeta del prefijo.
     #
-    # Es la version buena de prefijo_usuario_enlazar cuando el runner es
-    # Proton. Enlazar la carpeta de usuario ENTERA lo rompe:
+    # (Se llamaba prefijo_appdata_enlazar. El nombre dejo de ser verdad el
+    # 02/11, cuando empezo a enlazar tambien Documents.)
+    #
+    # POR QUE NO SE ENLAZA EL USUARIO ENTERO
+    #
+    # Porque con Proton lo rompe:
     #
     #   OSError: Invalid cross-device link:
     #     users/steamuser/My Documents -> users/steamuser/My Documents BACKUP
     #
-    # Al actualizar el prefijo, Proton renombra las carpetas del usuario
-    # (Documents, Desktop...). Si "steamuser" es un enlace a otro usuario, ese
-    # renombrado cruza capas del overlay y falla: el juego muere antes de
-    # arrancar.
+    # Al actualizar el prefijo, Proton RENOMBRA las carpetas del usuario. Si
+    # "steamuser" entero es un enlace a otro usuario que vive en otro sistema
+    # de ficheros, ese renombrado cruza sistemas y falla con EXDEV: el juego
+    # muere antes de arrancar. De ahi que se enlacen carpetas de dentro y no
+    # el usuario.
     #
-    # AppData no lo toca, y es donde estan los datos que hacen falta
-    # (idiomas, configuracion). Asi se consigue lo mismo sin estorbarle.
+    # Y POR QUE AHORA TAMBIEN Documents (02/11)
+    #
+    # Un tester con Football Life 2027: ese juego guarda las partidas en
+    # Documents y sin eso no funciona bien. En el registro, las partidas
+    # estaban en users/deck/Documents/SPGAME y Proton mirando en
+    # users/steamuser, que estaba vacio.
+    #
+    # La version anterior enlazaba SOLO AppData. Y, peor, solo se fijaba en
+    # AppData para elegir de quien son los datos:
+    #
+    #     [ -d "${d%/}/AppData" ] || continue
+    #
+    # asi que un juego que guarda en Documents y no en AppData no tenia ni
+    # candidato, y no se enlazaba nada. Dani se acordaba de que "ya hicimos un
+    # simlink para eso y en algun momento se perdio": se perdio aqui, al
+    # cambiar el enlace del usuario entero por el de AppData.
+    #
+    # LA GUARDA DEL EXDEV, que es la leccion que no se tira
+    #
+    # Solo se enlaza si origen y destino estan en el MISMO sistema de
+    # ficheros. El fallo que retiro el enlace entero era exactamente eso, y
+    # solo pasa cruzando sistemas. Con el prefijo sacado a disco los dos
+    # usuarios estan en el mismo y se puede; si alguna vez no lo estuvieran,
+    # no se enlaza y se dice por que.
     local pfx="$1" udir="$1/drive_c/users"
     [ -d "$udir" ] || return 0
     local yo="${USER:-$(id -un 2>/dev/null)}"
-    local d nombre origen="" cuantos=0
+    # LAS CARPETAS QUE SE ENLAZAN. AppData lleva el idioma y la
+    # configuracion; Documents, las partidas de muchisimos juegos. Se dejan
+    # fuera a proposito "My Documents" y compania, que son enlaces que pone
+    # Wine y que apuntan a estas.
+    local _datos="AppData Documents"
+    local d nombre origen="" cuantos=0 c
     for d in "$udir"/*/; do
         [ -d "$d" ] || continue
         [ -L "${d%/}" ] && continue
         nombre="$(basename "${d%/}")"
         case "$nombre" in Public|public) continue ;; esac
-        [ -d "${d%/}/AppData" ] || continue
-        [ -n "$(find "${d%/}/AppData" -type f 2>/dev/null | head -n1)" ] || continue
+        # ¿Tiene ficheros de verdad en ALGUNA de las carpetas de datos? El
+        # esqueleto vacio que crea wineboot no cuenta.
+        local _tiene=0
+        for c in $_datos; do
+            [ -d "${d%/}/$c" ] || continue
+            [ -n "$(find "${d%/}/$c" -type f 2>/dev/null | head -n1)" ] && _tiene=1
+        done
+        [ "$_tiene" = 1 ] || continue
         origen="$nombre"; cuantos=$((cuantos+1))
     done
-    [ "$cuantos" = 1 ] || return 0
-    # SOLO EL USUARIO QUE VA A USAR EL RUNNER, y solo si no es ya el del
-    # archivo. Con Proton eso es "steamuser": si los datos ya estan ahi, no
-    # hay nada que enlazar. Antes se enlazaban los dos por si acaso y salia un
-    # "dani/AppData -> steamuser/AppData" que no servia para nada.
+    [ "$cuantos" = 1 ] || {
+        [ "$cuantos" -gt 1 ] && log "prefijo: varios usuarios con datos en $udir; no se enlaza ninguno para no elegir mal" WARN
+        return 0
+    }
+    # SOLO EL USUARIO QUE VA A USAR EL RUNNER. Con Proton es "steamuser"; con
+    # Wine a secas, tu nombre. Si los datos ya estan ahi, no hay nada que
+    # enlazar.
     local destinos
     if [ "$(runner_kind "${RUNNER_DIR_ACTUAL:-}" 2>/dev/null)" = "wine" ]; then
         destinos="$yo"
     else
         destinos="steamuser"
     fi
-    local dest
+    local dest _dev_o _dev_d
     for dest in $destinos; do
         [ -n "$dest" ] || continue
         [ "$dest" = "$origen" ] && continue
         [ -d "$udir/$dest" ] || mkdir -p "$udir/$dest" 2>/dev/null
-        [ -L "$udir/$dest/AppData" ] && continue
-        if [ -d "$udir/$dest/AppData" ]; then
-            # si ya tiene ficheros propios, no se toca
-            [ -n "$(find "$udir/$dest/AppData" -type f 2>/dev/null | head -n1)" ] && continue
-            rm -rf "$udir/$dest/AppData" 2>/dev/null
+        [ -d "$udir/$dest" ] || continue
+        # LA GUARDA DEL EXDEV: mismo sistema de ficheros o no se enlaza.
+        _dev_o="$(stat -c %d "$udir/$origen" 2>/dev/null || true)"
+        _dev_d="$(stat -c %d "$udir/$dest" 2>/dev/null || true)"
+        if [ -n "${_dev_o:-}" ] && [ -n "${_dev_d:-}" ] && [ "$_dev_o" != "$_dev_d" ]; then
+            log "prefijo: '$origen' y '$dest' estan en sistemas de ficheros distintos ($_dev_o y $_dev_d); NO se enlaza, Proton fallaria al renombrar las carpetas del usuario (Invalid cross-device link)" WARN
+            continue
         fi
-        [ -e "$udir/$dest/AppData" ] && continue
-        if ln -s "../$origen/AppData" "$udir/$dest/AppData" 2>/dev/null; then
-            say "[+] Prefix incluido: '$dest/AppData' -> '$origen/AppData'"
-            say "    (ahi estan los datos del juego: idioma, configuracion)"
-        fi
+        for c in $_datos; do
+            [ -d "$udir/$origen/$c" ] || continue
+            [ -n "$(find "$udir/$origen/$c" -type f 2>/dev/null | head -n1)" ] || continue
+            [ -L "$udir/$dest/$c" ] && continue      # ya enlazado
+            if [ -d "$udir/$dest/$c" ]; then
+                if [ -n "$(find "$udir/$dest/$c" -type f 2>/dev/null | head -n1)" ]; then
+                    # OJO: CON LA REGLA DE CANDIDATOS DE ARRIBA, AQUI NO SE
+                    # LLEGA.
+                    #
+                    # Si el destino tiene ficheros en una carpeta de datos,
+                    # entonces el destino TAMBIEN es candidato, "cuantos" sale
+                    # 2 y la funcion se va antes de llegar hasta aqui. Se deja
+                    # la guarda porque no cuesta nada y porque protege si algun
+                    # dia cambia esa regla, pero queda dicho que hoy es una
+                    # red y no un camino: lo que de verdad protege este caso es
+                    # el "cuantos = 1".
+                    #
+                    # No se mezclan, y se dice, porque es el caso en que las
+                    # partidas acaban repartidas entre dos usuarios y el juego
+                    # solo ve unas.
+                    say "AVISO: el archivo guarda en 'users/$origen/$c' pero"
+                    say "       'users/$dest/$c' ya tiene ficheros tuyos. No se"
+                    say "       enlaza para no mezclarlos. Si al juego le faltan"
+                    say "       cosas, compara esas dos carpetas a mano."
+                    log "prefijo: $dest/$c ya tiene ficheros propios; no se enlaza a $origen/$c" WARN
+                    continue
+                fi
+                rm -rf "$udir/$dest/$c" 2>/dev/null   # esqueleto vacio: fuera
+            fi
+            [ -e "$udir/$dest/$c" ] && continue
+            if ln -s "../$origen/$c" "$udir/$dest/$c" 2>/dev/null; then
+                say "[+] Prefix incluido: '$dest/$c' -> '$origen/$c'"
+                log "prefijo: enlazado $dest/$c -> ../$origen/$c (ahi estan los datos del juego)"
+            else
+                log "prefijo: no se pudo enlazar $dest/$c -> ../$origen/$c" WARN
+            fi
+        done
     done
     return 0
 }
@@ -43487,8 +44082,36 @@ proton_marcar_prefijo() {
     #
     # Se quitan primero. Si despues el prefijo esta entero, perfecto; y si no,
     # al menos Proton y Wine lo encuentran limpio para rehacerlo.
-    local _colg
-    _colg="$(prefijo_enlaces_colgados_quitar "$pfx")" || _colg=0
+    local _colg _quitadas_f
+    _quitadas_f="$(mktemp 2>/dev/null)" || _quitadas_f=""
+    _colg="$(prefijo_enlaces_colgados_quitar "$pfx" "${_quitadas_f:-}")" || _colg=0
+    # Y SE REPONE DEL RUNNER LO QUE SE ACABA DE QUITAR.
+    #
+    # Quitar un enlace colgado del runner es media faena; la otra media es
+    # volver a poner ese fichero. Sin esto, el barrido se llevaba cientos de
+    # DLL y solo volvian siete -una lista escrita a mano-, kernel32.dll entre
+    # las que no volvian. Ver prefijo_dlls_del_runner_reponer.
+    #
+    # VA ANTES DE JUZGAR EL PREFIJO, a proposito: lo que se juzga aqui es si el
+    # prefijo se sostiene solo, y eso solo se puede decir cuando ya esta
+    # completo. Al reves se llamaria "a medias" a un prefijo al que solo le
+    # faltaba que le repusieramos lo que le habiamos quitado nosotros.
+    if [ -n "${_quitadas_f:-}" ] && [ -s "$_quitadas_f" ]; then
+        local _rep_runner
+        _rep_runner="$(prefijo_dlls_del_runner_reponer "$pfx" "$1" "$_quitadas_f")" || _rep_runner=0
+        if [ "${_rep_runner:-0}" != 0 ] 2>/dev/null; then
+            say "[+] $_rep_runner fichero(s) del runner repuestos en el prefijo"
+            say "    (venian como enlaces al runner de otro equipo)"
+            log "prefijo: repuestos $_rep_runner de $_colg fichero(s) que se quitaron por venir enlazados a un runner que no esta"
+        else
+            log "prefijo: se quitaron $_colg enlace(s) colgados y no se pudo reponer ninguno del runner $1" WARN
+        fi
+    fi
+    [ -n "${_quitadas_f:-}" ] && rm -f "$_quitadas_f" 2>/dev/null
+    # Y COMO QUEDAN LAS CARPETAS DEL USUARIO, al registro. Hay juegos que
+    # guardan en Documents y sin eso no funcionan: si esa carpeta esta mal, el
+    # registro tiene que decirlo aqui y no dejarlo a la adivinanza.
+    prefijo_usuarios_informe "$pfx"
     if [ "${_colg:-0}" -gt 0 ] 2>/dev/null; then
         say "[+] Prefijo: quitados $_colg enlace(s) que no apuntaban a nada"
         say "    (DLL de un runner que no esta en este equipo)"
@@ -43851,7 +44474,14 @@ volveran a aparecer sus ficheros originales. Tus partidas NO se
 tocan: solo se quitan las marcas, no se borra nada tuyo." || return 0
     # Con el juego montado no se puede tocar el upper: overlayfs tiene su
     # propia idea de lo que hay ahi y no se entera del cambio.
-    if is_mounted "$WS_DIR/tmp_mount/$gid" 2>/dev/null; then
+    # LA RUTA SALE DE MOUNT_BASE, NO ESCRITA A MANO.
+    #
+    # Aqui estaba "$WS_DIR/tmp_mount/$gid" a pelo. Mientras el montaje vivio
+    # siempre en el mismo sitio daba igual; desde que MONTAJE_RUTA_CORTA puede
+    # moverlo, una ruta escrita a mano mira donde no es y contesta que el
+    # juego NO esta montado estandolo, que es la respuesta peligrosa: se
+    # tocaria el upper con el overlay encima.
+    if is_mounted "$MOUNT_BASE/$gid" 2>/dev/null; then
         ui_error "Primero hay que desmontar el juego.
 
 Usa: Detener Wine y liberar los juegos montados"
@@ -46368,21 +46998,311 @@ prefijo_enlaces_colgados_quitar() {
     # asi que el fichero "no esta" aunque el enlace si. Quitandolo, Proton
     # pone su propia DLL al crear el prefijo.
     #
-    # Solo en drive_c/windows, que es donde viven los del runner. Una limpieza
-    # no debe pasearse por donde no la han llamado.
-    local pfx="${1:-}" l n=0
-    [ -d "$pfx/drive_c/windows" ] || { printf '0'; return 0; }
+    # DONDE SE BARRE, Y POR QUE EN MAS DE UN SITIO (02/11).
+    #
+    # Hasta hoy solo en drive_c/windows, "que es donde viven los del runner".
+    # Y era falso: el registro de un tester con Football Life 2027 revento en
+    #
+    #   FileExistsError: [Errno 17] File exists:
+    #     '.../x86_64-windows/wmplayer.exe' ->
+    #     '.../pfx/drive_c/Program Files/Windows Media Player/wmplayer.exe'
+    #
+    # que esta FUERA de drive_c/windows. El comentario de arriba ya citaba esa
+    # misma ruta como el error conocido, y la limpieza no pasaba por ahi.
+    #
+    # Y EL MECANISMO, QUE ES EL QUE EXPLICA QUE SE NOS ESCAPARA. En el propio
+    # Proton, copy_pfx() solo llama a pfx_copy() cuando el destino NO existe:
+    #
+    #   if not os.path.exists(dst_file): self.pfx_copy(src, dst_file)
+    #
+    # os.path.exists() SIGUE EL ENLACE, asi que un enlace colgado da False:
+    # Proton cree que no hay nada, llama a pfx_copy, y os.symlink() falla con
+    # EEXIST porque el enlace SI existe. O sea que un enlace colgado no es solo
+    # basura: es lo unico que hace reventar a Proton por ahi.
+    #
+    # Se barren los tres sitios donde Proton pone sus enlaces: windows y los
+    # dos Program Files. No todo drive_c, que es donde estan enlazadas las
+    # carpetas del propio juego.
+    # $2 = fichero (opcional) donde apuntar las rutas que se quitan.
+    #
+    # Hace falta porque quitar un enlace roto del runner es media faena: la
+    # otra media es REPONER ese fichero. Ver prefijo_dlls_del_runner_reponer y
+    # el comentario de ahi, que es el bug que Dani recordaba.
+    local pfx="${1:-}" apunte="${2:-}" l n=0 d
+    [ -n "${pfx:-}" ] && [ -d "$pfx/drive_c" ] || { printf '0'; return 0; }
+    local _donde=""
+    for d in "windows" "Program Files" "Program Files (x86)"; do
+        [ -d "$pfx/drive_c/$d" ] && _donde="${_donde}$pfx/drive_c/$d
+"
+    done
+    [ -n "${_donde:-}" ] || { printf '0'; return 0; }
     while IFS= read -r l; do
         [ -n "$l" ] || continue
         # -e sigue el enlace: falso si apunta a nada. Y -L confirma que es un
         # enlace, para no tocar nunca un fichero de verdad.
-        if [ -L "$l" ] && [ ! -e "$l" ]; then
-            rm -f "$l" 2>/dev/null && n=$((n+1))
+        [ -L "$l" ] && [ ! -e "$l" ] || continue
+        # Y LA GUARDA: SI APUNTA A UN MONTAJE NUESTRO, NO SE TOCA.
+        #
+        # Las carpetas del juego se enlazan al montaje. Si el montaje no esta
+        # puesto en este instante, esos enlaces se ven colgados y NO lo estan:
+        # vuelven solos al montar. Borrarlos seria romper el juego para
+        # arreglar un prefijo.
+        local _dest; _dest="$(readlink "$l" 2>/dev/null)"
+        case "${_dest:-}" in
+            "${MOUNT_BASE:-/dev/null}"/*)
+                log "prefijo: el enlace colgado $l apunta al montaje ($_dest); NO se toca, vuelve solo al montar el juego"
+                continue ;;
+        esac
+        if rm -f "$l" 2>/dev/null; then
+            n=$((n+1))
+            [ -n "${apunte:-}" ] && printf '%s\n' "$l" >> "$apunte" 2>/dev/null
         fi
     done <<EOFCOLG
-$(find "$pfx/drive_c/windows" -type l 2>/dev/null)
+$(printf '%s' "$_donde" | while IFS= read -r d; do
+    [ -n "$d" ] && find "$d" -type l 2>/dev/null
+  done)
 EOFCOLG
     printf '%s' "$n"
+    return 0
+}
+
+prefijo_rutas_usuario_normalizar() {
+    # DEJA LAS TRES RUTAS QUE PROTON RENOMBRA COMO LOS ENLACES QUE EL QUIERE.
+    # $1 = prefijo (el que tiene drive_c). Imprime "ok" si quedaron las tres.
+    #
+    # EL PROBLEMA, MEDIDO Y DOCUMENTADO (ver COMPATIBILIDAD.md)
+    #
+    # migrate_user_paths() de Proton corre en CADA lanzamiento y hace esto con
+    # tres rutas del perfil:
+    #
+    #   si es un DIRECTORIO de verdad -> merge_user_dir + os.rename(... " BACKUP")
+    #   si no existe                  -> os.symlink(...)
+    #   si es un enlace a otro sitio  -> os.remove + os.symlink
+    #
+    # Y fuse-overlayfs NO PUEDE RENOMBRAR un directorio de la capa inferior.
+    # Asi que si en el prefijo del archivo esas rutas son directorios de
+    # verdad, Proton intenta renombrarlos dentro del montaje, el os.rename
+    # falla y el juego muere antes de arrancar. Si ya son ENLACES, Proton no
+    # renombra nada y pasa de largo. Mismo archivo, dos equipos, dos
+    # resultados: depende de como las dejara quien empaqueto.
+    #
+    # POR QUE ESTO EN VEZ DE SACAR EL PREFIJO A DISCO
+    #
+    # Hasta ahora, con runner Proton, el prefijo incluido se copiaba ENTERO a
+    # disco (1,5 GB en el registro de un tester) y el juego se enlazaba de
+    # vuelta al montaje, solo por este rename. Su propio comentario lo decia.
+    # De esa copia salian, en cadena: los enlaces colgados de Program Files
+    # que revientan a copy_pfx, el EXDEV al enlazar carpetas de usuario entre
+    # dos sistemas de ficheros, el perfil pasando a "propio" sin que nadie lo
+    # pida, y la carpeta del juego convertida en un enlace que algunos juegos
+    # se niegan a mirar.
+    #
+    # Quitando el rename, la copia no hace falta. Y el rename se quita de la
+    # unica forma que el overlay admite: BORRAR y crear el enlace, en vez de
+    # renombrar. Borrar un directorio de la capa inferior es un whiteout, y
+    # eso si funciona; renombrarlo, no.
+    #
+    # Lo que no se pierde: si la ruta vieja tiene ficheros, se MEZCLAN en la
+    # nueva antes de borrarla, igual que hace merge_user_dir de Proton, y sin
+    # pisar lo que ya hubiera.
+    #
+    # Las rutas y los destinos salen de su fuente, no de la memoria: estan
+    # copiados en tests/prueba_quirurgico.py, que lleva migrate_user_paths tal
+    # cual para poder ejecutarlo contra un prefijo de verdad.
+    local pfx="${1:-}" u="${1:-}/drive_c/users/steamuser"
+    [ -n "${pfx:-}" ] && [ -d "$pfx/drive_c/users/steamuser" ] || { printf 'no'; return 0; }
+    local par viejo nuevo enlace n=0 total=0
+    for par in \
+        "Local Settings/Application Data|AppData/Local|../AppData/Local" \
+        "Application Data|AppData/Roaming|./AppData/Roaming" \
+        "My Documents|Documents|./Documents"
+    do
+        viejo="$u/${par%%|*}"
+        nuevo="$u/$(printf '%s' "$par" | cut -d'|' -f2)"
+        enlace="${par##*|}"
+        total=$((total+1))
+        # PRIMERO, EL CICLO. Proton lo hace antes que nada y por algo: si
+        # "Documents" es un enlace que apunta a "My Documents" y luego se pone
+        # "My Documents" -> "./Documents", queda un enlace que se muerde la
+        # cola y el juego no encuentra nada.
+        if [ -L "$nuevo" ] && case "$(readlink "$nuevo" 2>/dev/null)" in
+                                  *"${par%%|*}") true ;; *) false ;; esac; then
+            rm -f "$nuevo" 2>/dev/null \
+                && log "prefijo: quitado el enlace circular $(basename "$nuevo") -> $(basename "${par%%|*}")"
+        fi
+        if [ -L "$viejo" ]; then
+            if [ "$(readlink "$viejo" 2>/dev/null)" = "$enlace" ]; then
+                n=$((n+1)); continue          # ya esta como Proton lo quiere
+            fi
+            rm -f "$viejo" 2>/dev/null
+        elif [ -d "$viejo" ]; then
+            # MEZCLAR Y BORRAR, que es el rename que el overlay no admite,
+            # hecho con las dos operaciones que si admite.
+            mkdir -p "$nuevo" 2>/dev/null
+            if ! cp -a -n "$viejo/." "$nuevo/" 2>/dev/null; then
+                # -n no esta en todos los cp; se hace a mano, sin pisar.
+                ( cd "$viejo" 2>/dev/null && find . -type f -print 2>/dev/null \
+                  | while IFS= read -r _f; do
+                        [ -e "$nuevo/$_f" ] && continue
+                        mkdir -p "$nuevo/$(dirname "$_f")" 2>/dev/null
+                        cp -a "$viejo/$_f" "$nuevo/$_f" 2>/dev/null
+                    done ) || true
+            fi
+            if ! rm -rf "$viejo" 2>/dev/null; then
+                log "prefijo: no se pudo quitar '$viejo' para dejarlo como enlace; el montaje no lo admite" WARN
+                continue
+            fi
+            log "prefijo: '${par%%|*}' era un directorio; su contenido se mezclo en $(printf '%s' "$par" | cut -d'|' -f2) y se deja como enlace"
+        fi
+        [ -e "$viejo" ] && continue
+        mkdir -p "$(dirname "$viejo")" 2>/dev/null
+        if ln -s "$enlace" "$viejo" 2>/dev/null; then
+            n=$((n+1))
+            log "prefijo: '${par%%|*}' -> '$enlace' (como lo deja Proton, asi no lo renombra)"
+        else
+            log "prefijo: no se pudo crear el enlace '${par%%|*}' -> '$enlace'" WARN
+        fi
+    done
+    if [ "$n" = "$total" ]; then
+        log "prefijo: las $total rutas que Proton renombra ya son enlaces; no va a renombrar nada y el prefijo puede quedarse donde esta"
+        printf 'ok'
+    else
+        log "prefijo: solo $n de $total rutas quedaron como enlaces; Proton podria intentar renombrar y hay que sacar el prefijo a disco" WARN
+        printf 'no'
+    fi
+    return 0
+}
+
+prefijo_dlls_del_runner_reponer() {
+    # REPONE DEL RUNNER LOS FICHEROS QUE EL BARRIDO SE LLEVO.
+    # $1 = prefijo, $2 = carpeta del runner, $3 = fichero con las rutas
+    # quitadas. Imprime cuantos ha repuesto.
+    #
+    # EL BUG QUE ESTO ARREGLA, Y POR QUE LLEVABA TANTO TIEMPO
+    #
+    # Un prefijo que viene dentro de un archivo -hecho en otro equipo- guarda
+    # medio Windows como ENLACES ABSOLUTOS al runner de aquella maquina. Aqui
+    # ese runner no esta, asi que son enlaces colgados, y se barren: bien, un
+    # enlace colgado no sirve para nada.
+    #
+    # Pero quitarlos es media faena. La otra media es volver a poner esos
+    # ficheros, y eso NO se hacia: lo unico que los reponia era una lista
+    # ESCRITA A MANO de siete nombres -wined3d, vkd3d, d3dcompiler...-, que
+    # son los que fueron saliendo en las pruebas. El barrido se lleva
+    # CIENTOS (305 en el registro de un tester) y volvian siete.
+    #
+    # Entre los que no volvian estaba kernel32.dll. Y sin kernel32 el prefijo
+    # no se sostiene, asi que:
+    #
+    #   - proton_marcar_prefijo lo ve "a medias" y, con razon, NO le pone el
+    #     centinela y le retira las marcas, para que Proton lo repare;
+    #   - Proton entra a repararlo con copy_pfx()...
+    #   - ...y copy_pfx() revienta en cuanto se encuentra un enlace donde el
+    #     quiere poner el suyo (FileExistsError), que es como murio Football
+    #     Life 2027 en 3 segundos, en cada intento.
+    #
+    # O sea que el prefijo dependia de que Proton lo arreglara, y Proton no
+    # podia. De ahi el "hace muchas versiones esto funcionaba": antes del
+    # barrido el prefijo se quedaba con lo que traia y arrancaba.
+    #
+    # Con los ficheros repuestos, el prefijo se sostiene solo: kernel32 esta,
+    # se le puede poner el centinela, y Proton no tiene que tocar nada.
+    local pfx="${1:-}" rdir="${2:-}" lista="${3:-}" n=0
+    [ -n "${pfx:-}" ] && [ -n "${rdir:-}" ] && [ -d "$rdir" ] || { printf '0'; return 0; }
+    [ -n "${lista:-}" ] && [ -s "$lista" ] || { printf '0'; return 0; }
+    # UN INDICE DEL RUNNER, UNA SOLA VEZ.
+    #
+    # La version de los siete nombres hacia un "find" por fichero. Con
+    # cientos, eso son cientos de recorridos del runner: minutos. Se recorre
+    # una vez por arquitectura y se busca en el indice.
+    local idx64 idx32
+    idx64="$(mktemp 2>/dev/null)" || { printf '0'; return 0; }
+    idx32="$(mktemp 2>/dev/null)" || { rm -f "$idx64"; printf '0'; return 0; }
+    find "$rdir" -type f -path '*x86_64-windows*' 2>/dev/null > "$idx64"
+    find "$rdir" -type f -path '*i386-windows*'   2>/dev/null > "$idx32"
+    local l nombre rel arch idx src
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        nombre="$(basename "$l")"
+        rel="${l#$pfx/drive_c/windows/}"
+        # QUE ARQUITECTURA. system32 es de 64 bits y syswow64 de 32: poner una
+        # DLL de 64 en syswow64 no carga y confunde mas que la falta.
+        case "$rel" in
+            syswow64/*) arch=32 ;;
+            system32/*) arch=64 ;;
+            *) arch=64 ;;
+        esac
+        [ "$arch" = 32 ] && idx="$idx32" || idx="$idx64"
+        src="$(grep -m1 -F "/$nombre" "$idx" 2>/dev/null | head -n1)"
+        if [ -z "${src:-}" ] || [ ! -f "$src" ]; then
+            # Sin candidato de la arquitectura que toca no se pone nada. Si
+            # hace falta de verdad, Proton o Wine lo repondran; poner el
+            # tamano equivocado es peor que no poner.
+            continue
+        fi
+        [ -e "$l" ] && continue          # alguien lo puso ya
+        mkdir -p "$(dirname "$l")" 2>/dev/null
+        cp -f "$src" "$l" 2>/dev/null && n=$((n+1))
+    done < "$lista"
+    rm -f "$idx64" "$idx32" 2>/dev/null
+    printf '%s' "$n"
+    return 0
+}
+
+prefijo_usuarios_informe() {
+    # COMO ESTAN LAS CARPETAS DEL USUARIO DEL PREFIJO. $1 = prefijo.
+    #
+    # DE DONDE SALE: un tester con Football Life 2027 (02/11). Ese juego
+    # guarda en Documents y sin eso no va bien, y en el registro Wine no
+    # paraba de decir
+    #
+    #   err:shell:SHGetFolderPathAndSubDirW Failed to create directory
+    #     L"C:\users\steamuser\AppData\Local\Microsoft\Windows\INetCache"
+    #
+    # con un "Transport endpoint is not connected" justo antes, que es lo que
+    # dice el sistema cuando se toca un montaje FUSE cuyo proceso ya no esta.
+    #
+    # Y a la vez las partidas aparecian en users/deck/Documents, o sea en OTRO
+    # perfil que el que usa Proton (steamuser). Dos perfiles y uno roto.
+    #
+    # Esto no arregla nada: lo APUNTA. Que perfiles hay, cual es un enlace, a
+    # donde apunta, si se llega y si se puede escribir. Sin eso, de un fallo
+    # en Documents solo se puede opinar.
+    local pfx="${1:-}" u nombre dest
+    [ -n "${pfx:-}" ] && [ -d "$pfx/drive_c/users" ] || return 0
+    log "prefijo: perfiles de usuario en drive_c/users:"
+    for u in "$pfx"/drive_c/users/*; do
+        [ -e "$u" ] || [ -L "$u" ] || continue
+        nombre="$(basename "$u")"
+        if [ -L "$u" ]; then
+            dest="$(readlink "$u" 2>/dev/null)"
+            if [ -d "$u" ]; then
+                log "prefijo:   $nombre -> $dest (enlace, se llega)"
+            else
+                log "prefijo:   $nombre -> $dest (enlace COLGADO: no se llega)" WARN
+            fi
+        elif [ -d "$u" ]; then
+            log "prefijo:   $nombre (carpeta de verdad)"
+        fi
+        # Y Documents, que es la que importa en este juego.
+        local doc="$u/Documents"
+        if [ -L "$doc" ]; then
+            dest="$(readlink "$doc" 2>/dev/null)"
+            if [ -d "$doc" ]; then
+                log "prefijo:     $nombre/Documents -> $dest (enlace, se llega)"
+            else
+                log "prefijo:     $nombre/Documents -> $dest (enlace COLGADO: el juego no podra guardar)" WARN
+            fi
+        elif [ -d "$doc" ]; then
+            if [ -w "$doc" ]; then
+                log "prefijo:     $nombre/Documents (carpeta de verdad, se puede escribir)"
+            else
+                log "prefijo:     $nombre/Documents (carpeta de verdad, NO se puede escribir)" WARN
+            fi
+        else
+            log "prefijo:     $nombre/Documents no existe" WARN
+        fi
+    done
     return 0
 }
 
@@ -46636,7 +47556,87 @@ bundled_prefix_prepare() {
     # El "_rehecho_ok = 0" es lo que evita sacarlo dos veces: si ya se rehizo
     # arriba, este bloque no tiene nada que hacer y ademas volveria a decir en
     # pantalla que lo esta copiando.
-    if [ "$_rehecho_ok" = 0 ] \
+    # CON EL PREFIJO EN UNA CARPETA NO SE SACA NADA A DISCO.
+    #
+    # Esta copia existe por una razon concreta: dentro de un .wsquashfs el
+    # prefijo es de SOLO LECTURA, y Proton necesita renombrar las carpetas del
+    # usuario (falla con EXDEV). Una carpeta .wine ya esta en disco y es
+    # escribible, asi que no hay nada que resolver.
+    #
+    # Y copiar ahi seria un destrozo: el prefijo de un juego puede ocupar
+    # muchos gigas, se duplicaria sin que nadie lo pida, el perfil pasaria a
+    # "propio" solo, y el juego dejaria de usar la carpeta que el usuario
+    # eligio. Los testers lo pidieron por escrito -"no copiar ni convertir
+    # automaticamente las carpetas .wine"- y se analizo como el riesgo
+    # principal de todo esto (ANALISIS-CARPETAS-WINE.md, riesgo 1).
+    if [ "${WP_PREFIJO_EN_CARPETA:-0}" = 1 ]; then
+        say "[+] El prefijo esta en una carpeta en disco: se usa donde esta"
+        say "    (no se copia a prefixes/: ya es escribible)"
+        # Y SE DICE QUE NO HAY RED, porque es la diferencia de verdad con un
+        # .wsquashfs y no se ve por ningun lado.
+        #
+        # Un archivo protege su contenido: lo que el juego escriba va a la capa
+        # de escritura del overlay y el original queda intacto, asi que
+        # siempre se puede volver atras borrando overlays/<juego>/. Una carpeta
+        # NO tiene overlay: el juego escribe DENTRO de ella. Es lo que se pidio
+        # -"conservar la configuracion y los datos del prefijo original"- pero
+        # conviene saber que a partir de aqui no hay deshacer.
+        say "    OJO: aqui no hay capa de escritura como en un wsquashfs. El"
+        say "    juego escribe DENTRO de la carpeta, asi que conviene tener"
+        say "    una copia antes del primer arranque."
+        log "prefijo en carpeta: NO se saca a disco, se usa en su sitio (sin overlay: las escrituras van a la carpeta)"
+    fi
+    # ANTES DE SACAR NADA A DISCO: QUITARLE A PROTON EL MOTIVO (03/11).
+    #
+    # La copia de abajo existe por UNA cosa: que Proton renombra tres rutas
+    # del perfil en cada lanzamiento y fuse-overlayfs no deja renombrar un
+    # directorio de la capa inferior. Si esas tres rutas ya son los enlaces
+    # que Proton quiere, no renombra nada y la copia no hace falta.
+    #
+    # Y la decision NO se toma por una suposicion: se intenta normalizarlas y
+    # se mira si se consiguio. Si si, el prefijo se queda donde esta; si no
+    # -porque el montaje no deje borrar un directorio de abajo, por ejemplo-,
+    # se saca a disco como hasta ahora. El peor caso es lo que habia ayer.
+    local _norm="no"
+    if [ "${WP_PREFIJO_EN_CARPETA:-0}" != 1 ] \
+       && [ "$_rehecho_ok" = 0 ] \
+       && [ "$(runner_kind "$1" 2>/dev/null)" = "proton" ] \
+       && [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ "$_hay_steamuser" = 1 ]; then
+        local _pfx_norm="$WINEPREFIX"
+        [ -d "$WINEPREFIX/pfx/drive_c" ] && _pfx_norm="$WINEPREFIX/pfx"
+        # PRIMERO SE ENLAZAN LOS DATOS, Y LUEGO SE NORMALIZA. EL ORDEN IMPORTA.
+        #
+        # Al reves se pelean, y lo encontro la reproduccion del caso de
+        # Football Life 2027 (apartado 27 de prueba_prefijodoc.sh):
+        #
+        #   - el normalizador mezcla 'My Documents' en 'Documents' y deja
+        #     'Documents' como una carpeta CON FICHEROS en steamuser;
+        #   - y entonces prefijo_datos_usuario_enlazar ve dos perfiles con
+        #     datos -deck y steamuser-, no elige ninguno para no mezclar, y
+        #     no enlaza nada;
+        #   - resultado: la partida se queda en users/deck/Documents y Proton
+        #     sigue mirando en steamuser. Justo el fallo que se venia a
+        #     arreglar.
+        #
+        # Enlazando primero, 'steamuser/Documents' ya es un enlace al perfil
+        # que tiene los datos, y la mezcla del normalizador cae DONDE VIVEN
+        # esos datos. El juego llega por las dos rutas y no se parte nada.
+        #
+        # Se llama otra vez mas abajo a proposito: es idempotente -si ya es un
+        # enlace, no hace nada- y ahi cubre el caso del prefijo sacado a
+        # disco, donde la ruta es otra.
+        RUNNER_DIR_ACTUAL="$1"
+        prefijo_datos_usuario_enlazar "$_pfx_norm"
+        _norm="$(prefijo_rutas_usuario_normalizar "$_pfx_norm")" || _norm="no"
+        if [ "$_norm" = "ok" ]; then
+            say "[+] El prefijo del archivo se usa donde esta"
+            say "    (no se copia a prefixes/: las carpetas del perfil ya estan"
+            say "     como Proton las quiere, asi que no va a renombrar nada)"
+        fi
+    fi
+    if [ "${WP_PREFIJO_EN_CARPETA:-0}" != 1 ] \
+       && [ "$_norm" != "ok" ] \
+       && [ "$_rehecho_ok" = 0 ] \
        && [ "$(runner_kind "$1" 2>/dev/null)" = "proton" ] \
        && [ -n "${BUNDLED_PREFIX_DIR:-}" ] && [ "$_hay_steamuser" = 1 ]; then
         local _copia _origen_pfx="$WINEPREFIX"
@@ -46897,11 +47897,12 @@ bundled_prefix_prepare() {
     # espera el runner: si no, el juego no encuentra sus datos.
     local _pfxdir="$WINEPREFIX"
     [ -d "$WINEPREFIX/pfx/drive_c" ] && _pfxdir="$WINEPREFIX/pfx"
-    # Con Proton, solo AppData: enlazar el usuario entero le rompe la
-    # actualizacion del prefijo (ver prefijo_appdata_enlazar).
+    # Con Proton se enlazan las carpetas de datos (AppData, Documents) y no
+    # el usuario entero: eso le rompe la actualizacion del prefijo con un
+    # "Invalid cross-device link" (ver prefijo_datos_usuario_enlazar).
     RUNNER_DIR_ACTUAL="$rdir"
     if [ "$(runner_kind "$rdir" 2>/dev/null)" = "proton" ]; then
-        prefijo_appdata_enlazar "$_pfxdir"
+        prefijo_datos_usuario_enlazar "$_pfxdir"
     else
         prefijo_usuario_enlazar "$_pfxdir"
     fi
@@ -51182,6 +52183,75 @@ paquete. En carpeta carga a velocidad normal.
     return 0
 }
 
+enlaces_absolutos_dentro() {
+    # LOS ENLACES DE UNA CARPETA QUE APUNTAN A ELLA MISMA CON LA RUTA ENTERA.
+    # $1 = carpeta, $2 = cuantos se ensenan como mucho. Uno por linea.
+    #
+    # POR QUE ESTO IMPORTA AL EMPAQUETAR
+    #
+    # mksquashfs guarda el destino de un enlace LETRA POR LETRA: no lo
+    # resuelve. Asi que un enlace que dentro de la carpeta decia
+    #
+    #     data -> /home/dani/ROMs/windows/Juego/datos_de_verdad
+    #
+    # dentro del .wsquashfs sigue diciendo exactamente eso. Y ahi esta la
+    # trampa: MIENTRAS LA CARPETA SIGA EN EL DISCO, el juego arranca del
+    # archivo y lee de la carpeta sin que nadie se entere. Todo va bien. El dia
+    # que se borra la carpeta -justo lo que WProton ofrece despues de
+    # empaquetar- el enlace se queda colgando y el juego pierde esos ficheros.
+    #
+    # Un enlace RELATIVO no tiene este problema: viaja dentro del paquete y
+    # sigue apuntando a donde debe. Por eso aqui solo se buscan los absolutos.
+    #
+    # DE DONDE SALE: Jurassic Park Arcade, 02/11. En carpeta jugaba; del
+    # .wsquashfs arrancaba y se cerraba al pulsar un boton, con el motor
+    # quejandose de que no tenia cargado un "programa" suyo.
+    local d="$1" tope="${2:-40}" _real
+    [ -d "$d" ] || return 0
+    _real="$(cd "$d" 2>/dev/null && pwd -P)" || return 0
+    [ -n "${_real:-}" ] || return 0
+    # El tope de find es aparte y mas alto: se mira bastante y se ENSENA poco,
+    # que es lo que no deja el aviso ilegible en un juego con muchos enlaces.
+    find "$d" -maxdepth 8 -type l -print 2>/dev/null | head -n 600 \
+    | while IFS= read -r _l; do
+        _dest="$(readlink "$_l" 2>/dev/null)" || continue
+        case "$_dest" in /*) ;; *) continue ;; esac
+        case "$_dest" in
+            "$_real"|"$_real"/*|"$d"|"$d"/*)
+                printf '%s -> %s\n' "$_l" "$_dest" ;;
+        esac
+      done | head -n "$tope"
+    return 0
+}
+
+enlaces_cuantos() {
+    # CUANTOS ENLACES SIMBOLICOS SE HAN MIRADO. $1 = raiz.
+    #
+    # Existe por honradez con el registro: las dos funciones de abajo tienen
+    # topes (maxdepth 8, los primeros 600 enlaces), asi que un "ninguno" puede
+    # significar "no hay" o "no he llegado". Sin este numero al lado, el
+    # registro afirmaba lo primero sin saberlo, y un diagnostico que miente
+    # manda a la persona a buscar el fallo donde no esta.
+    local d="$1"
+    [ -d "$d" ] || { printf '0'; return 0; }
+    find "$d" -maxdepth 8 -type l -print 2>/dev/null | head -n 600 | wc -l | tr -d ' '
+}
+
+enlaces_colgando() {
+    # LOS ENLACES QUE NO LLEVAN A NINGUN SITIO. $1 = raiz, $2 = tope.
+    #
+    # Esto es la comprobacion de verdad, la que no supone nada: se pregunta al
+    # sistema si el destino existe. Sirve para el juego YA MONTADO, que es
+    # donde se nota el fallo de arriba, y tambien para una carpeta.
+    local d="$1" tope="${2:-40}"
+    [ -d "$d" ] || return 0
+    find "$d" -maxdepth 8 -type l -print 2>/dev/null | head -n 600 \
+    | while IFS= read -r _l; do
+        [ -e "$_l" ] || printf '%s -> %s\n' "$_l" "$(readlink "$_l" 2>/dev/null)"
+      done | head -n "$tope"
+    return 0
+}
+
 build_wsquashfs() {
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
@@ -51297,6 +52367,27 @@ $src"
         local _log_antes; _log_antes="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
         # -percentage: mksquashfs va escribiendo solo el numero, pensado
         # justo para alimentar una barra de progreso.
+        # AQUI ESTUVO UN "-no-duplicates" PARA LOS JUEGOS NATIVOS. RETIRADO.
+        #
+        # Se metio el 02/11 creyendo que la deduplicacion de mksquashfs hacia
+        # que dos ficheros distintos compartieran inodo, y que eso rompia al
+        # cargador de glibc, que identifica un .so ya cargado por
+        # (st_dev, st_ino). La primera mitad era falsa, y por dos lados:
+        #
+        #   - la deduplicacion de squashfs comparte los BLOQUES DE DATOS, no
+        #     el inodo: cada fichero conserva el suyo;
+        #   - y los "inodos compartidos" que se midieron eran un fallo de la
+        #     propia medida, que usaba os.stat() -que SIGUE los enlaces-, asi
+        #     que contaba un enlace y su destino (libGLEW.so y libGLEW.so.1.3)
+        #     como dos ficheros con el mismo inodo. No lo son.
+        #
+        # Lo demostro el registro del 02/11 a las 23:06: se reempaqueto con
+        # -no-duplicates ("No duplicate files removed") y los 4 inodos
+        # compartidos SEGUIAN ahi, con los mismos nombres, que son justo los
+        # 6 enlaces simbolicos del juego. Ver src/propiedades.py.
+        #
+        # Asi que se vuelve a empaquetar como siempre: el archivo sale ~80 MB
+        # mas pequeno y no se pierde nada.
         if ! run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
                 mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage; then
             rm -f "$out"
@@ -51403,12 +52494,42 @@ do_pack_dir() {
     # instalador vale para este equipo y no se reparte. Al jugar el archivo se
     # vuelve a poner solo. Ver helixsr_antes_de_empaquetar.
     helixsr_antes_de_empaquetar "$dir" "$name"
+    # Y LOS ENLACES QUE LLEVAN LA RUTA DE ESTA CARPETA ESCRITA DENTRO.
+    #
+    # Se mira AQUI, antes de comprimir, porque el aviso solo sirve si llega
+    # antes de la pregunta de borrar la carpeta: despues ya no hay vuelta.
+    # Ver enlaces_absolutos_dentro para el porque.
+    local _enl_abs; _enl_abs="$(enlaces_absolutos_dentro "$dir" 2>/dev/null || true)"
+    if [ -n "${_enl_abs:-}" ]; then
+        say "[!] Este juego trae enlaces con la ruta ENTERA de su carpeta:"
+        printf '%s\n' "$_enl_abs" | while IFS= read -r _e; do say "      $_e"; done
+        say ""
+        say "    Dentro del paquete esos enlaces seguiran apuntando a la"
+        say "    carpeta de ahora, no al archivo: asi los guarda mksquashfs."
+        say "    Mientras la carpeta este en el disco el juego ira bien SIN"
+        say "    QUE SE NOTE, porque lee de ella. Si se borra, el juego pierde"
+        say "    esos ficheros y puede cerrarse al cargar algo que este ahi."
+        log "empaquetado: $(contar_lineas "$_enl_abs") enlace(s) absoluto(s) a la propia carpeta; si se borra la carpeta quedan colgando" WARN
+    else
+        log "empaquetado: ningun enlace con la ruta de la propia carpeta, de $(enlaces_cuantos "$dir") mirado(s) [OK]"
+    fi
     out="$(build_wsquashfs "$dir" "$name" "$(pack_formato_archivo)")"
     if paquete_valido "$out"; then
         say "[OK] Empaquetado: $out"
+        # EL AVISO VA EN LA PROPIA PREGUNTA.
+        #
+        # Decirlo solo por el registro no sirve de nada: la decision se toma
+        # en este cuadro. Sin enlaces absolutos la pregunta es EXACTAMENTE la
+        # de siempre, letra por letra.
+        local _av_enl=""
+        [ -n "${_enl_abs:-}" ] && _av_enl="
+
+OJO: este juego trae enlaces con la ruta entera de esta
+carpeta. Si la borras, el juego los pierde y puede cerrarse
+al cargar. Conservandola, funciona."
         if ui_ask "Borrar la carpeta original?
 $(basename "$dir")
-(empaquetado con exito en $(basename "$GAMES_PATH"))"; then
+(empaquetado con exito en $(basename "$GAMES_PATH"))$_av_enl"; then
             remember_browse "$dir"      # recordar donde estaba antes de borrarla
             say "[+] Eliminando carpeta original: $dir"
             rm -rf "$dir"
@@ -53895,9 +55016,40 @@ launch_loose_exe() {
     # que estar tambien: por este camino entran las carpetas sueltas, que son
     # justo las que mas a menudo se quedan sin carátula.
     covers43_offer_for "$gid" || true
+    # EL PREFIJO QUE TRAE LA CARPETA (las .wine estilo Batocera).
+    #
+    # LO QUE HABIA AQUI, Y POR QUE SE QUITA. Estas cuatro lineas apagaban el
+    # modo "prefijo incluido" a la fuerza por este camino. Tenia sentido
+    # cuando por aqui solo entraban ejecutables sueltos: ahi no hay ningun
+    # prefijo que traer. Pero por aqui entran TAMBIEN las carpetas, y una
+    # carpeta "StarCraft II.wine/" de Batocera ES un prefijo de Wine con el
+    # juego dentro.
+    #
+    # Y OJO CON CUAL ERA EL BLOQUEO DE VERDAD, porque no es el que parece: lo
+    # que impedia usar el prefijo no era el PREFIX_MODE -esa linea corre ANTES
+    # de cargar el perfil, asi que apaga un valor que todavia no es el del
+    # juego- sino vaciar BUNDLED_PREFIX_DIR. Con esa variable vacia,
+    # prefix_path() cae al prefijo compartido aunque el perfil diga "bundled".
+    #
+    # Lo pidieron los testers y se analizo antes de tocar nada
+    # (ANALISIS-CARPETAS-WINE.md). El resto del mecanismo ya servia tal cual:
+    # has_bundled_prefix recibe una CARPETA y no le importa de donde salga, y
+    # wizard_prefijo ya ofrece la opcion solo si la hay.
     BUNDLED_PREFIX_DIR=""
     BUNDLED_RUNNER_DIR=""
-    [ "${PREFIX_MODE:-}" = "bundled" ] && PREFIX_MODE="shared"
+    WP_PREFIJO_EN_CARPETA=0
+    if [ -n "${raiz_juego:-}" ] && [ -d "${raiz_juego:-}" ] \
+       && has_bundled_prefix "$raiz_juego"; then
+        BUNDLED_PREFIX_DIR="$raiz_juego"
+        WP_PREFIJO_EN_CARPETA=1
+        say "[+] Esta carpeta trae un prefix de Wine (estilo Batocera)"
+        say "    Para usarlo: Ajustes del juego -> Prefijo -> 'El que trae la carpeta'"
+        log "prefijo en carpeta: $raiz_juego (drive_c y registro propios)"
+    else
+        # Sin prefijo que traer, como siempre: y se apaga el modo por si
+        # viniera puesto de un juego anterior de esta misma sesion.
+        [ "${PREFIX_MODE:-}" = "bundled" ] && PREFIX_MODE="shared"
+    fi
     [ "${RUNNER:-}" = "bundled" ] && RUNNER=""
     local abs_exe; abs_exe="$(readlink -f "$exe" 2>/dev/null || printf '%s' "$exe")"
     # TeknoParrot tambien por aqui: estos juegos suelen lanzarse con un .bat
@@ -54168,6 +55320,23 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # de los juegos de TeknoParrot, que son los que se quedaban colgados.
     RUNNER_DIR_ACTUAL="$rdir"
     build_runner_cmd "$rdir"
+    # EL PREFIJO DE LA CARPETA, PREPARADO IGUAL QUE EL DE UN ARCHIVO.
+    #
+    # Detectarlo no basta: un prefijo que viene de otra maquina necesita que le
+    # quiten los enlaces a rutas ajenas, que se le repongan las DLL de Direct3D
+    # y que se le enlace el usuario (Batocera guarda en users/root, el runner
+    # busca en steamuser). Todo eso lo hace bundled_prefix_prepare, que hasta
+    # ahora solo se llamaba desde launch_game.
+    #
+    # VA AQUI, en el mismo punto del orden que alli: despues de
+    # build_runner_cmd -que resuelve el runner y exporta WINEPREFIX- y antes
+    # de proton_marcar_prefijo, que da el prefijo por bueno para un runner.
+    # Al reves, se marcaria como listo un prefijo al que todavia le faltan
+    # ficheros, que es el fallo de TeknoParrot de la 2.22 otra vez.
+    #
+    # Se sale sola si PREFIX_MODE no es "bundled", asi que para los juegos de
+    # siempre no cambia nada.
+    bundled_prefix_prepare "$rdir"
 
     # LAS LIBRERIAS DE BASE, IGUAL QUE EN launch_game.
     #
@@ -55458,6 +56627,218 @@ diag_libreria_que_falta() {
     return 0
 }
 
+diag_propiedades_montaje() {
+    # EN QUE NO SE PARECE ESTE MONTAJE A UNA CARPETA. $1 = la carpeta del
+    # juego dentro del montaje. $2 = una carpeta de disco de referencia.
+    #
+    # La pregunta es de Dani (02/11) y es la que habia que hacerse desde el
+    # principio: "¿por que el wsquashfs no tiene las mismas propiedades que la
+    # carpeta cuando lo unico que deberia hacer es montar el fichero?". Pues
+    # porque no las tiene, y varias de esas diferencias producen EXACTAMENTE
+    # el sintoma de Jurassic Park: un dato que el juego dice no tener, sin un
+    # solo error de fichero por medio.
+    #
+    # Cuales son y por que importa cada una esta en src/propiedades.py, que es
+    # quien mide. Aqui solo se le pasan las dos carpetas y se apunta lo que
+    # diga, al registro entero; en pantalla, nada.
+    local dir="${1:-}" ref="${2:-}"
+    [ -n "${dir:-}" ] && [ -d "$dir" ] || return 0
+    [ -n "${ref:-}" ] && [ -d "$ref" ] || ref=""
+    log "propiedades: comparando el montaje con una carpeta de disco (A = montaje, B = disco)"
+    # Y LA CAPA DE ESCRITURA DEL JUEGO, QUE ES LO QUE EL JUEGO ESCRIBE.
+    #
+    # Lo pidio Dani el 02/11: "el juego escribe cosas en la carpeta pmuser,
+    # puede que el fallo venga por ese lado". Un .wsquashfs es de solo
+    # lectura, asi que todo lo que el juego escriba acaba en
+    # overlays/<juego>/upper, y si toca un fichero que ya venia en la imagen,
+    # overlayfs lo copia ahi antes (copy-up). O sea que esa carpeta dice las
+    # dos cosas: lo que el juego creo y lo que modifico. Se mira en vez de
+    # suponerlo.
+    local _gid _upper=""
+    _gid="${dir#${MOUNT_BASE:-/dev/null}/}"; _gid="${_gid%%/*}"
+    if [ -n "${_gid:-}" ] && [ -n "${OVERLAY_BASE:-}" ]; then
+        if [ -d "$OVERLAY_BASE/$_gid/upper" ]; then
+            _upper="$OVERLAY_BASE/$_gid/upper"
+        elif [ -d "$OVERLAY_BASE/$_gid" ]; then
+            _upper="$OVERLAY_BASE/$_gid"
+        fi
+    fi
+    local _sal
+    _sal="$(propiedades_py "$dir" "${ref:-$dir}" ${_upper:+"$_upper"} 2>&1 || true)"
+    if [ -z "${_sal:-}" ]; then
+        log "propiedades: la medida no devolvio nada" WARN
+        return 0
+    fi
+    printf '%s\n' "$_sal" | while IFS= read -r _l; do
+        [ -n "$_l" ] && log "propiedades: $_l"
+    done
+    # Y LO QUE SALTA A LA VISTA, DICHO APARTE.
+    #
+    # Un registro largo es util, pero si una de las diferencias es de las que
+    # explican el fallo, no puede quedar enterrada entre veinte lineas.
+    printf '%s' "$_sal" | grep -q 'A .*d_type de readdir: DESCONOCIDO' \
+        && log "propiedades: OJO -> en el montaje readdir NO dice de que tipo es cada entrada (DT_UNKNOWN). Un programa que se fie de ese campo no encuentra sus ficheros. Es la diferencia que mejor explica un 'dato no cargado' sin ningun error de fichero" WARN
+    printf '%s' "$_sal" | grep -q 'A .*nlink del directorio=1 ' \
+        && log "propiedades: OJO -> en el montaje los directorios dicen nlink=1, asi que quien cuente subdirectorios por nlink ve cero" WARN
+    printf '%s' "$_sal" | grep -q 'A .*espacio libre=0.0 MB' \
+        && log "propiedades: OJO -> el montaje declara 0 MB libres. Un juego que mire si le cabe algo antes de cargarlo ve el disco lleno" WARN
+    # LOS INODOS COMPARTIDOS: la divergencia que se midio de verdad el 02/11.
+    #
+    # mksquashfs quita los ficheros duplicados y los deja apuntando al MISMO
+    # inodo (3072 duplicados en el empaquetado de Jurassic Park). El contenido
+    # se lee bien, pero el par (dispositivo, inodo) deja de identificar un
+    # fichero. Un motor que lleve la cuenta de lo que tiene cargado con ese par
+    # -lo barato, y lo que hacen- cree tener cargado un dato cuando lo que
+    # cargo era otro fichero igual. En una carpeta no pasa.
+    local _ino_a
+    _ino_a="$(printf '%s\n' "$_sal" | sed -n 's/^A  *inodos compartidos por ficheros distintos: \([0-9]*\) .*/\1/p' | head -1)"
+    if [ -n "${_ino_a:-}" ] && [ "$_ino_a" -gt 0 ] 2>/dev/null; then
+        log "propiedades: OJO -> en el montaje hay $_ino_a inodo(s) que comparten varios ficheros DE VERDAD (los enlaces no cuentan: se mira con lstat). Eso rompe a quien identifique un fichero por (dispositivo, inodo)" WARN
+        # Y SI LO QUE COMPARTEN INODO SON BIBLIOTECAS, ESO YA NO ES UNA
+        # SOSPECHA: ES LA RESPUESTA A "SI LAS HERRAMIENTAS SON LAS MISMAS,
+        # DONDE ESTA LA DIFERENCIA".
+        #
+        # El cargador de glibc -el mismo ld.so en carpeta y en archivo- decide
+        # si una biblioteca YA esta cargada comparando el par
+        # (st_dev, st_ino). Es literal, en elf/dl-load.c:
+        #
+        #     if (l->l_removed == 0 && l->l_ino == st.st_ino
+        #                           && l->l_dev == st.st_dev)
+        #       /* The object is already loaded. */
+        #       add_name_to_object (l, name);
+        #       return l;
+        #
+        # O sea que si dos .so distintos comparten inodo, el segundo dlopen NO
+        # carga nada: devuelve el primero, y encima le pega el nombre pedido
+        # ("add_name_to_object"), asi que no falla ni avisa. El juego se queda
+        # con un objeto que responde al nombre que pidio y que es otro, y solo
+        # se entera cuando busca su programa dentro y no esta.
+        #
+        # Misma herramienta, respuesta distinta, porque la identidad de un
+        # fichero la pone el sistema de ficheros y no la herramienta.
+        if printf '%s' "$_sal" | grep -qE 'A .*lo comparten:.*\.so'; then
+            log "propiedades: OJO -> y lo que comparte inodo son BIBLIOTECAS (.so). Eso explica el fallo por si solo: el cargador de glibc decide si un .so ya esta cargado comparando (st_dev, st_ino) -elf/dl-load.c, l_ino y l_dev-, asi que el segundo dlopen devuelve el PRIMER objeto con el nombre del segundo pegado encima (add_name_to_object). No falla, no avisa, y el juego se queda sin lo que pidio" WARN
+        fi
+        log "propiedades: OJO con la explicacion facil: la deduplicacion de mksquashfs NO hace esto -comparte los bloques de datos, no el inodo-, y se comprobo reempaquetando con -no-duplicates (02/11): los compartidos seguian. Si esto sale, hay que mirar de donde vienen de verdad (enlaces duros en el juego, por ejemplo)" WARN
+    fi
+    # Y LO QUE EL PROPIO JUEGO HAYA DEJADO DICHO.
+    #
+    # Si en su log se repite una linea miles de veces, esa linea es el fallo.
+    # Vale mas que todo lo que se pueda medir por fuera.
+    local _rep
+    _rep="$(printf '%s\n' "$_sal" | sed -n 's/^L  *x\([0-9][0-9]*\)  \(.*\)/\1 \2/p' | head -1)"
+    if [ -n "${_rep:-}" ]; then
+        log "propiedades: OJO -> el propio juego deja esto escrito, repetido ${_rep%% *} vez/veces: ${_rep#* }" WARN
+    fi
+    return 0
+}
+
+diag_assert_del_motor() {
+    # ¿EL MOTOR DEL JUEGO SE RINDIO SOLO? $1 = raiz del juego, $2 = marca del
+    # registro tomada antes de lanzar.
+    #
+    # QUE PROBLEMA RESUELVE
+    #
+    # Hay juegos -los arcades nativos sobre todo- que al encontrarse algo que
+    # no esperan no se estrellan: sueltan un "assert" por la salida y se
+    # cierran ellos mismos, DEVOLVIENDO 0. Para WProton eso era una partida
+    # que acabo bien, y el registro ponia "rc=0" y a otra cosa. El aviso que
+    # explicaba el fallo estaba en el registro, pegado entre la salida del
+    # juego, y nadie lo miraba.
+    #
+    # Caso real, Jurassic Park Arcade el 02/11: en carpeta jugaba; empaquetado
+    # a .wsquashfs arrancaba y se cerraba al pulsar un boton. Lo unico que lo
+    # decia eran estas cuatro lineas en medio de la salida:
+    #
+    #     Assert file g5/core_statemachines.c, line 5696:
+    #     Program is not loaded: 'fxgroup'
+    #     Assert file g5/sys.c, line 371:
+    #     An uncaught lockup has occured
+    #
+    # "Program is not loaded" es el motor diciendo que le falta un trozo SUYO
+    # de datos. No es un cuelgue ni falta de memoria: es un fichero que no
+    # pudo leer. Por eso, cuando el juego venia de un archivo montado, aqui se
+    # comprueba lo que de verdad distingue las dos formas de arrancarlo.
+    local raiz="${1:-}" desde="${2:-0}" _vent _assert
+    [ -r "${LOG_FILE:-}" ] || return 0
+    _vent="$(tail -c +$(( desde + 1 )) "$LOG_FILE" 2>/dev/null || true)"
+    [ -n "${_vent:-}" ] || return 0
+    # SI FALTA UNA LIBRERIA, LA CAUSA ES ESA Y YA SE HA DICHO.
+    #
+    # diag_libreria_que_falta se llama justo antes. Repetir aqui el mismo
+    # fallo con otro nombre solo serviria para que la persona dudase de cual
+    # de los dos mirar.
+    if printf '%s' "$_vent" | grep -q 'error while loading shared libraries'; then
+        return 0
+    fi
+    _assert="$(printf '%s' "$_vent" | grep -m6 -E \
+        "Assert file|Program is not loaded|uncaught lockup|[Aa]ssertion .* failed" \
+        || true)"
+    [ -n "${_assert:-}" ] || return 0
+    say "[!] EL MOTOR DEL JUEGO SE CERRO SOLO"
+    say "    El codigo de salida puede ser 0 y aun asi el juego NO termino"
+    say "    bien: se rindio el solo. Lo que dijo antes de irse:"
+    printf '%s\n' "$_assert" | while IFS= read -r _a; do say "      $_a"; done
+    log "juego nativo: el motor solto un assert y se cerro solo (el codigo de salida engana)" WARN
+    # ¿VENIA DE UN ARCHIVO MONTADO? Entonces hay una pregunta clara que hacer.
+    case "$raiz" in
+        "${MOUNT_BASE:-/dev/null}"/*) ;;
+        *) return 0 ;;
+    esac
+    # QUE VENIA DE UN ARCHIVO ES UN DATO NUESTRO: AL REGISTRO.
+    log "juego nativo: el assert viene de un juego montado desde un archivo; se comprueban los enlaces de dentro"
+    local _colg; _colg="$(enlaces_colgando "$raiz" 2>/dev/null || true)"
+    if [ -n "${_colg:-}" ]; then
+        say ""
+        say "    *** ENCONTRADO: dentro del paquete hay enlaces que no llevan"
+        say "        a ningun sitio. Esto SI explica lo de arriba."
+        printf '%s\n' "$_colg" | while IFS= read -r _c; do say "      $_c"; done
+        say ""
+        say "    Son enlaces que se guardaron con la ruta entera de la carpeta"
+        say "    original. Al empaquetar siguen apuntando ahi, y al borrar la"
+        say "    carpeta se quedaron sin destino: el juego no encuentra esos"
+        say "    ficheros. En carpeta funcionaba por eso mismo."
+        say ""
+        say "    Como se arregla: vuelve a tener la carpeta -desempaqueta o"
+        say "    copia el juego otra vez-, cambia esos enlaces por otros"
+        say "    RELATIVOS (o por el fichero de verdad) y empaqueta de nuevo."
+        say "    Un enlace relativo si viaja dentro del paquete."
+        log "juego nativo: $(contar_lineas "$_colg") enlace(s) colgando dentro del montaje; es la causa del assert" WARN
+    else
+        local _cu; _cu="$(enlaces_cuantos "$raiz")"
+        # Tambien al registro: a quien juega no le dice nada, y el numero de
+        # enlaces mirados hace falta para que el "ninguno" no sea media verdad
+        # (hay tope: 8 niveles y los primeros 600 enlaces).
+        log "juego nativo: ni un enlace colgando en $raiz, de ${_cu:-0} mirado(s); el assert no viene de ahi"
+        # LO QUE PASA CON LA RUTA, AL REGISTRO Y NO A LA PANTALLA.
+        #
+        # Esto estaba escrito en pantalla, con el nivel "upper", los ajustes a
+        # mano y una pregunta. Fuera: son tripas nuestras. Quien juega no tiene
+        # que saber que existe un montaje anidado ni editar un settings.conf
+        # para que su juego arranque, y desde luego no tiene que decidirlo.
+        #
+        # Aqui solo queda apuntar los numeros, que es lo que sirve para
+        # comparar dos partidas.
+        local _lr _nv
+        _lr="$(ruta_largo "$raiz")"; _nv="$(ruta_niveles "$raiz")"
+        log "juego nativo: assert con la carpeta de verdad en $_lr caracteres / $_nv niveles ($raiz)"
+        log "juego nativo: el largo de la ruta ya se probo con un enlace corto (02/11) y el juego lo resuelve a la ruta de verdad: para descartarlo de verdad hay que mover el montaje (MONTAJE_RUTA_CORTA=1)"
+        # Y LA PREGUNTA BUENA: ¿en que NO se parece este montaje a una carpeta?
+        diag_propiedades_montaje "$raiz" "${GAMES_PATH:-${RUNTIME_DIR:-}}"
+        # Y en pantalla, solo lo que es del juego y le sirve a quien juega.
+        say ""
+        say "    Este juego arranca bien en carpeta y se cierra desde el"
+        say "    archivo. Mientras no este resuelto, en carpeta ira siempre."
+        log "juego nativo: sospechosos que quedan = plazo de carga del propio motor, o algo preparado por el cargador en la carpeta personal"
+        if [ -d "${HOME:-/dev/null}/.cache" ]; then
+            local _c2
+            _c2="$(ls -1 "$HOME/.cache" 2>/dev/null | head -n 6 | tr '\n' ' ' || true)"
+            [ -n "${_c2:-}" ] && log "juego nativo: lo que el juego tiene preparado en su carpeta personal: $_c2"
+        fi
+    fi
+    return 0
+}
+
 slr_dirs() {
     # LAS CARPETAS DE STEAM LINUX RUNTIME QUE HAYA INSTALADAS, una por linea.
     #
@@ -55957,6 +57338,33 @@ ejecutar_nativo() {
     # usa. Asi basta con copiar ahi el .so que falte y el paquete pasa a ser de
     # verdad portatil, sin depender de lo que tenga instalado cada equipo.
     local _raiz_lib; _raiz_lib="$(dirname "$exe")"
+    # EL ENLACE CORTO QUE HABIA AQUI: RETIRADO, Y POR QUE.
+    #
+    # Se lanzaba el juego por un enlace corto (<wproton>/.g) para darle una
+    # ruta mas corta que la del montaje. NO SIRVE, y el registro del 02/11 lo
+    # dice sin lugar a dudas: el juego se lanzo por el enlace de 48 caracteres
+    # y su LD_PRELOAD salio con la ruta de VERDAD, la de 79. El lanzador .sh
+    # resuelve su propia ruta, asi que el enlace no cambia nada de lo que el
+    # juego ve.
+    #
+    # Y encima dejaba el enlace puesto: la variable que lo recordaba se
+    # asignaba dentro de un $( ), que es un subshell, asi que al volver estaba
+    # vacia y nadie lo borraba. Dani lo encontro en la raiz de WProton.
+    #
+    # Si alguna vez hay que probar el largo de la ruta de verdad, lo que vale
+    # es mover el MONTAJE (MONTAJE_RUTA_CORTA=1): eso no se puede resolver.
+    local _raiz_real="$_raiz_lib"
+    # LA RUTA QUE VA A VER EL JUEGO, MEDIDA.
+    #
+    # Parece un detalle y no lo es. Un juego viejo puede guardar las rutas de
+    # sus datos en un buffer de tamano fijo, y la ruta de un montaje es MUCHO
+    # mas larga que la de una carpeta: en el caso de Jurassic Park (02/11), 84
+    # caracteres contra 58, por el mismo juego. Si se corta, el juego no abre
+    # el fichero y dice que le falta un dato SUYO, sin mencionar la ruta.
+    #
+    # Sin este numero en el registro, eso no se puede ni sospechar. Con el, se
+    # comparan dos partidas y se ve de un golpe.
+    log "juego nativo: la ruta que ve el juego mide $(ruta_largo "$_raiz_lib") caracteres y $(ruta_niveles "$_raiz_lib") niveles -> $_raiz_lib"
     # Donde acaba el registro ahora, para leer luego solo lo que escriba el juego.
     local _log_antes_nat; _log_antes_nat="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
     local _lp=""
@@ -55970,7 +57378,11 @@ ejecutar_nativo() {
         # quiza si servirian. Usarlas garantiza el fallo; no usarlas al menos
         # deja una oportunidad.
         local _pide _hay
-        _pide="$(cat "$_raiz_lib/lib/.glibc_minima" 2>/dev/null)"
+        # EL "|| true" NO ES ADORNO: si el fichero no esta -lo normal-, cat
+        # falla, y el trap ERR del subshell de lanzamiento lo apuntaba como
+        # "LANZAMIENTO: murio en -> cat ...", que es una falsa alarma en el
+        # registro justo donde se buscan los fallos de verdad.
+        _pide="$(cat "$_raiz_lib/lib/.glibc_minima" 2>/dev/null || true)"
         _hay="$(glibc_de_este_equipo)"
         if [ -n "$_pide" ] && [ -n "$_hay" ] && glibc_mayor "$_pide" "$_hay"; then
             say "[!] Las librerias que trae el juego piden glibc $_pide y aqui"
@@ -56038,7 +57450,7 @@ ejecutar_nativo() {
         # lanzador que hizo su trabajo y uno que se murio en el sitio.
         log "juego nativo: el lanzador salio con codigo $_rc tras $(( $(date +%s) - _t0_nat ))s"
         # EL LANZADOR HA TERMINADO, PERO EL JUEGO PUEDE SEGUIR.
-        esperar_juego_nativo "$(dirname "$exe")" 0
+        esperar_juego_nativo "$_raiz_real" 0
         # AHORA, CON EL JUEGO YA FUERA, TODO LO QUE DIJO.
         #
         # En este orden a proposito: diag_libreria_que_falta lee EL REGISTRO
@@ -56048,6 +57460,7 @@ ejecutar_nativo() {
         nativo_volcar_salida "$_sal_nat"
         nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
         diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
+        diag_assert_del_motor "$_raiz_real" "${_log_antes_nat:-0}"
         # Y LA TRADUCCION DEL FALLO DE VIDEO, TAMBIEN AQUI.
         #
         # Los diagnosticos de salida solo se llamaban en los caminos de
@@ -56080,10 +57493,11 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
     ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1
     local _rc2=$?
     log "juego nativo: el lanzador (interpretado) salio con codigo $_rc2 tras $(( $(date +%s) - _t0_nat ))s"
-    esperar_juego_nativo "$(dirname "$exe")" 0
+    esperar_juego_nativo "$_raiz_real" 0
     nativo_volcar_salida "$_sal_nat"
     nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
     diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
+    diag_assert_del_motor "$_raiz_real" "${_log_antes_nat:-0}"
     diag_video_del_juego "$_rc2" "$(( $(date +%s) - _t0_nat ))"
     return $_rc2
 }
@@ -69243,7 +70657,7 @@ ordenes: pegadas como argumento no harian nada."
                 "Compartido (prefixes/default)" \
                 "Propio del juego (prefixes/$gid)" \
                 "TeknoParrot (prefixes/teknoparrot, con todas sus librerias)" \
-                "Incluido en el wsquashfs (estilo Batocera)")" || psel=""
+                "Incluido en el juego (wsquashfs o carpeta .wine, Batocera)")" || psel=""
             case "$psel" in
                 # ELEGIR A MANO BORRA EL ORIGEN, y a proposito.
                 #
