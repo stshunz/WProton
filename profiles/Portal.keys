@@ -1,0 +1,106 @@
+{
+  "wproton_para": "Portal",
+  "actions_player1": [
+    {
+      "trigger": [
+        "hotkey",
+        "start"
+      ],
+      "type": "key",
+      "target": [
+        "KEY_LEFTALT",
+        "KEY_F4"
+      ]
+    },
+    {
+      "trigger": "joystick1up",
+      "type": "key",
+      "target": "KEY_W"
+    },
+    {
+      "trigger": "joystick1down",
+      "type": "key",
+      "target": "KEY_S"
+    },
+    {
+      "trigger": "joystick1left",
+      "type": "key",
+      "target": "KEY_A"
+    },
+    {
+      "trigger": "joystick1right",
+      "type": "key",
+      "target": "KEY_D"
+    },
+    {
+      "trigger": "a",
+      "type": "key",
+      "target": "KEY_SPACE"
+    },
+    {
+      "trigger": "b",
+      "type": "key",
+      "target": "KEY_LEFTCTRL"
+    },
+    {
+      "trigger": "l2",
+      "type": "key",
+      "target": "BTN_RIGHT"
+    },
+    {
+      "trigger": "r2",
+      "type": "key",
+      "target": "BTN_LEFT"
+    },
+    {
+      "trigger": "x",
+      "type": "key",
+      "target": "KEY_E"
+    },
+    {
+      "trigger": "up",
+      "type": "key",
+      "target": "KEY_UP"
+    },
+    {
+      "trigger": "down",
+      "type": "key",
+      "target": "KEY_DOWN"
+    },
+    {
+      "trigger": "left",
+      "type": "key",
+      "target": "KEY_LEFT"
+    },
+    {
+      "trigger": "right",
+      "type": "key",
+      "target": "KEY_RIGHT"
+    },
+    {
+      "trigger": "pagedown",
+      "type": "key",
+      "target": "BTN_MIDDLE"
+    },
+    {
+      "trigger": "start",
+      "type": "key",
+      "target": "KEY_ESC"
+    },
+    {
+      "trigger": "y",
+      "type": "key",
+      "target": "KEY_R"
+    },
+    {
+      "trigger": "pageup",
+      "type": "key",
+      "target": "KEY_TAB"
+    }
+  ],
+  "mouse": {
+    "axis": "joystick2",
+    "click_left": "r2",
+    "speed": 1500
+  }
+}
