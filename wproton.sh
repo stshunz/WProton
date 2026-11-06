@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.24"
+WPROTON_VERSION="2.25"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -138,6 +138,23 @@ RUNNERS_DIR="$RUNTIME_DIR/proton"        # un dir por runner (Proton o Wine)
 DL_DIR="$RUNTIME_DIR/downloads"          # cache de descargas (dgVoodoo, etc.)
 UMU_BIN="$RUNTIME_DIR/umu/umu-run"
 WS_DIR="$BASE_DIR/wsquashfs"             # === estructura del PortProton antiguo ===
+# EL PUNTO DE MONTAJE, Y UN EXPERIMENTO QUE SALIO MAL (03/11)
+#
+# Durante unas horas esto fue "$BASE_DIR/m", para acortar la ruta: el fichero
+# que el motor de Jurassic Park dice no tener medi­a 128 caracteres EXACTOS
+# desde el montaje y 108 desde la carpeta, y 128 es el tamano clasico de un
+# "char ruta[128]" en C -una ruta de 128 no cabe en 128 bytes, necesita 129
+# con el cero final-.
+#
+# ERA MENTIRA, Y LO DIJO EL REGISTRO DE LA SIGUIENTE PARTIDA: con la base
+# corta la raiz quedo en 61 caracteres -mas corta que los 59+ de la carpeta- y
+# el juego fallo EXACTAMENTE IGUAL, con el mismo assert. Ademas el fichero mas
+# largo del juego mide 149 desde el montaje y 133 desde la carpeta, o sea que
+# ya habia 1317 ficheros por encima de 128 en los dos sitios.
+#
+# Asi que el largo de la ruta queda DESCARTADO CON DATOS, el montaje vuelve a
+# su sitio de siempre, y de quien probo la version de en medio se recoge la
+# carpeta "m" al arrancar.
 MOUNT_BASE="$WS_DIR/tmp_mount"           #   <n>_ro (squashfuse) + <n> (overlay)
 OVERLAY_BASE="$WS_DIR/overlays"          #   <n>/upper (saves) + <n>/work
 BUILD_BASE="$WS_DIR/build_ws"            #   extraccion/empaquetado temporal
@@ -1708,6 +1725,11 @@ SQUASHFUSE_BIN="$(resolve_tool squashfuse)"
 OVERLAYFS_BIN="$(resolve_tool fuse-overlayfs)"
 FUSERMOUNT_BIN="$(command -v fusermount3 2>/dev/null || command -v fusermount 2>/dev/null)"
 
+# El techo de un inodo de 32 bits: 2^32. En el struct stat de 32 bits el campo
+# st_ino tiene 32 bits, asi que el nucleo devuelve EOVERFLOW en cuanto el
+# numero no cabe, y el programa cree que el fichero no esta.
+SQFS_TECHO_DE_32_BITS=4294967296
+
 squashfuse_monta_bin() {
     # CON QUE SE MONTA UN wsquashfs: squashfuse_ll si esta, squashfuse si no.
     #
@@ -1731,7 +1753,61 @@ squashfuse_monta_bin() {
     #
     # No se descarga aparte: viene en el mismo paquete que squashfuse, asi que
     # o esta al lado o no esta, y si no esta se usa el de siempre.
+    # Y HAY UN CASO EN QUE EL DRIVER RAPIDO NO SIRVE: ARCHIVOS DE MAS DE 4 GB
+    # CON UN JUEGO NATIVO DE 32 BITS. ESTO ERA LO DE JURASSIC PARK.
+    #
+    # squashfuse_ll, compilado para 64 bits, usa como numero de inodo la
+    # REFERENCIA de inodo de squashfs tal cual. Esta en su propio codigo
+    # (ll_inode.c):
+    #
+    #   static fuse_ino_t sqfs_ll_ino64_fuse(sqfs_ll *ll, sqfs_inode_id i) {
+    #       ... else { return i; }       <- la referencia, sin tocar
+    #
+    # Y una referencia de inodo de squashfs es (bloque de metadatos << 16) |
+    # offset dentro del bloque. O sea que en cuanto el bloque de metadatos
+    # esta por encima de los 4 GB, el numero PASA DE 32 BITS.
+    #
+    # Medido en la maquina de Dani con el Jurassic (archivo de 4 GB largos):
+    #
+    #   /version.txt -> ino=4338943681   = 0x1029f06c1  bloque 66207 off 1729
+    #   /utils       -> ino=4338943649   = 0x1029f06a1  bloque 66207 off 1697
+    #   /rawthrills  -> ino=4338942817   = 0x1029f0361  bloque 66207 off  865
+    #
+    # Los seis ejemplos caian en el MISMO bloque, el 66207, y 66207<<16 son
+    # 4,34 GB: el final del archivo. Solo 54 ficheros de 8089 se pasaban, y
+    # eran los de la raiz, porque mksquashfs escribe los metadatos de los
+    # directorios DESPUES de los datos y son los ultimos en entrar.
+    #
+    # Y un juego de 32 bits que hace stat() de un inodo que no cabe en 32 bits
+    # recibe EOVERFLOW del nucleo (fs/stat.c, cp_new_stat) y NO VE UN ERROR:
+    # VE QUE EL FICHERO NO ESTA. De ahi que leyera su version.txt y le saliera
+    # "Welcome to 0.00", con el fichero ahi y legible.
+    #
+    # El driver ALTO no tiene este problema: va por la interfaz alta de FUSE,
+    # que ignora el st_ino que le demos salvo que se pida "use_ino" -y aqui no
+    # se pide-, asi que los numeros los pone el nucleo y son pequeños. Se paga
+    # algo de cache, pero poco: al alto se le piden attr/entry/negative de una
+    # hora justo para eso (ver squashfuse_opciones_monta).
+    #
+    # Y OJO CON EL PROPIO squashfuse: el mismo codigo, compilado para 32 bits,
+    # usa "inode_number + 1", que es pequeño y secuencial. O sea que el
+    # proyecto YA SABE que la referencia no sirve cuando no hay 48 bits; lo
+    # que no puede saber es de cuantos bits es el programa que va a LEER.
     local ll; ll="$(resolve_tool squashfuse_ll)"
+    local img="${1:-}"
+    if [ -n "$ll" ] && [ -n "${img:-}" ] && [ -n "${SQUASHFUSE_BIN:-}" ] \
+       && [ -f "$img" ]; then
+        local _tam=""
+        _tam="$(stat -c%s "$img" 2>/dev/null || printf '')"
+        case "${_tam:-}" in
+            ''|*[!0-9]*) : ;;
+            *) if [ "$_tam" -ge "$SQFS_TECHO_DE_32_BITS" ]; then
+                   log "squashfuse: este archivo mide $_tam bytes, o sea que pasa de 4 GB. Se monta con el driver ALTO ($SQUASHFUSE_BIN) y no con squashfuse_ll, porque el bajo usa la referencia de inodo de squashfs -(bloque<<16)|offset- como numero de inodo, y por encima de 4 GB esa referencia NO CABE EN 32 BITS. Un juego nativo de 32 bits que hiciera stat() de esos ficheros recibiria EOVERFLOW y los daria por desaparecidos (esto era lo de Jurassic Park)"
+                   printf '%s' "$SQUASHFUSE_BIN"
+                   return 0
+               fi ;;
+        esac
+    fi
     if [ -n "$ll" ]; then printf '%s' "$ll"; else printf '%s' "$SQUASHFUSE_BIN"; fi
 }
 
@@ -2894,10 +2970,10 @@ steam_abrir() {
 PROPIEDADES_PY="$RUNTIME_DIR/propiedades.py"
 
 write_propiedades() {
-    grep -q "WPROTON_HELPER propiedades.py dc44b8991314" "$PROPIEDADES_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER propiedades.py 8085b3acaad6" "$PROPIEDADES_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PROPIEDADES_PY" <<'PROPEOF'
-# WPROTON_HELPER propiedades.py dc44b8991314
+# WPROTON_HELPER propiedades.py 8085b3acaad6
 # WPROTON_HELPER propiedades.py PENDIENTE
 # -*- coding: utf-8 -*-
 # WProton - en que NO se parece un montaje a una carpeta
@@ -2936,8 +3012,11 @@ write_propiedades() {
 # La primera sale como A, la segunda como B. Todo va a la salida estandar, una
 # linea por cosa, para que el registro de WProton se lo coma tal cual.
 import ctypes
+import errno
+import fcntl
 import mmap
 import os
+import re
 import stat
 import sys
 
@@ -3108,6 +3187,9 @@ EXT_DE_LOG = (".txt", ".log")
 TOPE_LOG_BYTES = 4 * 1024 * 1024   # cuanto se lee del final de cada log
 TOPE_REPETIDAS = 8                 # cuantas lineas repetidas se ensenan
 TOPE_ULTIMAS = 12                  # cuantas lineas del final
+TOPE_ANTES = 20                    # cuantas lineas de ANTES del volcado de pila
+TOPE_DIAS = 6                      # cuantos dias distintos se listan
+TOPE_PARTIDA_ENTERA = 200          # hasta aqui, la partida que fallo va entera
 
 
 def parece_un_log(nombre):
@@ -3117,7 +3199,564 @@ def parece_un_log(nombre):
     return any(x in bajo for x in NOMBRES_DE_LOG)
 
 
-def pistas_de_los_logs(upper):
+# LAS DOS COSAS QUE APRENDIMOS LEYENDO EL LOG DEL 03/11
+#
+# 1. El log del juego es ACUMULATIVO. En el mismo fichero habia lineas del
+#    "Sun Sep 27" al lado de las del "Tue Nov  3", o sea de partidas de hace
+#    cinco semanas. Un recuento sobre todo el fichero no dice nada de la
+#    partida que acaba de fallar: las 522 veces que salia un error de SDL
+#    podian ser todas de septiembre. Asi que hay que separar por dia.
+#
+# 2. La fecha va delante de CADA linea, y eso rompe el recuento: la misma
+#    queja repetida cien veces sale como cien lineas distintas porque cada una
+#    lleva su segundo. En la salida del 03/11 se veia clarisimo:
+#       x102  Sun Sep 27 09:27:39 2026: Assert File: g5/render_debug.c ...
+#       x102  Sun Sep 27 09:28:36 2026: Assert File: g5/render_debug.c ...
+#    Dos entradas del "top" gastadas en la misma linea. Hay que contar el
+#    mensaje SIN la fecha.
+#
+# Y una tercera, que es la que hacia inutil el final del log: las ultimas
+# lineas de un fallo son el volcado de pila, que dice por donde paso el
+# programa pero no QUE le pasaba. Eso lo dicen las lineas de justo ANTES.
+
+MESES = ("jan", "feb", "mar", "apr", "may", "jun", "jul",
+         "aug", "sep", "oct", "nov", "dec")
+
+# Las formas de fecha que se ven en los logs de los motores. Cada una devuelve
+# el dia en el grupo 'dia' cuando lo lleva; si solo trae la hora, no hay dia.
+FORMAS_DE_FECHA = (
+    # Tue Nov  3 18:27:59 2026:   (asctime de C, la de Jurassic Park)
+    re.compile(r"^(?P<dia>[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2}) +\d{1,2}:\d{2}:\d{2}"
+               r"(?P<ano> \d{4})?\s*[:\-]?\s*"),
+    # 2026-11-03 18:27:59,123   /   [2026-11-03T18:27:59]
+    re.compile(r"^\[?(?P<dia>\d{4}-\d{2}-\d{2})[T ]\d{1,2}:\d{2}:\d{2}"
+               r"(?:[.,]\d+)?\]?\s*[:\-]?\s*"),
+    # 03/11/2026 18:27:59
+    re.compile(r"^\[?(?P<dia>\d{1,2}/\d{1,2}/\d{2,4})[ T]\d{1,2}:\d{2}:\d{2}"
+               r"(?:[.,]\d+)?\]?\s*[:\-]?\s*"),
+    # [18:27:59.123]  /  18:27:59:    (solo hora, no dice de que dia es)
+    re.compile(r"^\[?\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\]?\s*[:\-]?\s*"),
+    # [1234.567]  /  (12.34)   marca de tiempo relativa al arranque
+    re.compile(r"^[\[(]\s*\d+[.,]\d+\s*[\])]\s*"),
+)
+
+
+def parte_la_fecha(linea):
+    """Separa la fecha del mensaje: devuelve (dia, mensaje).
+
+    'dia' sale como la escribio el juego ("Tue Nov  3 2026", "2026-11-03") o
+    None si la linea no lleva fecha o solo lleva la hora. 'mensaje' es la
+    linea sin el sello de tiempo, que es lo que se puede contar.
+    """
+    for forma in FORMAS_DE_FECHA:
+        hallado = forma.match(linea)
+        if not hallado:
+            continue
+        resto = linea[hallado.end():].strip()
+        grupos = hallado.groupdict()
+        dia = grupos.get("dia")
+        if dia:
+            dia = " ".join(dia.split())
+            ano = grupos.get("ano")
+            if ano:
+                dia = "%s %s" % (dia, ano.strip())
+        return dia, (resto if resto else linea)
+    return None, linea
+
+
+def parece_marco_de_pila(mensaje):
+    """¿Es esta linea parte de un volcado de pila?
+
+    Lo que hay que reconocer es lo que escriben backtrace_symbols() y los
+    volcados de los motores:
+        game(SceneManagerPlayNow+0xde) [0x831dbbe]
+        /usr/lib32/libc.so.6(__libc_start_main+0xf3) [0xf7c1a2e3]
+        #4  0x0804a1b2 in main ()
+        ########## BEGIN STACK TRACE ##########
+    No se reconoce por la palabra 'stack' sino por la forma, que es la que de
+    verdad se repite marco a marco.
+    """
+    if not mensaje:
+        return True
+    if "STACK TRACE" in mensaje.upper():
+        return True
+    if mensaje.startswith("#") and "0x" in mensaje:
+        return True
+    if re.search(r"\+0x[0-9a-fA-F]+\)", mensaje):
+        return True
+    if re.search(r"\[0x[0-9a-fA-F]{4,}\]\s*$", mensaje):
+        return True
+    if re.match(r"^[#*=\-_~]{3,}\s*$", mensaje):
+        return True     # la fila de asteriscos con la que cierran el volcado
+    return False
+
+
+def lo_que_dijo_antes_de_morir(mensajes, tope_atras=0):
+    """Las lineas de ANTES del volcado de pila, que son las que dicen el QUE.
+
+    En el log del 03/11, las doce ultimas lineas eran estas:
+        game(SceneManagerPlayNow+0xde) [0x831dbbe]
+        game(GameFlow_LevelSelect+0x4b) [0x816f90b]
+        ...
+        Program exiting...
+    Util para saber DONDE (se pulso un boton en la pantalla de seleccion y el
+    motor se fue), inutil para saber POR QUE. El motivo lo escribio el juego
+    justo antes de empezar a volcar, y eso es lo que se saca aqui.
+    """
+    if not mensajes:
+        return []
+    # Se sube desde el final saltando el volcado y la despedida.
+    i = len(mensajes) - 1
+    while i >= 0 and (parece_marco_de_pila(mensajes[i])
+                      or mensajes[i].lower().startswith("program exiting")):
+        i -= 1
+    if i < 0:
+        return []
+    if i == len(mensajes) - 1:
+        return []     # no hubo volcado: el final del log ya vale, no se repite
+    # Y NO SE PASA DE LA PARTIDA. Sin este tope, el contexto se metia en la
+    # partida ANTERIOR y colaba sus lineas como si fueran del fallo -se vio
+    # con dos partidas el mismo dia: salia la despedida de la primera en
+    # medio del motivo de la segunda-.
+    desde = max(tope_atras, i - TOPE_ANTES + 1)
+    return junta_las_seguidas(mensajes[desde:i + 1])
+
+
+def junta_las_seguidas(mensajes):
+    """La misma linea repetida seguida se queda en una, con el contador.
+
+    Si no, las veinte lineas de contexto se las come la queja que el juego
+    estaba escribiendo en bucle y no se ve la que de verdad importa, que es
+    la de justo antes de morir. Con esto, veinte lineas son veinte COSAS.
+    """
+    salida = []
+    for m in mensajes:
+        if salida and salida[-1][0] == m:
+            salida[-1][1] += 1
+        else:
+            salida.append([m, 1])
+    return [m if veces == 1 else "x%d  %s" % (veces, m) for m, veces in salida]
+
+
+# COMO SE SEPARA UNA PARTIDA DE LA DE ANTES
+#
+# Repartir por dia no basta, y el registro del 03/11 lo demuestra: en la misma
+# sesion Dani lanza el juego DOS veces -primero en carpeta, que va, y luego
+# desde el archivo, que se cierra- y las dos partidas caen el mismo dia. Si se
+# cuentan juntas, no se puede responder a la unica pregunta que importa: ¿ese
+# error es de la partida que falla o de la que funciona?
+#
+# Pero el log trae la frontera puesta: el motor escribe una despedida al
+# acabar. Asi que la ultima partida es lo que hay DESPUES de la penultima
+# despedida. Esto no depende de las fechas, que es lo bueno: hay motores que
+# no sellan las lineas.
+FIN_DE_PARTIDA = ("program exiting", "shutting down", "shutdown complete",
+                  "quitting", "exiting now")
+
+# Y POR EL OTRO LADO: POR DONDE EMPIEZA (04/11).
+#
+# Con las despedidas no basta. En el registro de Dani del 04/11 el motor solo
+# dejo UNA en los ultimos cuatro megas, asi que no habia dos con que cortar y
+# se cayo al reparto por dia... y ese dia habia lanzado el juego TRES veces.
+# Resultado: 174 lineas de tres partidas mezcladas, 110 mensajes distintos, y
+# un "top" de ocho lineas que salian x3 cada una. Inservible.
+#
+# Pero el motor tambien dice por donde EMPIEZA, y eso vale igual: la ultima
+# partida es lo que hay desde la ULTIMA marca de arranque. En ese mismo
+# registro, "Application Started" salia tres veces.
+INICIO_DE_PARTIDA = ("application started", "boot proc start", "game start",
+                     "starting up", "initializing game", "system init")
+
+
+def marca_de_arranque(mensajes):
+    """Cual de las marcas de arranque usa ESTE motor, y donde sale.
+
+    POR QUE HACE FALTA ELEGIR UNA (04/11). La lista tiene varias -"application
+    started", "boot proc start"...- y el motor de Jurassic Park escribe DOS de
+    ellas en cada partida, una detras de otra. Si se cortan las partidas por
+    cualquiera de las dos, cada partida sale partida en dos trozos: el log de
+    tres partidas daba seis, y la comparacion entre una buena y la mala
+    comparaba el final de una con el principio de otra. Sin sentido.
+
+    Asi que se elige UNA: la primera de la lista que salga al menos dos veces,
+    y se usa solo esa. Devuelve (marca, posiciones).
+    """
+    for marca in INICIO_DE_PARTIDA:
+        donde = [i for i, m in enumerate(mensajes) if marca in m.lower()]
+        if len(donde) >= 2:
+            return marca, donde
+    # Con una sola aparicion tambien vale para saber donde empieza la ultima.
+    for marca in INICIO_DE_PARTIDA:
+        donde = [i for i, m in enumerate(mensajes) if marca in m.lower()]
+        if donde:
+            return marca, donde
+    return "", []
+
+
+def donde_empieza_la_ultima_partida(mensajes):
+    """El indice donde arranca la ultima partida, o None si no se sabe.
+
+    Se mira primero por el final -dos despedidas- y, si no las hay, por el
+    principio -la ultima marca de arranque-. Las dos cosas son del propio
+    motor; no se adivina nada.
+    """
+    cortes = [i for i, m in enumerate(mensajes)
+              if any(x in m.lower() for x in FIN_DE_PARTIDA)]
+    if len(cortes) >= 2:
+        desde = cortes[-2] + 1
+        if desde < len(mensajes):
+            return desde, "desde la despedida anterior"
+    # Sin dos despedidas: por donde arranca. OJO: con UNA sola marca, no con
+    # cualquiera de la lista -el motor escribe varias seguidas en cada partida
+    # y cortar por la ultima dejaria fuera el principio de la partida-.
+    _marca, arranques = marca_de_arranque(mensajes)
+    if arranques and arranques[-1] > 0:
+        return arranques[-1], "desde la ultima marca de arranque del motor"
+    return None, ""
+
+
+def cuenta_las_repetidas(mensajes, cuantas=TOPE_REPETIDAS):
+    """Las lineas que mas se repiten, sin contar el volcado de pila.
+
+    Los marcos de pila salen una vez cada uno y no se repiten nunca, asi que
+    si entran en el recuento se comen los huecos del "top" con direcciones de
+    memoria. El volcado ya se ensena entero mas abajo.
+    """
+    cuenta = {}
+    for m in mensajes:
+        if parece_marco_de_pila(m):
+            continue
+        cuenta[m] = cuenta.get(m, 0) + 1
+    repes = sorted(cuenta.items(), key=lambda kv: (-kv[1], kv[0]))
+    return repes[:cuantas], len(cuenta)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# UNA PARTIDA BUENA CONTRA LA MALA, DENTRO DEL PROPIO LOG DEL JUEGO
+#
+# DE DONDE SALE (04/11). Dani mando dos registros: uno jugando en carpeta -que
+# va- y otro desde el archivo -que se cierra-. Lo que el juego escribe por la
+# salida de error es IDENTICO en los dos salvo cuatro lineas:
+#
+#     Assert file g5/core_statemachines.c, line 5696:
+#     Program is not loaded: 'fxgroup'
+#     Assert file g5/sys.c, line 371:
+#     An uncaught lockup has occured
+#
+# O sea que por ahi no hay nada mas que sacar. PERO el log que escribe el
+# propio juego -gamelog.txt- es ACUMULATIVO y vive dentro del juego, asi que
+# cuando se empaqueta la carpeta se lleva dentro las partidas buenas, y cuando
+# se juega desde el archivo la mala se escribe encima, en la capa de
+# escritura. Las dos cosas acaban en el MISMO fichero.
+#
+# Eso quiere decir que la comparacion que llevamos dias intentando hacer desde
+# fuera -¿en que se diferencia una partida de la otra?- ya esta hecha dentro
+# del fichero, con las palabras del motor. Solo hay que leerla: se parten las
+# partidas, se coge la ultima (la que fallo) y la ultima anterior que NO
+# fallara (una buena), y se mira EN QUE LINEA dejan de hacer lo mismo.
+#
+# No es una hipotesis sobre el sistema de ficheros: es el motor contando, paso
+# a paso, hasta donde hizo lo mismo y que hizo distinto.
+
+# Lo que delata que una partida acabo mal.
+MARCAS_DE_FALLO_PARTIDA = ("assert file", "assert:", "is not loaded",
+                           "uncaught lockup", "fatal", "segmentation fault")
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# ¿DE DONDE SACA EL JUEGO ESE NUMERO?
+#
+# DE DONDE SALE (05/11, y es el hallazgo que lo estrecha todo). Comparando la
+# partida buena con la mala, las dos son IDENTICAS hasta el fallo salvo una
+# linea:
+#
+#     BUENA  # Welcome to 1.33
+#     MALA   # Welcome to 0.00
+#
+# El juego lee un numero -su version- al arrancar, y desde el montaje le sale
+# CERO. Con la version a cero carga otro juego de "perm programs", y por eso
+# luego le falta 'fxgroup' y se rinde. O sea que la pregunta ya no es "¿que
+# pasa con el montaje?" sino una muy concreta: ¿DE QUE FICHERO sale ese 1.33,
+# y por que desde el montaje no sale?
+#
+# Eso se puede buscar: el valor bueno esta escrito en algun sitio dentro del
+# juego. Se recorren los ficheros de texto y se dice en cuales aparece y si se
+# pueden leer desde aqui. No es una teoria: es un grep con el dato que el
+# propio motor acaba de dar.
+EXT_DE_TEXTO = (".txt", ".ini", ".cfg", ".conf", ".xml", ".lst", ".json",
+                ".dat", ".inf", ".ver", ".cvs", ".csv")
+TOPE_FICHERO_BUSCADO = 1024 * 1024     # no se miran ficheros mas gordos
+TOPE_FICHEROS_BUSCADOS = 6000
+TOPE_HALLAZGOS = 10
+
+
+def parece_una_fecha_o_un_tiempo(linea):
+    """Numeros que cambian solos y no dicen nada: relojes, fechas, duraciones."""
+    bajo = linea.lower()
+    if "current time" in bajo or "build:" in bajo:
+        return True
+    if re.search(r"\d{1,2}:\d{2}:\d{2}", linea):
+        return True
+    if re.search(r"took\s+\d+\s*(ms|us|s)\b", bajo):
+        return True
+    if re.search(r"\b\d+\s*(ms|fps|bytes|kb|mb)\b", bajo):
+        return True
+    return False
+
+
+def numeros_que_cambian(bueno, malo):
+    """Los numeros que NO coinciden entre las dos versiones de una linea."""
+    nb = re.findall(r"\d+(?:\.\d+)?", bueno)
+    nm = re.findall(r"\d+(?:\.\d+)?", malo)
+    return [(b, m) for b, m in zip(nb, nm) if b != m]
+
+
+def busca_el_valor_en_el_juego(raiz, valor):
+    """¿En que ficheros del juego esta escrito ese valor?"""
+    lineas = []
+    if not raiz or not os.path.isdir(raiz) or not valor:
+        return lineas
+    hallados = 0
+    mirados = 0
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for f in ficheros:
+            if hallados >= TOPE_HALLAZGOS or mirados >= TOPE_FICHEROS_BUSCADOS:
+                break
+            ruta = os.path.join(aqui, f)
+            bajo = f.lower()
+            try:
+                tam = os.path.getsize(ruta)
+            except OSError:
+                continue
+            if tam == 0 or tam > TOPE_FICHERO_BUSCADO:
+                continue
+            # Ficheros de texto por extension, o cualquiera pequeno: un juego
+            # viejo guarda su version en cualquier sitio.
+            if not bajo.endswith(EXT_DE_TEXTO) and tam > 64 * 1024:
+                continue
+            mirados += 1
+            try:
+                with open(ruta, "rb") as fh:
+                    datos = fh.read(TOPE_FICHERO_BUSCADO)
+            except OSError as ex:
+                lineas.append("de donde sale: OJO -> %s no se pudo leer: %s"
+                              % (os.path.relpath(ruta, raiz), ex))
+                continue
+            if b"\x00" in datos[:4096]:
+                continue                      # binario: no es donde se escribe
+            texto = datos.decode("utf-8", "replace")
+            if valor not in texto:
+                continue
+            hallados += 1
+            rel = os.path.relpath(ruta, raiz)
+            for l in texto.splitlines():
+                if valor in l:
+                    lineas.append("de donde sale: '%s' aparece en %s -> %s"
+                                  % (valor, rel, l.strip()[:200]))
+                    break
+            # Y TODO LO QUE SE PUEDA SABER DE ESE FICHERO.
+            #
+            # Si el contenido es el correcto -y aqui se acaba de leer desde el
+            # montaje, asi que lo es- entonces el problema no es QUE pone sino
+            # COMO lo abre el juego. Para poder decir eso hay que enseñar lo
+            # que hay: tipo, tamano, si es un enlace y adonde, como acaban las
+            # lineas y los primeros bytes en crudo.
+            try:
+                est = os.lstat(ruta)
+                tipo = ("enlace" if stat.S_ISLNK(est.st_mode)
+                        else "fichero" if stat.S_ISREG(est.st_mode) else "otro")
+                lineas.append("de donde sale:   %s -> %s de %d bytes,"
+                              " permisos %o" % (rel, tipo, est.st_size,
+                                                stat.S_IMODE(est.st_mode)))
+                if tipo == "enlace":
+                    destino = os.readlink(ruta)
+                    lineas.append("de donde sale:   OJO -> es un ENLACE y"
+                                  " apunta a %s (%s)"
+                                  % (destino,
+                                     "existe" if os.path.exists(ruta) else "NO EXISTE"))
+            except OSError as ex:
+                lineas.append("de donde sale:   no se pudo mirar: %s" % ex)
+            fin_de_linea = ("CRLF (fin de linea de Windows)" if b"\r\n" in datos
+                            else "LF" if b"\n" in datos
+                            else "sin salto de linea al final")
+            lineas.append("de donde sale:   acaba las lineas en %s;"
+                          " primeros bytes: %s" % (fin_de_linea,
+                                                   " ".join("%02x" % c for c in datos[:16])))
+            lineas.append("de donde sale:   contenido entero (leido DESDE AQUI,"
+                          " o sea que desde aqui se lee bien): %s"
+                          % texto.strip()[:200].replace("\n", " | "))
+        if hallados >= TOPE_HALLAZGOS or mirados >= TOPE_FICHEROS_BUSCADOS:
+            break
+    if not lineas:
+        lineas.append("de donde sale: '%s' NO esta escrito en ningun fichero de"
+                      " texto del juego (%d mirados). O lo calcula el propio"
+                      " motor, o esta dentro de un fichero binario"
+                      % (valor, mirados))
+    return lineas
+
+
+def partir_en_partidas(mensajes):
+    """Devuelve una lista de (desde, hasta) con cada partida del log.
+
+    Se corta por las marcas de ARRANQUE del motor cuando las hay -cada una
+    abre una partida- y, si no, por las despedidas. Es lo mismo que usa
+    donde_empieza_la_ultima_partida, pero quedandose con todas y no solo con
+    la ultima.
+    """
+    _marca, arranques = marca_de_arranque(mensajes)
+    if len(arranques) >= 2:
+        trozos = []
+        for n, ini in enumerate(arranques):
+            fin = arranques[n + 1] if n + 1 < len(arranques) else len(mensajes)
+            trozos.append((ini, fin))
+        return trozos
+    finales = [i for i, m in enumerate(mensajes)
+               if any(x in m.lower() for x in FIN_DE_PARTIDA)]
+    if len(finales) >= 2:
+        trozos = []
+        ini = 0
+        for f in finales:
+            trozos.append((ini, f + 1))
+            ini = f + 1
+        if ini < len(mensajes):
+            trozos.append((ini, len(mensajes)))
+        return trozos
+    return []
+
+
+def acabo_mal(trozo):
+    return any(any(x in m.lower() for x in MARCAS_DE_FALLO_PARTIDA)
+               for m in trozo)
+
+
+def sin_numeros(mensaje):
+    """El mismo mensaje con los numeros tapados, para poder compararlos.
+
+    'Raw Thrills: 2D layer laid out at 1360x768 (341 screen size reads)' no es
+    la misma cadena de una partida a otra, pero es la MISMA COSA. Si no se
+    normaliza, cada linea con una cuenta dentro sale como diferencia y la
+    comparacion no vale para nada.
+    """
+    return re.sub(r"\d+", "#", mensaje)
+
+
+def compara_partidas(mensajes, cuantas_ensenar=12, raiz=None):
+    """¿Hasta donde hizo lo mismo la partida que fallo, y que hizo distinto?"""
+    lineas = []
+    trozos = partir_en_partidas(mensajes)
+    if len(trozos) < 2:
+        return ["comparar partidas: en el log solo hay una partida; no hay con"
+                " que compararla"]
+    ini_mala, fin_mala = trozos[-1]
+    mala = mensajes[ini_mala:fin_mala]
+    if not acabo_mal(mala):
+        lineas.append("comparar partidas: la ultima partida del log no acabo"
+                      " en assert; no se compara nada")
+        return lineas
+    # La ultima anterior que acabara bien.
+    buena = None
+    for ini, fin in reversed(trozos[:-1]):
+        trozo = mensajes[ini:fin]
+        if trozo and not acabo_mal(trozo):
+            buena = trozo
+            break
+    if buena is None:
+        return ["comparar partidas: todas las partidas del log acabaron en"
+                " assert; no hay ninguna buena con que comparar"]
+    lineas.append("comparar partidas: hay %d partida(s) en el log; se compara la"
+                  " ULTIMA (%d lineas, acabo en assert) con la ultima que"
+                  " acabo BIEN (%d lineas)"
+                  % (len(trozos), len(mala), len(buena)))
+    # ¿Hasta donde hacen lo mismo?
+    nb = [sin_numeros(m) for m in buena]
+    nm = [sin_numeros(m) for m in mala]
+    iguales = 0
+    while iguales < len(nb) and iguales < len(nm) and nb[iguales] == nm[iguales]:
+        iguales += 1
+    if iguales == 0:
+        lineas.append("comparar partidas: OJO -> no coinciden ni en la primera"
+                      " linea; el motor hace algo distinto desde el principio")
+    else:
+        lineas.append("comparar partidas: las dos hacen LO MISMO durante %d"
+                      " linea(s); lo ultimo que hicieron igual:" % iguales)
+        for m in junta_las_seguidas(mala[max(0, iguales - 4):iguales]):
+            lineas.append("comparar partidas:     = %s" % m[:300])
+        # LAS LINEAS QUE SON "IGUALES" PERO NO LO SON DEL TODO.
+        #
+        # El tramo comun se compara con los numeros tapados, porque si no
+        # cualquier cuenta de dentro -"(341 screen size reads)"- saldria como
+        # diferencia. Pero entonces una linea como
+        #
+        #     Load Scene 'screen_levelselect3' took 72 ms
+        #
+        # cuenta como igual aunque en una partida tarde 72 ms y en la otra
+        # 300. Y justo ahi es donde se esconde una diferencia silenciosa: el
+        # motor hace LO MISMO pero con otro resultado. Asi que del tramo comun
+        # se sacan aparte las lineas cuyo texto crudo NO coincide, con los dos
+        # valores al lado.
+        distintas_en_numeros = [(b_, m_) for b_, m_ in zip(buena[:iguales],
+                                                           mala[:iguales])
+                                if b_ != m_]
+        if distintas_en_numeros:
+            lineas.append("comparar partidas: OJO -> dentro de ese tramo"
+                          " 'igual' hay %d linea(s) con NUMEROS DISTINTOS."
+                          " El motor hizo lo mismo pero no le salio lo mismo:"
+                          % len(distintas_en_numeros))
+            for b_, m_ in distintas_en_numeros[:cuantas_ensenar]:
+                lineas.append("comparar partidas:     BUENA  # %s" % b_[:300])
+                lineas.append("comparar partidas:     MALA   # %s" % m_[:300])
+            # Y DE DONDE SALE ESE NUMERO, que es la pregunta siguiente.
+            #
+            # Se buscan solo los que valen la pena: un reloj, una fecha o un
+            # "took 43 ms" cambian solos y no dicen nada. Lo que importa es un
+            # numero que en la partida buena vale algo y en la mala CERO: eso
+            # es un dato que el motor no pudo leer.
+            buscados = 0
+            for b_, m_ in distintas_en_numeros:
+                if parece_una_fecha_o_un_tiempo(b_) or buscados >= 2:
+                    continue
+                for val_b, val_m in numeros_que_cambian(b_, m_):
+                    if float(val_m or 0) != 0 or float(val_b or 0) == 0:
+                        continue      # solo los que en la mala salen a CERO
+                    lineas.append("comparar partidas: OJO -> en la partida mala"
+                                  " ese numero sale CERO y en la buena vale"
+                                  " %s. Un dato que el motor no pudo leer"
+                                  % val_b)
+                    buscados += 1
+                    if raiz:
+                        lineas += ["comparar partidas: " + l
+                                   for l in busca_el_valor_en_el_juego(raiz, val_b)]
+                    break
+        else:
+            lineas.append("comparar partidas: y en ese tramo no cambia ni un"
+                          " numero: hasta ahi las dos partidas son identicas"
+                          " letra por letra")
+    lineas.append("comparar partidas: OJO -> y AQUI se separan:")
+    for m in junta_las_seguidas(buena[iguales:iguales + cuantas_ensenar]):
+        lineas.append("comparar partidas:     BUENA  > %s" % m[:300])
+    for m in junta_las_seguidas(mala[iguales:iguales + cuantas_ensenar]):
+        lineas.append("comparar partidas:     MALA   > %s" % m[:300])
+    # Y lo que la buena hizo y la mala no vio NUNCA, que es otra pregunta.
+    if len(buena) <= TOPE_PARTIDA_ENTERA:
+        lineas.append("comparar partidas: y la partida BUENA entera, para"
+                      " poder leerlas una al lado de la otra:")
+        for m in junta_las_seguidas(buena):
+            lineas.append("comparar partidas:     B| %s" % m[:300])
+    # OJO: tambien con los numeros tapados. Si no, una linea que solo cambia
+    # en una cuenta -"(341 screen size reads)" contra "(352 ...)"- sale como
+    # "solo en la buena" y ensucia la lista con ruido.
+    vistos_mala = set(sin_numeros(m) for m in mala)
+    nunca = [m for m in dict.fromkeys(buena) if sin_numeros(m) not in vistos_mala]
+    if nunca:
+        lineas.append("comparar partidas: la partida buena escribio %d"
+                      " mensaje(s) que la mala no llego a escribir; los"
+                      " primeros:" % len(nunca))
+        for m in nunca[:cuantas_ensenar]:
+            lineas.append("comparar partidas:     solo en la BUENA: %s" % m[:300])
+    return lineas
+
+
+def pistas_de_los_logs(upper, raiz_juego=None):
     """LO QUE EL PROPIO JUEGO ESCRIBE SOBRE SU FALLO.
 
     POR QUE ESTO ES LO PRIMERO QUE HAY QUE LEER
@@ -3129,7 +3768,10 @@ def pistas_de_los_logs(upper):
 
     Un log de seis megas en veinte segundos de partida es una linea repetida
     miles de veces, asi que lo que sirve no es el final: es QUE linea se
-    repite. Se saca lo uno y lo otro.
+    repite. Pero ademas el log es acumulativo y lleva la fecha en cada linea,
+    asi que hay que (1) separar por dia para quedarse con la partida de hoy,
+    (2) contar el mensaje sin la fecha, y (3) ensenar lo de ANTES del volcado
+    de pila. Las tres cosas las aprendimos del log del 03/11.
     """
     if not upper or not os.path.isdir(upper):
         return []
@@ -3165,14 +3807,95 @@ def pistas_de_los_logs(upper):
         if not todas:
             lineas.append("  vacio o sin lineas legibles")
             continue
-        cuenta = {}
+
+        # Se parte cada linea en (dia, mensaje). Las que no llevan fecha se
+        # quedan con el dia de la ultima que si la llevaba: son continuacion
+        # de la misma partida.
+        dias_en_orden = []
+        por_dia = {}
+        mensajes = []
+        dia_actual = None
         for l in todas:
-            cuenta[l] = cuenta.get(l, 0) + 1
-        repes = sorted(cuenta.items(), key=lambda kv: kv[1], reverse=True)
-        lineas.append("  %d linea(s) leidas, %d distintas. Las que mas se repiten:" % (len(todas), len(cuenta)))
-        for texto_l, veces in repes[:TOPE_REPETIDAS]:
-            lineas.append("    x%d  %s" % (veces, texto_l[:300]))
-        lineas.append("  y las ultimas:")
+            dia, mensaje = parte_la_fecha(l)
+            if dia:
+                if dia != dia_actual:
+                    if dia not in por_dia:
+                        dias_en_orden.append(dia)
+                        por_dia[dia] = []
+                    dia_actual = dia
+            mensajes.append(mensaje)
+            if dia_actual:
+                por_dia[dia_actual].append(mensaje)
+
+        lineas.append("  %d linea(s) leidas" % len(todas))
+        if len(dias_en_orden) > 1:
+            lineas.append("  OJO -> este log es ACUMULATIVO: lleva lineas de %d dias"
+                          " distintos, asi que un recuento del fichero entero NO es"
+                          " de esta partida" % len(dias_en_orden))
+            for d in dias_en_orden[-TOPE_DIAS:]:
+                lineas.append("    %s -> %d linea(s)" % (d, len(por_dia[d])))
+
+        # EL RECUENTO QUE DE VERDAD IMPORTA, en dos pasadas y por este orden:
+        # la ultima partida (lo mas fino que se puede acotar), el ultimo dia
+        # (por si no hay despedidas de las que fiarse) y el fichero entero
+        # (para no perder lo historico). El aviso de WProton se ancla al
+        # PRIMER bloque, asi que este orden es parte del comportamiento.
+        desde_partida, _como = donde_empieza_la_ultima_partida(mensajes)
+        if desde_partida is not None:
+            de_la_partida = mensajes[desde_partida:]
+            repes, distintas = cuenta_las_repetidas(de_la_partida)
+            lineas.append("  lo que mas se repitio en la ULTIMA PARTIDA del log"
+                          " (%d lineas %s, %d mensajes"
+                          " distintos, ya sin la fecha delante):"
+                          % (len(de_la_partida), _como, distintas))
+            for mensaje, veces in repes:
+                lineas.append("    x%d  %s" % (veces, mensaje[:300]))
+            # Y SI LA PARTIDA QUE FALLA ES CORTA, SE PONE ENTERA.
+            #
+            # El registro del 03/11 lo pedia a gritos: la partida eran 79
+            # lineas con 51 mensajes distintos, y el "top 8" enseñaba ocho
+            # lineas de x1 ordenadas por nombre -"An uncaught lockup", "Boot
+            # proc kill", "Build: May 13 2015"...-. O sea que el recuento no
+            # servia de nada ahi: cuando casi todo sale una vez, lo que vale
+            # es la SECUENCIA, no el conteo. Y 79 lineas caben de sobra.
+            if len(de_la_partida) <= TOPE_PARTIDA_ENTERA:
+                lineas.append("  y como la partida que fallo es corta, va"
+                              " ENTERA y en orden (es lo que el motor hizo,"
+                              " paso a paso):")
+                for m in junta_las_seguidas(de_la_partida):
+                    lineas.append("    | %s" % m[:300])
+        else:
+            lineas.append("  el log no trae ni despedidas ni marcas de arranque"
+                          " con las que separar una partida de la anterior,"
+                          " asi que se cuenta por dia")
+
+        if dias_en_orden:
+            ultimo = dias_en_orden[-1]
+            del_dia = por_dia[ultimo]
+            repes, distintas = cuenta_las_repetidas(del_dia)
+            lineas.append("  lo que mas se repitio el %s (%d lineas, %d mensajes"
+                          " distintos, ya sin la fecha delante):"
+                          % (ultimo, len(del_dia), distintas))
+            for mensaje, veces in repes:
+                lineas.append("    x%d  %s" % (veces, mensaje[:300]))
+
+        # Y el del fichero entero, para no perder de vista lo historico.
+        repes_todo, distintas_todo = cuenta_las_repetidas(mensajes)
+        lineas.append("  y en todo el fichero (%d mensajes distintos):" % distintas_todo)
+        for mensaje, veces in repes_todo:
+            lineas.append("    x%d  %s" % (veces, mensaje[:300]))
+
+        # Y LA COMPARACION QUE DE VERDAD CONTESTA: una partida buena contra
+        # la mala, con las palabras del propio motor.
+        lineas += ["  " + l for l in compara_partidas(mensajes, raiz=raiz_juego)]
+
+        antes = lo_que_dijo_antes_de_morir(mensajes, desde_partida or 0)
+        if antes:
+            lineas.append("  lo que dijo JUSTO ANTES del volcado de pila"
+                          " (aqui esta el motivo, no en el volcado):")
+            for m in antes:
+                lineas.append("    %s" % m[:300])
+        lineas.append("  y las ultimas tal cual:")
         for l in todas[-TOPE_ULTIMAS:]:
             lineas.append("    %s" % l[:300])
     return lineas
@@ -3255,6 +3978,866 @@ def mide(etiqueta, ruta):
     return lineas
 
 
+# LOS LIMITES CLASICOS DE UN BUFFER DE RUTA EN C
+#
+# No son caprichos: son los tamanos que de verdad se escriben en codigo de
+# motores y de arcades. 260 es MAX_PATH de Windows, que muchos juegos
+# portados se traen puesto; 4096 es PATH_MAX de Linux, que casi nunca es el
+# que estorba. Los que pican son los pequenos.
+LIMITES_DE_RUTA = (64, 80, 96, 128, 160, 192, 256, 260, 512, 1024)
+
+
+def rutas_largas(raiz, tope=20000):
+    """LA RUTA MAS LARGA QUE EL JUEGO PUEDE PEDIR, Y SI CRUZA UN LIMITE.
+
+    DE DONDE SALE ESTA MEDIDA (03/11, y es de Dani). Lo dijo desde el primer
+    dia -"tiene pinta de ser un problema de profundidad de carpeta"- y se
+    midio mal: se midio la RAIZ del juego (79 caracteres) y no la ruta de sus
+    DATOS, que es la que el juego mete en su buffer. Con el fichero que el
+    motor dice no tener:
+
+      montaje  .../tmp_mount/Jurassic_Park/g5/dino/data/programs_enc_china/
+                                           perm/fxgroup.txt      128 EXACTOS
+      carpeta  .../ROMs/windows/Jurassic_Park/.../fxgroup.txt    108
+
+    128 es el tamano clasico de un char ruta[128]. Una ruta de 128 caracteres
+    necesita 129 bytes con el cero final: NO CABE, se corta, el fopen falla y
+    el motor dice lo unico que sabe decir, que no tiene el dato. Desde la
+    carpeta, 108 cabe de sobra.
+
+    Esto no demuestra que el buffer sea de 128 -eso esta dentro del binario-,
+    pero convierte "tiene pinta" en un numero y hace la prueba decisiva
+    evidente: acortar la ruta y volver a lanzar.
+    """
+    lineas = []
+    if not raiz or not os.path.isdir(raiz):
+        return lineas
+    mayor = ""
+    cuantos = 0
+    por_limite = {}
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for f in ficheros:
+            ruta = os.path.join(aqui, f)
+            cuantos += 1
+            if len(ruta) > len(mayor):
+                mayor = ruta
+            for lim in LIMITES_DE_RUTA:
+                if len(ruta) >= lim:
+                    por_limite[lim] = por_limite.get(lim, 0) + 1
+            if cuantos >= tope:
+                break
+        if cuantos >= tope:
+            break
+    if not mayor:
+        return ["rutas: no hay ficheros que medir en %s" % raiz]
+    lineas.append("rutas: %d fichero(s) mirados; la mas larga mide %d caracteres"
+                  % (cuantos, len(mayor)))
+    lineas.append("rutas: la mas larga es %s" % mayor)
+    cruzados = [l for l in LIMITES_DE_RUTA if l in por_limite]
+    if cruzados:
+        lineas.append("rutas: ficheros que llegan o pasan de cada limite clasico de"
+                      " buffer -> %s"
+                      % ", ".join("%d: %d" % (l, por_limite[l]) for l in cruzados))
+    else:
+        lineas.append("rutas: ningun fichero llega al limite mas pequeno (%d)"
+                      % LIMITES_DE_RUTA[0])
+    return lineas
+
+
+def compara_rutas(raiz_a, raiz_b, tope=20000):
+    """LA MISMA RUTA RELATIVA, DESDE LOS DOS SITIOS.
+
+    Es la comparacion que hace falta: no cuanto mide la ruta en el montaje,
+    sino CUANTO MAS mide que en la carpeta, y si esa diferencia cruza un
+    limite que la carpeta no cruza. Eso ultimo es lo que convierte una ruta
+    larga en un fallo, y es lo que separa este caso de "el montaje es mas
+    hondo y ya esta".
+    """
+    lineas = []
+    if not raiz_a or not os.path.isdir(raiz_a):
+        return lineas
+    if not raiz_b or not os.path.isdir(raiz_b):
+        return lineas
+    mayor_rel = ""
+    cuantos = 0
+    for aqui, _dirs, ficheros in os.walk(raiz_a):
+        for f in ficheros:
+            rel = os.path.relpath(os.path.join(aqui, f), raiz_a)
+            cuantos += 1
+            if len(rel) > len(mayor_rel):
+                mayor_rel = rel
+            if cuantos >= tope:
+                break
+        if cuantos >= tope:
+            break
+    if not mayor_rel:
+        return lineas
+    la = len(os.path.join(raiz_a, mayor_rel))
+    lb = len(os.path.join(raiz_b, mayor_rel))
+    lineas.append("rutas: la misma ruta relativa mide %d desde A y %d desde B"
+                  " (%+d) -> %s" % (la, lb, la - lb, mayor_rel))
+    cruza = [l for l in LIMITES_DE_RUTA if lb < l <= la]
+    if cruza:
+        lineas.append("rutas: OJO -> desde A esa ruta PASA de %s y desde B no."
+                      " Un juego que guarde sus rutas en un buffer de ese"
+                      " tamano la recibe CORTADA desde aqui y entera desde la"
+                      " carpeta: no daria ningun error de fichero, diria que"
+                      " le falta un dato suyo"
+                      % ", ".join(str(x) for x in cruza))
+    return lineas
+
+
+def xattrs_peligrosos(nombres):
+    """Cuales de estos atributos pueden romper un copy-up del overlay.
+
+    Esta aparte para poder probarla: poner un security.* en un fichero
+    necesita privilegios y no se puede hacer en cualquier sistema de ficheros,
+    asi que si la clasificacion estuviera pegada a la lectura del disco no
+    habria forma de comprobar que distingue bien -se vio mutando el codigo:
+    quitar el aviso entero no hacia fallar nada-.
+
+    Los de user.* los copia cualquiera y no estorban. Los de security.* y
+    trusted.* son los que piden privilegios o soporte del sistema de ficheros
+    de destino, y son los que hacen fallar la subida de un fichero a la capa
+    de escritura.
+    """
+    return [x for x in nombres if x.startswith(("security.", "trusted."))]
+
+
+def xattrs_que_hay(raiz, tope=4000):
+    """¿LLEVAN LOS FICHEROS ATRIBUTOS EXTENDIDOS, Y CUALES?
+
+    DE DONDE SALE (04/11): los testers de Dani dijeron de empaquetar con
+    -no-xattrs "para que sea mas compatible". Y tienen razon por un camino que
+    importa aqui: mksquashfs guarda los xattrs POR DEFECTO, y cuando el juego
+    va montado, el fuse-overlayfs tiene que subir un fichero a la capa de
+    escritura para modificarlo (copy-up) copiando tambien sus xattrs. Si el
+    destino no los acepta -security.capability sin privilegios, por ejemplo-,
+    la subida falla y el juego se queda sin poder escribir un fichero que en
+    carpeta si podia.
+
+    El cambio al empaquetar solo vale para los archivos NUEVOS, asi que esto
+    cuenta lo que lleva el que se esta usando ahora mismo. Sin esto no se
+    podria saber si un archivo viejo esta afectado o no.
+    """
+    lineas = []
+    if not raiz or not os.path.isdir(raiz):
+        return lineas
+    if not hasattr(os, "listxattr"):
+        return ["xattrs: este Python no sabe leerlos; no se puede decir"]
+    con, mirados = 0, 0
+    nombres = {}
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for f in ficheros:
+            ruta = os.path.join(aqui, f)
+            mirados += 1
+            try:
+                xs = os.listxattr(ruta, follow_symlinks=False)
+            except OSError:
+                xs = []
+            if xs:
+                con += 1
+                for x in xs:
+                    nombres[x] = nombres.get(x, 0) + 1
+            if mirados >= tope:
+                break
+        if mirados >= tope:
+            break
+    if not con:
+        lineas.append("xattrs: ninguno de los %d fichero(s) mirados lleva"
+                      " atributos extendidos" % mirados)
+        return lineas
+    lineas.append("xattrs: %d de %d fichero(s) mirados llevan atributos"
+                  " extendidos" % (con, mirados))
+    for x in sorted(nombres, key=lambda k: -nombres[k])[:8]:
+        lineas.append("xattrs:   %s -> en %d fichero(s)" % (x, nombres[x]))
+    peligrosos = xattrs_peligrosos(nombres)
+    if peligrosos:
+        lineas.append("xattrs: OJO -> hay atributos de los que el overlay puede"
+                      " no poder copiar al subir un fichero a la capa de"
+                      " escritura (%s). Un juego que modifique ese fichero"
+                      " fallaria montado y no en carpeta. Se arregla"
+                      " reempaquetando: los archivos nuevos ya salen sin"
+                      " xattrs" % ", ".join(sorted(peligrosos)[:4]))
+    return lineas
+
+
+def una_ficha(raiz, rel):
+    """Lo que se puede saber de un fichero sin abrirlo, con lstat."""
+    ruta = os.path.join(raiz, rel)
+    try:
+        est = os.lstat(ruta)
+    except OSError as ex:
+        return {"falta": str(ex)}
+    f = {
+        "tipo": ("enlace" if stat.S_ISLNK(est.st_mode)
+                 else "directorio" if stat.S_ISDIR(est.st_mode)
+                 else "fichero" if stat.S_ISREG(est.st_mode)
+                 else "otro"),
+        "permisos": stat.S_IMODE(est.st_mode),
+        "uid": est.st_uid,
+        "gid": est.st_gid,
+        "tam": est.st_size if not stat.S_ISDIR(est.st_mode) else -1,
+        "mtime": int(est.st_mtime),
+    }
+    if f["tipo"] == "enlace":
+        try:
+            f["destino"] = os.readlink(ruta)
+        except OSError:
+            f["destino"] = "?"
+        f["tam"] = -1
+    return f
+
+
+def en_que_no_son_iguales(a, b, tope=40000, cuantas_ensenar=25):
+    """EL MISMO JUEGO, SU CARPETA CONTRA SU MONTAJE, FICHERO A FICHERO.
+
+    DE DONDE SALE (03/11, y lo pidio Dani con estas palabras: "tienes que ver
+    como hacer para que sea igual el formato carpeta y el montaje").
+
+    Hasta ahora se comparaban PROPIEDADES DEL SISTEMA DE FICHEROS -d_type,
+    nlink, espacio libre, inodos, orden de readdir- y salian iguales. Lo que
+    no se habia comparado nunca es el CONTENIDO: los mismos ficheros, con los
+    mismos permisos, el mismo tamano, los mismos enlaces apuntando al mismo
+    sitio. Si el juego arranca de un sitio y no del otro y las propiedades son
+    iguales, la diferencia tiene que estar aqui.
+
+    Se compara con lstat, o sea SIN seguir los enlaces: un enlace y su destino
+    son cosas distintas y confundirlos ya nos costo un diagnostico falso el
+    02/11.
+
+    No se comparan contenidos byte a byte -son miles de ficheros y varios
+    gigas- pero si tamano y tipo, que es lo que delata un fichero que se
+    quedo por el camino o que dejo de ser un enlace.
+    """
+    lineas = []
+    if not a or not os.path.isdir(a):
+        return ["en que no son iguales: no esta la carpeta A"]
+    if not b or not os.path.isdir(b):
+        return ["en que no son iguales: no hay carpeta de disco con que comparar"]
+
+    def listar(raiz):
+        vistos = {}
+        n = 0
+        for aqui, dirs, ficheros in os.walk(raiz, followlinks=False):
+            for nombre in list(dirs) + ficheros:
+                rel = os.path.relpath(os.path.join(aqui, nombre), raiz)
+                vistos[rel] = True
+                n += 1
+                if n >= tope:
+                    return vistos, n
+        return vistos, n
+
+    sa, na = listar(a)
+    sb, nb = listar(b)
+    lineas.append("en que no son iguales: A tiene %d entrada(s), B tiene %d" % (na, nb))
+    solo_a = sorted(set(sa) - set(sb))
+    solo_b = sorted(set(sb) - set(sa))
+    if solo_b:
+        lineas.append("en que no son iguales: OJO -> %d entrada(s) estan en la"
+                      " CARPETA y NO en el montaje: %s"
+                      % (len(solo_b), ", ".join(solo_b[:cuantas_ensenar])))
+    if solo_a:
+        lineas.append("en que no son iguales: %d entrada(s) estan en el montaje"
+                      " y no en la carpeta (normal: lo que el juego escribio):"
+                      " %s" % (len(solo_a), ", ".join(solo_a[:cuantas_ensenar])))
+    if not solo_a and not solo_b:
+        lineas.append("en que no son iguales: estan LAS MISMAS entradas en los dos")
+
+    # Y de las comunes, que no coincide.
+    distintos = {"tipo": [], "permisos": [], "tam": [], "destino": [], "duenos": []}
+    comunes = sorted(set(sa) & set(sb))
+    for rel in comunes:
+        fa = una_ficha(a, rel)
+        fb = una_ficha(b, rel)
+        if "falta" in fa or "falta" in fb:
+            continue
+        if fa["tipo"] != fb["tipo"]:
+            distintos["tipo"].append("%s (montaje=%s, carpeta=%s)"
+                                     % (rel, fa["tipo"], fb["tipo"]))
+            continue
+        if fa["permisos"] != fb["permisos"]:
+            distintos["permisos"].append("%s (montaje=%o, carpeta=%o)"
+                                         % (rel, fa["permisos"], fb["permisos"]))
+        if fa["tam"] != fb["tam"]:
+            distintos["tam"].append("%s (montaje=%d, carpeta=%d)"
+                                    % (rel, fa["tam"], fb["tam"]))
+        if fa.get("destino") != fb.get("destino"):
+            distintos["destino"].append("%s (montaje=%s, carpeta=%s)"
+                                        % (rel, fa.get("destino"), fb.get("destino")))
+        if (fa["uid"], fa["gid"]) != (fb["uid"], fb["gid"]):
+            distintos["duenos"].append("%s (montaje=%d:%d, carpeta=%d:%d)"
+                                       % (rel, fa["uid"], fa["gid"], fb["uid"], fb["gid"]))
+    lineas.append("en que no son iguales: %d entrada(s) en los dos sitios" % len(comunes))
+    COMO = {"tipo": "CAMBIAN DE TIPO (un enlace que ya no es enlace, por ejemplo)",
+            "permisos": "tienen otros permisos",
+            "tam": "tienen otro tamano",
+            "destino": "son enlaces que apuntan a otro sitio",
+            "duenos": "tienen otro dueno"}
+    hubo = False
+    for clave in ("tipo", "destino", "tam", "permisos", "duenos"):
+        lista = distintos[clave]
+        if not lista:
+            continue
+        hubo = True
+        aviso = "OJO -> " if clave in ("tipo", "destino", "tam") else ""
+        lineas.append("en que no son iguales: %s%d entrada(s) %s:"
+                      % (aviso, len(lista), COMO[clave]))
+        for x in lista[:cuantas_ensenar]:
+            lineas.append("en que no son iguales:     %s" % x)
+        if len(lista) > cuantas_ensenar:
+            lineas.append("en que no son iguales:     ... y %d mas"
+                          % (len(lista) - cuantas_ensenar))
+    if not hubo:
+        lineas.append("en que no son iguales: y de las comunes, NADA cambia:"
+                      " mismo tipo, mismo tamano, mismos permisos, mismos"
+                      " enlaces y mismos duenos")
+    return lineas
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# QUE SE PUEDE HACER AQUI, QUE ES OTRA COSA QUE QUE HAY AQUI
+#
+# DE DONDE SALE (03/11, y es la pregunta de Dani): "cuando se monta se comporta
+# de diferente forma cuando el wsquashfs es 1:1 del juego en carpeta".
+#
+# Tiene razon, y senala el hueco. Todo lo que se media hasta ahora eran
+# propiedades ESTATICAS -que hay, de que tamano, con que permisos, en que
+# orden- y todas salen iguales. Lo que no se habia probado nunca es lo que se
+# puede HACER: un squashfs es de solo lectura y el fuse-overlayfs de encima
+# tiene limites que ext4 no tiene.
+#
+# El mas conocido, y ya nos ha mordido en este proyecto: fuse-overlayfs NO
+# puede RENOMBRAR un directorio que viene de la capa de abajo. Devuelve EXDEV
+# (Invalid cross-device link). En ext4 eso funciona. Un juego que renombre una
+# carpeta suya -descifrar en una temporal y renombrarla encima, por ejemplo-
+# va en carpeta y no va montado, y NO deja ni un error de fichero en el
+# registro: deja un dato que "no esta cargado".
+#
+# Aqui no se elige entre hipotesis: se hacen las operaciones, las mismas en
+# los dos sitios, y se apunta cual falla donde. Todo dentro de una carpeta
+# propia que se borra al acabar, y las pruebas sobre ficheros del juego son
+# las que NO cambian nada (abrir para escribir sin escribir, chmod al mismo
+# modo que ya tiene, utime a la misma fecha que ya tiene).
+NOMBRE_SONDA = ".wp_sonda_operaciones"
+
+
+def _quitar(ruta):
+    try:
+        if os.path.islink(ruta) or os.path.isfile(ruta):
+            os.unlink(ruta)
+        elif os.path.isdir(ruta):
+            for aqui, dirs, fich in os.walk(ruta, topdown=False):
+                for f in fich:
+                    try:
+                        os.unlink(os.path.join(aqui, f))
+                    except OSError:
+                        pass
+                for d in dirs:
+                    try:
+                        os.rmdir(os.path.join(aqui, d))
+                    except OSError:
+                        pass
+            os.rmdir(ruta)
+    except OSError:
+        pass
+
+
+def _fallo(ex):
+    """El error, corto y con su nombre de errno, que es lo que se compara."""
+    nombre = errno.errorcode.get(getattr(ex, "errno", None), "")
+    return "NO (%s%s)" % (nombre + ": " if nombre else "", ex.strerror or ex)
+
+
+def operaciones(raiz, fichero_del_juego=None, dir_del_juego=None):
+    """Hace las operaciones y devuelve {nombre: "SI" o "NO (ERRNO: ...)"}."""
+    res = {}
+    base = os.path.join(raiz, NOMBRE_SONDA)
+    _quitar(base)
+    try:
+        os.mkdir(base)
+        res["crear carpeta"] = "SI"
+    except OSError as ex:
+        res["crear carpeta"] = _fallo(ex)
+        return res
+
+    f1 = os.path.join(base, "uno.dat")
+    try:
+        with open(f1, "wb") as fh:
+            fh.write(b"0123456789" * 100)
+            fh.flush()
+            os.fsync(fh.fileno())
+        res["crear y escribir un fichero"] = "SI"
+    except OSError as ex:
+        res["crear y escribir un fichero"] = _fallo(ex)
+
+    try:
+        with open(f1, "ab") as fh:
+            fh.write(b"mas")
+        res["anadir al final"] = "SI"
+    except OSError as ex:
+        res["anadir al final"] = _fallo(ex)
+
+    try:
+        with open(f1, "r+b") as fh:
+            fh.truncate(10)
+        res["truncar"] = "SI"
+    except OSError as ex:
+        res["truncar"] = _fallo(ex)
+
+    # mmap COMPARTIDO ESCRIBIBLE: esto no se habia probado nunca. Solo se
+    # habia probado lectura y copia privada, y un motor que escriba un fichero
+    # por mmap compartido necesita esto y no lo otro.
+    try:
+        with open(f1, "r+b") as fh:
+            mapa = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_WRITE)
+            mapa[0:1] = b"X"
+            mapa.flush()
+            mapa.close()
+        with open(f1, "rb") as fh:
+            res["mmap compartido escribible"] = "SI" if fh.read(1) == b"X" else "NO (el cambio no llego al fichero)"
+    except (OSError, ValueError) as ex:
+        res["mmap compartido escribible"] = _fallo(ex) if isinstance(ex, OSError) else "NO (%s)" % ex
+
+    try:
+        os.rename(f1, os.path.join(base, "dos.dat"))
+        os.rename(os.path.join(base, "dos.dat"), f1)
+        res["renombrar un fichero"] = "SI"
+    except OSError as ex:
+        res["renombrar un fichero"] = _fallo(ex)
+
+    d1 = os.path.join(base, "carpeta")
+    try:
+        os.mkdir(d1)
+        with open(os.path.join(d1, "dentro.txt"), "wb") as fh:
+            fh.write(b"x")
+        os.rename(d1, os.path.join(base, "carpeta2"))
+        os.rename(os.path.join(base, "carpeta2"), d1)
+        res["renombrar una carpeta propia"] = "SI"
+    except OSError as ex:
+        res["renombrar una carpeta propia"] = _fallo(ex)
+
+    try:
+        os.link(f1, os.path.join(base, "duro.dat"))
+        res["enlace duro"] = "SI"
+    except OSError as ex:
+        res["enlace duro"] = _fallo(ex)
+
+    try:
+        os.symlink("uno.dat", os.path.join(base, "blando"))
+        res["enlace simbolico"] = ("SI" if os.readlink(os.path.join(base, "blando")) == "uno.dat"
+                                   else "NO (el destino no es el que se puso)")
+    except OSError as ex:
+        res["enlace simbolico"] = _fallo(ex)
+
+    try:
+        os.chmod(f1, 0o640)
+        res["chmod"] = ("SI" if stat.S_IMODE(os.lstat(f1).st_mode) == 0o640
+                        else "NO (el modo no se quedo puesto)")
+    except OSError as ex:
+        res["chmod"] = _fallo(ex)
+
+    try:
+        os.utime(f1, (1000000000, 1000000000))
+        res["cambiar la fecha"] = ("SI" if int(os.lstat(f1).st_mtime) == 1000000000
+                                   else "NO (la fecha no se quedo puesta)")
+    except OSError as ex:
+        res["cambiar la fecha"] = _fallo(ex)
+
+    try:
+        d = os.open(os.path.join(base, "exclusivo"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(d)
+        res["crear con O_EXCL"] = "SI"
+    except OSError as ex:
+        res["crear con O_EXCL"] = _fallo(ex)
+
+    try:
+        with open(f1, "rb") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        res["bloqueo flock"] = "SI"
+    except (OSError, IOError) as ex:
+        res["bloqueo flock"] = _fallo(ex)
+
+    try:
+        with open(f1, "r+b") as fh:
+            fcntl.lockf(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.lockf(fh.fileno(), fcntl.LOCK_UN)
+        res["bloqueo fcntl"] = "SI"
+    except (OSError, IOError) as ex:
+        res["bloqueo fcntl"] = _fallo(ex)
+
+    try:
+        os.unlink(f1)
+        with open(f1, "wb") as fh:
+            fh.write(b"otra vez")
+        res["borrar y volver a crear"] = "SI"
+    except OSError as ex:
+        res["borrar y volver a crear"] = _fallo(ex)
+
+    # NOMBRES LARGOS. El montaje declara nombre_max=251 y ext4 255: un juego
+    # con un nombre de 252 lo tendria en carpeta y no montado.
+    for largo in (250, 252, 254):
+        try:
+            n = os.path.join(base, "n" * largo)
+            with open(n, "wb") as fh:
+                fh.write(b"x")
+            os.unlink(n)
+            res["nombre de %d letras" % largo] = "SI"
+        except OSError as ex:
+            res["nombre de %d letras" % largo] = _fallo(ex)
+
+    # MUCHOS FICHEROS EN UNA CARPETA, que es lo que hace un motor al volcar.
+    try:
+        muchos = os.path.join(base, "muchos")
+        os.mkdir(muchos)
+        for i in range(500):
+            with open(os.path.join(muchos, "f%03d" % i), "wb") as fh:
+                fh.write(b"x")
+        res["500 ficheros en una carpeta"] = ("SI" if len(os.listdir(muchos)) == 500
+                                              else "NO (no se ven los 500)")
+    except OSError as ex:
+        res["500 ficheros en una carpeta"] = _fallo(ex)
+
+    # ── Y AHORA SOBRE LO QUE YA TRAE EL JUEGO ──────────────────────────────
+    #
+    # Estas son las que de verdad separan un montaje de una carpeta, porque
+    # obligan al overlay a subir el fichero de la capa de abajo (copy-up). Se
+    # eligen a proposito las que NO cambian nada: abrir para escribir sin
+    # escribir, poner el modo que ya tiene, poner la fecha que ya tiene.
+    if fichero_del_juego and os.path.isfile(fichero_del_juego):
+        try:
+            est = os.lstat(fichero_del_juego)
+            d = os.open(fichero_del_juego, os.O_RDWR)
+            os.close(d)
+            res["abrir para escribir un fichero del juego"] = "SI"
+        except OSError as ex:
+            res["abrir para escribir un fichero del juego"] = _fallo(ex)
+        try:
+            os.chmod(fichero_del_juego, stat.S_IMODE(est.st_mode))
+            res["chmod a un fichero del juego (el mismo modo)"] = "SI"
+        except OSError as ex:
+            res["chmod a un fichero del juego (el mismo modo)"] = _fallo(ex)
+        try:
+            os.utime(fichero_del_juego, (est.st_atime, est.st_mtime))
+            res["utime a un fichero del juego (la misma fecha)"] = "SI"
+        except OSError as ex:
+            res["utime a un fichero del juego (la misma fecha)"] = _fallo(ex)
+
+    # RENOMBRAR UNA CARPETA QUE VIENE DE LA CAPA DE ABAJO.
+    #
+    # Esta es LA prueba: fuse-overlayfs no puede, y devuelve EXDEV. Se hace
+    # con una carpeta de verdad del juego y SE DEVUELVE A SU SITIO en el acto.
+    # Si el renombrado falla -que es lo que se espera en el montaje- no se ha
+    # tocado nada. Si sale bien y la vuelta falla, se dice a gritos.
+    if dir_del_juego and os.path.isdir(dir_del_juego):
+        destino = dir_del_juego + ".sonda_tmp"
+        try:
+            os.rename(dir_del_juego, destino)
+        except OSError as ex:
+            res["renombrar una carpeta DEL JUEGO"] = _fallo(ex)
+        else:
+            try:
+                os.rename(destino, dir_del_juego)
+                res["renombrar una carpeta DEL JUEGO"] = "SI"
+            except OSError as ex2:
+                res["renombrar una carpeta DEL JUEGO"] = (
+                    "SI, PERO NO SE PUDO DESHACER: %s sigue como %s (%s)"
+                    % (dir_del_juego, destino, ex2))
+
+    _quitar(base)
+    return res
+
+
+def que_se_puede_hacer(a, b):
+    """Las mismas operaciones en los dos sitios, y en que se diferencian."""
+    lineas = []
+    if not a or not os.path.isdir(a):
+        return lineas
+    fa = busca_fichero_con_algo(a)
+    da = busca_carpeta_con_algo(a)
+    ra = operaciones(a, fa, da)
+    lineas.append("lo que se puede hacer: A = el montaje")
+    for k in sorted(ra):
+        lineas.append("lo que se puede hacer:   A %-46s %s" % (k, ra[k]))
+    if not b or not os.path.isdir(b):
+        lineas.append("lo que se puede hacer: no hay carpeta con que comparar")
+        return lineas
+    fb = busca_fichero_con_algo(b)
+    db = busca_carpeta_con_algo(b)
+    rb = operaciones(b, fb, db)
+    lineas.append("lo que se puede hacer: B = la carpeta")
+    for k in sorted(rb):
+        lineas.append("lo que se puede hacer:   B %-46s %s" % (k, rb[k]))
+    lineas += compara_operaciones(ra, rb)
+    return lineas
+
+
+def compara_operaciones(ra, rb):
+    """En que se diferencian las dos tandas. Aparte, para poder probarla.
+
+    Lo que importa NO es que falle algo en el montaje: es que falle algo que
+    en la carpeta SI funciona. Lo que falla en los dos sitios no explica que
+    el juego arranque de uno y no del otro.
+
+    Y una operacion que sale bien pero no se pudo deshacer tampoco cuenta como
+    "igual": se dice aparte, porque ahi hay algo que arreglar a mano.
+    """
+    lineas = []
+    solo_falla_en_a = [k for k in sorted(ra)
+                       if k in rb and rb[k] == "SI" and not ra[k].startswith("SI")]
+    a_medias = [k for k in sorted(ra) if ra[k].startswith("SI, PERO")]
+    if a_medias:
+        for k in a_medias:
+            lineas.append("lo que se puede hacer: OJO -> %s: %s" % (k, ra[k]))
+    if solo_falla_en_a:
+        lineas.append("lo que se puede hacer: OJO -> %d operacion(es) que la CARPETA"
+                      " hace y el MONTAJE no:" % len(solo_falla_en_a))
+        for k in solo_falla_en_a:
+            # Lleva el OJO a proposito: asi sube al registro con el aviso y
+            # este dice CUAL falla, no solo cuantas. Un aviso que no se basta
+            # a si mismo obliga a buscar el detalle veinte lineas mas arriba.
+            lineas.append("lo que se puede hacer:   OJO ->   %s -> %s" % (k, ra[k]))
+        lineas.append("lo que se puede hacer: OJO -> si el juego hace alguna de"
+                      " esas, va en carpeta y no va montado, y no deja ni un"
+                      " error de fichero en el registro")
+    elif not a_medias:
+        lineas.append("lo que se puede hacer: el montaje hace TODO lo que hace la"
+                      " carpeta; la diferencia no esta en las operaciones")
+    return lineas
+
+
+def busca_fichero_con_algo(raiz, tope=400):
+    n = 0
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        if NOMBRE_SONDA in aqui:
+            continue
+        for f in ficheros:
+            r = os.path.join(aqui, f)
+            try:
+                if os.path.isfile(r) and not os.path.islink(r) and os.path.getsize(r) > 0:
+                    return r
+            except OSError:
+                pass
+            n += 1
+            if n >= tope:
+                return None
+    return None
+
+
+def busca_carpeta_con_algo(raiz):
+    """Una carpeta del juego, de las de dentro: no la raiz."""
+    try:
+        for nombre in sorted(os.listdir(raiz)):
+            r = os.path.join(raiz, nombre)
+            if nombre == NOMBRE_SONDA or os.path.islink(r) or not os.path.isdir(r):
+                continue
+            for dentro in sorted(os.listdir(r)):
+                r2 = os.path.join(r, dentro)
+                if os.path.isdir(r2) and not os.path.islink(r2):
+                    return r2
+            return r
+    except OSError:
+        pass
+    return None
+
+
+def orden_de_entradas(a, b, tope=400):
+    """¿DEVUELVEN LAS DOS CARPETAS SUS ENTRADAS EN EL MISMO ORDEN?
+
+    DE DONDE SALE ESTA MEDIDA (03/11). El motor de Jurassic Park dice, con
+    estas palabras, "Program is not loaded: 'fxgroup'", y lo dice SOLO cuando
+    el juego va desde el archivo: en la misma sesion, la partida en carpeta no
+    lo dice. Un programa que "no esta cargado" sin un solo error de fichero por
+    medio es lo que pasa cuando algo RECORRE una carpeta y se deja una entrada.
+
+    Y el orden de ese recorrido NO es el mismo en los dos sitios. readdir() no
+    promete ningun orden: ext4 las devuelve por el hash del nombre y un
+    squashfs por como quedaron colocadas al empaquetar. Son dos ordenes
+    distintos para los mismos ficheros, y hay codigo que se apoya en el orden
+    sin saberlo -el primero que casa, un indice por posicion, un "el ultimo
+    gana"-.
+
+    Esto no mide ninguna teoria: mide si el orden cambia, cuanto, y si el
+    CONJUNTO es el mismo. Si el conjunto es el mismo y el orden distinto, ya se
+    sabe que hay que mirar; si tambien falta algo, se sabe que falta.
+    """
+    lineas = []
+    if not a or not b or not os.path.isdir(a) or not os.path.isdir(b):
+        return lineas
+    try:
+        ea = os.listdir(a)[:tope]
+        eb = os.listdir(b)[:tope]
+    except OSError as ex:
+        return ["orden de readdir: no se pudo listar: %s" % ex]
+    return compara_orden(ea, eb)
+
+
+def compara_orden(ea, eb):
+    """La comparacion en si, aparte de leer el disco.
+
+    Esta separada a proposito: el orden que devuelve readdir no se puede
+    forzar desde una prueba -lo decide el sistema de ficheros-, asi que si la
+    comparacion estuviera pegada a os.listdir() no se podria comprobar que
+    distingue bien los tres casos. Con las dos listas por argumento, si.
+    """
+    lineas = []
+    lineas.append("orden de readdir: A devuelve %d entrada(s), B devuelve %d"
+                  % (len(ea), len(eb)))
+    sa, sb = set(ea), set(eb)
+    if sa != sb:
+        falta_en_a = sorted(sb - sa)[:12]
+        falta_en_b = sorted(sa - sb)[:12]
+        if falta_en_a:
+            lineas.append("orden de readdir: OJO -> en A NO estan: %s"
+                          % ", ".join(falta_en_a))
+        if falta_en_b:
+            lineas.append("orden de readdir: en B no estan (normal si B es otra carpeta): %s"
+                          % ", ".join(falta_en_b))
+    else:
+        lineas.append("orden de readdir: el CONJUNTO de entradas es el mismo en las dos")
+    # EL ORDEN SE MIRA SOLO EN LAS ENTRADAS COMUNES.
+    #
+    # Si no, una entrada que falta en un lado desplaza a todas las de atras y
+    # el resultado diria "el orden es distinto" cuando lo que pasa es que
+    # falta algo -son dos hallazgos muy distintos y hay que separarlos-.
+    comunes_a = [x for x in ea if x in sb]
+    comunes_b = [x for x in eb if x in sa]
+    if comunes_a == comunes_b:
+        lineas.append("orden de readdir: y el ORDEN de las entradas comunes"
+                      " es el mismo")
+        return lineas
+    movidas = sum(1 for x, y in zip(comunes_a, comunes_b) if x != y)
+    lineas.append("orden de readdir: OJO -> el ORDEN es DISTINTO:"
+                  " %d de %d entradas comunes caen en otra posicion."
+                  " readdir no promete orden (ext4 va por hash del nombre, un"
+                  " squashfs por como se empaqueto), asi que si algo del juego"
+                  " recorre esta carpeta y se apoya en el orden, aqui ve otra"
+                  " cosa" % (movidas, len(comunes_a)))
+    lineas.append("orden de readdir: A empieza por -> %s"
+                  % ", ".join(ea[:8]))
+    lineas.append("orden de readdir: B empieza por -> %s"
+                  % ", ".join(eb[:8]))
+    return lineas
+
+
+TOPE_DE_32_BITS = 1 << 32
+
+
+def inodos_que_no_caben(raiz, tope=20000):
+    """Inodos que NO caben en 32 bits. ESTO ERA EL FALLO DE JURASSIC PARK.
+
+    Un programa de 32 bits que llama a stat() sin soporte de ficheros
+    grandes recibe EOVERFLOW -"Value too large for defined data type"- en
+    cuanto st_ino pasa de 2^32. Y el programa no se entera de que ha habido
+    un error: lo que ve es que EL FICHERO NO ESTA.
+
+    El nucleo lo hace a proposito, en fs/stat.c (cp_new_stat), porque en la
+    struct stat de 32 bits el campo st_ino tiene 32 bits y no hay donde
+    meter el numero.
+
+    En carpeta los inodos son los del disco de verdad y son pequeños. En el
+    montaje los pone fuse-overlayfs y, cuando las capas estan en
+    dispositivos distintos -aqui lo estan: abajo squashfuse, arriba el
+    disco-, su propio manual dice que devuelve "an opaque, non-stable inode
+    number". De ahi salen los numeros grandes.
+
+    Esta medida es la que faltaba, y faltaba por un motivo tonto: todo lo
+    demas se comparo con Python y con coreutils, que son de 64 bits y se
+    comen cualquier inodo sin pestañear. El unico programa de 32 bits de
+    todo el experimento era el juego.
+    """
+    if not raiz or not os.path.isdir(raiz):
+        return ["no se puede mirar los inodos de %s" % raiz]
+    grandes, total, ejemplos, mayor = 0, 0, [], 0
+    for aqui, dirs, ficheros in os.walk(raiz):
+        for n in list(dirs) + ficheros:
+            ruta = os.path.join(aqui, n)
+            try:
+                ino = os.lstat(ruta).st_ino
+            except OSError:
+                continue
+            total += 1
+            if ino > mayor:
+                mayor = ino
+            if ino >= TOPE_DE_32_BITS:
+                grandes += 1
+                if len(ejemplos) < 6:
+                    ejemplos.append("%s -> ino=%d" % (ruta[len(raiz):] or "/", ino))
+            if total >= tope:
+                break
+        if total >= tope:
+            break
+    lineas = ["inodos mirados: %d; el mas alto: %d (el techo de 32 bits es %d)"
+              % (total, mayor, TOPE_DE_32_BITS - 1)]
+    if grandes:
+        lineas.append("OJO -> %d inodo(s) NO caben en 32 bits. Un juego NATIVO"
+                      " de 32 bits que haga stat() sobre ellos recibe EOVERFLOW"
+                      " y da el fichero por DESAPARECIDO (no da error: cree que"
+                      " no esta). Si el juego va en carpeta y no en wsquashfs,"
+                      " ESTO es el motivo, y se cura montando el overlay con"
+                      " la opcion ino32_t" % grandes)
+        lineas += ["   " + e for e in ejemplos]
+    else:
+        lineas.append("todos caben en 32 bits: por aqui no es")
+    return lineas
+
+def bits_de_los_ejecutables(raiz, tope=4000):
+    """De cuantos bits son los ELF que hay aqui. Devuelve (hay32, hay64, cuantos).
+
+    La clase de un ELF esta en el quinto byte de la cabecera: 1 = ELFCLASS32,
+    2 = ELFCLASS64. No es una heuristica, es el formato.
+    """
+    hay32 = hay64 = 0
+    mirados = 0
+    for aqui, _dirs, ficheros in os.walk(raiz):
+        for n in ficheros:
+            if mirados >= tope:
+                return hay32, hay64, mirados
+            ruta = os.path.join(aqui, n)
+            try:
+                with open(ruta, "rb") as f:
+                    cab = f.read(5)
+            except OSError:
+                continue
+            if len(cab) < 5 or cab[:4] != b"\x7fELF":
+                continue
+            mirados += 1
+            if cab[4] == 1:
+                hay32 += 1
+            elif cab[4] == 2:
+                hay64 += 1
+    return hay32, hay64, mirados
+
+
+def veredicto_de_inodos(raiz):
+    """Los inodos Y de cuantos bits es el juego, juntos. Separados no dicen nada.
+
+    Un inodo de mas de 32 bits es inofensivo para un programa de 64 bits y
+    MORTAL para uno de 32. Y un juego de 32 bits no tiene ningun problema si
+    los inodos son pequeños. Hace falta que se junten las dos cosas, asi que
+    se miran las dos y se dice la conclusion, no los ingredientes.
+    """
+    lineas = inodos_que_no_caben(raiz)
+    grandes = any("NO caben en 32 bits" in l for l in lineas)
+    if not grandes:
+        return lineas
+    hay32, hay64, _m = bits_de_los_ejecutables(raiz)
+    if hay32:
+        lineas.append(
+            "OJO -> y este juego ES de 32 bits (%d ejecutable(s)/libreria(s)"
+            " ELFCLASS32%s). Las dos cosas juntas explican el fallo entero: el"
+            " juego pide stat() de un fichero, el inodo no le cabe, recibe"
+            " EOVERFLOW y da el fichero por desaparecido. Sin un error, sin un"
+            " aviso, sin nada en pantalla. Se cura montando el overlay con"
+            " ino32_t, que es para lo que existe esa opcion."
+            % (hay32, ", y %d de 64" % hay64 if hay64 else ""))
+    else:
+        lineas.append(
+            "los inodos no caben en 32 bits, pero aqui no hay ningun ELF de 32"
+            " bits, asi que a ESTE juego eso no le afecta")
+    return lineas
+
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(
@@ -3263,11 +4846,40 @@ def main(argv):
     salida = []
     for i, ruta in enumerate(argv[1:3]):
         salida += mide("A" if i == 0 else "B", ruta)
+    # Y EL ORDEN, que es la unica propiedad del sistema de ficheros que
+    # quedaba sin medir y la que explicaria un "no esta cargado" sin error.
+    if len(argv) > 2:
+        salida += ["O " + l for l in orden_de_entradas(argv[1], argv[2])]
+    # Y EL LARGO DE LAS RUTAS DE LOS DATOS, que es lo que decia Dani desde el
+    # principio y se habia medido mal: se medio la raiz, no los ficheros.
+    salida += ["R " + l for l in rutas_largas(argv[1])]
+    # Y LOS INODOS, que es lo que NO se habia medido nunca y era el fallo.
+    salida += ["N A " + l for l in veredicto_de_inodos(argv[1])]
+    if len(argv) > 2:
+        salida += ["N B " + l for l in inodos_que_no_caben(argv[2])]
+    # Y LOS ATRIBUTOS EXTENDIDOS, que es lo que trajeron los testers.
+    salida += ["X A " + l for l in xattrs_que_hay(argv[1])]
+    if len(argv) > 2:
+        salida += ["X B " + l for l in xattrs_que_hay(argv[2])]
+    if len(argv) > 2:
+        salida += ["R " + l for l in compara_rutas(argv[1], argv[2])]
+        # Y LA COMPARACION QUE PIDIO DANI: en que NO son iguales.
+        # SOLO SI B ES EL MISMO JUEGO. Si no, esto compara el juego con la
+        # carpeta de TODOS los juegos y suelta cuarenta mil "faltan" que son
+        # otros juegos -paso el 03/11 y es ruido que tapa lo que importa-.
+        if os.environ.get("WP_B_ES_EL_MISMO_JUEGO") == "1":
+            salida += ["I " + l for l in en_que_no_son_iguales(argv[1], argv[2])]
+        else:
+            salida += ["I no hay una carpeta de ESTE MISMO juego con que"
+                       " comparar fichero a fichero; para tenerla, hay que"
+                       " dejar el juego tambien descomprimido"]
+        # Y LO QUE SE PUEDE HACER, que es otra cosa que lo que hay.
+        salida += ["H " + l for l in que_se_puede_hacer(argv[1], argv[2])]
     if len(argv) > 3:
         salida += ["W " + l for l in lo_que_escribio(argv[3])]
         # Y LO QUE EL JUEGO CUENTA DE SU PROPIO FALLO, que es lo que de verdad
         # hay que leer antes de seguir midiendo nada.
-        salida += ["L " + l for l in pistas_de_los_logs(argv[3])]
+        salida += ["L " + l for l in pistas_de_los_logs(argv[3], argv[1])]
     sys.stdout.write("\n".join(salida) + "\n")
     return 0
 
@@ -27305,7 +28917,7 @@ $(basename "$img")"; return 1; }
                 || { fuse_diagnostico; return 1; }
         fi
     else
-        local sqbin; sqbin="$(squashfuse_monta_bin)"
+        local sqbin; sqbin="$(squashfuse_monta_bin "$img")"
         [ -n "$sqbin" ] || { ui_error "Falta squashfuse para montar:
 $(basename "$img")"; return 1; }
         squashfuse_opciones_monta "$sqbin"
@@ -27454,6 +29066,37 @@ caso si hace falta reiniciar, pero es raro: mira el registro."
     fi
     return 0
 }
+
+montaje_sitio_viejo_recoger() {
+    # LA CARPETA "m" DEL EXPERIMENTO DEL 03/11.
+    #
+    # Durante unas horas el montaje vivio en <raiz>/m para acortar la ruta. No
+    # sirvio -el juego fallo igual con la ruta mas corta que la carpeta- y el
+    # montaje volvio a su sitio. Quien probara esa version se queda con una
+    # carpeta "m" colgando, y puede tener dentro un montaje vivo si se le
+    # cerro mal: eso mantiene el fichero abierto para siempre.
+    #
+    # Se desmonta y se borra lo que quede VACIO; lo que tenga algo dentro no
+    # se toca, que ahi no hay nada nuestro que valga la pena arriesgar.
+    local _viejo="$BASE_DIR/m"
+    [ -d "$_viejo" ] || return 0
+    local _d
+    for _d in "$_viejo"/*; do
+        [ -e "$_d" ] || continue
+        if is_mounted "$_d" 2>/dev/null; then
+            log "montaje: queda un montaje en el sitio viejo ($_d); se desmonta"
+            umount_dir "$_d" 2>/dev/null || true
+        fi
+        rmdir "$_d" 2>/dev/null || true
+    done
+    if rmdir "$_viejo" 2>/dev/null; then
+        log "montaje: recogida la carpeta $_viejo del experimento de la ruta corta; el montaje sigue en $MOUNT_BASE"
+    else
+        log "montaje: $_viejo no esta vacio; se deja como esta"
+    fi
+    return 0
+}
+
 
 limpiar_rotos_si_los_hay() {
     # Limpia los montajes colgados ANTES de montar el juego siguiente.
@@ -27664,6 +29307,167 @@ sweep_stale_mounts() {
 # arranca. Y con MONTAJE_ANIDADO=0 en settings.conf se apaga del todo.
 WS_NIDO="upper"
 
+# --- INODOS DE 32 BITS: EL FALLO DE JURASSIC PARK -------------------------
+#
+# QUE PASA. Un juego de 32 bits que pide "stat()" sin soporte de ficheros
+# grandes recibe EOVERFLOW -"Value too large for defined data type"- en
+# cuanto el numero de inodo no cabe en 32 bits. El juego NO ve un error
+# raro: ve que el fichero NO ESTA. Y se queda tan ancho.
+#
+# POR QUE SOLO EN wsquashfs. En carpeta los inodos son los de verdad del
+# disco (ext4/btrfs), numeros pequeños. En el montaje manda fuse-overlayfs,
+# y su manual lo dice tal cual para su modo por defecto (xino=off):
+#
+#   "when all layers are on the same device, the underlying inode number
+#    is used; otherwise an opaque, non-stable inode number is returned"
+#
+# Aqui la capa de abajo es el squashfuse y la de arriba el disco: SON
+# DISPOSITIVOS DISTINTOS. Asi que los inodos son inventados, y grandes.
+#
+# COMO SE CURA. fuse-overlayfs trae una opcion que existe exactamente para
+# esto, y su manual tampoco deja lugar a dudas:
+#
+#   ino32_t: "Forces all returned st_ino values to be truncated to 32 bits.
+#    This option exists solely for compatibility with older 32-bit
+#    userspaces that cannot correctly handle 64-bit inode numbers."
+#
+# Un juego arcade de 2017 compilado para i386 ES ese "older 32-bit
+# userspace". Se pide siempre que el fuse-overlayfs lo entienda: en un
+# montaje de solo-juego truncar no molesta a nadie, y a los de 32 bits les
+# devuelve los ficheros.
+#
+# ESTO ES LO QUE HABIA ESTADO ESCONDIDO TODO EL RATO: se comparo carpeta
+# contra montaje por fechas, tamaños, permisos, orden, atributos, rutas y
+# contenido byte a byte, y TODO salia identico... porque todo se midio con
+# Python y con coreutils, que son de 64 bits. El unico programa de 32 bits
+# de la historia era el juego, el unico que fallaba.
+OVL_INO32=""
+OVL_INO32_MIRADO=0
+
+overlay_ino32_detectar() {
+    # Una vez por sesion: ¿entiende este fuse-overlayfs la opcion ino32_t?
+    [ "$OVL_INO32_MIRADO" = 1 ] && return 0
+    OVL_INO32_MIRADO=1
+    OVL_INO32=""
+    [ -n "${OVERLAYFS_BIN:-}" ] || return 0
+    local _ayuda=""
+    _ayuda="$("$OVERLAYFS_BIN" --help 2>&1)" || true
+    case "$_ayuda" in
+        *ino32_t*)
+            OVL_INO32="ino32_t"
+            log "overlay: este fuse-overlayfs entiende ino32_t, se pedira (los juegos de 32 bits necesitan inodos de 32 bits o su stat() falla con EOVERFLOW y creen que los ficheros no estan)"
+            ;;
+        *)
+            log "overlay: OJO -> este fuse-overlayfs NO entiende ino32_t. Se intentara igual por si solo falta en la ayuda, pero si tampoco lo traga, un juego NATIVO de 32 bits puede no ver sus propios ficheros dentro del wsquashfs (y si funciona en carpeta, es esto)" WARN
+            # Se pide de todas formas: la ayuda de algunas versiones no lista
+            # todas las opciones, y si no la traga baja un escalon y listo.
+            OVL_INO32="ino32_t"
+            ;;
+    esac
+}
+
+overlay_inodos_apuntar() {
+    # LOS INODOS DEL MONTAJE, APUNTADOS EN CADA PARTIDA. $1 = el punto.
+    #
+    # POR QUE EN CADA PARTIDA Y NO SOLO AL FALLAR. El informe largo de
+    # propiedades solo se saca cuando el juego YA se ha estrellado, asi que si
+    # el arreglo de ino32_t funciona, la prueba de que funciona NO APARECERIA
+    # EN NINGUN REGISTRO. Y entonces no se sabria si va porque el arreglo era
+    # el bueno o por otra cosa, que es como se empieza a dar vueltas otra vez.
+    #
+    # Es una linea y es barata: se miran unos cuantos cientos de entradas de
+    # los tres primeros niveles y se apunta el inodo mas alto. No decide nada,
+    # solo deja el numero escrito.
+    local raiz="${1:-}" cuantos="${2:-400}"
+    [ -n "${raiz:-}" ] && [ -d "$raiz" ] || return 0
+    local _lista="" _max=0 _n=0 _i=""
+    # -printf es de GNU findutils (Deck y CachyOS lo traen); si no, "ls -i",
+    # que esta hasta en busybox.
+    _lista="$(find "$raiz" -maxdepth 3 -printf '%i\n' 2>/dev/null | head -n "$cuantos")"
+    [ -n "${_lista:-}" ] || _lista="$(ls -1i "$raiz" 2>/dev/null | awk '{print $1}' | head -n "$cuantos")"
+    if [ -z "${_lista:-}" ]; then
+        log "overlay: no se han podido leer los inodos de $raiz" WARN
+        return 0
+    fi
+    while IFS= read -r _i; do
+        case "${_i:-}" in ''|*[!0-9]*) continue ;; esac
+        _n=$((_n+1))
+        [ "$_i" -gt "$_max" ] && _max="$_i"
+    done <<FINLISTA
+$_lista
+FINLISTA
+    [ "$_n" -gt 0 ] || return 0
+    if [ "$_max" -ge 4294967296 ]; then
+        log "overlay: OJO -> los inodos de este montaje PASAN de 32 bits (el mas alto de $_n mirados: $_max). Un juego NATIVO de 32 bits que haga stat() sobre ellos recibe EOVERFLOW y cree que sus ficheros no estan: arranca, pinta y se cierra solo" WARN
+        # DE DONDE SALEN ESOS NUMEROS, que ya esta medido (06/11).
+        #
+        # Si el numero parece (bloque<<16)|offset, viene de squashfuse_ll, que
+        # usa la referencia de inodo de squashfs tal cual. Eso solo pasa de 32
+        # bits cuando el archivo mide mas de 4 GB, y se cura montando con el
+        # driver ALTO. Decirlo aqui ahorra el camino entero la proxima vez.
+        log "overlay: ese numero en hexadecimal es $(printf '0x%x' "$_max" 2>/dev/null || printf '?'): si acaba teniendo la forma (bloque<<16)|offset, viene de squashfuse_ll usando la referencia de inodo de squashfs, y entonces el arreglo es montar el archivo con el driver ALTO de squashfuse (pasa solo con archivos de mas de 4 GB). Si no, viene de fuse-overlayfs y el arreglo es ino32_t"
+    else
+        log "overlay: los inodos caben en 32 bits (el mas alto de $_n mirados: $_max, el techo es 4294967295), asi que un juego de 32 bits puede hacerles stat() sin EOVERFLOW"
+    fi
+    return 0
+}
+
+montar_overlay_escalera() {
+    # Monta el overlay pidiendo lo MEJOR primero y bajando escalon a escalon.
+    #
+    # Se baja por separado para saber -y para que quede en el registro- QUE
+    # es lo que esta version no traga, en vez de quedarse con un "no se pudo
+    # montar" que no dice nada. El orden importa: ino32_t es lo que hace
+    # funcionar a los juegos de 32 bits, asi que va en los escalones de
+    # arriba; squash_to_uid es lo que deja escribir el prefix incluido.
+    local opts="$1" punto="$2"
+    local squash="squash_to_uid=$(id -u),squash_to_gid=$(id -g)"
+    overlay_ino32_detectar
+    local _ino=""
+    [ -n "$OVL_INO32" ] && _ino=",$OVL_INO32"
+    local _escalones=()
+    [ -n "$_ino" ] && _escalones+=("$opts$_ino,$squash" "$opts$_ino")
+    _escalones+=("$opts,$squash" "$opts")
+    local _n=0 _o=""
+    for _o in "${_escalones[@]}"; do
+        _n=$((_n+1))
+        if montar_suelto "$OVERLAYFS_BIN" -o "$_o" "$punto"; then
+            log "overlay: montado con -o $_o"
+            # QUE HAYA MONTADO NO QUIERE DECIR QUE HAYA HECHO CASO (06/11).
+            #
+            # fuse-overlayfs no RECHAZA una opcion que no conoce: la IGNORA y
+            # monta igual, escribiendo una sola linea por su salida de
+            # errores. En la maquina de Dani salio asi:
+            #
+            #   unknown argument ignored: ino32_t
+            #
+            # Y el registro decia "montado con -o ...,ino32_t,...", o sea que
+            # daba por puesto algo que no estaba. Eso es un registro que
+            # miente, y es peor que no decir nada. Lo unico que nos salvo de
+            # volver a dar vueltas fue la medida de los inodos.
+            case "${MONTAJE_DIJO:-}" in
+                *"unknown argument ignored: ino32_t"*)
+                    log "overlay: OJO -> ...pero fuse-overlayfs ha IGNORADO ino32_t (\"unknown argument ignored\"), asi que esa opcion NO esta puesta aunque aparezca en la linea de arriba. Esta version es anterior a la que la trae. Para los juegos nativos de 32 bits lo que cubre el caso es montar el archivo con el driver ALTO de squashfuse (ver squashfuse_monta_bin), no esta opcion" WARN
+                    ;;
+            esac
+            case "$_o" in
+                *ino32_t*) : ;;
+                *) log "overlay: OJO -> montado SIN ino32_t (esta version de fuse-overlayfs no lo traga). Un juego NATIVO de 32 bits puede no ver sus propios ficheros aqui y si en carpeta, porque su stat() recibe EOVERFLOW con los inodos grandes que devuelve el overlay. Se cura actualizando fuse-overlayfs; si no se puede, ese juego hay que jugarlo en carpeta" WARN ;;
+            esac
+            # Y EL NUMERO QUE DEMUESTRA SI EL ARREGLO HA SERVIDO.
+            overlay_inodos_apuntar "$punto"
+            case "$_o" in
+                *squash_to_uid*) : ;;
+                *) say "AVISO: fuse-overlayfs sin squash_to_uid (versión antigua): si el"
+                   say "       juego trae prefix incluido puede que no pueda escribirlo" ;;
+            esac
+            return 0
+        fi
+        log "overlay: no ha podido montar con -o $_o (escalon $_n de ${#_escalones[@]}): ${MONTAJE_DIJO:-sin mensaje}" WARN
+    done
+    return 1
+}
+
 montaje_anidado_activo() {
     [ "${MONTAJE_ANIDADO:-1}" = 1 ]
 }
@@ -27756,13 +29560,7 @@ mount_game() {
         _low="$base_ro"; _up="$ov"; _dentro="/$WS_NIDO"
     fi
     local ovl_opts="lowerdir=$_low,upperdir=$_up,workdir=$work"
-    local ovl_squash; ovl_squash="$ovl_opts,squash_to_uid=$(id -u),squash_to_gid=$(id -g)"
-    if montar_suelto "$OVERLAYFS_BIN" -o "$ovl_squash" "$MOUNT_RW"; then
-        MOUNT_OK=1
-        MOUNT_POINT="$MOUNT_RW$_dentro"
-    elif montar_suelto "$OVERLAYFS_BIN" -o "$ovl_opts" "$MOUNT_RW"; then
-        say "AVISO: fuse-overlayfs sin squash_to_uid (versión antigua): si el"
-        say "       juego trae prefix incluido puede que no pueda escribirlo"
+    if montar_overlay_escalera "$ovl_opts" "$MOUNT_RW"; then
         MOUNT_OK=1
         MOUNT_POINT="$MOUNT_RW$_dentro"
     else
@@ -27807,9 +29605,7 @@ mount_game() {
         fi
     fi
     ovl_opts="lowerdir=$MOUNT_RO,upperdir=$upper,workdir=$work"
-    if montar_suelto "$OVERLAYFS_BIN" \
-         -o "$ovl_opts,squash_to_uid=$(id -u),squash_to_gid=$(id -g)" "$MOUNT_RW" \
-       || montar_suelto "$OVERLAYFS_BIN" -o "$ovl_opts" "$MOUNT_RW"; then
+    if montar_overlay_escalera "$ovl_opts" "$MOUNT_RW"; then
         MOUNT_OK=1
         MOUNT_POINT="$MOUNT_RW"
     else
@@ -30198,6 +31994,28 @@ home_portable_exportar() {
     return 0
 }
 
+lanzador_en_la_raiz() {
+    # EL LANZADOR QUE HAY EN LA RAIZ DEL PAQUETE, si hay alguno. $1 = raiz.
+    #
+    # Se mira SOLO el primer nivel, y se saltan los nombres de instalar: un
+    # "setup.sh" en la raiz no es el lanzador del juego, es el instalador, y
+    # tomarlo por el punto de entrada seria peor que no encontrar nada.
+    local root="${1:-}" c
+    [ -n "${root:-}" ] && [ -d "$root" ] || return 1
+    while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
+        case "$(basename "$c")" in
+            install*|setup*|uninstall*|patch*|Install*|Setup*) continue ;;
+        esac
+        printf '%s' "$c"
+        return 0
+    done <<EOFRAIZ
+$(find -H "$root" -mindepth 1 -maxdepth 1 -type f \
+       \( -iname '*.sh' -o -iname '*.AppImage' \) 2>/dev/null | sort)
+EOFRAIZ
+    return 1
+}
+
 juego_hay_windows() {
     # ¿HAY UNA VERSION DE WINDOWS EN ESTA CARPETA? $1 = raiz del juego.
     #
@@ -30240,11 +32058,25 @@ juego_trae_las_dos() {
     # mucho-. Solo en esos tiene sentido preguntar con cual se juega: en los
     # demas la fila seria una pregunta sin respuestas.
     local root="${1:-}"
-    [ -d "$root" ] || return 1
+    [ -n "${root:-}" ] || return 1
     # EL MISMO CRITERIO QUE juego_es_nativo, y por eso va por juego_hay_windows.
     # Antes aqui se exigia un *.exe mientras la otra se contentaba con un
     # autorun.cmd: un juego con autorun.cmd y un .sh al lado se iba por Windows
     # y no daba opcion a elegir.
+    # UN ARCHIVO SIN MONTAR NO SE PUEDE MIRAR DENTRO, Y LA FILA SALE IGUAL.
+    #
+    # Montar un .wsquashfs solo para decidir si se pinta una fila costaria mas
+    # que la fila. Y esconderla es peor: deja al usuario sin salida justo en el
+    # caso en que la necesita, que es el que conto Dani el 06/11. Una fila de
+    # mas no molesta; una que falta cuando hace falta, si.
+    if [ ! -d "$root" ]; then
+        case "${root:-}" in
+            *.wsquashfs|*.squashfs|*.dwarfs|*.iso|*.chd)
+                log "juego_trae_las_dos: '$root' es un archivo sin montar, no se puede mirar dentro; se ofrece la fila de version por si acaso"
+                return 0 ;;
+        esac
+        return 1
+    fi
     juego_hay_windows "$root" || return 1
     [ -n "$(find "$root" -maxdepth 2 -type f \
             \( -iname '*.sh' -o -iname '*.AppImage' \) 2>/dev/null | head -n1)" ]
@@ -30254,7 +32086,7 @@ version_juego_label() {
     case "${VERSION_JUEGO:-auto}" in
         windows) printf 'la de Windows (.exe)' ;;
         linux)   printf 'la de Linux (nativa)' ;;
-        *)       printf 'automática (la de Windows si hay .exe)' ;;
+        *)       printf 'automática (la de Linux si el lanzador está en la raíz)' ;;
     esac
 }
 
@@ -30289,6 +32121,11 @@ juego_es_nativo() {
     # elegir: en cuanto se veia un .exe, Windows, y ahi se acababa la
     # conversacion. Con VERSION_JUEGO se elige; "auto" es lo de siempre,
     # asi que un juego que hoy arranca sigue arrancando igual.
+    # EL MARCADOR DEL PAQUETE, que lo pone quien empaqueta. Se lee antes de
+    # entrar en el case porque sirve para dos cosas: decir que esto es de Linux
+    # y, si lo dice, decir CUAL es el lanzador.
+    local _lin_marca="" _lin_tiene=1
+    _lin_marca="$(linux_marcador_lanzador "$root")" && _lin_tiene=0
     case "${VERSION_JUEGO:-auto}" in
         windows)
             log "juego_es_nativo: el perfil pide la version de WINDOWS"
@@ -30296,6 +32133,15 @@ juego_es_nativo() {
         linux)
             log "juego_es_nativo: el perfil pide la version de LINUX; no se mira si hay .exe" ;;
         *)
+        # EL MARCADOR VALE LO MISMO QUE LA CASILLA DEL PERFIL.
+        #
+        # Y tiene que ir aqui, ANTES de buscar .exe: el caso que lo pidio es un
+        # recompilado al que se le mete DENTRO el juego original de Windows,
+        # con sus .exe. Si se mirasen los .exe primero, el paquete se iria por
+        # Wine siempre y el marcador no serviria de nada.
+        if [ "$_lin_tiene" = 0 ]; then
+            log "juego_es_nativo: el paquete trae el marcador *.linuxloader -> es un juego de LINUX; no se mira si hay .exe"
+        else
 
         # UN autorun.cmd YA DICE QUE ES DE WINDOWS. No hace falta buscar mas: ese
         # fichero es un guion de cmd, y las .pc de Batocera lo llevan.
@@ -30330,11 +32176,54 @@ juego_es_nativo() {
         if [ -n "$( (cd "$root" 2>/dev/null && \
                      find . -maxdepth 8 -iname '*.exe' \
                          ! -ipath './windows/*' 2>/dev/null) | head -n1)" ]; then
-            log "juego_es_nativo: hay un .exe -> se trata como juego de Windows"
-            return 1
+            # EL LANZADOR DE LA RAIZ MANDA SOBRE UN .exe DE MAS ADENTRO (06/11).
+            #
+            # EL CASO: un recompilado nativo al que se le mete DENTRO el juego
+            # original de Windows, con sus .exe. En la raiz esta el lanzador del
+            # port. Dani lo dijo asi: "elige el exe del juego en vez del sh que
+            # esta en la raiz".
+            #
+            # Y no es un empate: quien empaqueta pone el punto de entrada ARRIBA
+            # y los datos del juego DEBAJO. Un .exe que esta mas adentro que el
+            # lanzador es material que el lanzador consume, no una alternativa.
+            #
+            # SE EXIGE QUE EN LA RAIZ NO HAYA NINGUN .exe, y eso es lo que hace
+            # que esto sea seguro. Si el .exe esta al MISMO nivel que el .sh, el
+            # paquete si trae las dos versiones de verdad -GOG lo hace- y ahi no
+            # se decide por nadie: se queda Windows, como siempre, y la fila de
+            # "Version del juego" esta para elegir.
+            local _lanz_raiz="" _exe_raiz=""
+            _lanz_raiz="$(lanzador_en_la_raiz "$root")" || _lanz_raiz=""
+            _exe_raiz="$( (cd "$root" 2>/dev/null && \
+                           find . -mindepth 1 -maxdepth 1 -iname '*.exe' 2>/dev/null) | head -n1)"
+            if [ -n "${_lanz_raiz:-}" ] && [ -z "${_exe_raiz:-}" ]; then
+                log "juego_es_nativo: hay .exe mas adentro, PERO el lanzador esta en la raiz ($_lanz_raiz) y en la raiz no hay ningun .exe -> se trata como juego de LINUX. Es la forma de un recompilado: el punto de entrada arriba y el juego original debajo. Si no es lo que se quiere, Ajustes del juego -> Version del juego -> La de Windows"
+            else
+                # Y SI DE VERDAD TRAE LAS DOS, SE DICE. La rama del autorun.cmd
+                # ya lo hacia y esta no: el registro decia "hay un .exe ->
+                # Windows" y se quedaba tan ancho, sin mencionar que habia un
+                # .sh ni donde se elige.
+                if juego_trae_las_dos "$root"; then
+                    log "juego_es_nativo: hay un .exe -> Windows, PERO este juego trae tambien la version de Linux: se puede elegir en Ajustes del juego -> Version del juego"
+                fi
+                log "juego_es_nativo: hay un .exe -> se trata como juego de Windows"
+                return 1
+            fi
+        fi
         fi
             ;;
     esac
+
+    # Y SI EL MARCADOR DICE CUAL ES EL LANZADOR, SE ACABO LA BUSQUEDA.
+    #
+    # Es el unico dato que no se puede adivinar desde fuera: en un recompilado,
+    # en la raiz esta el lanzador del port y dentro esta el juego original con
+    # sus propios .sh. Quien empaqueto lo sabe; nosotros no.
+    if [ -n "${_lin_marca:-}" ]; then
+        log "juego_es_nativo: el marcador *.linuxloader dice que el lanzador es $_lin_marca"
+        printf '%s' "$_lin_marca"
+        return 0
+    fi
 
     # 2. Un lanzador .sh en la raiz.
     #
@@ -30359,20 +32248,44 @@ juego_es_nativo() {
     #
     # Dos niveles y no mas: mas abajo empiezan los .sh internos del juego y se
     # acabaria eligiendo uno que no lanza nada.
-    log "juego_es_nativo: buscando lanzador de Linux en $_raiz_busq (2 niveles)"
-    local c
-    while IFS= read -r c; do
-        [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
-        case "$(basename "$c")" in
-            install*|setup*|uninstall*|patch*|Install*|Setup*)
-                log "  se salta $(basename "$c") (parece de instalar)"; continue ;;
-        esac
-        log "  lanzador .sh encontrado: $c"
-        printf '%s' "$c"
-        return 0
-    done <<EOFSH
-$(find -H "$_raiz_busq" -maxdepth 2 -type f -iname '*.sh' 2>/dev/null | sort)
+    # LA RAIZ GANA SIEMPRE SOBRE LO QUE HAYA DENTRO (06/11).
+    #
+    # EL FALLO QUE ESTO ARREGLA, que lo encontro un tester con el compilado de
+    # Screamer: "no me pilla el sh que tengo en la raiz, se va a buscar los del
+    # juego dentro".
+    #
+    # Aqui habia UN SOLO barrido de dos niveles con "| sort" y se cogia el
+    # primero. Y "sort" ordena la RUTA COMPLETA alfabeticamente, sin saber nada
+    # de profundidad. Con esto dentro:
+    #
+    #     Screamer/run.sh      <- un .sh de dentro del juego
+    #     screamer.sh          <- EL LANZADOR, en la raiz
+    #
+    # sort devuelve "Screamer/run.sh" primero, porque la 'S' mayuscula (83) va
+    # antes que la 's' minuscula (115) en el orden de C. O sea que acertar
+    # dependia de la MAYUSCULA del nombre de la carpeta: pura loteria. Con la
+    # carpeta en minuscula habria funcionado, y asi fue como paso desapercibido.
+    #
+    # Y no es un empate cualquiera: un lanzador en la RAIZ del paquete es, por
+    # definicion, el punto de entrada; los .sh que hay mas adentro son del
+    # juego. Asi que ahora son DOS barridos, el de la raiz primero, y el de
+    # dentro solo si arriba no habia nada.
+    local c _nivel
+    for _nivel in 1 2; do
+        log "juego_es_nativo: buscando lanzador de Linux en $_raiz_busq (nivel $_nivel)"
+        while IFS= read -r c; do
+            [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
+            case "$(basename "$c")" in
+                install*|setup*|uninstall*|patch*|Install*|Setup*)
+                    log "  se salta $(basename "$c") (parece de instalar)"; continue ;;
+            esac
+            log "  lanzador .sh encontrado: $c"
+            printf '%s' "$c"
+            return 0
+        done <<EOFSH
+$(find -H "$_raiz_busq" -mindepth "$_nivel" -maxdepth "$_nivel" -type f -iname '*.sh' 2>/dev/null | sort)
 EOFSH
+    done
 
     # 3. Un binario ELF en la raiz. Se mira la firma del fichero, no el
     #    nombre: los juegos de Linux no llevan extension.
@@ -30389,23 +32302,29 @@ EOFSH
     # Aqui se busca por extension, que es lo que el usuario ve, y el permiso se
     # arregla al lanzar. Pedirle a alguien que haga chmod +x antes de empaquetar
     # es justo el tipo de paso manual que este programa existe para evitar.
-    while IFS= read -r c; do
-        [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
-        log "  AppImage encontrado: $c"
-        printf '%s' "$c"
-        return 0
-    done <<EOFAI
-$(find -H "$_raiz_busq" -maxdepth 2 -type f -iname '*.AppImage' 2>/dev/null | sort)
+    # Y LA MISMA REGLA PARA LOS AppImage Y LOS ELF, por lo mismo: el de la raiz
+    # es el del paquete, los de dentro son del juego.
+    for _nivel in 1 2; do
+        while IFS= read -r c; do
+            [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
+            log "  AppImage encontrado: $c (nivel $_nivel)"
+            printf '%s' "$c"
+            return 0
+        done <<EOFAI
+$(find -H "$_raiz_busq" -mindepth "$_nivel" -maxdepth "$_nivel" -type f -iname '*.AppImage' 2>/dev/null | sort)
 EOFAI
-    while IFS= read -r c; do
-        [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || continue
-        case "$(head -c 4 "$c" 2>/dev/null | tr -d '\0')" in
-            *ELF*) log "  binario de Linux encontrado: $c"
-                   printf '%s' "$c"; return 0 ;;
-        esac
-    done <<EOFELF
-$(find -H "$_raiz_busq" -maxdepth 2 -type f -perm -u+x 2>/dev/null | sort)
+    done
+    for _nivel in 1 2; do
+        while IFS= read -r c; do
+            [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || continue
+            case "$(head -c 4 "$c" 2>/dev/null | tr -d '\0')" in
+                *ELF*) log "  binario de Linux encontrado: $c (nivel $_nivel)"
+                       printf '%s' "$c"; return 0 ;;
+            esac
+        done <<EOFELF
+$(find -H "$_raiz_busq" -mindepth "$_nivel" -maxdepth "$_nivel" -type f -perm -u+x 2>/dev/null | sort)
 EOFELF
+    done
     log "  no hay lanzador de Linux; se tratara como juego de Windows"
     return 1
 }
@@ -40276,6 +42195,28 @@ Que cumplas muchos mas.
     # -la sonda que mide el montaje, el ruido del trap en el registro- esta
     # contado en el fichero de novedades y no se promete aqui.
     #
+    # 05/11, AL SUBIR A LA 2.25: fuera los seis de la 2.24 y dentro DOS. Solo
+    # dos, y es una decision de Dani que corrige la mia:
+    #
+    #   "Dejaria solo la primera linea, sin el comentario 'van mejor'. El
+    #    resto de cosas son cambios que tenemos nuestros que no importan a la
+    #    gente. Como mucho pondria cambios menores en la carga de wsquashfs
+    #    de Linux."
+    #
+    # Y lleva razon. Yo habia puesto cinco, y cuatro eran arreglos de cosas
+    # que rompimos NOSOTROS entre ayer y hoy: el reintento al empaquetar, el
+    # archivo bueno dado por fallido, el directorio de trabajo. Nada de eso lo
+    # ha sufrido nadie en una version publicada, asi que anunciarlo es contar
+    # nuestro trabajo, no sus novedades. Lo unico nuevo de verdad para quien
+    # usa WProton es el -no-xattrs, que lo pidieron ellos.
+    #
+    # LO QUE NO ENTRA, A PROPOSITO: Jurassic Park Arcade SIGUE sin funcionar
+    # desde el archivo. Todo el trabajo de diagnostico de estos dias esta
+    # contado en el fichero de novedades, pero AQUI no se promete ningun juego
+    # arreglado. Prometer un arreglo que no esta confirmado es exactamente lo
+    # que paso en la 2.15 y por lo que existe la suite.
+
+    #
     # OJO CON EL PUNTO DEL PREFIJO INCLUIDO. En la 2.15 se prometio dos veces
     # que eso estaba arreglado cuando se habia SACADO por la regresion del
     # 18/10, y de ahi viene esta suite. Esta vez el punto entra porque un
@@ -40291,17 +42232,9 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Los juegos en carpeta .wine, con su prefijo dentro, ya se pueden usar.
+  Arreglados los juegos nativos de 32 bits en .wsquashfs de mas de 4 GB.
 
-  El prefijo que trae el juego dentro ya arranca a la primera.
-
-  Y ya no se copia a disco: se usa donde esta, sin duplicar gigas.
-
-  Si un juego de Linux se cierra solo, WProton lo dice.
-
-  Al empaquetar se avisa de los enlaces que se quedarian colgando.
-
-  Los .keys de la comunidad se bajan aunque el nombre lleve un apostrofo.
+  Los .wsquashfs nuevos se hacen sin atributos extendidos.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -52253,6 +54186,10 @@ enlaces_colgando() {
 }
 
 build_wsquashfs() {
+    # La ruta del paquete sale por aqui, no por la salida estandar (el porque
+    # esta al final de la funcion). Se limpia al entrar para que un fallo no
+    # deje la de la vez anterior.
+    PACK_OUT=""
     # Empaqueta una carpeta en el formato elegido (PACK_FORMAT):
     #   wsquashfs -> mksquashfs (compatible con Batocera y PortProton)
     #   dwarfs    -> mkdwarfs   (comprime bastante mas, monta igual de rapido)
@@ -52314,7 +54251,7 @@ build_wsquashfs() {
         # estan.
         if mv -f "$src" "$out" 2>/dev/null; then
             say "[OK] Juego guardado como carpeta: $out"
-            printf '%s' "$out"; return 0
+            PACK_OUT="$out"; printf '%s' "$out"; return 0
         fi
         local needc; needc="$(dir_bytes "$src")"
         if [ -n "$needc" ] && ! check_space "$needc" "$_destc" "mover '$name'"; then
@@ -52324,7 +54261,7 @@ build_wsquashfs() {
                cp -a "$src" "$out"; then
             rm -rf "$src"
             say "[OK] Juego guardado como carpeta: $out"
-            printf '%s' "$out"; return 0
+            PACK_OUT="$out"; printf '%s' "$out"; return 0
         fi
         rm -rf "$out" 2>/dev/null
         fallo "No se pudo mover '$name' a:
@@ -52367,109 +54304,147 @@ $src"
         local _log_antes; _log_antes="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
         # -percentage: mksquashfs va escribiendo solo el numero, pensado
         # justo para alimentar una barra de progreso.
-        # AQUI ESTUVO UN "-no-duplicates" PARA LOS JUEGOS NATIVOS. RETIRADO.
+        # "-no-duplicates" DESDE EL PRIMER INTENTO, Y POR QUE SE VOLVIO A EL.
         #
-        # Se metio el 02/11 creyendo que la deduplicacion de mksquashfs hacia
-        # que dos ficheros distintos compartieran inodo, y que eso rompia al
-        # cargador de glibc, que identifica un .so ya cargado por
-        # (st_dev, st_ino). La primera mitad era falsa, y por dos lados:
+        # HISTORIA CORTA: lo llevaba, lo quite el 02/11 por un motivo que
+        # resulto ser falso, y eso le rompio el empaquetado a Dani. Vuelve.
         #
-        #   - la deduplicacion de squashfs comparte los BLOQUES DE DATOS, no
-        #     el inodo: cada fichero conserva el suyo;
-        #   - y los "inodos compartidos" que se midieron eran un fallo de la
-        #     propia medida, que usaba os.stat() -que SIGUE los enlaces-, asi
-        #     que contaba un enlace y su destino (libGLEW.so y libGLEW.so.1.3)
-        #     como dos ficheros con el mismo inodo. No lo son.
+        # POR QUE SE QUITO (02/11). Se creyo que la deduplicacion de
+        # mksquashfs hacia que dos ficheros distintos compartieran inodo y que
+        # eso rompia al cargador de glibc, que identifica un .so ya cargado
+        # por (st_dev, st_ino). Era falso por dos lados: la deduplicacion
+        # comparte los BLOQUES DE DATOS, no el inodo, y los "inodos
+        # compartidos" que se midieron eran un fallo de la medida -usaba
+        # os.stat(), que SIGUE los enlaces, asi que contaba un enlace y su
+        # destino como dos ficheros con el mismo inodo-. Lo demostro el
+        # registro del 02/11 a las 23:06. Hasta ahi, todo correcto.
         #
-        # Lo demostro el registro del 02/11 a las 23:06: se reempaqueto con
-        # -no-duplicates ("No duplicate files removed") y los 4 inodos
-        # compartidos SEGUIAN ahi, con los mismos nombres, que son justo los
-        # 6 enlaces simbolicos del juego. Ver src/propiedades.py.
+        # EL ERROR FUE LO QUE VINO DESPUES: al retirar la teoria se retiro
+        # TAMBIEN el parametro, "porque el archivo sale ~80 MB mas pequeno y
+        # no se pierde nada". Y si se perdia algo.
         #
-        # Asi que se vuelve a empaquetar como siempre: el archivo sale ~80 MB
-        # mas pequeno y no se pierde nada.
-        if ! run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
-                mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage; then
-            rm -f "$out"
-            # ¿ES EL FALLO CONOCIDO DE mksquashfs? ENTONCES SE REINTENTA SOLO.
-            #
-            # "BUG in get_virt_disk, <numero> not found" es un fallo del propio
-            # mksquashfs, no nuestro: esta reportado como el issue 360 de
-            # squashfs-tools -su autor lo marca como duplicado del 362- y se ve
-            # en la version 4.7.5. Salta a media compresion y deja el archivo a
-            # medias.
-            #
-            # Aparece en la deteccion de ficheros duplicados, asi que se vuelve
-            # a intentar con esa deteccion apagada: el archivo sale un poco mas
-            # grande y a cambio se crea.
-            #
-            # Se reintenta SOLO ante ese fallo concreto. Reintentar a ciegas
-            # ante cualquier error seria hacer esperar el doble para volver a
-            # fallar por lo mismo.
-            # SE ESPERA A QUE EL MENSAJE LLEGUE AL FICHERO ANTES DE BUSCARLO.
-            #
-            # mksquashfs escribe su "FATAL ERROR" por una tuberia, y esa linea
-            # puede aterrizar en el registro DESPUES de que nosotros miremos.
-            # Sin esta espera, el reintento automatico no se disparaba y el
-            # usuario veia "El empaquetado fallo" a secas, con el mensaje del
-            # fallo apareciendo en el registro justo despues. Medio segundo
-            # aqui no lo nota nadie.
+        # LO QUE PASO (04/11, registro de Dani, y es una A/B limpia en su
+        # maquina): empaqueto el Jurassic Park y el primer mksquashfs FALLO
+        # -60 segundos, sin dejar ni una linea de salida, sin FATAL ni nada-.
+        # El reintento, con los MISMOS ficheros y los MISMOS parametros salvo
+        # -no-duplicates, termino perfecto: 7506 ficheros, 4130 MB. O sea que
+        # lo unico que separa el fallo del acierto es ese parametro.
+        #
+        # Y encaja con lo que ya sabiamos: el fallo conocido de squashfs-tools
+        # (BUG in get_virt_disk, issues 360 y 362) vive justo en el camino de
+        # la deduplicacion, y el reintento existia PARA ESO desde antes.
+        #
+        # Asi que se empaqueta sin duplicados desde el principio. Cuesta un
+        # 2% de tamano -unos 80 MB en un archivo de 4 GB- y a cambio: no falla,
+        # no hay un intento tirado de un minuto, no hay reintento, y la
+        # persona no ve ningun aviso raro a mitad de la barra. Dani lo pidio
+        # asi: "tiene que hacerlo a la primera sin reintentos".
+        #
+        # -percentage: mksquashfs va escribiendo solo el numero, pensado
+        # justo para alimentar una barra de progreso.
+        # -no-xattrs: NO SE GUARDAN LOS ATRIBUTOS EXTENDIDOS (04/11).
+        #
+        # Lo trajeron los testers -"para que sea mas compatible"- y al mirarlo
+        # tiene sentido por tres sitios distintos:
+        #
+        # 1. mksquashfs guarda los xattrs POR DEFECTO ("-xattrs" es el
+        #    comportamiento de fabrica, segun su propio manual). O sea que
+        #    hasta ahora se metian en cada archivo sin que nadie lo pidiera.
+        # 2. Un juego no los necesita para nada. Lo que suele haber ahi es
+        #    security.capability, security.selinux o cosas de user.*, que no
+        #    son del juego sino del sistema donde se empaqueto.
+        # 3. Y SI MOLESTAN. Cuando el juego va montado, el fuse-overlayfs
+        #    tiene que subir un fichero a la capa de escritura para
+        #    modificarlo (copy-up), y en ese copy-up se copian tambien los
+        #    xattrs. Si el sistema de ficheros de destino no los acepta -o no
+        #    deja poner security.capability sin privilegios-, la subida falla
+        #    y el juego se queda sin poder escribir un fichero que en carpeta
+        #    si podia. Que es exactamente la clase de diferencia que llevamos
+        #    dias buscando. Ademas, unsquashfs como usuario normal sale con
+        #    codigo 2 cuando se encuentra xattrs que no puede poner.
+        #
+        # Esto solo afecta a lo que se empaquete DE AHORA EN ADELANTE: los
+        # archivos que ya existen siguen con los suyos, y por eso el
+        # diagnostico los cuenta y lo dice.
+        # EL CODIGO DE SALIDA SE GUARDA ANTES DE PREGUNTAR NADA.
+        #
+        # Con "if ! orden; then", dentro del then el $? vale SIEMPRE 0: es el
+        # resultado de la negacion, no el de la orden. El registro llego a
+        # decir "mksquashfs fallo con codigo 0", que es un dato falso, y un
+        # dato que parece bueno y no lo es es peor que no tener ninguno.
+        # (Antes de eso habia ademas un "rm -f" por delante, asi que el $?
+        # era el del rm.)
+        local _rc_ms=0
+        run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
+                mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+                -no-duplicates -percentage || _rc_ms=$?
+        if [ "$_rc_ms" != 0 ]; then
             sleep 1
-            # SE MIRA SOLO LO QUE ESCRIBIO ESTE INTENTO, NO EL REGISTRO ENTERO.
+            # TODO AL REGISTRO, NADA A LA PANTALLA, Y NINGUN REINTENTO.
             #
-            # El registro es ACUMULATIVO: lleva dentro todo lo de la sesion. Un
-            # "Permission denied" de hace media hora -de montar un disco, de
-            # cualquier cosa- hacia creer que el empaquetado habia fallado por
-            # permisos, y entonces NO se reintentaba sin duplicados: salia "El
-            # empaquetado fallo" y el reintento que habria salvado el archivo no
-            # llegaba a ejecutarse nunca.
-            local _motivo_conocido=0 _salida
+            # Antes esto soltaba en pantalla "[!] mksquashfs fallo y el
+            # registro no dice por que. Se reintenta sin buscar duplicados..."
+            # a mitad de la barra de progreso. Dani: "eso no salia antes y no
+            # tiene que salir, solo la barra normal de progreso". Y tiene
+            # razon dos veces: por el aviso, y porque ya no hay reintento que
+            # anunciar -ahora se empaqueta sin duplicados desde el principio,
+            # que es justo lo que hacia el reintento-. Repetir lo mismo otra
+            # vez no arreglaria nada y cuesta otro minuto.
+            local _salida _ultimas _motivo
             _salida="$(tail -c +$(( ${_log_antes:-0} + 1 )) "$LOG_FILE" 2>/dev/null)"
+            _motivo="sin explicacion"
             case "$_salida" in
-                *"BUG in get_virt_disk"*) _motivo_conocido=1 ;;
+                *"BUG in get_virt_disk"*)  _motivo="el fallo conocido de squashfs-tools (BUG in get_virt_disk)" ;;
+                *"No space left"*)         _motivo="no cabe: disco lleno" ;;
+                *"Permission denied"*)     _motivo="permisos" ;;
+                *"Read-only file system"*) _motivo="el destino es de solo lectura" ;;
             esac
-            if [ "$_motivo_conocido" = 0 ]; then
-                case "$_salida" in
-                    *"No space left"*|*"Permission denied"*|*"Read-only file system"*) ;;
-                    *) _motivo_conocido=2 ;;
-                esac
+            log "empaquetado: mksquashfs fallo con codigo ${_rc_ms:-?}; motivo = $_motivo" WARN
+            # EL CODIGO DE SALIDA DICE MAS DE LO QUE PARECE: por encima de 128
+            # es una senal, o sea que a mksquashfs lo MATARON, no fallo solo.
+            # La 9 (codigo 137) suele ser el sistema por falta de memoria. Eso
+            # no se puede confundir con un fallo de mksquashfs, y hasta el
+            # 04/11 no se apuntaba en ningun sitio.
+            if [ "${_rc_ms:-0}" -gt 128 ] 2>/dev/null; then
+                log "empaquetado: OJO -> el codigo ${_rc_ms} es una senal ($(( _rc_ms - 128 ))): a mksquashfs LO MATARON, no fallo solo. Si es la 9, suele ser el sistema por falta de memoria" WARN
             fi
-            log "empaquetado: motivo = $_motivo_conocido (1=fallo conocido de mksquashfs, 2=sin explicacion, 0=disco o permisos)"
-            if [ "$_motivo_conocido" != 0 ]; then
-                if [ "$_motivo_conocido" = 1 ]; then
-                    say "[!] mksquashfs fallo por un fallo conocido suyo"
-                    say "    (BUG in get_virt_disk). Se reintenta sin buscar"
-                    say "    duplicados: el archivo saldra algo mas grande."
-                else
-                    say "[!] mksquashfs fallo y el registro no dice por que."
-                    say "    Se reintenta sin buscar duplicados, que es de donde"
-                    say "    salen sus fallos raros."
-                fi
-                log "empaquetado: reintento con -no-duplicates por el fallo conocido de mksquashfs" WARN
-                if ! run_con_porcentaje "Reintentando '$name' sin duplicados..." \
-                        mksquashfs "$src" "$out" -comp zstd -b 1M -noappend \
-                        -no-duplicates -percentage; then
-                    rm -f "$out"
-                    fallo "El empaquetado fallo dos veces.
+            _ultimas="$(printf '%s\n' "$_salida" | grep -v '^[0-9]*$' \
+                        | grep -v '^[[:space:]]*$' | tail -12 | tr '\n' '|')"
+            log "empaquetado: lo ultimo que dijo mksquashfs -> ${_ultimas:-(no dijo nada: ni una linea de salida)}" WARN
+            log "empaquetado: espacio libre en $(dirname "$out") -> $(df -h "$(dirname "$out")" 2>/dev/null | awk 'NR==2{print $4" de "$2}' || echo '?')" WARN
+            rm -f "$out"
+            fallo "No se pudo empaquetar '$name'.
 
-Es un fallo de mksquashfs (squashfs-tools), no de WProton:
-  FATAL ERROR: BUG in get_virt_disk
+La carpeta del juego NO se ha tocado.
 
-Dos salidas:
-  - Actualiza squashfs-tools: esta corregido en versiones
-    mas nuevas.
-  - O empaqueta en DwarFS: Biblioteca y preferencias ->
-    Formato para los juegos que empaquetes -> dwarfs.
-    Comprime mas y no usa mksquashfs."
-                    return 1
-                fi
-            else
-                fallo "El empaquetado fallo (mira el registro)"
-                return 1
-            fi
+Si se repite, en Biblioteca y preferencias puedes cambiar el
+formato a DwarFS, que comprime mas y no usa mksquashfs."
+            return 1
         fi
     fi
     rm -rf "${OVERLAY_BASE:?}/${name}"
+    # LA RUTA VA EN UNA VARIABLE, NO POR LA SALIDA ESTANDAR (04/11).
+    #
+    # QUE PASO. Dani empaqueto el Jurassic Park: mksquashfs fallo la primera
+    # vez, se reintento, el reintento TERMINO BIEN -el resumen esta en el
+    # registro: 7506 ficheros, 4130 MB, "no xattrs"- y el archivo quedo hecho
+    # y funcionando... y WProton dijo "El empaquetado fallo". Dani lo conto
+    # asi: "da error, pero sin embargo lo ha hecho entero".
+    #
+    # POR QUE. Quien llama hacia out="$(build_wsquashfs ...)", o sea que la
+    # ruta viajaba por la SALIDA ESTANDAR de una funcion larga que arranca
+    # procesos, barras de progreso y menus. Cualquier cosa que escriba por ahi
+    # -ahora o dentro de seis meses, en cualquier funcion de las que se llaman
+    # por debajo- se mete en la variable y la ruta deja de ser una ruta. Y el
+    # sintoma es el peor posible: un archivo de 4 GB perfectamente bueno dado
+    # por fallido.
+    #
+    # Es el mismo fallo que ya nos mordio dos veces con los subshells, puesto
+    # del reves: alli se perdia lo que se escribia dentro, aqui se cuela lo
+    # que no deberia. La forma de que no vuelva a pasar no es revisar quien
+    # escribe en stdout: es no usar stdout para esto.
+    PACK_OUT="$out"
+    log "empaquetado: hecho -> $out ($(du -h "$out" 2>/dev/null | cut -f1 || echo '?'))"
     printf '%s' "$out"
 }
 
@@ -52513,7 +54488,11 @@ do_pack_dir() {
     else
         log "empaquetado: ningun enlace con la ruta de la propia carpeta, de $(enlaces_cuantos "$dir") mirado(s) [OK]"
     fi
-    out="$(build_wsquashfs "$dir" "$name" "$(pack_formato_archivo)")"
+    # SIN $( ): la ruta viene en PACK_OUT. Con la sustitucion de ordenes,
+    # cualquier cosa que se escriba por la salida estandar ahi dentro se
+    # colaba en la variable y un archivo bueno salia como fallido (04/11).
+    build_wsquashfs "$dir" "$name" "$(pack_formato_archivo)" >/dev/null
+    out="${PACK_OUT:-}"
     if paquete_valido "$out"; then
         say "[OK] Empaquetado: $out"
         # EL AVISO VA EN LA PROPIA PREGUNTA.
@@ -54835,7 +56814,8 @@ Para jugarlo: Añadir un juego -> elige esa carpeta."
         say "[+] Buscando ejecutable del juego..."
         local exe; exe="$(find_game_exe "$root")"
         [ -n "$exe" ] && { say "[+] Ejecutable: $(basename "$exe") - escribiendo autorun.cmd"; write_autorun "$root" "$exe"; }
-        out="$(build_wsquashfs "$root" "$game_name")"
+        build_wsquashfs "$root" "$game_name" >/dev/null
+        out="${PACK_OUT:-}"
         # build_wsquashfs devuelve 1 y no escribe nada si falta espacio, si
         # falla mksquashfs o si se cancela. Antes no se miraba: se borraba lo
         # extraido igualmente y se intentaba lanzar una ruta vacia.
@@ -56627,6 +58607,31 @@ diag_libreria_que_falta() {
     return 0
 }
 
+carpeta_del_mismo_juego() {
+    # DONDE ESTA ESTE MISMO JUEGO EN CARPETA, SI ESTA. $1 = raiz del montaje.
+    #
+    # POR QUE HACIA FALTA (03/11). La comparacion montaje/carpeta se estaba
+    # haciendo contra GAMES_PATH, o sea contra la carpeta que tiene TODOS los
+    # juegos. En el registro de Dani eso salia asi:
+    #
+    #   A = .../m/Jurassic_Park        (la carpeta del juego)
+    #   B = .../ROMs/windows           (la de todos los juegos)
+    #   OJO -> en A NO estan: 1001 Spikes.wsquashfs, 88 Heroes.wsquashfs...
+    #
+    # Un aviso de que "faltan" ficheros que son OTROS JUEGOS. La comparacion
+    # no decia nada porque no se estaban comparando las dos versiones del
+    # mismo juego, que es lo unico que tiene sentido comparar.
+    local raiz="${1:-}" gid _d
+    [ -n "${raiz:-}" ] || return 0
+    gid="$(basename "$raiz")"
+    [ -n "${gid:-}" ] || return 0
+    for _d in "${GAMES_PATH:-}" $(printf '%s\n' "${GAMES_PATHS_EXTRA:-}" | tr '\n' ' '); do
+        [ -n "${_d:-}" ] || continue
+        if [ -d "$_d/$gid" ]; then printf '%s' "$_d/$gid"; return 0; fi
+    done
+    return 0
+}
+
 diag_propiedades_montaje() {
     # EN QUE NO SE PARECE ESTE MONTAJE A UNA CARPETA. $1 = la carpeta del
     # juego dentro del montaje. $2 = una carpeta de disco de referencia.
@@ -56663,8 +58668,13 @@ diag_propiedades_montaje() {
             _upper="$OVERLAY_BASE/$_gid"
         fi
     fi
+    # ¿ES "B" EL MISMO JUEGO? La comparacion fichero a fichero solo tiene
+    # sentido si lo es; si no, compara el juego con la carpeta de todos los
+    # juegos. El 03/11 eso solto cuarenta mil "faltan" que eran otros juegos.
+    local _mismo_juego=0
+    [ -n "${ref:-}" ] && [ "$ref" = "$(carpeta_del_mismo_juego "$dir")" ] && _mismo_juego=1
     local _sal
-    _sal="$(propiedades_py "$dir" "${ref:-$dir}" ${_upper:+"$_upper"} 2>&1 || true)"
+    _sal="$(WP_B_ES_EL_MISMO_JUEGO="$_mismo_juego" propiedades_py "$dir" "${ref:-$dir}" ${_upper:+"$_upper"} 2>&1 || true)"
     if [ -z "${_sal:-}" ]; then
         log "propiedades: la medida no devolvio nada" WARN
         return 0
@@ -56676,8 +58686,87 @@ diag_propiedades_montaje() {
     #
     # Un registro largo es util, pero si una de las diferencias es de las que
     # explican el fallo, no puede quedar enterrada entre veinte lineas.
+    # LOS INODOS, QUE ES LO QUE ERA (05/11, Jurassic Park Arcade).
+    #
+    # Va PRIMERO porque es la unica diferencia medida que explica el fallo
+    # entero, y porque las otras veinte lineas ya se han comprobado y salen
+    # iguales. Si esto salta, no hay que seguir leyendo.
+    if printf '%s' "$_sal" | grep -q 'N A .*NO caben en 32 bits'; then
+        log "propiedades: OJO -> LOS INODOS. $(printf '%s\n' "$_sal" | sed -n 's/^N A *\(OJO -> [0-9]* inodo.*\)/\1/p' | head -1)" WARN
+        printf '%s' "$_sal" | grep -q 'N A .*este juego ES de 32 bits' \
+            && log "propiedades: $(printf '%s\n' "$_sal" | sed -n 's/^N A *\(OJO -> y este juego ES de 32 bits.*\)/\1/p' | head -1)" WARN
+    elif printf '%s' "$_sal" | grep -q 'N A .*todos caben en 32 bits'; then
+        log "propiedades: los inodos del montaje caben todos en 32 bits, asi que por ahi no es (se monta con ino32_t, que es lo que lo asegura)"
+    fi
     printf '%s' "$_sal" | grep -q 'A .*d_type de readdir: DESCONOCIDO' \
         && log "propiedades: OJO -> en el montaje readdir NO dice de que tipo es cada entrada (DT_UNKNOWN). Un programa que se fie de ese campo no encuentra sus ficheros. Es la diferencia que mejor explica un 'dato no cargado' sin ningun error de fichero" WARN
+    # EL ORDEN DE readdir, que es la ultima propiedad que quedaba sin medir.
+    #
+    # Se sube aparte porque es la que explicaria el caso de Jurassic Park sin
+    # que haya un solo error de fichero: el motor dice "Program is not loaded:
+    # 'fxgroup'" y no dice que no pueda abrir nada. Un recorrido que se apoya
+    # en el orden ve otra cosa en un squashfs que en ext4, y readdir no promete
+    # ningun orden en ninguno de los dos.
+    if printf '%s' "$_sal" | grep -q '^O .*el ORDEN es DISTINTO'; then
+        log "propiedades: OJO -> las dos carpetas devuelven sus entradas en ORDEN DISTINTO. Si algo del juego recorre su carpeta de datos y se apoya en el orden -el primero que casa, un indice por posicion-, desde el archivo ve otra cosa. Es lo que mejor explica un 'no esta cargado' sin ningun error de fichero" WARN
+    fi
+    if printf '%s' "$_sal" | grep -q '^O .*en A NO estan'; then
+        log "propiedades: OJO -> y hay entradas que estan en la carpeta de disco y NO en el montaje. Eso ya no es orden: es que falta algo" WARN
+    fi
+    # EL LARGO DE LAS RUTAS DE LOS DATOS. Esto lo dijo Dani el primer dia
+    # -"tiene pinta de ser un problema de profundidad de carpeta"- y se midio
+    # mal: se midio la RAIZ del juego, no la ruta de sus FICHEROS, que es la
+    # que el juego mete en su buffer. Con el fichero que el motor de Jurassic
+    # Park dice no tener, la cuenta sale clavada en 128 desde el montaje y en
+    # 108 desde la carpeta.
+    # EN QUE NO SON IGUALES: lo que pidio Dani. Si falta un fichero en el
+    # montaje, o uno cambia de tipo -un enlace que deja de serlo- o de tamano,
+    # eso explica un juego que arranca de un sitio y no del otro mucho mejor
+    # que cualquier propiedad del sistema de ficheros.
+    local _l2
+    printf '%s\n' "$_sal" | grep '^I .*OJO ->' | while IFS= read -r _l2; do
+        log "propiedades: ${_l2#I }" WARN
+    done
+    # UNA PARTIDA BUENA CONTRA LA MALA, con las palabras del propio motor.
+    #
+    # El log del juego es acumulativo y viaja DENTRO del juego, asi que al
+    # empaquetar se lleva las partidas buenas de cuando iba en carpeta, y la
+    # mala del archivo se escribe encima en la capa de escritura. Las dos
+    # estan en el mismo fichero, o sea que la comparacion que llevamos dias
+    # intentando hacer desde fuera ya esta hecha dentro: solo hay que leerla.
+    local _l5
+    printf '%s\n' "$_sal" | grep '^L .*comparar partidas: OJO ->' | while IFS= read -r _l5; do
+        log "propiedades: ${_l5#L }" WARN
+    done
+    if printf '%s' "$_sal" | grep -q '^L .*comparar partidas: las dos hacen LO MISMO'; then
+        log "propiedades: $(printf '%s\n' "$_sal" | sed -n 's/^L  *\(comparar partidas: las dos hacen LO MISMO.*\)/\1/p' | head -1)" WARN
+    fi
+    # LOS ATRIBUTOS EXTENDIDOS, que es lo que trajeron los testers el 04/11.
+    local _l4
+    printf '%s\n' "$_sal" | grep '^X .*OJO ->' | while IFS= read -r _l4; do
+        log "propiedades: ${_l4#X }" WARN
+    done
+    # LO QUE SE PUEDE HACER, que es otra cosa que lo que hay.
+    #
+    # Lo pidio Dani asi (03/11): "cuando se monta se comporta de diferente
+    # forma cuando el wsquashfs es 1:1 del juego en carpeta". Tiene razon: si
+    # el contenido es el mismo, lo que cambia no es QUE hay sino QUE SE PUEDE
+    # HACER con ello. Un squashfs es de solo lectura y el fuse-overlayfs de
+    # encima tiene limites que ext4 no tiene -no puede renombrar una carpeta
+    # que viene de la capa de abajo, por ejemplo: devuelve EXDEV-.
+    local _l3
+    printf '%s\n' "$_sal" | grep '^H .*OJO ->' | while IFS= read -r _l3; do
+        log "propiedades: ${_l3#H }" WARN
+    done
+    if printf '%s' "$_sal" | grep -q '^H .*hace TODO lo que hace la'; then
+        log "propiedades: el montaje hace TODO lo que hace la carpeta -crear, escribir, renombrar ficheros y carpetas, enlaces, bloqueos, mmap compartido-, asi que la diferencia tampoco esta en las operaciones" WARN
+    fi
+    if printf '%s' "$_sal" | grep -q '^I .*NADA cambia'; then
+        log "propiedades: la carpeta y el montaje tienen las MISMAS entradas, del mismo tipo, tamano, permisos y duenos. La diferencia no esta en los ficheros" WARN
+    fi
+    if printf '%s' "$_sal" | grep -q '^R .*OJO -> desde A esa ruta PASA'; then
+        log "propiedades: OJO -> LAS RUTAS. Desde el montaje, los ficheros de este juego pasan de un limite de buffer que desde la carpeta NO pasan. Eso explica un 'no tengo este dato' sin un solo error de fichero: la ruta llega cortada" WARN
+    fi
     printf '%s' "$_sal" | grep -q 'A .*nlink del directorio=1 ' \
         && log "propiedades: OJO -> en el montaje los directorios dicen nlink=1, asi que quien cuente subdirectorios por nlink ve cero" WARN
     printf '%s' "$_sal" | grep -q 'A .*espacio libre=0.0 MB' \
@@ -56719,17 +58808,137 @@ diag_propiedades_montaje() {
         if printf '%s' "$_sal" | grep -qE 'A .*lo comparten:.*\.so'; then
             log "propiedades: OJO -> y lo que comparte inodo son BIBLIOTECAS (.so). Eso explica el fallo por si solo: el cargador de glibc decide si un .so ya esta cargado comparando (st_dev, st_ino) -elf/dl-load.c, l_ino y l_dev-, asi que el segundo dlopen devuelve el PRIMER objeto con el nombre del segundo pegado encima (add_name_to_object). No falla, no avisa, y el juego se queda sin lo que pidio" WARN
         fi
+        log "propiedades: y OJO con lo nuestro: desde el 05/11 el overlay se monta con ino32_t, que TRUNCA los inodos a 32 bits. Truncar puede hacer que dos ficheros distintos acaben con el mismo numero. Es poco probable -con 8000 ficheros, menos de un 1%- pero no es imposible, y si los que chocan son dos .so el sintoma es el de abajo. Si esto aparece justo despues de haber puesto ino32_t, hay que mirar aqui antes que a mksquashfs" WARN
         log "propiedades: OJO con la explicacion facil: la deduplicacion de mksquashfs NO hace esto -comparte los bloques de datos, no el inodo-, y se comprobo reempaquetando con -no-duplicates (02/11): los compartidos seguian. Si esto sale, hay que mirar de donde vienen de verdad (enlaces duros en el juego, por ejemplo)" WARN
     fi
     # Y LO QUE EL PROPIO JUEGO HAYA DEJADO DICHO.
     #
     # Si en su log se repite una linea miles de veces, esa linea es el fallo.
     # Vale mas que todo lo que se pueda medir por fuera.
-    local _rep
-    _rep="$(printf '%s\n' "$_sal" | sed -n 's/^L  *x\([0-9][0-9]*\)  \(.*\)/\1 \2/p' | head -1)"
+    #
+    # DOS CORRECCIONES DEL 03/11, LAS DOS SACADAS DEL LOG DE DANI
+    #
+    # 1. Esto cogia la linea mas repetida de TODO el fichero, y el log del
+    #    juego es acumulativo: el aviso decia "repetido 522 veces: SDL Error
+    #    ... wrong ELF class" cuando esas 522 podian ser todas del 27 de
+    #    septiembre. Ahora se coge la del ULTIMO DIA del log, que es la
+    #    partida que acaba de fallar. El modulo saca las dos listas y esta
+    #    seccion se ancla a la del dia, no al primer "x" que aparezca.
+    # 2. Lo que el motor dice JUSTO ANTES de volcar la pila es el motivo del
+    #    fallo, y antes no salia: solo salian los marcos del volcado, que
+    #    dicen por donde paso el programa pero no que le pasaba. Ahora sube.
+    #
+    # 3. Y el modulo acota en tres pasadas -ultima partida, ultimo dia,
+    #    fichero entero- y las saca por ese orden, asi que esto se ancla al
+    #    PRIMER bloque y dice de cual es. Lo mas fino que pudo acotar es lo
+    #    primero que sale.
+    local _rep _antes _ambito
+    _ambito="$(printf '%s\n' "$_sal" \
+        | sed -n 's/^L  *lo que mas se repitio \(.*\)/\1/p' | head -1)"
+    _ambito="${_ambito%% (*}"
+    _rep="$(printf '%s\n' "$_sal" \
+        | awk '/^L  *lo que mas se repitio /{dentro=1; next}
+               dentro && /^L  *x[0-9]/{sub(/^L  *x/, ""); print; exit}
+               dentro && !/^L  *x[0-9]/{exit}' \
+        | sed 's/  */ /' | head -1)"
     if [ -n "${_rep:-}" ]; then
-        log "propiedades: OJO -> el propio juego deja esto escrito, repetido ${_rep%% *} vez/veces: ${_rep#* }" WARN
+        log "propiedades: OJO -> el propio juego deja esto escrito ${_ambito:-en su log}, repetido ${_rep%% *} vez/veces: ${_rep#* }" WARN
     fi
+    _antes="$(printf '%s\n' "$_sal" \
+        | awk '/^L  *lo que dijo JUSTO ANTES/{dentro=1; next}
+               dentro && /^L  *y las ultimas/{exit}
+               dentro{sub(/^L  */, ""); print}')"
+    if [ -n "${_antes:-}" ]; then
+        log "propiedades: OJO -> y esto es lo que dijo justo antes de volcar la pila, que es el motivo:" WARN
+        printf '%s\n' "$_antes" | while IFS= read -r _l; do
+            [ -n "${_l:-}" ] && log "propiedades:   $_l" WARN
+        done
+    fi
+    return 0
+}
+
+diag_programa_no_cargado() {
+    # EL MOTOR DICE QUE LE FALTA ALGO Y LO DICE POR SU NOMBRE. $1 = raiz del
+    # juego, $2 = el texto del assert.
+    #
+    # DE DONDE SALE (03/11, leyendo los registros del 02/11 que ya teniamos).
+    # El motor de Jurassic Park no se calla: dice exactamente que le falta.
+    #
+    #   Assert file g5/core_statemachines.c, line 5696:
+    #   Program is not loaded: 'fxgroup'
+    #   Assert file g5/sys.c, line 371:
+    #   An uncaught lockup has occured
+    #
+    # Y ESTO ES LO IMPORTANTE: el mismo registro trae la partida EN CARPETA
+    # unas lineas mas arriba, y ahi estan igual el ruido del LD_PRELOAD
+    # ("wrong ELF class: ELFCLASS32: ignored", las mismas seis veces), el
+    # "Joysticks Found=0" y el aviso de que falta linuxloader.ini. O sea que
+    # esas tres cosas NO son la diferencia: son normales en las dos. La unica
+    # linea que aparece en la partida del archivo y no en la de carpeta es la
+    # del 'fxgroup'.
+    #
+    # Asi que la pregunta ya no es "¿en que se diferencia un montaje de una
+    # carpeta?" sino una mucho mas estrecha: ¿donde esta eso que el motor dice
+    # no tener, y se puede abrir desde el montaje? Eso se puede medir.
+    local raiz="${1:-}" texto="${2:-}"
+    [ -n "${raiz:-}" ] && [ -d "$raiz" ] || return 0
+    [ -n "${texto:-}" ] || return 0
+    # El nombre va entre comillas simples en el propio assert.
+    local _que
+    _que="$(printf '%s\n' "$texto" \
+        | sed -n "s/.*[Pp]rogram is not loaded: *'\([^']*\)'.*/\1/p" | head -1)"
+    if [ -z "${_que:-}" ]; then
+        _que="$(printf '%s\n' "$texto" \
+            | sed -n "s/.*not loaded: *'\([^']*\)'.*/\1/p" | head -1)"
+    fi
+    [ -n "${_que:-}" ] || return 0
+    log "motor: dice que no tiene cargado '$_que'. Se busca donde esta eso dentro del juego" WARN
+    # 1. ¿HAY ALGO CON ESE NOMBRE, Y SE PUEDE LEER?
+    local _hall _n=0 _f
+    _hall="$(find "$raiz" -maxdepth 8 -iname "*$_que*" 2>/dev/null | head -40 || true)"
+    if [ -z "${_hall:-}" ]; then
+        log "motor: OJO -> no hay NI UN fichero ni carpeta con '$_que' en el nombre dentro del juego. Entonces no lo carga de un fichero con ese nombre: viene de dentro de otro fichero (un indice, un paquete de datos) y hay que buscarlo ahi" WARN
+    else
+        printf '%s\n' "$_hall" | while IFS= read -r _f; do
+            [ -n "${_f:-}" ] || continue
+            if [ -d "$_f" ]; then
+                log "motor:   carpeta $_f -> $(ls -1 "$_f" 2>/dev/null | wc -l) entrada(s)"
+            elif [ -f "$_f" ]; then
+                # Y NO SE SUPONE QUE SE PUEDE LEER: SE LEE.
+                if head -c 64 "$_f" >/dev/null 2>&1; then
+                    log "motor:   fichero $_f -> $(stat -c %s "$_f" 2>/dev/null || echo "?") bytes, se abre y se lee bien"
+                else
+                    log "motor:   OJO -> fichero $_f EXISTE pero NO se puede leer desde aqui" WARN
+                fi
+            else
+                log "motor:   $_f -> ni fichero ni carpeta (¿enlace colgando?)" WARN
+            fi
+            _n=$((_n+1))
+        done
+    fi
+    # 2. LO QUE EL PROPIO MOTOR APUNTO DE LO QUE SI CARGO.
+    #
+    # El juego escribe GeneralPurposeStateMachine.txt -12546 bytes en el
+    # registro del 03/11- y nadie lo habia abierto. Si el motor lleva la
+    # cuenta de sus "programas" ahi, ese fichero dice que cargo y que no, que
+    # es justo lo que hace falta saber.
+    local _sm _lista _cuantas
+    _lista="$(find "$raiz" "${OVERLAY_BASE:-/dev/null}" -maxdepth 6 \
+        -iname '*statemachine*.txt' -o -iname '*program*.txt' 2>/dev/null | head -8 || true)"
+    if [ -z "${_lista:-}" ]; then
+        log "motor: el juego no ha dejado ninguna lista de sus programas donde mirar"
+        return 0
+    fi
+    printf '%s\n' "$_lista" | while IFS= read -r _sm; do
+        [ -n "${_sm:-}" ] && [ -f "$_sm" ] || continue
+        _cuantas="$(grep -c . "$_sm" 2>/dev/null || echo 0)"
+        log "motor:   lista $_sm -> $_cuantas linea(s)"
+        if grep -qiF -- "$_que" "$_sm" 2>/dev/null; then
+            log "motor:   OJO -> '$_que' SI aparece en esa lista: $(grep -iF -- "$_que" "$_sm" 2>/dev/null | head -3 | tr '\n' ' ')" WARN
+        else
+            log "motor:   OJO -> '$_que' NO aparece en esa lista. Lo que si hay, para comparar con una partida en carpeta: $(head -5 "$_sm" 2>/dev/null | tr '\n' ' ')" WARN
+        fi
+    done
     return 0
 }
 
@@ -56780,6 +58989,9 @@ diag_assert_del_motor() {
     say "    bien: se rindio el solo. Lo que dijo antes de irse:"
     printf '%s\n' "$_assert" | while IFS= read -r _a; do say "      $_a"; done
     log "juego nativo: el motor solto un assert y se cerro solo (el codigo de salida engana)" WARN
+    # Y SI DIJO EL NOMBRE DE LO QUE LE FALTA, SE BUSCA. Es la pista mas
+    # estrecha que da el motor y la que menos hay que suponer.
+    diag_programa_no_cargado "$raiz" "$_assert"
     # ¿VENIA DE UN ARCHIVO MONTADO? Entonces hay una pregunta clara que hacer.
     case "$raiz" in
         "${MOUNT_BASE:-/dev/null}"/*) ;;
@@ -56823,8 +59035,19 @@ diag_assert_del_motor() {
         _lr="$(ruta_largo "$raiz")"; _nv="$(ruta_niveles "$raiz")"
         log "juego nativo: assert con la carpeta de verdad en $_lr caracteres / $_nv niveles ($raiz)"
         log "juego nativo: el largo de la ruta ya se probo con un enlace corto (02/11) y el juego lo resuelve a la ruta de verdad: para descartarlo de verdad hay que mover el montaje (MONTAJE_RUTA_CORTA=1)"
+        # Y QUE LA PROXIMA PARTIDA SALGA TRAZADA: a estas alturas ya no queda
+        # nada que medir desde fuera, hay que ver que pide el juego.
+        trazar_marca_poner "$raiz"
         # Y LA PREGUNTA BUENA: ¿en que NO se parece este montaje a una carpeta?
-        diag_propiedades_montaje "$raiz" "${GAMES_PATH:-${RUNTIME_DIR:-}}"
+        # LA CARPETA DEL MISMO JUEGO, no la de todos los juegos: comparar el
+        # montaje con GAMES_PATH no decia nada y encima daba avisos falsos.
+        local _mismo; _mismo="$(carpeta_del_mismo_juego "$raiz")"
+        if [ -n "${_mismo:-}" ]; then
+            log "juego nativo: este juego tambien esta en carpeta ($_mismo); se comparan los dos"
+        else
+            log "juego nativo: no hay una carpeta de este mismo juego con que comparar; se compara con ${GAMES_PATH:-} solo para las propiedades del sistema de ficheros"
+        fi
+        diag_propiedades_montaje "$raiz" "${_mismo:-${GAMES_PATH:-${RUNTIME_DIR:-}}}"
         # Y en pantalla, solo lo que es del juego y le sirve a quien juega.
         say ""
         say "    Este juego arranca bien en carpeta y se cierra desde el"
@@ -57306,6 +59529,228 @@ nativo_entorno_steam() {
     return 0
 }
 
+clase_elf() {
+    # ¿Es este fichero de 32 o de 64 bits? $1 = fichero. Sale "32", "64" o "".
+    #
+    # POR QUE A MANO Y NO CON "file". El Steam Deck no trae "file" ni "readelf"
+    # garantizados, y esto se necesita justo cuando no se puede instalar nada.
+    # La clase de un ELF esta en el quinto byte: 1 = ELFCLASS32, 2 = ELFCLASS64.
+    # Es la cabecera, no una heuristica.
+    local f="${1:-}"
+    [ -n "${f:-}" ] && [ -f "$f" ] || return 0
+    local _m
+    _m="$(od -An -tx1 -N5 "$f" 2>/dev/null | tr -d ' \n')" || return 0
+    case "${_m:-}" in
+        7f454c4601) printf '32' ;;
+        7f454c4602) printf '64' ;;
+    esac
+    return 0
+}
+
+diag_arquitectura_nativa() {
+    # DE QUE ARQUITECTURA ES EL JUEGO Y DE QUE SON LAS LIBRERIAS QUE LE DAMOS.
+    # $1 = el ejecutable del juego. $2 = el LD_LIBRARY_PATH que se le puso.
+    #
+    # DE DONDE SALE (03/11, Jurassic Park Arcade). Al leer bien el log del
+    # propio juego aparecio esto, repetido cientos de veces:
+    #
+    #   SDL Error: Failed loading libvorbisfile.so.3: libvorbisfile.so.3:
+    #     wrong ELF class: ELFCLASS64.
+    #
+    # Y el juego es de 32 bits: su libc es /usr/lib32/libc.so.6. O sea que
+    # pidio una libreria y le dieron una de 64. WProton pone en el camino
+    # lib/ Y lib64/ del propio juego, asi que puede venir de ahi.
+    #
+    # LO QUE ESTO HACE Y LO QUE NO. Mide: la clase del ejecutable y la de las
+    # librerias de cada carpeta del camino. NO cambia el camino: ld.so se
+    # salta las de clase equivocada y sigue buscando, y un juego de 32 bits
+    # puede lanzar herramientas de 64 que si necesiten su lib64. Lo que hacia
+    # falta era el DATO, que es lo que no habia.
+    local exe="${1:-}" lp="${2:-}"
+    [ -n "${exe:-}" ] && [ -f "$exe" ] || return 0
+    local _clase; _clase="$(clase_elf "$exe")"
+    if [ -z "${_clase:-}" ]; then
+        log "arquitectura: no se pudo leer la cabecera ELF de $exe"
+        return 0
+    fi
+    log "arquitectura: el ejecutable del juego es de $_clase bits -> $exe"
+    [ -n "${lp:-}" ] || { log "arquitectura: no se le puso ninguna carpeta de librerias"; return 0; }
+    local _dir _n32 _n64 _mezcla=0 _OLDIFS="$IFS"
+    IFS=':'
+    for _dir in $lp; do
+        IFS="$_OLDIFS"
+        [ -n "${_dir:-}" ] && [ -d "$_dir" ] || { IFS=':'; continue; }
+        _n32=0; _n64=0
+        local _f _c
+        for _f in "$_dir"/*.so*; do
+            [ -f "$_f" ] || continue
+            _c="$(clase_elf "$_f")"
+            case "${_c:-}" in
+                32) _n32=$((_n32+1)) ;;
+                64) _n64=$((_n64+1)) ;;
+            esac
+        done
+        log "arquitectura: $_dir -> $_n32 libreria(s) de 32 bits, $_n64 de 64"
+        # Lo que de verdad se busca: librerias que el juego NO puede cargar.
+        if [ "$_clase" = 32 ] && [ "$_n64" -gt 0 ]; then
+            _mezcla=1
+            log "arquitectura: OJO -> esa carpeta trae $_n64 libreria(s) de 64 bits y el juego es de 32: cada vez que pida una de esas, el cargador dira 'wrong ELF class: ELFCLASS64'" WARN
+        elif [ "$_clase" = 64 ] && [ "$_n32" -gt 0 ]; then
+            _mezcla=1
+            log "arquitectura: OJO -> esa carpeta trae $_n32 libreria(s) de 32 bits y el juego es de 64: cada vez que pida una de esas, el cargador dira 'wrong ELF class: ELFCLASS32'" WARN
+        fi
+        IFS=':'
+    done
+    IFS="$_OLDIFS"
+    if [ "$_mezcla" = 1 ]; then
+        log "arquitectura: el camino mezcla arquitecturas. No se toca a proposito: ld.so se salta las de clase equivocada y sigue buscando, y un juego de 32 bits puede lanzar herramientas de 64 que si necesiten su lib64. Pero si en el log del juego sale un 'wrong ELF class', ya se sabe de donde viene" WARN
+    else
+        log "arquitectura: el camino no mezcla arquitecturas"
+    fi
+    return 0
+}
+
+trazador_disponible() {
+    # El que haya. strace es el normal; si no esta, se dice y ya.
+    command -v strace 2>/dev/null && return 0
+    return 1
+}
+
+trazar_marca_poner() {
+    # DEJA DICHO QUE LA PROXIMA PARTIDA DE ESTE JUEGO SE TRACE. $1 = raiz.
+    #
+    # DE DONDE SALE (05/11). Jurassic Park lleva dias cerrandose desde el
+    # archivo y en carpeta va. A estas alturas esta medido que: los ficheros
+    # son los MISMOS (8089 entradas, mismo tamano salvo los propios logs del
+    # juego, que crecen), que version.txt se lee bien desde el montaje (57
+    # bytes, "Jurassic Park 1.33"), que las propiedades del sistema de
+    # ficheros son iguales y que el directorio de trabajo ya era el bueno.
+    #
+    # Y aun asi el juego lee su version como 0.00 y se queda sin 'fxgroup'.
+    #
+    # O sea que no falta nada y no se puede ver desde fuera: hay que ver QUE
+    # LLAMADA hace el juego y sobre que ruta. Eso es un trazador. No se usa
+    # siempre -frena el juego- sino solo cuando ya ha fallado una vez: la
+    # partida siguiente sale trazada sola, sin preguntar nada.
+    local raiz="${1:-}" gid
+    [ -n "${raiz:-}" ] && [ -n "${OVERLAY_BASE:-}" ] || return 0
+    gid="$(basename "$raiz")"
+    [ -n "${gid:-}" ] && [ -d "$OVERLAY_BASE/$gid" ] || return 0
+    : > "$OVERLAY_BASE/$gid/.trazar" 2>/dev/null || return 0
+    # Y SE DICE AQUI SI DE VERDAD VA A PODER TRAZARSE.
+    #
+    # El aviso de "no hay strace" estaba solo en el lanzamiento siguiente, o
+    # sea que quien no lo tuviera gastaba OTRA partida entera para enterarse.
+    # El dato se sabe ya: se mira ahora y se dice ahora.
+    if trazador_disponible >/dev/null 2>&1; then
+        log "traza: la proxima partida de '$gid' saldra trazada para ver que fichero busca y no encuentra"
+    else
+        log "traza: la proxima partida de '$gid' se trazaria, pero en este equipo NO hay strace y sin el no se puede ver que fichero busca el juego. Es lo unico que falta para saber por que este juego va en carpeta y no desde el archivo" WARN
+    fi
+    return 0
+}
+
+
+diag_traza_de_ficheros() {
+    # QUE FICHEROS PIDIO EL JUEGO Y CUALES NO ENCONTRO. $1 = traza, $2 = raiz.
+    #
+    # Lo que se busca es lo que no se puede ver de ninguna otra forma: una
+    # ruta que el juego abre y que no existe. Si el juego pide /pm/version.txt
+    # -que es la ruta de la maquina arcade original- en vez de version.txt, se
+    # vera aqui y no hara falta suponer nada mas.
+    local traza="${1:-}" raiz="${2:-}"
+    [ -n "${traza:-}" ] || return 0
+    # ANUNCIAR UNA TRAZA Y LUEGO CALLARSE ES EL PEOR RESULTADO POSIBLE.
+    #
+    # Paso el 05/11: el registro decia "esta partida sale trazada con
+    # /usr/bin/strace" y despues NI UNA LINEA mas. Esta funcion salia por la
+    # puerta de atras con un "return 0" mudo cuando el fichero no estaba o
+    # estaba vacio, asi que se gasto una partida entera para no saber nada, y
+    # encima parecia que la traza no se habia leido por algun motivo oculto.
+    #
+    # Y HAY UN MOTIVO DE VERDAD PARA QUE ESTE VACIO: strace escribe su salida
+    # por bloques, no linea a linea. Si al acabar la partida se cierra el
+    # grupo de procesos de golpe -que es justo lo que hace WProton para no
+    # dejar restos-, a strace lo matan antes de que vuelque lo que lleva en
+    # memoria y el fichero se queda a cero. Por eso se espera un poco a que
+    # aparezca y, si no aparece, se dice ESO y no se calla.
+    # El tope de esperas sale de una variable para poder probar esto sin que
+    # la prueba se pase cinco segundos durmiendo. En uso normal son 10 medios
+    # segundos, que es de sobra para que strace vuelque lo que lleve.
+    local _esperas=0 _tope="${WP_TRAZA_ESPERAS:-10}"
+    case "${_tope:-}" in ''|*[!0-9]*) _tope=10 ;; esac
+    while [ ! -s "$traza" ] && [ "$_esperas" -lt "$_tope" ]; do
+        sleep 0.5
+        _esperas=$((_esperas+1))
+    done
+    if [ ! -e "$traza" ]; then
+        log "traza: OJO -> se lanzo el trazador pero NO hay fichero de traza en $traza. O no llego a arrancar, o algo lo borro" WARN
+        return 0
+    fi
+    if [ ! -s "$traza" ]; then
+        log "traza: OJO -> el fichero de traza $traza existe pero esta VACIO tras esperar 5s. strace escribe por bloques, asi que lo mas probable es que lo matasen al cerrar el grupo de procesos antes de que volcara nada" WARN
+        return 0
+    fi
+    [ "$_esperas" -gt 0 ] && log "traza: el fichero tardo $(( _esperas * 5 / 10 ))s en tener contenido"
+    local _n _fallos _ok
+    _n="$(grep -c . "$traza" 2>/dev/null || echo 0)"
+    log "traza: $_n linea(s) de llamadas al sistema en $traza"
+    # Las que fallaron, sin repetir, con el motivo.
+    # POR LINEA, NO POR TROZO: strace escribe openat(AT_FDCWD, "ruta", ...),
+    # con el AT_FDCWD por delante, asi que una expresion que espere la ruta
+    # pegada al parentesis no casa nunca. Se saca la PRIMERA ruta entre
+    # comillas de cada linea que acabe en error, y el errno.
+    _fallos="$(grep '= -1 ' "$traza" 2>/dev/null \
+               | sed -n 's/.*"\([^"]*\)".*= -1 \([A-Z][A-Z]*\).*/\2 \1/p' \
+               | sort -u | head -40 || true)"
+    # Y SE QUITA EL RUIDO, QUE ES CASI TODO.
+    #
+    # Un arranque cualquiera falla cientos de veces buscando el binario por
+    # cada carpeta del PATH y las bibliotecas por cada carpeta del sistema.
+    # Eso no es el fallo de nadie: es como funciona la busqueda. Lo que
+    # importa es lo que pide DENTRO del juego, y lo de fuera que no sea una
+    # carpeta del sistema.
+    local _dentro _fuera
+    if [ -n "${raiz:-}" ]; then
+        _dentro="$(printf '%s\n' "$_fallos" | grep -F -- "$raiz" | head -25 || true)"
+    else
+        _dentro=""
+    fi
+    _fuera="$(printf '%s\n' "$_fallos" \
+              | grep -vE ' /(usr|lib|lib64|etc|proc|sys|dev|run|var|opt|nix|snap|bin|sbin)/' \
+              | grep -vE '/(bin|sbin)/[^/]*$' \
+              | { [ -n "${raiz:-}" ] && grep -vF -- "$raiz" || cat; } \
+              | head -15 || true)"
+    if [ -n "${_dentro:-}" ]; then
+        log "traza: OJO -> lo que el juego pidio DENTRO de su carpeta y no obtuvo:" WARN
+        printf '%s\n' "$_dentro" | while IFS= read -r _l; do
+            [ -n "${_l:-}" ] && log "traza:   $_l" WARN
+        done
+    else
+        log "traza: el juego no pidio ni un fichero de su carpeta que no obtuviera" WARN
+    fi
+    if [ -n "${_fuera:-}" ]; then
+        log "traza: OJO -> y esto pidio FUERA de su carpeta y del sistema (aqui saldria un /pm/... si lo usa):" WARN
+        printf '%s\n' "$_fuera" | while IFS= read -r _l; do
+            [ -n "${_l:-}" ] && log "traza:   $_l" WARN
+        done
+    fi
+    log "traza: (en total $(printf '%s\n' "$_fallos" | grep -c . ) ruta(s) distintas sin obtener, casi todas del PATH y de las bibliotecas del sistema)"
+    # Y lo que pidio con 'version' en la ruta, salga bien o mal: es el dato
+    # que buscamos desde ayer.
+    _ok="$(grep -i 'version' "$traza" 2>/dev/null \
+           | sed 's/^[0-9][0-9]* *//' | cut -c1-200 | sort -u | head -10 || true)"
+    if [ -n "${_ok:-}" ]; then
+        log "traza: OJO -> todo lo que el juego hizo con una ruta que lleva 'version':" WARN
+        printf '%s\n' "$_ok" | while IFS= read -r _l; do
+            [ -n "${_l:-}" ] && log "traza:   $_l" WARN
+        done
+    else
+        log "traza: OJO -> el juego NO abrio NI UNA ruta con 'version' dentro. Entonces su version no sale de version.txt: sale de otro sitio" WARN
+    fi
+    return 0
+}
+
 ejecutar_nativo() {
     # Ejecuta el lanzador de un juego de Linux: $1 = ruta.
     #
@@ -57365,6 +59810,9 @@ ejecutar_nativo() {
     # Sin este numero en el registro, eso no se puede ni sospechar. Con el, se
     # comparan dos partidas y se ve de un golpe.
     log "juego nativo: la ruta que ve el juego mide $(ruta_largo "$_raiz_lib") caracteres y $(ruta_niveles "$_raiz_lib") niveles -> $_raiz_lib"
+    # EL DIRECTORIO DE TRABAJO, APUNTADO. Un lanzador con rutas relativas
+    # depende de esto y hasta ahora no se sabia ni cual era.
+    log "juego nativo: el juego se lanza con el directorio de trabajo en $_raiz_lib (antes se heredaba el de WProton: $(pwd 2>/dev/null || echo '?'))"
     # Donde acaba el registro ahora, para leer luego solo lo que escriba el juego.
     local _log_antes_nat; _log_antes_nat="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
     local _lp=""
@@ -57393,6 +59841,7 @@ ejecutar_nativo() {
         else
             export LD_LIBRARY_PATH="$_lp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
             say "[+] Librerias propias del juego: $_lp"
+            diag_arquitectura_nativa "$exe" "$_lp"
         fi
     fi
     [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
@@ -57401,6 +59850,33 @@ ejecutar_nativo() {
     local _sal_nat; _sal_nat="$(nativo_salida_fich)"
     : > "$_sal_nat" 2>/dev/null
     local _t0_nat; _t0_nat="$(date +%s)"
+    # ¿TOCA TRAZAR ESTA PARTIDA?
+    #
+    # Solo si la anterior de ESTE juego se murio con un assert viniendo de un
+    # archivo. No se pregunta nada y no se traza nunca "por si acaso": frena
+    # el juego y llena el disco. La marca la pone el diagnostico del assert
+    # consume aqui, asi que se traza UNA partida y se vuelve a lo normal.
+    local _traza="" _trazador="" _marca_traza=""
+    if [ -n "${OVERLAY_BASE:-}" ]; then
+        _marca_traza="$OVERLAY_BASE/$(basename "$_raiz_lib")/.trazar"
+        if [ -f "$_marca_traza" ]; then
+            if _trazador="$(trazador_disponible)"; then
+                _traza="$(nativo_salida_fich).traza"
+                # DELANTE DE LO QUE YA HUBIERA, NO EN SU LUGAR.
+                #
+                # WP_NAT_PRE puede traer el punto de entrada del Steam Linux
+                # Runtime y/o el "env -u" que le quita la identidad de Steam.
+                # Machacarlo dejaria al juego sin eso justo en la partida que
+                # queremos mirar, o sea cambiando lo que estamos midiendo.
+                WP_NAT_PRE=("$_trazador" -f -q -y -e trace=file -o "$_traza" --
+                            ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"})
+                log "traza: esta partida sale trazada con $_trazador (la anterior se murio con un assert); la traza va a $_traza"
+            else
+                log "traza: la partida anterior fallo y tocaria trazarla, pero no hay strace en este equipo; sin el no se puede ver que fichero busca el juego" WARN
+            fi
+            rm -f "$_marca_traza" 2>/dev/null || true
+        fi
+    fi
     # Lo que el lanzador dice de si mismo, y lo que le llega de fuera.
     nativo_mira_steam "$exe"
     nativo_entorno_steam
@@ -57437,7 +59913,37 @@ ejecutar_nativo() {
         # que la persona ya tuviera abiertos: los nuestros son mas nuevos que
         # esta marca. Ver wine_restos_cerrar.
         : > "$RUNTIME_DIR/.juego_arranque" 2>/dev/null
-        setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" >>"$_sal_nat" 2>&1 &
+    # EL DIRECTORIO DE TRABAJO, QUE AQUI NO SE PONIA (05/11).
+    #
+    # DE DONDE SALE. Dani mando el lanzador de Jurassic Park, entero:
+    #
+    #     #!/bin/bash
+    #     ./linuxloader
+    #
+    # Dos lineas, y una ruta RELATIVA. Eso no se resuelve respecto al script:
+    # se resuelve respecto al directorio de trabajo de QUIEN LO LANZA. Y aqui
+    # no se ponia ninguno, asi que el juego heredaba el que tuviera WProton en
+    # ese momento, que depende de por donde se haya pasado antes.
+    #
+    # Lo mismo vale para los datos que el juego abre por ruta relativa. En el
+    # registro del 05/11, la partida buena y la mala son IDENTICAS linea por
+    # linea salvo una:
+    #
+    #     BUENA  # Welcome to 1.33
+    #     MALA   # Welcome to 0.00
+    #
+    # El juego lee su version -version.txt, en la raiz del juego, lo confirmo
+    # Dani- y desde el archivo le sale CERO. Con la version a cero carga otro
+    # juego de "perm programs", y por eso luego le falta 'fxgroup' y se rinde
+    # al arrancar la camara del humo. No falta ningun fichero: no lo estaba
+    # buscando donde esta.
+    #
+    # Y NO ES UN CASO RARO: el resto de WProton ya hace este cd desde siempre
+    # -"cd $(dirname "$exe")" antes de lanzar un .exe o un lanzador de
+    # Windows-. El camino de los juegos nativos era el unico que no lo hacia.
+    # Un juego no tiene por que saber desde donde se le llama.
+        ( cd "$_raiz_real" 2>/dev/null || cd "$_raiz_lib" 2>/dev/null || true
+          setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" >>"$_sal_nat" 2>&1 ) &
         local _pg=$!
         printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
         wait "$_pg" 2>/dev/null
@@ -57459,6 +59965,7 @@ ejecutar_nativo() {
         # nunca nada.
         nativo_volcar_salida "$_sal_nat"
         nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
+        diag_traza_de_ficheros "${_traza:-}" "$_raiz_real"
         diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
         diag_assert_del_motor "$_raiz_real" "${_log_antes_nat:-0}"
         # Y LA TRADUCCION DEL FALLO DE VIDEO, TAMBIEN AQUI.
@@ -57490,12 +59997,17 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
     # que bash interpretara el punto de entrada del contenedor en vez de
     # entrar en el.
     : > "$RUNTIME_DIR/.juego_arranque" 2>/dev/null
-    ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1
+    # El mismo cd que arriba, por el mismo motivo (el lanzador de Jurassic
+    # Park es "./linuxloader" a secas: una ruta relativa al directorio de
+    # trabajo de quien lo llama).
+    ( cd "$_raiz_real" 2>/dev/null || cd "$_raiz_lib" 2>/dev/null || true
+      ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1 )
     local _rc2=$?
     log "juego nativo: el lanzador (interpretado) salio con codigo $_rc2 tras $(( $(date +%s) - _t0_nat ))s"
     esperar_juego_nativo "$_raiz_real" 0
     nativo_volcar_salida "$_sal_nat"
     nativo_volcar_player_log "$(( $(date +%s) - _t0_nat ))"
+    diag_traza_de_ficheros "${_traza:-}" "$_raiz_real"
     diag_libreria_que_falta "$_raiz_lib" "${_log_antes_nat:-0}"
     diag_assert_del_motor "$_raiz_real" "${_log_antes_nat:-0}"
     diag_video_del_juego "$_rc2" "$(( $(date +%s) - _t0_nat ))"
@@ -57566,6 +60078,61 @@ arcade_loader_label() {
 # ahi.
 AL_MARCADOR=".windowsloader"
 AL_MARCADOR_GLOB="*.windowsloader"
+
+# EL GEMELO PARA LOS JUEGOS DE LINUX: "*.linuxloader" (06/11).
+#
+# Lo pidio un tester con el compilado de Screamer: "le tengo que poner el juego
+# dentro y despues wproton, no me pilla el sh que tengo en la raiz, se va a
+# buscar los del juego dentro... habia que poner una opcion para decirle es un
+# juego linux, como hacemos con lo de es un juego de windows arcade loader".
+#
+# Es exactamente la misma idea que .windowsloader y por los mismos motivos: lo
+# pone QUIEN EMPAQUETA, que es quien sabe con que se lanza; no se pierde al
+# renombrar el fichero; y no hay que acordarse de ninguna etiqueta.
+#
+# Y ADEMAS PUEDE DECIR CUAL ES EL LANZADOR. Si el fichero trae dentro una ruta
+# relativa, esa es la que se usa y no se busca nada. Es lo que hace falta en un
+# recompilado: en la raiz esta el lanzador del port y dentro esta el juego
+# original con sus propios .sh, y desde fuera no hay forma de adivinar cual de
+# los dos manda. Vacio tambien vale: significa "esto es de Linux, busca tu".
+LINUX_MARCADOR_GLOB="*.linuxloader"
+
+linux_marcador_lanzador() {
+    # ¿Esta carpeta trae el marcador de juego de Linux? $1 = carpeta.
+    #
+    # Devuelve 0 si lo trae, y ADEMAS imprime la ruta ABSOLUTA del lanzador si
+    # el marcador dice cual. Si no dice ninguno, devuelve 0 e imprime nada:
+    # "es de Linux, pero busca tu el lanzador".
+    #
+    # El contenido se lee de la PRIMERA linea que no este vacia ni sea un
+    # comentario, para que se pueda documentar dentro del propio fichero. La
+    # ruta es relativa a la raiz del juego: una absoluta de la maquina de quien
+    # empaqueto no valdria nada aqui, donde el juego esta montado en otro sitio.
+    local d="${1:-}" hallado linea ruta
+    [ -n "$d" ] && [ -d "$d" ] || return 1
+    hallado="$(find -H "$d" -maxdepth 2 -iname "$LINUX_MARCADOR_GLOB" -print -quit 2>/dev/null)"
+    [ -n "$hallado" ] || return 1
+    [ -f "$hallado" ] || return 0
+    while IFS= read -r linea; do
+        case "${linea:-}" in ''|'#'*) continue ;; esac
+        # Se quitan los espacios de los extremos y un ./ de delante, que es lo
+        # que sale al copiar una ruta desde una terminal.
+        ruta="$(printf '%s' "$linea" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's|^\./||')"
+        [ -n "${ruta:-}" ] || continue
+        case "$ruta" in
+            /*) log "marcador de Linux: '$ruta' es una ruta absoluta y se ignora; dentro del marcador la ruta va RELATIVA a la raiz del juego" WARN
+                continue ;;
+            *..*) log "marcador de Linux: '$ruta' sale de la carpeta del juego y se ignora" WARN
+                continue ;;
+        esac
+        if [ -f "$d/$ruta" ]; then
+            printf '%s' "$d/$ruta"
+            return 0
+        fi
+        log "marcador de Linux: dice '$ruta' pero ahi no hay ningun fichero; se buscara el lanzador como siempre" WARN
+    done < "$hallado"
+    return 0
+}
 
 al_marcador_en_carpeta() {
     # ¿Esta carpeta trae el marcador de Arcade Loader? $1 = carpeta.
@@ -72879,7 +75446,27 @@ game_config_menu() {
         # La fila sale SOLO en los juegos que traen las dos. En los demas seria
         # una pregunta sin respuestas, y esta pantalla ya tiene filas de sobra.
         local r_version=""
-        if juego_trae_las_dos "${WP_RAIZ_JUEGO:-}"; then
+        # OJO CON EL RESPALDO A "$squash" (06/11). Esta linea era la UNICA de
+        # las tres de esta pantalla que no lo llevaba:
+        #
+        #   dependencias_del_juego_buscar "${WP_RAIZ_JUEGO:-$squash}"
+        #   juego_trae_las_dos            "${WP_RAIZ_JUEGO:-}"     <- esta
+        #   ...                           "${WP_RAIZ_JUEGO:-$squash}"
+        #
+        # WP_RAIZ_JUEGO solo esta puesta cuando el juego esta MONTADO. Si se
+        # entra a los ajustes sin haber jugado -que es lo normal: se configura
+        # ANTES de jugar-, estaba vacia, "juego_trae_las_dos" recibia una cadena
+        # vacia, su "[ -d ]" fallaba y LA FILA NO SALIA.
+        #
+        # Y eso es exactamente lo que conto Dani el 06/11: "elige el exe del
+        # juego en vez del sh que esta en la raiz y no da la opcion de elegir el
+        # sh". La opcion existia; la fila para llegar a ella, no.
+        #
+        # Con el respaldo, un juego guardado como CARPETA se mira directamente.
+        # Si es un .wsquashfs sin montar sigue sin poder mirarse dentro -habria
+        # que montarlo solo para pintar una fila-, y en ese caso la fila sale
+        # igual: ver juego_trae_las_dos.
+        if juego_trae_las_dos "${WP_RAIZ_JUEGO:-$squash}"; then
             r_version="Versión del juego: $(version_juego_label)"
         fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
@@ -74245,13 +76832,15 @@ Se sobrescribe?" || return 0
 O cambia el formato a DwarFS en:
   Biblioteca y preferencias -> Formato al empaquetar"
             return 1; }
-        # LOS MISMOS PARAMETROS QUE build_wsquashfs, incluido -percentage.
+        # LOS MISMOS PARAMETROS QUE build_wsquashfs: -percentage, -no-xattrs
+        # y -no-duplicates (el porque de cada uno esta alla, con detalle).
         #
         # -percentage hace que mksquashfs escriba solo el numero, que es de
         # donde saca run_con_porcentaje la barra. Con -no-progress la barra se
         # queda a cero toda la compresion y parece colgada.
         run_con_porcentaje "Comprimiendo '$nombre'..." \
-            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -percentage || {
+            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+            -no-duplicates -percentage || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
     fi
 
@@ -75151,6 +77740,14 @@ arranque_del_programa() {
 
     covers_wide_preparar    # crea covers_wide/ y traslada lo del nombre viejo
     datos_preparar          # crea metadata/ y trae lo que hubiera de antes
+    # Y SE RECOGE EL SITIO VIEJO DEL MONTAJE.
+    #
+    # OJO CON DONDE VA ESTA LLAMADA: estaba en load_settings, que se ejecuta
+    # en la linea 1315 del fichero generado, y alli is_mounted y umount_dir
+    # TODAVIA NO EXISTEN -bash define las funciones segun lee-. O sea que la
+    # recogida no habria ocurrido nunca y no se habria notado. Lo cazo la
+    # auditoria, que para eso esta.
+    montaje_sitio_viejo_recoger
     # LA MARCA DE "EL MENU GRAFICO FALLO" DURA UNA SESION, NO PARA SIEMPRE.
     #
     # Se pone cuando el menu grafico no arranca dos veces seguidas, para dejar de
