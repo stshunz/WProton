@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.25"
+WPROTON_VERSION="2.26"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -247,6 +247,7 @@ GRID_COLS=0                              # columnas de la rejilla (0 = automáti
 LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
 PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion) | carpeta (sin empaquetar)
+PACK_NIVEL=normal                        # rapida | normal | maxima (cuanto comprime al empaquetar)
 # JUEGOS CON MUCHISIMOS FICHEROS: se avisa ANTES de empaquetar.
 #
 # Un juego empaquetado se lee a traves de DOS capas FUSE (la imagen y la
@@ -563,6 +564,8 @@ GAMES_SORT="$GAMES_SORT"
 # Formato al empaquetar juegos: wsquashfs (compatible con Batocera) o
 # dwarfs (comprime bastante más y monta igual de rapido)
 PACK_FORMAT="$PACK_FORMAT"
+# Cuanto comprimir al empaquetar: rapida | normal | maxima
+PACK_NIVEL="$PACK_NIVEL"
 # --------------------------------------------------------------------------
 # JUEGOS CON MUCHISIMOS FICHEROS
 #   Al empaquetar, si el juego pasa de estos ficheros, WProton avisa y
@@ -5672,9 +5675,9 @@ MANDO_VIRTUAL_PY="$RUNTIME_DIR/mando_virtual.py"
 MAPEADOR_PID=""
 
 write_mapeador() {
-    grep -q "WPROTON_HELPER mapeador.py 98dfcf903a9e" "$MAPEADOR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mapeador.py 51af7be5e0c2" "$MAPEADOR_PY" 2>/dev/null && return 0
     cat > "$MAPEADOR_PY" <<'MAPEOF'
-# WPROTON_HELPER mapeador.py 98dfcf903a9e
+# WPROTON_HELPER mapeador.py 51af7be5e0c2
 # WProton - mapeador de mando a teclado
 #
 # Copyright (C) 2026  stshunz y colaboradores
@@ -7027,25 +7030,42 @@ def resincronizar_botones(dispositivos, pulsados, pendiente, map_combos):
     return fallaron
 
 
-def main():
-    try:
-        os.nice(-10)
-    except:
-        pass
+def mando_fisico(d):
+    """El aparato FISICO detras de un nodo de /dev/input.
 
-    if len(sys.argv) < 2:
-        print("Uso: python3 mapeador.py archivo.keys")
-        return
+    "usb-0000:00:14.0-3/input0" -> "usb-0000:00:14.0-3"
 
-    try:
-        with open(sys.argv[1], 'r') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"Error al cargar .keys: {e}")
-        return
+    Estaba dentro de buscar_mandos y se subio aqui (08/11) para poder usarlo
+    tambien desde el bucle: cuando un mando se duerme y vuelve, lo hace con
+    OTRA ruta -otro eventN- pero con el MISMO aparato detras. Es lo unico que
+    permite devolverle su jugador en vez de tratarlo como un mando nuevo.
+    """
+    base = (getattr(d, 'phys', '') or '').split('/')[0]
+    return base or (getattr(d, 'uniq', '') or d.path)
 
+
+def buscar_mandos(ya_abiertos=()):
+    """Los mandos que hay AHORA, menos los que ya se estan escuchando.
+
+    ESTO ERA CODIGO SUELTO DENTRO DE main() Y SE SACO AQUI (08/11) para poder
+    llamarlo MAS DE UNA VEZ. La logica de dentro no se ha tocado ni una coma:
+    es la misma que llevaba funcionando, solo que ahora se le puede preguntar
+    otra vez mientras se juega.
+
+    POR QUE HACIA FALTA. evdev.list_devices() se recorria UNA SOLA VEZ al
+    arrancar. Un mando inalambrico que se duerme y despierta vuelve con otro
+    /dev/input/eventN, asi que no se recogia nunca; y si era el unico, el
+    mapeador se cerraba para siempre y no habia forma de recuperarlo sin
+    cerrar el juego. Lo trajo mirar como lo hace el Windows Arcade Loader, que
+    escucha las altas y bajas de SDL y vuelve a atar el mando a su jugador.
+
+    "ya_abiertos" son las RUTAS que ya se escuchan: no se vuelven a abrir.
+    """
+    _rutas_abiertas = set(ya_abiertos)
     pads = []
     for p in evdev.list_devices():
+        if p in _rutas_abiertas:
+            continue
         try:
             dev = evdev.InputDevice(p)
             dev_name = dev.name.lower()
@@ -7090,9 +7110,7 @@ def main():
     # nodos distintos de verdad, comparando el aparato fisico, y de cada uno
     # el que tenga botones de mando (BTN_SOUTH) y ejes.
     def _fisico(d):
-        # "usb-0000:00:14.0-3/input0" -> "usb-0000:00:14.0-3"
-        base = (getattr(d, 'phys', '') or '').split('/')[0]
-        return base or (getattr(d, 'uniq', '') or d.path)
+        return mando_fisico(d)
 
     def _puntua(d):
         # cuanto mas parece un mando de verdad, mejor
@@ -7123,7 +7141,27 @@ def main():
                     d.close()
                 except Exception:
                     pass
-    pads = list(mejores.values())
+    return list(mejores.values())
+
+
+def main():
+    try:
+        os.nice(-10)
+    except:
+        pass
+
+    if len(sys.argv) < 2:
+        print("Uso: python3 mapeador.py archivo.keys")
+        return
+
+    try:
+        with open(sys.argv[1], 'r') as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"Error al cargar .keys: {e}")
+        return
+
+    pads = buscar_mandos()
 
     if not pads:
         print("No se encontró ningún mando válido en el sistema.")
@@ -7410,6 +7448,13 @@ def main():
     _declarados = _declarados or [1]
     _otros = {}          # ruta del mando -> estado de SU jugador
     _sin_nada = []       # mandos que no le tocan a ningun jugador
+    # Y LA LIBRETA DE QUIEN ERA CADA APARATO (08/11).
+    #
+    # _otros va por RUTA (/dev/input/eventN), y un mando que se duerme y
+    # vuelve lo hace con OTRA ruta. Sin esta libreta, el mando del jugador 2
+    # volveria como si fuera un mando nuevo -o sea, del jugador 1-. Se apunta
+    # por aparato fisico, que es lo unico que no cambia al reconectar.
+    _quien_era = {}      # aparato fisico -> estado de SU jugador
 
     if len(_declarados) > 1:
         # EL REPARTO. El jugador 1 se queda con el mando del que salio su
@@ -7496,6 +7541,7 @@ def main():
                         _st["abs_map"][_e] = (None, _nb)
                         _st["gatillos"].add(_e)
             _otros[_d.path] = _st
+            _quien_era[mando_fisico(_d)] = _st
             print("[keys] JUGADOR %d: \"%s\" -> perfil %s"
                   % (_nj, _d.name, _nomp), flush=True)
             for _c2 in sorted(_mn):
@@ -8400,8 +8446,52 @@ def main():
               % _mando_marca, flush=True)
 
     try:
+        # VOLVER A MIRAR SI HAY MANDOS NUEVOS (08/11).
+        #
+        # Antes la lista de mandos se hacia UNA VEZ al arrancar y no se
+        # volvia a mirar. Un mando que conectas con el juego abierto no
+        # entraba, y uno inalambrico que se duerme vuelve con OTRO eventN,
+        # asi que tampoco. Y si era el unico, el mapeador se cerraba PARA
+        # SIEMPRE: WProton no lo relanza, asi que te quedabas sin mando hasta
+        # cerrar el juego.
+        #
+        # Se mira cada _CADA_CUANTO segundos y SOLO cuando el select se ha
+        # quedado sin nada que hacer, que es lo que garantiza que esto no
+        # cuesta nada mientras se juega: si hay eventos llegando, aqui no se
+        # entra. Y un list_devices() es leer una carpeta, no abrir nada.
+        _CADA_CUANTO = 2.0
+        _proxima_mirada = _tiempo.monotonic() + _CADA_CUANTO
+
+        def _recoger_mandos_nuevos():
+            """Abre los mandos que hayan aparecido y los ata a su jugador."""
+            _nuevos = []
+            try:
+                _nuevos = buscar_mandos([_d.path for _d in pads])
+            except Exception as _e:
+                print("[-] No se pudo mirar si hay mandos nuevos: %s" % _e,
+                      flush=True)
+                return 0
+            for _nd in _nuevos:
+                pads.append(_nd)
+                # ¿ES UNO QUE YA ESTABA Y HA VUELTO? Se le devuelve SU
+                # jugador. Si es nuevo de verdad, no se le asigna ninguno y
+                # cae en el camino del jugador 1, que es lo que hace WProton
+                # cuando arranca con un solo mando.
+                _st_vuelve = _quien_era.get(mando_fisico(_nd))
+                if _st_vuelve is not None:
+                    _otros[_nd.path] = _st_vuelve
+                    print("[+] Mando recuperado (vuelve a su jugador): %s"
+                          % _nd.name, flush=True)
+                else:
+                    print("[+] Mando nuevo: %s" % _nd.name, flush=True)
+            return len(_nuevos)
+
         while True:
             r, _, _ = select.select(pads, [], [], 0.001)
+            # ¿TOCA MIRAR SI HAY MANDOS NUEVOS?
+            if not r and _tiempo.monotonic() >= _proxima_mirada:
+                _proxima_mirada = _tiempo.monotonic() + _CADA_CUANTO
+                _recoger_mandos_nuevos()
             # LAS TECLAS QUE TOCA SOLTAR YA. Ver el comentario de
             # "_soltar_luego" mas abajo: se mantienen pulsadas un rato para que
             # un juego que mira el teclado una vez por fotograma las vea, y se
@@ -8970,10 +9060,36 @@ def main():
                         pads.remove(_dev)
                     except ValueError:
                         pass
+                    # Y SE CIERRA EL DESCRIPTOR. Antes se quitaba de la lista
+                    # y se dejaba abierto; daba igual porque el mapeador se
+                    # moria a continuacion. Ahora sigue vivo, asi que un mando
+                    # con mal contacto que entra y sale cien veces iria
+                    # dejando cien descriptores abiertos hasta agotarlos.
+                    try:
+                        _dev.close()
+                    except Exception:
+                        pass
                     if not pads:
-                        print("[-] Sin mandos: el mapeador termina", flush=True)
+                        # ANTES AQUI SE TERMINABA, Y ERA LO PEOR QUE PODIA
+                        # PASAR (08/11).
+                        #
+                        # Un mando inalambrico que se duerme un momento dejaba
+                        # al mapeador cerrado PARA SIEMPRE -WProton no lo
+                        # relanza-, asi que al despertar el mando ya no hacia
+                        # nada y habia que cerrar el juego y volver a abrirlo.
+                        #
+                        # Ahora se sueltan las teclas que hubiera pulsadas -que
+                        # si no, el juego se queda con una direccion metida- y
+                        # se espera a que vuelva alguno. El mapeador se muere
+                        # con el juego de todas formas.
+                        print("[-] Sin mandos: esperando a que vuelva alguno",
+                              flush=True)
                         _soltar_mandos()
-                        return
+                        while not pads:
+                            _tiempo.sleep(0.5)
+                            _recoger_mandos_nuevos()
+                        print("[+] Mando(s) de vuelta: %d" % len(pads),
+                              flush=True)
                     break
             if ui_mouse:
                 _n=_tm.monotonic(); _dt=min(_n-_mlast,0.05); _mlast=_n
@@ -11988,9 +12104,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 00262664f8da" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 227b1406a513" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 00262664f8da
+# WPROTON_HELPER menu_pygame.py 227b1406a513
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -14611,6 +14727,22 @@ def compute_layout():
     # descuadraria las tres cosas a la vez.
     SUB_H = (f_sm.get_height() + FS(2)) if SUBS else 0
     ROW += SUB_H
+    # Y QUE LA FILA QUEPA DE VERDAD, medida con las fuentes que se van a usar.
+    #
+    # El alto de fila salia de TH['row'], una constante del tema, y se daba por
+    # hecho que la fuente del titulo cabria dentro. Mientras el tema y la
+    # fuente vayan a la par, cabe. Pero la segunda linea se coloca colgada del
+    # ALTO DE LA FUENTE del titulo ("_ty + f_it.get_height() - 2"), asi que si
+    # esa fuente resulta ser mas alta de lo que el tema supone, la segunda
+    # linea baja con ella y se sale de la fila: aparece ENCIMA de la de abajo y
+    # se leen las dos superpuestas.
+    #
+    # Dani lo vio el 07/11 en "¿Donde guardar el paquete?", que es el unico
+    # menu con segunda linea Y con textos largos (rutas), asi que es donde se
+    # nota. En vez de mover el texto, se mide: la fila tiene que dar para el
+    # titulo, la segunda linea y un respiro. Medido, no supuesto.
+    if SUB_H:
+        ROW = max(ROW, f_it.get_height() + SUB_H + FS(8))
     PANEL_UI = TH.get('layout') in ('panel', 'arcade')
     ARCADE = TH.get('layout') == 'arcade'
     TOP = (HEAD + 30) if MODE == 'browse' else HEAD
@@ -16073,8 +16205,10 @@ def run_session():
                 draw_segments(row_segments(label, color), f_it, _tx, _ty, _tw, i == sel)
             _sub = SUBS.get(view[i])
             if _sub:
-                draw_row_text(_sub, f_sm, DIM, _tx, _ty + f_it.get_height() - FS(2),
-                              _tw, False)
+                # La segunda linea va justo debajo del titulo. Que QUEPA lo
+                # garantiza compute_layout, no esta cuenta: ver ROW alli.
+                draw_row_text(_sub, f_sm, DIM, _tx,
+                              _ty + f_it.get_height() - FS(2), _tw, False)
         if not view and FILTER:
             screen.blit(f_it.render("(sin coincidencias para '%s')" % FILTER, True, WARN),
                         (LIST_X + 14, LIST_Y + 14))
@@ -42217,6 +42351,24 @@ Que cumplas muchos mas.
     # que paso en la 2.15 y por lo que existe la suite.
 
     #
+    # 08/11, AL SUBIR A LA 2.26: fuera los DOS de la 2.25 y dentro SIETE.
+    #
+    # La lista se cambia ENTERA, no se hereda ni se toca por encima. Eso es
+    # literalmente lo que paso en la 2.15 -el titulo se actualiza solo porque
+    # lleva $WPROTON_VERSION, y tapa que la lista de debajo es la de hace tres
+    # versiones- y por eso existe esta comprobacion.
+    #
+    # SIETE PARECEN MUCHOS Y SON LOS QUE HAY: la 2.25 se cerro el 06/11 y
+    # desde entonces se ha trabajado dos dias seguidos. Los siete los NOTA
+    # quien usa el programa; los arreglos internos de la tanda -la aritmetica
+    # de las filas de dos lineas, la medida de inodos en cada montaje, la
+    # escalera de montaje del overlay, el lector de trazas- no entran, que es
+    # la regla de siempre.
+    #
+    # Y LOS SIETE ESTAN CONFIRMADOS FUNCIONANDO por Dani antes de publicarse
+    # ("parece que todo va bien, subimos a la 2.26"). Ninguno se anuncia por
+    # una hipotesis, que es lo que salio mal en la 2.15.
+    #
     # OJO CON EL PUNTO DEL PREFIJO INCLUIDO. En la 2.15 se prometio dos veces
     # que eso estaba arreglado cuando se habia SACADO por la regresion del
     # 18/10, y de ahi viene esta suite. Esta vez el punto entra porque un
@@ -42232,9 +42384,19 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arreglados los juegos nativos de 32 bits en .wsquashfs de mas de 4 GB.
+  Los mandos que se duermen vuelven solos, sin cerrar el juego.
 
-  Los .wsquashfs nuevos se hacen sin atributos extendidos.
+  Los juegos nativos cogen su lanzador de la raiz aunque haya .exe.
+
+  Y ya les llegan los argumentos que pongas en su perfil.
+
+  Ya puedes elegir cuanto comprimir al empaquetar.
+
+  Las copias de seguridad avisan si alguna carpeta ha fallado.
+
+  Los juegos de instalador ya no se llaman \"instalador_...\".
+
+  Arreglado el texto superpuesto al elegir donde guardar.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -53448,6 +53610,39 @@ clean_game_name() {
     # es que el de escena NO TIENE NI UN ESPACIO: en cuanto el nombre trae
     # alguno, los puntos se dejan como estan.
     local n="$1"
+    # 0) "instalador_", "setup_" y companhia, que no son parte del titulo.
+    #
+    # Lo pidio Dani (07/11): un juego importado desde un instalador acababa
+    # llamandose "instalador_Road_Rash_30th_Anniversary.wsquashfs". El nombre
+    # del fichero que trajo el juego no es el nombre del juego.
+    #
+    # import_gog_exe ya quitaba "setup_", pero solo ahi y solo esa palabra. Va
+    # aqui para que valga para TODAS las vias -instalador, ISO, carpeta- y
+    # para que no haya que acordarse de anadirla en cada sitio nuevo.
+    #
+    # SOLO SI DESPUES QUEDA ALGO. Un juego que de verdad se llamara "Setup"
+    # se quedaria sin nombre, y eso es peor que un prefijo de sobra. La
+    # envoltura nombre_para_empaquetar ya protege el caso de que la limpieza
+    # entera lo deje vacio, pero aqui se mira ademas que quede algo que no
+    # sean numeros o separadores sueltos: de "instalador_2024" no sale
+    # "2024", sale "instalador 2024", que al menos dice de donde vino.
+    local _sin_pref
+    # LA LISTA ES CORTA A PROPOSITO. Estuvo "inst" y se quito: es el unico que
+    # podria comerse una palabra de un titulo de verdad -"Inst " seguido de
+    # algo- y lo que aporta es casi nada. En un limpiador que usan TODAS las
+    # vias, pasarse de conservador sale barato y quedarse corto no.
+    _sin_pref="$(printf '%s' "$n" | sed -E 's/^(instalador|instalator|installer|install|setup)[-_. ]+//I')"
+    # SI NO QUEDA NADA, TAMPOCO SE QUITA. Es el mismo criterio que con
+    # "instalador_2024": si al quitar el prefijo no sobra un titulo, el
+    # prefijo se queda, porque al menos dice de donde vino el juego.
+    case "$_sin_pref" in
+        *[!0-9_.\ -]*)
+            if [ "$_sin_pref" != "$n" ]; then
+                log "nombre: se quita el prefijo de instalador de '$n'"
+                n="$_sin_pref"
+            fi ;;
+        *) log "nombre: '$n' se quedaria sin titulo al quitarle el prefijo de instalador; se deja" ;;
+    esac
     # 1) el grupo delante y el grupo detras, con su separador
     n="$(printf '%s' "$n" | sed -E "s/^($WP_GRUPOS_RELEASE)[-_. ]+//I")"
     n="$(printf '%s' "$n" | sed -E "s/[-_. ]+($WP_GRUPOS_RELEASE)[-_. ]*$//I")"
@@ -54032,6 +54227,59 @@ EOFD
     return 0
 }
 
+# CUANTO COMPRIMIR AL EMPAQUETAR (08/11).
+#
+# Lo pidio Dani: "que en elegir el formato tambien te permita elegir el tipo
+# de compresion mayor o menor". Es una preferencia de PERSONA -tamaño contra
+# tiempo- que el programa no puede decidir solo, asi que aqui si toca
+# preguntar; no es un detalle de tripas.
+#
+# POR QUE "normal" ES 15 Y NO MAS. Es el que trae mksquashfs por defecto, y no
+# es un numero cualquiera: el propio autor de zstd dice que "best
+# decompression speed is typically achieved at level 15". O sea que es el que
+# MEJOR DESCOMPRIME, que es lo que decide si hay un bajon en pantalla mientras
+# se juega. Subirlo ahorra poco y puede costar justo eso.
+#
+# LO QUE CUESTA SUBIRLO, medido (corpus de 8,5 GB, bloques de 128 KB):
+#
+#     nivel 15 -> 8.553.738.240 bytes en 215 s
+#     nivel 22 -> 8.473.190.400 bytes en 934 s
+#
+# O sea 0,94 % mas pequeño por 4,3 veces mas tiempo. Por eso "normal" sigue
+# siendo lo de siempre y lo que se recomienda; "maxima" esta para quien
+# prefiera esperar, no porque sea mejor.
+#
+# Y LA PALANCA GRANDE YA ESTA ECHADA: el bloque es de 1 MB, el maximo que
+# admite el formato, contra los 128 KB de por defecto. Ahi es donde se gana
+# ratio de verdad.
+pack_nivel_zstd() {
+    # El nivel para mksquashfs con zstd. La escala va de 1 a 22.
+    case "${PACK_NIVEL:-normal}" in
+        rapida) printf '8'  ;;
+        maxima) printf '22' ;;
+        *)      printf '15' ;;
+    esac
+}
+
+pack_nivel_dwarfs() {
+    # El nivel para mkdwarfs, que tiene SU PROPIA escala, de 0 a 9. Un ajuste
+    # que dijera "15" aqui no significaria nada: se traduce.
+    case "${PACK_NIVEL:-normal}" in
+        rapida) printf '4' ;;
+        maxima) printf '9' ;;
+        *)      printf '7' ;;
+    esac
+}
+
+pack_nivel_texto() {
+    # Como se dice en pantalla, con lo que cuesta cada uno.
+    case "${PACK_NIVEL:-normal}" in
+        rapida) printf 'rápida (ocupa más, se empaqueta antes)' ;;
+        maxima) printf 'máxima (ocupa algo menos, tarda bastante más)' ;;
+        *)      printf 'normal (recomendada)' ;;
+    esac
+}
+
 pack_formato_archivo() {
     # El formato de ARCHIVO elegido. Nunca "carpeta": quien llama a esto
     # quiere un paquete, y si el ajuste dice "carpeta" se empaqueta en
@@ -54294,7 +54542,7 @@ $src"
     if [ "$fmt" = "dwarfs" ]; then
         # -l7: buen equilibrio; zstd por defecto = montaje y lectura rapidos
         run_con_porcentaje "Empaquetando '$name' a DwarFS..." \
-            "$MKDWARFS_BIN" -i "$src" -o "$out" -l7 --log-level=warn \
+            "$MKDWARFS_BIN" -i "$src" -o "$out" -l"$(pack_nivel_dwarfs)" --log-level=warn \
             --progress=simple \
             || { rm -f "$out"; fallo "El empaquetado a DwarFS fallo (mira el registro)"; return 1; }
     else
@@ -54377,6 +54625,7 @@ $src"
         local _rc_ms=0
         run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
                 mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+                -Xcompression-level "$(pack_nivel_zstd)" \
                 -no-duplicates -percentage || _rc_ms=$?
         if [ "$_rc_ms" != 0 ]; then
             sleep 1
@@ -59766,6 +60015,22 @@ ejecutar_nativo() {
     # funcionar.
     local exe="$1"
     [ -f "$exe" ] || { fallo "No existe el lanzador: $exe"; return 1; }
+    # LOS ARGUMENTOS DEL PERFIL, QUE ANTES SE TIRABAN (07/11).
+    #
+    # Lo trajo una auditoria externa y es cierto: la rama de imagen llamaba
+    # con "ejecutar_nativo "$EXE_PATH" $EXE_ARGS", o sea que SI mandaba los
+    # argumentos... y aqui solo se miraba $1. Los lanzamientos ponian "$exe" a
+    # secas y el resto se perdia sin una linea en ningun sitio. Quien escribia
+    # argumentos en el perfil de un juego de Linux veia que no pasaba nada y no
+    # tenia forma de saber por que.
+    #
+    # Se guardan aparte porque mas abajo se usan "set --" y subshells, y $@ no
+    # sobrevive a eso de forma fiable.
+    shift || true
+    local WP_NAT_ARGS=(); [ "$#" -gt 0 ] && WP_NAT_ARGS=("$@")
+    if [ "${#WP_NAT_ARGS[@]}" -gt 0 ]; then
+        log "nativo: argumentos para el lanzador (${#WP_NAT_ARGS[@]}): $(printf '[%s] ' "${WP_NAT_ARGS[@]}")"
+    fi
     # LAS LIBRERIAS QUE EL JUEGO TRAIGA CONSIGO.
     #
     # PARA QUE SIRVE
@@ -59943,7 +60208,8 @@ ejecutar_nativo() {
     # Windows-. El camino de los juegos nativos era el unico que no lo hacia.
     # Un juego no tiene por que saber desde donde se le llama.
         ( cd "$_raiz_real" 2>/dev/null || cd "$_raiz_lib" 2>/dev/null || true
-          setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" >>"$_sal_nat" 2>&1 ) &
+          setsid ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} "$exe" \
+               ${WP_NAT_ARGS[@]+"${WP_NAT_ARGS[@]}"} >>"$_sal_nat" 2>&1 ) &
         local _pg=$!
         printf '%s' "$_pg" > "$RUNTIME_DIR/.juego_pgid" 2>/dev/null
         wait "$_pg" 2>/dev/null
@@ -60001,7 +60267,8 @@ Dale permisos al fichero original y vuelve a empaquetarlo."
     # Park es "./linuxloader" a secas: una ruta relativa al directorio de
     # trabajo de quien lo llama).
     ( cd "$_raiz_real" 2>/dev/null || cd "$_raiz_lib" 2>/dev/null || true
-      ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" >>"$_sal_nat" 2>&1 )
+      ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"} bash "$exe" \
+          ${WP_NAT_ARGS[@]+"${WP_NAT_ARGS[@]}"} >>"$_sal_nat" 2>&1 )
     local _rc2=$?
     log "juego nativo: el lanzador (interpretado) salio con codigo $_rc2 tras $(( $(date +%s) - _t0_nat ))s"
     esperar_juego_nativo "$_raiz_real" 0
@@ -65282,20 +65549,60 @@ EOFR2
 # Lo que NUNCA es una partida guardada: caches de shaders, temporales y, en
 # los juegos con prefijo incluido, todo el Windows del prefijo. Sin esto, la
 # copia de un juego con prefijo propio se llevaba GIGAS y tardaba una eternidad.
-BACKUP_EXCLUDES='--exclude=./drive_c/windows --exclude=./drive_c/Program Files/Common Files
---exclude=*/dosdevices --exclude=*.dxvk-cache --exclude=*.dxvk-cache-tmp
---exclude=*.vkd3d-cache --exclude=*.nvcache --exclude=*.shadercache
---exclude=*/DXVK_state_cache --exclude=*/GLCache --exclude=*/ShaderCache
---exclude=*/shadercache --exclude=*/D3DSCache --exclude=*/NVIDIA --exclude=*/AMD
---exclude=*/Temp --exclude=*/Crashpad --exclude=*.log --exclude=*.tmp --exclude=*.dmp'
+# LAS EXCLUSIONES DE LA COPIA, COMO LISTA DE ARGUMENTOS Y NO COMO TEXTO.
+#
+# ESTO ERA UN FALLO DE VERDAD (07/11), y lo trajo una auditoria externa. Antes
+# era UNA CADENA que se expandia sin comillas: "tar $BACKUP_EXCLUDES". Y dentro
+# habia un patron CON ESPACIOS:
+#
+#     --exclude=./drive_c/Program Files/Common Files
+#
+# El shell lo partia en tres trozos y a tar le llegaba esto:
+#
+#     [--exclude=./drive_c/Program]  [Files/Common]  [Files]
+#
+# O sea tres desastres de una vez, los tres medidos:
+#
+#   1. La exclusion NO EXCLUIA. "Common Files" acababa DENTRO de la copia.
+#   2. "Files/Common" y "Files" pasaban a ser FICHEROS QUE METER en el tar, y
+#      como no existen, tar decia "Cannot stat" dos veces.
+#   3. Y tar SALIA CON CODIGO 2. Que no se notaba, por lo de abajo.
+#
+# Con una lista de verdad cada patron llega entero, espacios incluidos, y no
+# hay nada que se pueda partir.
+BACKUP_EXCLUDES=(
+    --exclude=./drive_c/windows
+    "--exclude=./drive_c/Program Files/Common Files"
+    --exclude='*/dosdevices'
+    --exclude='*.dxvk-cache' --exclude='*.dxvk-cache-tmp'
+    --exclude='*.vkd3d-cache' --exclude='*.nvcache' --exclude='*.shadercache'
+    --exclude='*/DXVK_state_cache' --exclude='*/GLCache' --exclude='*/ShaderCache'
+    --exclude='*/shadercache' --exclude='*/D3DSCache'
+    --exclude='*/NVIDIA' --exclude='*/AMD'
+    --exclude='*/Temp' --exclude='*/Crashpad'
+    --exclude='*.log' --exclude='*.tmp' --exclude='*.dmp'
+)
 
 backup_size_of() {
     # Tamaño real de lo que se va a copiar (ya descontando lo excluido)
     local locs="$1" total=0 label path sz
     while IFS='|' read -r label path; do
         [ -n "$path" ] || continue
-        sz="$(du -sb --exclude='*cache*' --exclude='*Cache*' --exclude='*/windows' \
-              --exclude='*.log' "$path" 2>/dev/null | awk '{print $1}')"
+        # LAS MISMAS EXCLUSIONES QUE LA COPIA DE VERDAD.
+        #
+        # Antes esta lista era otra, mas corta y escrita a mano, asi que el
+        # tamaño anunciado no era el de lo que se iba a copiar. Y de ese numero
+        # depende el aviso de "esto son 2 GB, ¿seguro?", que con una cuenta
+        # equivocada avisa cuando no toca o no avisa cuando si.
+        #
+        # "du" quiere los patrones sin el "--exclude=" delante, asi que se
+        # reaprovecha la MISMA lista quitandole ese prefijo: una sola fuente de
+        # verdad, y lo que se anuncia es lo que se copia.
+        local _du_ex=() _ex
+        for _ex in "${BACKUP_EXCLUDES[@]}"; do
+            _du_ex+=( "--exclude=${_ex#--exclude=}" )
+        done
+        sz="$(du -sb "${_du_ex[@]}" "$path" 2>/dev/null | awk '{print $1}')"
         total=$(( total + ${sz:-0} ))
     done <<EOFSZ
 $locs
@@ -65305,7 +65612,7 @@ EOFSZ
 
 backup_create() {
     # $1 = gid. Crea backups/<gid>_YYYYmmdd_HHMM.zip con las partidas.
-    local gid="$1" locs n zip tmp label path bytes
+    local gid="$1" locs n zip tmp label path bytes fallos=0
     locs="$(save_locations "$gid")"
     if [ -z "$locs" ]; then
         ui_info "No se han encontrado partidas guardadas de '$gid'.
@@ -65338,12 +65645,29 @@ La copia puede tardar bastantes minutos. Continuar?" || return 1
         [ -n "$path" ] || continue
         mkdir -p "$tmp/$label"
         progress_set 0 "Copiando: $label"
-        # tar con exclusiones: evita arrastrar caches y el Windows del prefijo
-        # shellcheck disable=SC2086
-        if ( cd "$path" && tar $BACKUP_EXCLUDES -cf - . ) 2>>"$LOG_FILE" \
-             | ( cd "$tmp/$label" && tar -xf - ) 2>>"$LOG_FILE"; then
+        # LAS DOS ETAPAS TIENEN QUE SALIR BIEN, NO SOLO LA ULTIMA.
+        #
+        # Un "if tuberia; then" mira el codigo del ULTIMO comando. Aqui el
+        # ultimo es el tar que EXTRAE, que termina tan contento con lo que le
+        # haya llegado. Asi que si el tar que EMPAQUETA fallaba -y fallaba, ver
+        # BACKUP_EXCLUDES-, o si se quedaba a medias por falta de espacio, el
+        # contador subia igual y al usuario se le decia "Copia creada.
+        # Carpetas guardadas: N". Una copia truncada se veia igual que una
+        # buena, y eso es lo peor que puede hacer un gestor de copias.
+        #
+        # Se arregla con "pipefail" DENTRO DE ESTE SUBSHELL y en ningun sitio
+        # mas: ponerlo global cambiaria el comportamiento de cientos de
+        # tuberias que llevan anos funcionando, y eso es cambiar medio programa
+        # para arreglar una linea.
+        if ( set -o pipefail
+             ( cd "$path" && tar "${BACKUP_EXCLUDES[@]}" -cf - . ) 2>>"$LOG_FILE" \
+                 | ( cd "$tmp/$label" && tar -xf - ) 2>>"$LOG_FILE" ); then
             n=$((n+1))
             say "[backup] $label: $path"
+        else
+            fallos=$((fallos+1))
+            log "backup: FALLO copiando '$label' desde $path (una de las dos etapas de tar no termino bien; los detalles estan unas lineas mas arriba en este registro)" WARN
+            say "[backup] FALLO: $label"
         fi
     done <<EOFLOC
 $locs
@@ -65362,6 +65686,20 @@ EOFLOC
     if ( cd "$tmp" && zip -1 -qr "$zip" . ) >>"$LOG_FILE" 2>&1; then
         progress_stop
         rm -rf "$tmp"
+        # Y SI ALGUNA CARPETA FALLO, SE DICE. Un zip valido por CRC no es una
+        # copia completa: puede estar perfectamente formado y faltarle media
+        # partida. Decir solo "Copia creada" seria mentir por omision justo en
+        # lo unico que el usuario no puede comprobar por su cuenta.
+        if [ "${fallos:-0}" -gt 0 ]; then
+            ui_error "Copia creada A MEDIAS:
+
+$(basename "$zip")   ($(human_size "$(dir_bytes "$zip")"))
+Carpetas guardadas: $n
+Carpetas que FALLARON: $fallos
+
+Esta copia esta incompleta. Los detalles estan en el registro."
+            return 1
+        fi
         ui_info "Copia creada:
 
 $(basename "$zip")   ($(human_size "$(dir_bytes "$zip")"))
@@ -75957,6 +76295,38 @@ Los wsquashfs que ya tienes se siguen usando igual."
                         ui_error "No se pudieron preparar las herramientas de DwarFS."
                     fi ;;
             esac ;;
+        "Compresión al empaquetar:"*)
+            # SE DICE LO QUE CUESTA CADA UNA, no solo como se llama.
+            #
+            # "maxima" suena a mejor y no lo es: son 0,94 % menos de tamaño por
+            # 4,3 veces mas tiempo (medido, nivel 15 contra 22 sobre 8,5 GB), y
+            # encima el nivel 15 es el que mejor descomprime segun el propio
+            # autor de zstd, que es lo que decide si hay un bajon jugando. Si
+            # solo pusiera "baja / normal / alta", todo el mundo elegiria alta.
+            local pn
+            pn="$(menu "Cuánto comprimir al empaquetar" \
+                "Normal - recomendada, la que mejor descomprime" \
+                "Rápida - se empaqueta antes, el archivo ocupa más" \
+                "Máxima - ocupa un 1% menos y tarda unas 4 veces más" \
+                "<< Volver")" || pn=""
+            case "$pn" in
+                Normal*)
+                    PACK_NIVEL=normal; save_settings
+                    ui_info "Compresión normal. Es la de siempre y la que mejor
+descomprime, que es lo que cuenta mientras juegas." ;;
+                Rápida*)
+                    PACK_NIVEL=rapida; save_settings
+                    ui_info "Compresión rápida. Los juegos se empaquetan antes y
+los archivos ocupan algo más." ;;
+                Máxima*)
+                    PACK_NIVEL=maxima; save_settings
+                    ui_info "Compresión máxima. Avisamos de lo que cuesta: el
+archivo queda alrededor de un 1% mas pequeño y empaquetar
+tarda unas 4 veces mas. En un juego de 4 GB son unos 40 MB
+ahorrados.
+
+Los juegos que ya tengas empaquetados no cambian." ;;
+            esac ;;
         "Carátulas por fila:"*)
             local gc
             gc="$(menu "Cuántas carátulas por fila en la rejilla" \
@@ -76613,6 +76983,7 @@ library_menu() {
             "Comprobar el repositorio (perfiles y carátulas)" \
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
+            "Compresión al empaquetar: $(pack_nivel_texto)" \
             "Tema de los menus: $THEME" \
             "Motor de los menus: $(menu_motor_label)" \
             "Tamaño de la letra: $(font_label)" \
@@ -76818,7 +77189,7 @@ Se sobrescribe?" || return 0
         fi
         [ -n "${MKDWARFS_BIN:-}" ] || { ui_error "Sin mkdwarfs no se puede comprimir a DwarFS."; return 1; }
         run_con_porcentaje "Comprimiendo '$nombre' a DwarFS..." \
-            "$MKDWARFS_BIN" -i "$src" -o "$out" -l7 --log-level=warn || {
+            "$MKDWARFS_BIN" -i "$src" -o "$out" -l"$(pack_nivel_dwarfs)" --log-level=warn || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
     else
         # AQUI NO SE USA need_mksquashfs: esa hace "die" y se lleva WProton
@@ -76840,6 +77211,7 @@ O cambia el formato a DwarFS en:
         # queda a cero toda la compresion y parece colgada.
         run_con_porcentaje "Comprimiendo '$nombre'..." \
             mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+                -Xcompression-level "$(pack_nivel_zstd)" \
             -no-duplicates -percentage || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
     fi
