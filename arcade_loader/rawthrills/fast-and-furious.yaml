@@ -1,0 +1,9 @@
+# rawthrills/fast-and-furious - user overrides (written by the launcher GUI)
+input:
+  gamepad:
+    +righty: b5
+    -righty: b6
+    b: none
+    dpdown: b1
+    dpup: none
+    x: none
