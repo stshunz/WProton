@@ -1,0 +1,8 @@
+# rawthrills/winter-x-games-snocross - user overrides (written by the launcher GUI)
+input:
+  gamepad:
+    b: b1
+    dpdown: none
+    dpup: none
+    l1: none
+    r1: none

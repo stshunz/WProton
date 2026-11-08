@@ -1,0 +1,10 @@
+# rawthrills/fast-and-furious-super-bikes-2 - user overrides (written by the launcher GUI)
+input:
+  gamepad:
+    -righty: b6
+    b: start
+    dpdown: none
+    dpup: none
+    l1: none
+    x: b2
+    y: b1

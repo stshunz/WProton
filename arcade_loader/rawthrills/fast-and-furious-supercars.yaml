@@ -1,0 +1,12 @@
+# rawthrills/fast-and-furious-supercars - user overrides (written by the launcher GUI)
+input:
+  gamepad:
+    +righty: b5
+    -righty: b6
+    a: start
+    b: b2
+    dpdown: none
+    dpleft: none
+    dpup: none
+    x: b2
+    y: b1
