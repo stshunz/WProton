@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.26"
+WPROTON_VERSION="2.27"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -352,7 +352,48 @@ PREFIX_BATOCERA_AL_INSTALAR=0
 #
 # ESTA EN LOS AJUSTES Y NO A FUEGO EN EL CODIGO a proposito: cuando cambie de
 # sitio se cambia esta linea y no hace falta una version nueva de WProton.
-ARCADE_LOADER_URL="https://github.com/stshunz/WProton/releases/download/WProton_Extras/Arcade_Loader.tar.gz"
+# 09/11: ARCADE LOADER 2.0, y la vieja apuntada abajo como
+# valor-de-fabrica-de-antes para que ajuste_url_migrar la cambie sola.
+#
+# COMPROBADO CON UNA PETICION, NO SUPUESTO. Dani dijo que habia borrado el
+# fichero anterior, y NO ESTA BORRADO: a dia 09/11 sigue publicado y se
+# descarga (200, 1.560.573.584 bytes, frente a los 1.404.394.506 de la 2.0).
+#
+# Eso no quita la migracion, la hace mas necesaria: si fuera un 404, quien
+# tuviera la URL vieja guardada se enteraria en el momento -no le descarga- y
+# podria preguntar. Como SI funciona, lo que pasa es que se le instala la 1.x
+# una y otra vez, sin un solo aviso, por mucho que actualice WProton. Un fallo
+# que no da la cara es peor que uno que la da.
+#
+# Si algun dia se borra de verdad, esto sigue valiendo igual: la migracion no
+# depende de que la vieja conteste o no.
+ARCADE_LOADER_URL="https://github.com/stshunz/WProton/releases/download/WProton_Extras/Arcade_Loader2.0.tar.gz"
+# La version que trae esa URL. Se escribe al instalar y sirve para saber si lo
+# que hay puesto es viejo (ver arcade_loader_version_puesta).
+ARCADE_LOADER_VERSION="2.0"
+# LA TANDA DE CONFIGURACIONES DEL REPOSITORIO. Subir esto obliga a TODO EL
+# MUNDO a volver a bajarse las configuraciones de arcade_loader/ una vez.
+#
+# POR QUE HACE FALTA UNA PALANCA ASI (09/11). Dani subio configuraciones nuevas
+# al repositorio y pidio "resetear los contadores... para que se vuelvan a
+# descargar". El apunte que las frena es el ETag que guarda al_config_especial:
+# mientras el fichero del repositorio no cambie, GitHub contesta 304 y no se
+# copia nada, que es justo lo que se queria.
+#
+# Y con las de hoy eso YA funciona solo: el contenido cambio, asi que el ETag
+# cambia y se bajan sin tocar nada. Lo que no cubre son estos dos casos:
+#
+#   1. TARDA HASTA UN DIA. La comprobacion se hace una vez al dia como mucho,
+#      asi que quien jugo hace un rato no lo ve hasta mañana.
+#   2. SI SE SUBE EL MISMO CONTENIDO, no cambia. Y hay un caso en que eso deja
+#      el fichero equivocado para siempre: si la copia local se pierde o la
+#      pisa una version nueva de Arcade Loader, el ETag sigue diciendo "ya lo
+#      tengo" y el 304 deja lo que haya.
+#
+# Subiendo este numero se limpian los apuntes una vez y se vuelve a bajar todo.
+# Es un numero y no una fecha a proposito: una fecha invita a compararla con
+# hoy y aqui no se compara nada, solo se mira si es la misma de la ultima vez.
+AL_CFG_TANDA="2"
 # La de fabrica, guardada aparte: load_settings la necesita para saber si
 # la que hay en settings.conf es una eleccion de la persona o un valor de
 # fabrica de una version anterior.
@@ -1567,7 +1608,8 @@ load_settings() {
     # aparezca tambien.
     ajuste_url_migrar ARCADE_LOADER_URL "Arcade Loader" \
         "https://www.mediafire.com/file/ib27k8cya9ng0s8/Arcade_Loader.tar.gz/file" \
-        "https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz/file"
+        "https://www.mediafire.com/file/k2t62nrwcnu4mhb/Arcade_Loader.tar.gz/file" \
+        "https://github.com/stshunz/WProton/releases/download/WProton_Extras/Arcade_Loader.tar.gz"
     ajuste_url_migrar GE_CUSTOM_URL "el Proton Frankenstein" \
         "https://www.mediafire.com/file/obr2s1m9rrc9nf2/Proton7-38-Frankenstein.tar.gz/file"
     # El prefijo compartido nace ya en la release, asi que todavia no hay
@@ -39205,6 +39247,43 @@ export_game_env() {
         printf '%s' "$_shay" | while IFS= read -r _l; do
             [ -n "$_l" ] && say "  $_l"
         done
+        # Y LO UNICO QUE SE SABE QUE FUNCIONA, DICHO AQUI (08/11).
+        #
+        # Si estan las listas de ignorados de SDL, Steam esta escondiendo el
+        # mando FISICO para ofrecer el suyo virtual: eso es Steam Input activo.
+        # Y cuando lo esta, hay juegos -TMNT Shredder's Revenge, Half-Life 2,
+        # Portal- en los que Wine NO ENUMERA NINGUN mando de evdev.
+        #
+        # Eso se investigo a fondo el 17-18/09 y esta cerrado: se probaron
+        # nueve cosas -quitar la superposicion, quitar SteamAppId/SteamGameId,
+        # borrar la etiqueta STEAM_GAME de las ventanas, PROTON_PREFER_SDL,
+        # PROTON_USE_SDL, PROTON_STEAMINPUT_XINPUT_FALLBACK, borrar la lista de
+        # 759 ignorados, las dos ultimas juntas, y el mando virtual propio- y
+        # NINGUNA sirvio. La prueba decisiva: habia cuatro mandos conectados,
+        # DOS DE ELLOS LIBRES, y el juego no vio ninguno.
+        #
+        # La documentacion de controladores de Proton-GE lo confirma por su
+        # cuenta: "an actual live Steam virtual device or native Steam API
+        # controller still takes priority". Cuando hay sesion de Steam Input
+        # viva, manda ella y Proton se aparta.
+        #
+        # Asi que no hay variable que lo arregle, y por eso esto se DICE en vez
+        # de intentarse: lo unico verificado es desactivarlo desde Steam. Nueve
+        # dias de investigacion no sirven de nada si quien tiene el problema
+        # delante no se entera en el momento en que le pasa.
+        case " $_shay " in
+            *SDL_*IGNORE_DEVICES*)
+                say ""
+                say "[i] Steam Input esta ACTIVO (Steam esconde tu mando fisico)."
+                say "    Si el juego no ve el mando, lo unico que funciona es"
+                say "    desactivarlo en Steam para el atajo de WProton:"
+                say "      Steam -> (boton derecho en WProton) -> Propiedades"
+                say "      -> Mando -> Desactivar Steam Input"
+                say "    Probado con TMNT Shredder's Revenge, Half-Life 2 y Portal."
+                say "    No hay ninguna variable de entorno que lo arregle: se"
+                say "    probaron nueve y ninguna sirvio (ver COMPATIBILIDAD.md)."
+                ;;
+        esac
     else
         say "[i] Sin entorno de Steam: WProton no se abrio desde Steam, asi"
         say "    que Steam Input no interviene en este juego."
@@ -42351,6 +42430,44 @@ Que cumplas muchos mas.
     # que paso en la 2.15 y por lo que existe la suite.
 
     #
+    # ACLARACION DEL 09/11, QUE ESTE COMENTARIO SE HA QUEDADO VIEJO: arriba
+    # dice "Jurassic Park Arcade SIGUE sin funcionar desde el archivo". Eso era
+    # verdad cuando se escribio, pero YA ESTA ARREGLADO Y PUBLICADO en la 2.25:
+    # eran los archivos de mas de 4 GB con squashfuse_ll, que devuelve inodos
+    # por encima de 2^32 y hacen que un juego de 32 bits vea "el fichero no
+    # esta". Esta contado en COMPATIBILIDAD.md. Se deja el parrafo porque
+    # cuenta por que existe esta suite, pero no se lea como el estado de hoy.
+    #
+    # 09/11, AL SUBIR A LA 2.27: fuera los SIETE de la 2.26 y dentro TRES.
+    #
+    # Los tres son de Arcade Loader, que es en lo unico que se ha trabajado
+    # desde que se cerro la 2.26: la actualizacion a la 2.0 conservando las
+    # partidas, que las configuraciones de mandos se vuelvan a traer, y poder
+    # abrirlo desde el menu para tocar un juego.
+    #
+    # LOS SIETE DE LA 2.26 SE VAN, aunque sean de anteayer. Es la regla de
+    # siempre y es la que fallo en la 2.15: el titulo lleva
+    # $WPROTON_VERSION y cambia solo, asi que dejar la lista de ayer debajo
+    # pone "NOVEDADES DE LA 2.27" encima de cosas que la gente ya tiene. Los
+    # siete pasan a la lista negra de prueba_novedades.sh, que es donde se
+    # vigila que no vuelvan.
+    #
+    # Y LOS TRES ESTAN CONFIRMADOS POR UN TESTER antes de publicarse, que es
+    # la regla que salio de la 2.15 y que aqui se cumple en los tres:
+    #
+    #   - la actualizacion a la 2.0 y lo de las configuraciones: Dani el
+    #     09/11, "me confirman que ha funcionado bien el update, vamos a subir
+    #     a la 2.27";
+    #   - abrirlo desde el menu: Dani el 09/11, "te confirmo que un tester lo
+    #     ha usado desde WProton y ha funcionado bien".
+    #
+    # Ese tercero estuvo unas horas en la lista SIN confirmar -escrito el
+    # mismo dia-, y se dijo que estaba sin confirmar en vez de darlo por
+    # bueno. Es lo mismo que se hizo en la 2.25 con el titular de los 32 bits:
+    # se pone, se avisa de que falta la prueba, y si no llega se CAE ANTES de
+    # publicar, no despues. Lo que no se hace nunca mas es lo de la 2.15:
+    # prometer un arreglo por una hipotesis y tener que retirarlo.
+    #
     # 08/11, AL SUBIR A LA 2.26: fuera los DOS de la 2.25 y dentro SIETE.
     #
     # La lista se cambia ENTERA, no se hereda ni se toca por encima. Eso es
@@ -42384,19 +42501,11 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Los mandos que se duermen vuelven solos, sin cerrar el juego.
+  Arcade Loader 2.0: se te ofrece la actualizacion y guarda tus partidas.
 
-  Los juegos nativos cogen su lanzador de la raiz aunque haya .exe.
+  Las configuraciones de mandos de sus juegos se vuelven a traer solas.
 
-  Y ya les llegan los argumentos que pongas en su perfil.
-
-  Ya puedes elegir cuanto comprimir al empaquetar.
-
-  Las copias de seguridad avisan si alguna carpeta ha fallado.
-
-  Los juegos de instalador ya no se llaman \"instalador_...\".
-
-  Arreglado el texto superpuesto al elegir donde guardar.
+  Y puedes abrirlo desde el menu para tocar los mandos de un juego.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -60320,9 +60429,136 @@ arcade_loader_instalado() {
     return 0
 }
 
+# QUE VERSION DE ARCADE LOADER HAY PUESTA (09/11).
+#
+# EL TARBALL NO TRAE NINGUN MARCADOR DE VERSION: se miro el de la 2.0 entero y
+# no hay ni VERSION, ni changelog, ni nada que lo diga. Asi que el marcador lo
+# pone WProton al instalar.
+#
+# Y eso da la respuesta justa para lo que hace falta: quien tenga Arcade Loader
+# de antes NO tiene marcador -se instalo cuando esto no existia-, asi que "sin
+# marcador" significa "de antes de la 2.0". Que es exactamente a quien hay que
+# ofrecerle la actualizacion.
+arcade_loader_marca_fich() { printf '%s' "$(arcade_loader_dir)/.wproton_version"; }
+
+arcade_loader_version_puesta() {
+    # La version instalada, o nada si no se sabe.
+    local f; f="$(arcade_loader_marca_fich)"
+    [ -f "$f" ] || return 1
+    local v; v="$(head -n1 "$f" 2>/dev/null | tr -d ' \t\r\n')"
+    [ -n "$v" ] || return 1
+    printf '%s' "$v"
+}
+
+arcade_loader_hay_nuevo() {
+    # Imprime la version nueva si lo que hay puesto no es la de ahora.
+    #
+    # Igual que runner_hay_nuevo con Proton-GE: si no hay nada instalado no hay
+    # nada que actualizar -eso es una instalacion, no una actualizacion-.
+    arcade_loader_instalado || return 1
+    local v; v="$(arcade_loader_version_puesta)" || v=""
+    [ "$v" = "${ARCADE_LOADER_VERSION:-}" ] && return 1
+    printf '%s' "${ARCADE_LOADER_VERSION:-}"
+    return 0
+}
+
+arcade_loader_marca() {
+    # El aviso que se pega detras de la fila, igual que en los runners.
+    local n; n="$(arcade_loader_hay_nuevo)" || return 0
+    printf '  *** NUEVA: %s ***' "$n"
+    return 0
+}
+
+arcade_loader_abrir() {
+    # ABRE ARCADE LOADER SOLO, SIN JUEGO: su ventana de frontend.
+    #
+    # LO QUE PIDIO DANI (09/11): "estaria bien que se pudiese ejecutar desde
+    # Runners y herramientas para poder hacer una modificacion rapida en algun
+    # juego".
+    #
+    # LA ORDEN SALE DE LA AYUDA DEL PROPIO PROGRAMA, no de suponerla. Se
+    # extrajo el binario de la 2.0 y se leyeron sus cadenas:
+    #
+    #     arcade-launcher [gui] [--root DIR]
+    #         Without a game: the frontend window (every game, its controls
+    #         mapped per device into its user profile, its dump folder,
+    #         launch).
+    #
+    # O sea que "gui" es justo esto: la lista de juegos con sus mandos y su
+    # perfil de usuario, que es donde se hace la modificacion rapida.
+    #
+    # --root SE PASA A MANO Y NO ES UN ADORNO. La misma ayuda dice del
+    # --root: "where systemprofiles/ is (default: the current directory, else
+    # next to the launcher)". WProton lanza esto desde SU carpeta, no desde la
+    # de Arcade Loader, asi que dejarlo al valor por defecto es jugarsela a
+    # que la carpeta de turno no tenga un systemprofiles/ dentro. Y lo que se
+    # juega no es poco: ahi es donde el frontend ESCRIBE los perfiles de
+    # usuario. Se le dice donde esta y no hay nada que adivinar.
+    local bin raiz
+    arcade_loader_instalado || { ui_error "Arcade Loader no esta instalado."; return 1; }
+    bin="$(arcade_loader_bin)"; raiz="$(arcade_loader_dir)"
+    # EL PUENTE MANDO->TECLADO SE APAGA, Y ESTO ES LO QUE MAS IMPORTA DE AQUI.
+    #
+    # Mientras el puente corre, cada boton del mando sale TAMBIEN como una
+    # tecla. En un menu eso es justo lo que se quiere; en una pantalla donde
+    # estas ASIGNANDO botones es lo peor que puede pasar: pulsas para enlazar
+    # un boton y la pantalla recibe el boton y una tecla a la vez. El mando
+    # tiene que ser de Arcade Loader mientras su ventana este abierta.
+    #
+    # No se vuelve a arrancar aqui: los menus propios leen el mando de forma
+    # nativa, y ui_info/ui_ask ya lo arrancan ellos si hace falta zenity. Es lo
+    # mismo que hace batocera_play.
+    pad_bridge_stop
+    [ -n "${DISPLAY:-}" ] || export DISPLAY=:0.0
+    say "[+] Abriendo Arcade Loader (sin juego)"
+    say "    $bin gui --root \"$raiz\""
+    log "Arcade Loader: abriendo su ventana -> $bin gui --root '$raiz'"
+    # EN PRIMER PLANO Y ESPERANDO: se vuelve al menu cuando se cierre la
+    # ventana. Nada del aparato de lanzar un juego -vigilante de salida, mando
+    # virtual, capa del menu, reloj de la partida-: eso es para juegos, y aqui
+    # meter un mando virtual seria volver a tapar el fisico, que es lo que se
+    # acaba de evitar apagando el puente.
+    local rc=0
+    "$bin" gui --root "$raiz" >>"$LOG_FILE" 2>&1 || rc=$?
+    log "Arcade Loader: su ventana se ha cerrado (rc=$rc)"
+    if [ "$rc" -ne 0 ]; then
+        ui_error "Arcade Loader se ha cerrado con error (rc=$rc).
+
+Ultimas lineas del registro:
+$(tail -n 8 "$LOG_FILE")"
+        return 1
+    fi
+    return 0
+}
+
+arcade_loader_fila_instalar() {
+    # LA PRIMERA FILA DEL MENU DE ARCADE LOADER, que dice tres cosas distintas
+    # segun como este:
+    #
+    #   no instalado           -> "Descargar e instalar"
+    #   instalado y hay nueva  -> "Actualizar a 2.0 (...)"
+    #   instalado y al dia     -> "Reinstalar (volver a descargarlo)"
+    #
+    # El caso del medio es el que pidio Dani: que quien ya la tuviera vea que
+    # hay una nueva. El titulo ya lleva el "*** NUEVA: 2.0 ***", pero eso es
+    # una marca y se lee de pasada; la fila es lo que se pulsa, y ahi tiene que
+    # decir lo que va a hacer. Y dice ademas que las partidas se conservan,
+    # porque "actualizar" encima de algo que ya esta puesto da reparo si no te
+    # dicen que no vas a perder nada.
+    local n
+    if ! arcade_loader_instalado; then
+        printf 'Descargar e instalar'
+    elif n="$(arcade_loader_hay_nuevo)"; then
+        printf 'Actualizar a %s (tus partidas y perfiles se conservan)' "$n"
+    else
+        printf 'Reinstalar (volver a descargarlo)'
+    fi
+}
+
 arcade_loader_label() {
     if arcade_loader_instalado; then
-        printf 'instalado'
+        local v; v="$(arcade_loader_version_puesta)" || v=""
+        if [ -n "$v" ]; then printf 'instalado (%s)' "$v"; else printf 'instalado'; fi
     else
         printf 'no instalado'
     fi
@@ -60766,6 +61002,42 @@ Si lo descargo WProton, lo mas probable es que la descarga se
 cortara a medias. El registro trae el enlace y el tamaño."
         return 1
     fi
+    # ¿CABE? Se mira ANTES de descomprimir, que es cuando se llena el disco.
+    #
+    # La cuenta: se descomprime al lado (eso ya es mas que el .tar.gz), y la
+    # instalacion anterior sigue puesta hasta el final, a proposito. Asi que en
+    # el peor momento hay tres cosas a la vez. Se piden DOS VECES el tamaño del
+    # archivo y no mas, porque lo que ocupa descomprimido no se puede saber sin
+    # leerlo entero -1,4 GB de lectura solo para preguntar- y es mejor un aviso
+    # aproximado a tiempo que uno exacto cuando ya se lleno.
+    #
+    # Es un AVISO Y SE PUEDE SEGUIR: la cuenta es a lo bruto y quien tenga el
+    # disco justo puede que le quepa igual. Lo que no se hace es llegar al
+    # final sin que nadie le haya dicho nada.
+    local _mide _hace_falta _hay
+    _mide="$(stat -c %s -- "$tgz" 2>/dev/null || echo 0)"
+    if [ "${_mide:-0}" -gt 0 ]; then
+        _hace_falta=$((_mide * 2))
+        _hay="$(free_bytes "$RUNTIME_DIR")"
+        if [ -n "$_hay" ] && [ "$_hay" -lt "$_hace_falta" ]; then
+            log "Arcade Loader: poco sitio -> hay $(human_size "$_hay") y la cuenta pide $(human_size "$_hace_falta")" WARN
+            if ! ui_ask "Puede que no quepa.
+
+Arcade Loader ocupa $(human_size "$_mide") comprimido y hay que
+descomprimirlo al lado, asi que hacen falta sobre
+$(human_size "$_hace_falta") libres. En ese disco quedan $(human_size "$_hay").
+
+Si se llena a mitad, la instalacion se queda a medias (tus
+partidas no se pierden: la version anterior no se borra hasta
+que la nueva este entera).
+
+Seguir igualmente?"; then
+                rm -f "$tgz" 2>/dev/null
+                log "Arcade Loader: instalacion cancelada por falta de sitio"
+                return 1
+            fi
+        fi
+    fi
     tmp="$RUNTIME_DIR/arcade_loader_tmp.$$"
     rm -rf "$tmp"; mkdir -p "$tmp" || { al_fallo "No se pudo crear la carpeta temporal"; return 1; }
     if ! tar -xzf "$tgz" -C "$tmp" 2>>"$LOG_FILE"; then
@@ -60830,8 +61102,106 @@ puede ejecutar:
   $(arcade_loader_bin)"
         return 1
     fi
-    log "Arcade Loader: instalado en $(arcade_loader_dir)"
-    say "[+] Arcade Loader instalado en Arcade_Loader/"
+    # LAS PARTIDAS Y LOS PERFILES DEL USUARIO SE TRAEN DE LA VERSION ANTERIOR.
+    #
+    # ESTO ES LO MAS IMPORTANTE DE TODA LA ACTUALIZACION (09/11).
+    #
+    # Al mirar el tarball de la 2.0 aparecieron estas dos carpetas:
+    #
+    #   Arcade_Loader/saves/v5-RGS_adrenaline_batocera/Crossy Road/upper/
+    #   Arcade_Loader/userprofiles/
+    #
+    # O sea que Arcade Loader guarda AHI DENTRO las partidas y los perfiles de
+    # mando que haga la persona. En el tarball vienen vacias -son el esqueleto,
+    # no traen ni un fichero-, pero en la carpeta de quien lleva meses jugando
+    # NO estan vacias.
+    #
+    # Asi que sustituir la carpeta por la nueva, sin mas, le borra las partidas.
+    # Se piden las dos cosas a la vez -actualizar y quitar lo viejo- y es facil
+    # hacer justo eso y no enterarse hasta que alguien lo reclama.
+    #
+    # Se copia SIN PISAR lo que trae la version nueva (cp -n): si la 2.0 trae un
+    # perfil con el mismo nombre, el suyo manda, porque sera el corregido.
+    local _ant="$dest.anterior" _sub _trajo="" _copia_fallo=""
+    if [ -d "$_ant" ]; then
+        for _sub in saves userprofiles; do
+            [ -d "$_ant/$_sub" ] || continue
+            # ¿Tiene algo dentro? Una carpeta vacia no hay que traerla.
+            [ -n "$(find "$_ant/$_sub" -mindepth 1 -print -quit 2>/dev/null)" ] || continue
+            mkdir -p "$dest/$_sub" 2>/dev/null
+            if cp -a -n -- "$_ant/$_sub/." "$dest/$_sub/" 2>>"$LOG_FILE"; then
+                _trajo="$_trajo $_sub"
+            else
+                log "Arcade Loader: OJO -> no se pudo traer '$_sub' de la version anterior; sigue en $(basename "$_ant")" WARN
+                _copia_fallo="$_copia_fallo $_sub"
+            fi
+        done
+        if [ -n "$_trajo" ]; then
+            log "Arcade Loader: traidas de la version anterior:$_trajo"
+            say "[+] Partidas y perfiles conservados:$_trajo"
+        fi
+    fi
+    # Y SE APUNTA LA VERSION, que el tarball no la trae.
+    printf '%s\n' "${ARCADE_LOADER_VERSION:-}" > "$(arcade_loader_marca_fich)" 2>/dev/null \
+        || log "Arcade Loader: no se pudo escribir el marcador de version" WARN
+    # LO VIEJO SE BORRA, PERO SOLO AQUI.
+    #
+    # Aqui ya se sabe que la nueva quedo instalada. Se borra porque son 1,4 GB:
+    # en una Steam Deck eso no es "un respaldo por si acaso", es un disco lleno.
+    #
+    # PERO NO SI LA COPIA DE LAS PARTIDAS FALLO.
+    #
+    # Esto estaba mal escrito y es el fallo que mas caro sale de todos los que
+    # ha tenido este trozo. El comentario de antes decia que si la copia
+    # fallaba "arriba se ha salido con return 1", y NO ES VERDAD: un cp que
+    # falla ahi arriba solo deja un aviso en el registro y sigue. O sea que el
+    # unico caso en el que las partidas estan SOLO en la carpeta anterior era
+    # justo el caso en el que se borraba la carpeta anterior.
+    #
+    # Y no es un caso de laboratorio: el disco lleno a mitad de copia lo hace,
+    # y es lo normal cuando acabas de meter 1,4 GB nuevos al lado de los 1,4
+    # viejos. Asi que si fallo algo, lo viejo se queda y se dice donde esta;
+    # 1,4 GB de disco se recuperan, una partida de hace meses no.
+    if [ -n "$_copia_fallo" ]; then
+        log "Arcade Loader: NO se borra la anterior porque no se pudo traer:$_copia_fallo" WARN
+        ui_info "Arcade Loader ${ARCADE_LOADER_VERSION:-} esta instalado y
+funciona, pero NO se han podido copiar estas carpetas de la
+version anterior:
+ $_copia_fallo
+
+Las tienes enteras en Arcade_Loader.anterior/, que se ha
+dejado sin borrar a proposito. Copialas a mano a
+Arcade_Loader/ y borra esa carpeta cuando lo hayas hecho
+(ocupa mas de 1 GB).
+
+Lo mas probable es que sea falta de espacio en el disco."
+    elif [ -d "$_ant" ]; then
+        log "Arcade Loader: se borra la instalacion anterior ($(du -sh "$_ant" 2>/dev/null | cut -f1))"
+        rm -rf "$_ant" 2>/dev/null \
+            && say "[+] Borrada la version anterior de Arcade Loader" \
+            || say "[i] No se pudo borrar Arcade_Loader.anterior; puedes quitarla a mano"
+    fi
+    # LOS APUNTES DE CONFIGURACION SE TIRAN AL REEMPLAZAR ARCADE LOADER.
+    #
+    # Y ESTE ES EL CASO QUE DE VERDAD LO NECESITA. El apunte del ETag dice
+    # "la configuracion de este juego ya la tengo puesta". Al cambiar Arcade
+    # Loader entero, lo que hay puesto en userprofiles/ ya no es
+    # necesariamente lo que ese apunte creia: puede ser un fichero de fabrica
+    # de la version nueva, o nada.
+    #
+    # Si se dejara el apunte, la siguiente comprobacion preguntaria en
+    # condicional, GitHub contestaria 304 porque el fichero del repositorio no
+    # ha cambiado, y se quedaria el de fabrica PARA SIEMPRE -con el agravante
+    # de que el menu diria "la que tienes es la ultima"-. El unico que se
+    # salvaba era el juego cuya copia hubiera desaparecido del todo, que es lo
+    # que miraba el "&& [ -f \"$dest\" ]" de ahi abajo.
+    #
+    # Borrando los apuntes aqui, la primera comprobacion de cada juego vuelve
+    # a pedir su configuracion entera y la pone encima, que es lo que pidio
+    # Dani el 31/10: "si que hay que sobreescribir el fichero".
+    al_cfg_cache_borrar "Arcade Loader reemplazado"
+    log "Arcade Loader: instalado en $(arcade_loader_dir) (version ${ARCADE_LOADER_VERSION:-?})"
+    say "[+] Arcade Loader ${ARCADE_LOADER_VERSION:-} instalado en Arcade_Loader/"
     return 0
 }
 
@@ -60963,7 +61333,43 @@ arcade_loader_asegurar() {
     # ya lo tenga instalado tampoco.
     #
     # $1 = nombre del juego, para que el aviso diga de que va.
-    arcade_loader_instalado && return 0
+    #
+    # 09/11: Y SI YA LO TIENE PERO ES VIEJO, SE OFRECE LA ACTUALIZACION.
+    #
+    # Dani: "ofrecer el update para los que ya la tuvieran avisando como los
+    # updates de Proton GE". El aviso principal es el "*** NUEVA: 2.0 ***" de
+    # la fila del menu, igual que en los runners. Pero ahi solo lo ve quien
+    # entra a mirar, y a Arcade Loader se entra poco: se instala una vez y se
+    # olvida. Asi que tambien se ofrece al lanzar un juego de estos, que es
+    # cuando le importa.
+    #
+    # SE PREGUNTA UNA VEZ POR VERSION, NO UNA VEZ POR PARTIDA. Si dice que no,
+    # no se vuelve a preguntar por la 2.0; cuando salga la 2.1 se preguntara
+    # otra vez. Es el mismo trato que los perfiles de la comunidad, y es lo que
+    # respeta el "si esta ya no se vuelve a ofrecer" que pidio Dani cuando se
+    # escribio esta funcion.
+    if arcade_loader_instalado; then
+        local _nv _dicho
+        _nv="$(arcade_loader_hay_nuevo)" || return 0
+        _dicho="$RUNTIME_DIR/.arcade_loader_no_quiero_$_nv"
+        [ -f "$_dicho" ] && return 0
+        if ui_ask "Hay una version nueva de Arcade Loader: $_nv
+
+La que tienes es anterior y trae bastantes menos cosas.
+
+Se descarga entera (son mas de 1 GB) y sustituye a la de ahora.
+TUS PARTIDAS Y TUS PERFILES DE MANDO SE CONSERVAN: se copian a
+la nueva antes de quitar la anterior.
+
+Actualizar ahora?"; then
+            arcade_loader_instalar && return 0
+            # Si falla, lo de antes sigue puesto y se puede jugar igual.
+            return 0
+        fi
+        : > "$_dicho" 2>/dev/null
+        log "Arcade Loader: se ofrecio la $_nv y se dijo que no; no se vuelve a preguntar por esta"
+        return 0
+    fi
     local nom="${1:-este juego}"
     if ui_ask "'$nom' es un juego de Arcade Loader.
 
@@ -60991,7 +61397,7 @@ arcade_loader_menu() {
     # aviso por tener WProton instalado.
     local sel
     while :; do
-        sel="$(menu "Arcade Loader - $(arcade_loader_label)
+        sel="$(menu "Arcade Loader - $(arcade_loader_label)$(arcade_loader_marca)
 
 Lanzador de arcades NATIVO de Linux.
 
@@ -61000,16 +61406,20 @@ terminado en .windowsloader, que pone quien los empaqueta.
 Tambien vale la cadena [AL] en el nombre, de antes.
 
 Al lanzar uno de esos, WProton usa Arcade Loader en vez de
-Proton o Wine. Si no lo tienes, lo ofrece entonces." \
-            "$(arcade_loader_instalado \
-                 && printf 'Reinstalar / actualizar (volver a descargarlo)' \
-                 || printf 'Descargar e instalar')" \
+Proton o Wine. Si no lo tienes, lo ofrece entonces.
+
+Si cambias algo a mano y ese juego tiene configuracion en el
+repositorio, la del repositorio se pondra encima cuando salga
+una mas nueva. La tuya se guarda al lado, con .anterior." \
+            "$(arcade_loader_fila_instalar)" \
             "Instalar desde un .tar.gz que ya tengas" \
+            "$(arcade_loader_instalado && printf 'Abrir Arcade Loader (cambiar mandos de un juego)')" \
+            "$(arcade_loader_instalado && printf 'Volver a bajar las configuraciones de los juegos')" \
             "$(arcade_loader_instalado && printf 'Borrarlo')" \
             "<< Volver")" || return 0
         case "$sel" in
             "<< Volver"|"") return 0 ;;
-            "Descargar e instalar"*|"Reinstalar"*)
+            "Descargar e instalar"*|"Reinstalar"*|"Actualizar a"*)
                 if arcade_loader_instalar; then
                     ui_info "Arcade Loader instalado.
 
@@ -61020,6 +61430,28 @@ solo al lanzar un juego con [AL] en el nombre."
                 if arcade_loader_desde_fichero; then
                     ui_info "Arcade Loader instalado desde el fichero."
                 fi ;;
+            "Abrir Arcade Loader"*)
+                arcade_loader_abrir || true ;;
+            "Volver a bajar las configuraciones"*)
+                # BORRA LOS APUNTES, NO LAS CONFIGURACIONES.
+                #
+                # La salida de emergencia para cuando algo no cuadra: se
+                # olvidan los apuntes de "esta ya la tengo" y la proxima vez
+                # que se lance cada juego se vuelve a pedir la suya.
+                #
+                # No se bajan aqui todas de golpe a proposito: hay que saber el
+                # gameid y el sistema de cada juego, y eso sale del marcador de
+                # DENTRO del juego. Sin los juegos delante no se puede, y una
+                # fila de menu no es sitio para ponerse a montar imagenes.
+                al_cfg_cache_borrar "pedido desde el menu"
+                ui_info "Hecho.
+
+La proxima vez que lances cada juego de Arcade Loader se
+volvera a pedir su configuracion al repositorio y se pondra
+encima de la que tenga.
+
+No se ha borrado ninguna configuracion: si el repositorio no
+trae nada para un juego, se queda la que ya tenia." ;;
             "Borrarlo"*)
                 if ui_ask "Borrar Arcade Loader de la carpeta de WProton?
 
@@ -61090,6 +61522,55 @@ al_sistema_de_gameid() {
     printf '%s' "$(basename "$(dirname "$hit")")"
 }
 
+al_cfg_cache_dir() { printf '%s' "$PROFILE_DIR/.al_cfg"; }
+
+al_cfg_cache_borrar() {
+    # BORRA LOS APUNTES DE ETag, no las configuraciones. $1 = motivo, al registro.
+    #
+    # Lo que se borra son los ficheros .etag de $PROFILE_DIR/.al_cfg, que es
+    # donde se apunta "esta configuracion ya la tengo y es esta". Las
+    # configuraciones de verdad estan en Arcade_Loader/userprofiles/ y no se
+    # tocan: si el repositorio no trae nada nuevo, se queda la que hay.
+    #
+    # O sea que esto no puede perder nada de nadie. Como mucho hace una
+    # pregunta de mas a GitHub por juego.
+    local d; d="$(al_cfg_cache_dir)"
+    [ -d "$d" ] || return 0
+    local n; n="$(find "$d" -maxdepth 1 -name '*.etag' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${n:-0}" -eq 0 ]; then
+        log "Arcade Loader: no habia apuntes de configuracion que borrar (${1:-sin motivo})"
+        return 0
+    fi
+    find "$d" -maxdepth 1 -name '*.etag' -delete 2>>"$LOG_FILE" \
+        && log "Arcade Loader: borrados $n apunte(s) de configuracion; se volveran a mirar (${1:-sin motivo})" \
+        || log "Arcade Loader: OJO -> no se pudieron borrar los apuntes de configuracion de $d" WARN
+    return 0
+}
+
+al_cfg_tanda_al_dia() {
+    # ¿SE HA LIMPIADO YA PARA ESTA TANDA? Si no, se limpia una vez y se apunta.
+    #
+    # Asi es como un AL_CFG_TANDA nuevo llega a la gente que no reinstala
+    # Arcade Loader: la primera vez que se mira una configuracion despues de
+    # actualizar WProton, se tiran los apuntes de golpe y se vuelve a bajar
+    # todo. Una vez, no en cada arranque.
+    local d sello puesta
+    d="$(al_cfg_cache_dir)"; sello="$d/.tanda"
+    mkdir -p "$d" 2>/dev/null || true
+    puesta=""
+    [ -f "$sello" ] && puesta="$(head -n1 "$sello" 2>/dev/null | tr -d ' \t\r\n')"
+    [ "$puesta" = "${AL_CFG_TANDA:-}" ] && return 0
+    # La primera vez de todas no hay nada que borrar: se apunta y listo, que
+    # no tiene sentido decir "se vuelven a bajar" lo que no se ha bajado nunca.
+    if [ -n "$puesta" ]; then
+        log "Arcade Loader: tanda de configuraciones '$puesta' -> '${AL_CFG_TANDA:-}'"
+        al_cfg_cache_borrar "tanda nueva de configuraciones"
+    fi
+    printf '%s\n' "${AL_CFG_TANDA:-}" > "$sello" 2>/dev/null \
+        || log "Arcade Loader: no se pudo apuntar la tanda de configuraciones en $sello" WARN
+    return 0
+}
+
 al_config_especial() {
     # LA CONFIGURACION ESPECIAL DE UN JUEGO, TRAIDA DEL REPOSITORIO.
     # $1 = ruta del juego, $2 = gid del perfil de WProton.
@@ -61143,8 +61624,10 @@ al_config_especial() {
         log "Arcade Loader: '$gameid' no tiene perfil de fabrica en systemprofiles; no se sabe su sistema y no se busca configuracion"
         return 1
     fi
+    # ¿HAY TANDA NUEVA? Entonces los apuntes se tiran antes de mirar nada.
+    al_cfg_tanda_al_dia
     dest="$(arcade_loader_dir)/userprofiles/$sistema/$gameid.yaml"
-    etagdir="$PROFILE_DIR/.al_cfg"
+    etagdir="$(al_cfg_cache_dir)"
     etag="$etagdir/${sistema}__${gameid}.etag"
     mkdir -p "$etagdir" 2>/dev/null || true
     # ¿YA SE MIRO HOY? Entonces nada, y sin tocar la red.
@@ -61161,7 +61644,21 @@ al_config_especial() {
     # Si el ETag esta guardado pero el fichero de destino ya no esta -alguien
     # lo borro, o reinstalo Arcade Loader-, preguntar en condicional daria 304
     # y nos quedariamos sin copiarlo. En ese caso se pide entero.
-    if [ -s "$etag" ] && [ -f "$dest" ]; then
+    # Y SI SE FUERZA, SE PIDE ENTERO: nada de preguntar en condicional.
+    #
+    # Esto estaba a medias y se notaba justo cuando hacia falta. "forzar" solo
+    # se saltaba la comprobacion de una-vez-al-dia, pero seguia preguntando
+    # con --etag-compare, asi que si el fichero del repositorio no habia
+    # cambiado contestaba 304 y la fila del menu decia "no se ha traido
+    # ninguna configuracion nueva" DEJANDO LA QUE HUBIERA.
+    #
+    # Para el caso normal da igual -si no ha cambiado, no hay nada que traer-,
+    # pero para el que pulsa esa fila no: la pulsa porque el fichero que tiene
+    # NO es el que deberia, y lo que quiere es el del repositorio encima,
+    # cambiado o no. Pedirlo entero son 200 bytes.
+    if [ "$forzar" = forzar ]; then
+        log "Arcade Loader: se pide la configuracion de '$sistema/$gameid' entera (forzado a mano)"
+    elif [ -s "$etag" ] && [ -f "$dest" ]; then
         _cond=(--etag-compare "$etag")
         log "Arcade Loader: preguntando si hay una version mas nueva de '$sistema/$gameid'"
     else
@@ -75868,11 +76365,10 @@ busca los cambios, asi que no se pierde al actualizarlo.
 
 Si habia una puesta antes, queda al lado con .anterior."
                 else
-                    ui_info "No se ha traido ninguna configuracion nueva.
+                    ui_info "No se ha traido ninguna configuracion.
 
-Puede ser que el repositorio no tenga nada para este juego, o
-que la que ya tienes sea la ultima. El registro dice cual de
-las dos."
+El repositorio no tiene nada para este juego, o no se ha
+podido preguntar. El registro dice cual de las dos."
                 fi
                 continue ;;
             "Es un juego de Arcade Loader:"*)
@@ -77579,7 +78075,7 @@ tools_menu() {
             "Borrar un runner" \
             "Instalar y actualizar componentes >>" \
             "Instalar librerias de Windows (vcredist, PhysX...)" \
-            "Arcade Loader (arcades nativos de Linux): $(arcade_loader_label)" \
+            "Arcade Loader (arcades nativos de Linux): $(arcade_loader_label)$(arcade_loader_marca)" \
             "Convertir carpeta a $(pack_formato_archivo)" \
             "Convertir wsquashfs a carpeta" \
             "Acceso a WProton en el escritorio: $(acceso_directo_label)" \
