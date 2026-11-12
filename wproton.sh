@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.27"
+WPROTON_VERSION="2.28"
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -32648,7 +32648,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -32699,6 +32699,16 @@ profile_defaults() {
     HDR=0
     WINED3D=0
     FSR=0
+    MAKO_MODELO="mako-fg"
+    MAKO_FG_MODO="balanced"
+    MAKO_ESCALA="0"
+    MAKO_ESCALA_FACTOR="1.5"
+    MAKO_ESCALA_NITIDEZ="0.8"
+    LSFG="0"
+    LSFG_MULT="2"
+    LSFG_FLUJO="0.8"
+    LSFG_RENDIM="0"
+    LSFG_RITMO="vsync"
     LAA=0
     GAMESCOPE=""
     DLL_OVERRIDES=""
@@ -32723,10 +32733,10 @@ profile_defaults() {
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py 17012ea92575" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py e3a8b1626c11" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py 17012ea92575
+# WPROTON_HELPER perfil.py e3a8b1626c11
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -32888,6 +32898,49 @@ ESQUEMA = [
     ("HDR",               "entero", 0,                None),
     ("WINED3D",           "entero", 0,                None),
     ("FSR",               "entero", 0,                None),
+    # GENERACION DE FOTOGRAMAS DE LOSSLESS SCALING (lsfg-vk), 12/11.
+    #
+    # LSFG apagado por defecto a proposito: hace falta tener Lossless Scaling
+    # comprado en Steam -su lsfg-vk.dll sale de ahi- y cambia como se ve y se
+    # siente el juego. Eso no se enciende sin que lo pidan.
+    #
+    # Los valores salen de la documentacion de lsfg-vk, no inventados:
+    #   multiplicador 2/3/4, flujo 1.0/0.8/0.5/0.25 (menos = mas rapido),
+    #   modo rendimiento 1/0, y el ritmo vsync/immediate/mailbox/fifo.
+    # EL MAKO SCALER (escalado espacial), 12/11. Es una capa APARTE de la de
+    # generacion de fotogramas -VK_LAYER_MAKO_spatial_scaling- y, segun el
+    # README del paquete 4.6.0, "The open MAKO Scaler does not require
+    # Lossless.dll": o sea que esto lo puede usar quien NO tenga Lossless
+    # Scaling comprado, al contrario que la generacion de fotogramas.
+    #
+    # Metodo fijado a "mako" a proposito: los otros que admite (ls1,
+    # ls1-performance) si necesitan el dll, y "native" es no escalar. Factor y
+    # nitidez son los valores de su documentacion; los defectos del propio
+    # MAKO son 1.5 y 0.8.
+    # EL MODELO DE GENERACION DE FOTOGRAMAS DE MAKO, 12/11 (MAKO 5.0).
+    #
+    # Desde la 5.0 el paquete trae su propio modelo -MAKO FG, en
+    # lib/mako-fg/- y es el modelo POR DEFECTO del motor. Lo importante:
+    # FUNCIONA SIN EL Lossless.dll. Su README: "MAKO FG and MAKO Scaler are
+    # the default models and, with Shaders, work without Lossless Scaling.
+    # Only the optional Lossless Scaling frame generation models and LS1
+    # scaling require a user-owned installation".
+    #
+    # Asi que el defecto aqui es mako-fg, igual que en el motor. "lossless"
+    # queda para quien lo prefiera y tenga el dll.
+    ("MAKO_MODELO",       "opcion", "mako-fg",        ("mako-fg", "lossless")),
+    # El modo de MAKO FG. El defecto del motor es "balanced"; los otros tres
+    # cambian cada cuanto resuelve el movimiento, o sea precision por GPU.
+    ("MAKO_FG_MODO",      "opcion", "balanced",
+                    ("quality", "balanced", "performance", "extra-performance")),
+    ("MAKO_ESCALA",       "opcion", "0",              ("0", "1")),
+    ("MAKO_ESCALA_FACTOR","opcion", "1.5",            ("1.3", "1.5", "1.7", "2.0")),
+    ("MAKO_ESCALA_NITIDEZ","opcion","0.8",            ("0.0", "0.5", "0.8", "1.0")),
+    ("LSFG",              "opcion", "0",              ("0", "1")),
+    ("LSFG_MULT",         "opcion", "2",              ("2", "3", "4")),
+    ("LSFG_FLUJO",        "opcion", "0.8",            ("1.0", "0.8", "0.5", "0.25")),
+    ("LSFG_RENDIM",       "opcion", "0",              ("0", "1")),
+    ("LSFG_RITMO",        "opcion", "vsync",          ("vsync", "immediate", "mailbox", "fifo")),
     ("LAA",               "entero", 0,                None),
     ("GAMESCOPE",         "texto",  "",               None),
     ("DLL_OVERRIDES",     "texto",  "",               None),
@@ -35272,7 +35325,14 @@ mako_etiqueta() {
         printf 'no instalado'
         return 0
     fi
-    if ! mako_dll >/dev/null; then
+    # 12/11, MAKO 5.0: SOLO SE DICE QUE FALTA EL DLL SI DE VERDAD HACE FALTA.
+    #
+    # Antes esta fila decia "falta Lossless.dll" en cuanto el dll no aparecia,
+    # y con la 5.0 eso es mentira: su modelo propio -MAKO FG- viene en el
+    # paquete y genera fotogramas sin ningun dll. Dejarlo asi le decia a todo
+    # el que no tiene Lossless Scaling comprado que esto no es para el, cuando
+    # si lo es.
+    if mako_necesita_dll && ! mako_dll >/dev/null; then
         printf 'falta Lossless.dll'
         return 0
     fi
@@ -35282,16 +35342,17 @@ mako_etiqueta() {
     else
         printf '%sx' "${MAKO_MULT:-2}"
     fi
+    [ "$(mako_modelo_resuelto)" = mako-fg ] && printf ' (MAKO FG, %s)' "${MAKO_FG_MODO:-balanced}"
 }
 
 MAKO_DIR="$RUNTIME_DIR/mako"
 MAKO_PY="$RUNTIME_DIR/mako.py"
 
 write_mako() {
-    grep -q "WPROTON_HELPER mako.py 5bd6223e7e86" "$MAKO_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER mako.py aee3e5f338b5" "$MAKO_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MAKO_PY" <<'MAKEOF'
-# WPROTON_HELPER mako.py 5bd6223e7e86
+# WPROTON_HELPER mako.py aee3e5f338b5
 # WPROTON_HELPER mako.py 71dbfd484f6e
 # -*- coding: utf-8 -*-
 # WProton - MAKO Renderer (generacion de fotogramas por capa Vulkan)
@@ -35351,8 +35412,37 @@ def estado(base):
         # aceptar la estandar, que dentro del contenedor no sirve.
         for actual, dirs, _f in os.walk(base):
             dirs.sort()
-            if actual.endswith(os.path.join("mako-render", "vulkan",
-                                            "implicit_layer.d")):
+            # 12/11: SE BUSCA POR EL MANIFIESTO, PERO SIGUE SIN VALER LA
+            # CARPETA ESTANDAR.
+            #
+            # Primero el error que casi cometo: al revisar la 4.6.0 vi que los
+            # manifiestos estaban en share/vulkan/implicit_layer.d y di por
+            # roto el reconocimiento. NO LO ESTA: el paquete trae LAS DOS
+            # carpetas, y la de siempre -share/mako-render/vulkan/
+            # implicit_layer.d- sigue en su sitio, asi que MANIF_REL de arriba
+            # acierta y este respaldo ni se usa. Comprobado descargando el
+            # paquete de verdad y listandolo entero, no las primeras lineas.
+            #
+            # Y SON DOS CARPETAS DISTINTAS A PROPOSITO:
+            #
+            #   share/mako-render/vulkan/implicit_layer.d  -> SOLO la capa del
+            #       Renderer. Es la que se le da a VK_LAYER_PATH, para meter
+            #       esa capa y nada mas.
+            #   share/vulkan/implicit_layer.d              -> la estandar, con
+            #       la del Renderer Y la de escalado, para el descubrimiento
+            #       automatico de todo el sistema.
+            #
+            # Por eso este respaldo EXCLUYE la estandar, que es lo que ya decia
+            # el comentario de arriba y yo habia quitado sin darme cuenta:
+            # apuntar VK_LAYER_PATH a la estandar le ensena al cargador
+            # manifiestos que no hemos pedido. Se busca una carpeta
+            # implicit_layer.d que tenga el manifiesto del Renderer y que NO
+            # sea la estandar.
+            if actual.endswith(os.path.join("vulkan", "implicit_layer.d")) \
+               and not actual.endswith(os.path.join("share", "vulkan",
+                                                    "implicit_layer.d")) \
+               and os.path.isfile(os.path.join(actual,
+                                               "VkLayer_MAKO_render.json")):
                 manif = actual
                 break
     if not os.path.isfile(os.path.join(manif, "VkLayer_MAKO_render.json")):
@@ -36285,16 +36375,51 @@ y ejecuta su instalador con:
     # busca la carpeta de manifiestos y se sube desde ella: eso da la raiz sea
     # cual sea la forma que traiga el paquete.
     say "[+] Instalando en $MAKO_DIR ..."
-    local manif_pkg raiz_pkg
-    manif_pkg="$(find "$tmp" -type d -path '*/share/mako-render/vulkan/implicit_layer.d' \
-                 2>/dev/null | head -1)"
+    # LA RAIZ DEL PAQUETE SE BUSCA, NO SE CUENTA.
+    #
+    # 12/11: ESTO ESTABA ROTO Y ROMPIA LA INSTALACION ENTERA.
+    #
+    # Antes se exigia la ruta '*/share/mako-render/vulkan/implicit_layer.d' y,
+    # a partir de ella, se subian CUATRO niveles para dar con la raiz. En la
+    # 4.6.0 los manifiestos estan en 'share/vulkan/implicit_layer.d', sin el
+    # tramo 'mako-render' en medio -comprobado descargando el paquete de verdad
+    # y listandolo-. O sea que:
+    #
+    #   - el find no encontraba nada y mako_instalar se iba con
+    #     "El paquete no tiene la forma esperada";
+    #   - y aunque se hubiera encontrado, cuatro niveles desde la ruta nueva se
+    #     pasan uno y la raiz habria salido mal.
+    #
+    # El comentario de antes ya decia "en vez de suponer la profundidad, se
+    # busca la carpeta de manifiestos y se sube desde ella"... y acto seguido
+    # suponia la profundidad. Ahora no: se busca el fichero del manifiesto, se
+    # sube desde el, y se para en la carpeta que TIENE la biblioteca de 64
+    # bits. Eso identifica la raiz sea cual sea la forma del paquete, y ademas
+    # se comprueba a si mismo: si lo que se encuentra no trae la biblioteca, no
+    # es la raiz y no se copia nada.
+    local manif_pkg raiz_pkg _subir _n
+    manif_pkg="$(find "$tmp" -type f -name 'VkLayer_MAKO_render.json' 2>/dev/null | head -1)"
+    if [ -n "$manif_pkg" ]; then manif_pkg="$(dirname "$manif_pkg")"; fi
     if [ -z "$manif_pkg" ]; then
-        ui_error "El paquete no tiene la forma esperada: no aparecen los
-manifiestos de la capa (share/mako-render/vulkan/implicit_layer.d)."
+        ui_error "El paquete no tiene la forma esperada: no aparece el
+manifiesto de la capa (VkLayer_MAKO_render.json)."
         rm -rf "$tmp"; rm -f "$pkg"; return 1
     fi
-    # de .../share/mako-render/vulkan/implicit_layer.d se suben cuatro
-    raiz_pkg="$(dirname "$(dirname "$(dirname "$(dirname "$manif_pkg")")")")"
+    raiz_pkg=""; _subir="$manif_pkg"
+    _n=0
+    while [ "$_n" -lt 6 ]; do
+        _subir="$(dirname "$_subir")"
+        [ "$_subir" = / ] && break
+        if [ -f "$_subir/lib/libmako-render.so" ]; then raiz_pkg="$_subir"; break; fi
+        _n=$((_n+1))
+    done
+    if [ -z "$raiz_pkg" ]; then
+        ui_error "El paquete trae el manifiesto de la capa pero no su
+biblioteca (lib/libmako-render.so). No se instala a medias."
+        log "MAKO: manifiesto en '$manif_pkg' pero sin lib/libmako-render.so por encima" WARN
+        rm -rf "$tmp"; rm -f "$pkg"; return 1
+    fi
+    log "MAKO: raiz del paquete '$raiz_pkg' (manifiestos en '$manif_pkg')"
     mkdir -p "$MAKO_DIR"
     # cp -a conserva permisos: los binarios de bin/ tienen que seguir siendo
     # ejecutables. El "/." copia el CONTENIDO, no la carpeta dentro de si misma.
@@ -36334,6 +36459,121 @@ versiones viejas no traen los modelos que MAKO necesita."
     return 0
 }
 
+mako_escala_exportar() {
+    # EL MAKO SCALER: escalado espacial, capa APARTE de la de fotogramas.
+    #
+    # POR QUE TIENE SU PROPIA FUNCION Y NO VA DENTRO DE mako_exportar:
+    #
+    # Son dos capas distintas del mismo paquete, con su propio manifiesto y su
+    # propia variable de encendido, y -lo que mas importa- CON REQUISITOS
+    # DISTINTOS. El README del paquete 4.6.0 lo dice en una linea:
+    #
+    #   "Frame Generation and LS1 scaling require a user-owned installation of
+    #    the default public version of Lossless Scaling from Steam. [...] The
+    #    open MAKO Scaler does not require Lossless.dll."
+    #
+    # O sea que esto lo puede usar QUIEN NO TENGA LOSSLESS SCALING COMPRADO, y
+    # mako_exportar se vuelve sin hacer nada cuando falta el dll. Metiendolo
+    # ahi dentro, el escalado habria heredado un requisito que no tiene.
+    #
+    # Y encaja con el liston de este proyecto -maquinas por debajo de una Steam
+    # Deck-: escalar es renderizar a menos y subir, que es justo lo que da aire
+    # en una maquina justa, mientras que generar fotogramas pide GPU.
+    [ "${MAKO_ESCALA:-0}" = 1 ] || return 0
+    local manif_esc nombre_esc
+    mako_disponible >/dev/null || {
+        say "AVISO: el perfil pide el escalado de MAKO y MAKO no esta instalado - se ignora"
+        log "MAKO Scaler: pedido pero MAKO no esta instalado" WARN
+        return 1
+    }
+    # SU MANIFIESTO VIVE EN OTRA CARPETA: spatial_scaling.d, al lado de
+    # implicit_layer.d. Las dos son privadas del paquete y traen UNA capa cada
+    # una, que es lo que permite darle a VK_LAYER_PATH exactamente la que se
+    # quiere y ninguna mas.
+    manif_esc="$(mako_escala_manifiestos)" || {
+        say "AVISO: este MAKO no trae la capa de escalado - se ignora"
+        log "MAKO Scaler: no aparece spatial_scaling.d; sera un paquete anterior a la 4.x" WARN
+        return 1
+    }
+    nombre_esc="$(mako_escala_capa_nombre 2>/dev/null)"
+    vk_capa_anadir "$manif_esc" "${nombre_esc:-VK_LAYER_MAKO_spatial_scaling}"
+    export ENABLE_MAKO_SPATIAL_SCALING=1
+    export MAKO_ENV=1
+    export MAKO_SCALING_ENABLED=1
+    # "mako" es el metodo abierto, el unico que no pide el dll. Los otros que
+    # admite el motor (ls1, ls1-performance) si lo piden, y "native" es no
+    # escalar; por eso aqui no se ofrece elegir metodo.
+    export MAKO_SCALING_METHOD=mako
+    export MAKO_SCALING_FACTOR="${MAKO_ESCALA_FACTOR:-1.5}"
+    export MAKO_SCALING_SHARPNESS="${MAKO_ESCALA_NITIDEZ:-0.8}"
+    case "$MAKO_DIR" in
+        "$HOME"/*) ;;
+        *) export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$MAKO_DIR" ;;
+    esac
+    say "[+] MAKO Scaler: escalado x${MAKO_ESCALA_FACTOR:-1.5} (nitidez ${MAKO_ESCALA_NITIDEZ:-0.8})"
+    log "MAKO Scaler: ACTIVADO -> capa=${nombre_esc:-VK_LAYER_MAKO_spatial_scaling} manif=$manif_esc factor=${MAKO_ESCALA_FACTOR:-1.5} nitidez=${MAKO_ESCALA_NITIDEZ:-0.8}"
+    return 0
+}
+
+mako_trae_fg() {
+    # ¿TRAE ESTE MAKO SU PROPIO MODELO DE GENERACION? (MAKO FG)
+    #
+    # Desde la 5.0.0 el paquete incluye lib/mako-fg/ con su programa auxiliar
+    # y su modelo, y ya NO hace falta el Lossless.dll para generar fotogramas.
+    # Comprobado en el paquete real de la 5.0.0 (sha256 verificado contra el
+    # que el proyecto fija en plugin/package.json): lib/mako-fg/mako-fg-host
+    # de 19 MB y lib/mako-fg/model/ con weights.bin, ops.spv, transport.spv y
+    # mixture.spv. En la 4.6.0 NO venia.
+    #
+    # Se mira que esten las dos cosas -el programa y los pesos-, no solo la
+    # carpeta: media instalacion es peor que ninguna, porque la capa cargaria y
+    # fallaria al generar.
+    [ -x "$MAKO_DIR/lib/mako-fg/mako-fg-host" ] || return 1
+    [ -s "$MAKO_DIR/lib/mako-fg/model/weights.bin" ] || return 1
+    return 0
+}
+
+mako_modelo_resuelto() {
+    # QUE MODELO SE VA A USAR DE VERDAD: imprime "mako-fg" o "lossless".
+    #
+    # No es solo leer el perfil: si se pide mako-fg y el MAKO instalado es
+    # anterior a la 5.0, ese modelo no existe en la maquina. Aqui se resuelve
+    # una vez y quien llama ya no tiene que volver a pensarlo.
+    if [ "${MAKO_MODELO:-mako-fg}" = lossless ]; then printf 'lossless'; return 0; fi
+    if mako_trae_fg; then printf 'mako-fg'; else printf 'lossless'; fi
+    return 0
+}
+
+mako_necesita_dll() {
+    # ¿HACE FALTA EL Lossless.dll? Solo para el modelo de Lossless Scaling.
+    [ "$(mako_modelo_resuelto)" = lossless ]
+}
+
+mako_escala_manifiestos() {
+    local d="$MAKO_DIR/share/mako-render/vulkan/spatial_scaling.d"
+    [ -f "$d/VkLayer_MAKO_spatial_scaling.json" ] && { printf '%s' "$d"; return 0; }
+    return 1
+}
+
+mako_escala_capa_nombre() {
+    # Del manifiesto, no de una constante, por lo mismo que mako_capa_nombre.
+    local d; d="$(mako_escala_manifiestos)" || return 1
+    local n
+    n="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(VK_LAYER_[^"]*\)".*/\1/p' \
+         "$d/VkLayer_MAKO_spatial_scaling.json" 2>/dev/null | head -n1)"
+    [ -n "$n" ] || return 1
+    printf '%s' "$n"
+}
+
+mako_escala_etiqueta() {
+    if ! mako_disponible >/dev/null; then printf 'MAKO no instalado'; return 0; fi
+    if ! mako_escala_manifiestos >/dev/null 2>&1; then
+        printf 'este MAKO no lo trae'; return 0
+    fi
+    [ "${MAKO_ESCALA:-0}" = 1 ] || { printf 'no'; return 0; }
+    printf 'x%s' "${MAKO_ESCALA_FACTOR:-1.5}"
+}
+
 mako_exportar() {
     # Enciende MAKO para ESTE juego. Se llama desde export_game_env.
     #
@@ -36361,12 +36601,34 @@ mako_exportar() {
         say "AVISO: el perfil pide MAKO y no esta instalado - se ignora"
         return 1
     }
-    local dll
-    dll="$(mako_dll)" || {
-        say "AVISO: MAKO necesita el Lossless.dll de Lossless Scaling y no aparece.
-     Copialo en: $MAKO_DIR/Lossless.dll"
-        return 1
-    }
+    # EL DLL SOLO SE EXIGE PARA EL MODELO QUE LO NECESITA (12/11, MAKO 5.0).
+    #
+    # Antes esto era un "sin dll no hay MAKO" y punto. Con la 5.0 es falso: el
+    # paquete trae MAKO FG -programa y modelo, en lib/mako-fg/- y es el modelo
+    # por defecto del motor. Su README lo dice en una linea: "Only the optional
+    # Lossless Scaling frame generation models and LS1 scaling require a
+    # user-owned installation of Lossless Scaling from Steam".
+    #
+    # O sea que el bloqueo de antes dejaba sin generacion de fotogramas a todo
+    # el que no tiene Lossless Scaling comprado, para algo que YA le funciona.
+    local dll="" modelo
+    modelo="$(mako_modelo_resuelto)"
+    if [ "$modelo" = lossless ]; then
+        dll="$(mako_dll)" || {
+            if [ "${MAKO_MODELO:-mako-fg}" = lossless ]; then
+                say "AVISO: has elegido el modelo de Lossless Scaling y el Lossless.dll no aparece.
+     Copialo en: $MAKO_DIR/Lossless.dll, o cambia el modelo a MAKO FG."
+            else
+                # Pidio mako-fg pero el MAKO instalado es anterior a la 5.0.
+                say "AVISO: este MAKO no trae su propio modelo (es anterior a la 5.0) y el
+     Lossless.dll no aparece. Reinstala MAKO desde Runners y herramientas
+     para tener la ultima, o copia el dll en: $MAKO_DIR/Lossless.dll"
+                log "MAKO: se pidio mako-fg pero el MAKO instalado no lo trae y no hay dll" WARN
+            fi
+            return 1
+        }
+    fi
+    log "MAKO: modelo=$modelo (perfil='${MAKO_MODELO:-mako-fg}', el paquete trae FG: $(mako_trae_fg && echo si || echo no))"
     case "$MAKO_DIR" in
         "$HOME"/*) ;;
         *) export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$MAKO_DIR"
@@ -36383,8 +36645,23 @@ mako_exportar() {
     # tocar ~/.config, que es lo que lo hace portable de verdad. Comprobado:
     # el registro dice "using profile with name '(environment)'".
     export MAKO_ENV=1
-    export MAKO_DLL_PATH="$dll"
+    # EL DLL SOLO SE PASA SI HAY DLL. Con el modelo propio (MAKO FG) la
+    # variable se queda sin poner, que no es lo mismo que ponerla vacia: una
+    # MAKO_DLL_PATH="" es una ruta, y una ruta que no existe.
+    [ -n "$dll" ] && export MAKO_DLL_PATH="$dll"
     export MAKO_FRAME_GENERATION_ENABLED=1
+    # EL MODELO, SIEMPRE EXPRESO. El motor tiene su propio defecto -mako-fg
+    # desde la 5.0- pero decirlo nosotros quita una suposicion: si manana
+    # cambian el defecto, el perfil del usuario sigue valiendo lo mismo.
+    export MAKO_FRAME_GENERATION_MODEL="$([ "$modelo" = lossless ] \
+        && printf 'lossless-scaling' || printf 'mako-fg')"
+    if [ "$modelo" = mako-fg ]; then
+        # quality / balanced / performance / extra-performance. Cambian cada
+        # cuanto MAKO FG resuelve el movimiento: los modos altos ahorran GPU a
+        # cambio de precision. El defecto del motor es balanced.
+        export MAKO_FG_MODE="${MAKO_FG_MODO:-balanced}"
+        say "[+] MAKO: modelo propio MAKO FG (modo ${MAKO_FG_MODO:-balanced}), sin Lossless.dll"
+    fi
     if [ "${MAKO_ADAPTIVE:-0}" = 1 ]; then
         export MAKO_ADAPTIVE=1
         export MAKO_ADAPTIVE_MAX_MULTIPLIER="${MAKO_MULT:-2}"
@@ -39185,11 +39462,26 @@ export_game_env() {
     # virtual de Steam, da igual si el usuario lo pidio o lo decidimos
     # nosotros. Un ajuste que se comporta distinto segun como llegaste a el es
     # una trampa.
-    if mando_solo_virtual_de_steam && [ "${PAD_STEAMFIX:-0}" = 0 ] \
+    #
+    # EL "auto" SE RESUELVE AQUI, UNA VEZ, Y EN UNA LOCAL.
+    #
+    # Antes estas dos mitades comparaban "${PAD_STEAMFIX:-0}" con 0 y con 1, y
+    # el valor de fabrica es la palabra "auto": ninguna de las dos
+    # comparaciones se cumplia nunca. O sea que con la opcion en automatico
+    # -que es como la tiene todo el que no la haya tocado- la deteccion NO
+    # SALTABA y el arreglo NO SE APLICABA JAMAS. "auto" significaba "apagado
+    # para siempre y sin decirlo".
+    #
+    # Y no se escribe en PAD_STEAMFIX, que es lo que hacia la linea de abajo:
+    # tras cada partida se reescribe el perfil entero, asi que ese 1 se le
+    # quedaba guardado al usuario y perdia el automatico sin tocar nada.
+    local _sfix; _sfix="$(pad_steamfix_resuelto)"
+    if mando_solo_virtual_de_steam && [ "$_sfix" != 1 ] \
        && [ -n "${PROTON_PREFER_SDL:-}" ]; then
-        PAD_STEAMFIX=1
+        _sfix=1
         say "[+] Mando: se quita tambien la ocultacion de Steam (hacen falta las dos)"
     fi
+    log "Mando: arreglo de Steam Input -> perfil='${PAD_STEAMFIX:-auto}' resuelto=$_sfix"
     # EL PUENTE DE STEAM INPUT A XInput.
     #
     # PROTON_STEAMINPUT_XINPUT_FALLBACK (GE-Proton 11-4): un dispositivo Steam
@@ -39295,7 +39587,7 @@ export_game_env() {
     # abre desde Steam, el juego hereda esa ocultacion pero no siempre el
     # mando virtual: SDL no ve ninguno y el mando "no funciona" aunque los
     # menus si lo lean (nosotros leemos /dev/input en crudo).
-    if [ "${PAD_STEAMFIX:-0}" = 1 ]; then
+    if [ "$_sfix" = 1 ]; then
         local v val cleared=""
         for v in SDL_GAMECONTROLLER_IGNORE_DEVICES \
                  SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT \
@@ -39364,6 +39656,7 @@ export_game_env() {
     # añadieramos el fantasma antes, lo borraria el mismo y no serviria de
     # nada. El orden importa y por eso queda dicho aqui.
     pad_fantasma_aplicar
+    lsfg_entorno
     # NTsync: primitivas de sincronizacion NT dentro del kernel (6.14+).
     # Sustituye a esync/fsync; los runners parcheados la activan con
     # PROTON_USE_NTSYNC=1 (GE-Proton 10-9+, Proton/Wine-CachyOS, DWProton).
@@ -39704,6 +39997,10 @@ export_game_env() {
     # MAKO EL ULTIMO, para que EXTRA_ENV pueda afinarlo si alguien quiere
     # probar una variable MAKO_* que aqui no se ofrezca.
     [ "${MAKO:-0}" = 1 ] && mako_exportar
+    # El escalado va aparte y NO depende de que la generacion este encendida:
+    # se puede escalar sin generar fotogramas, y de hecho es lo que tiene
+    # sentido en una maquina justa.
+    mako_escala_exportar || true
     # DESPUES DE MAKO, para que las dos capas se sumen en VK_INSTANCE_LAYERS
     # en vez de pisarse.
     [ "${RESHADE_LX:-0}" = 1 ] && reshade_lx_exportar
@@ -42438,6 +42735,25 @@ Que cumplas muchos mas.
     # esta". Esta contado en COMPATIBILIDAD.md. Se deja el parrafo porque
     # cuenta por que existe esta suite, pero no se lea como el estado de hoy.
     #
+    # 12/11, AL SUBIR A LA 2.28: fuera los TRES de la 2.27 y dentro CUATRO.
+    #
+    # Los tres primeros son cosas que la gente no podia hacer y ahora si:
+    # generar fotogramas con MAKO sin tener Lossless Scaling comprado (su
+    # paquete 5.0.0 trae modelo propio), escalar con el MAKO Scaler, que
+    # tampoco lo pide, y que el plugin de Decky de lsfg-vk sirva para los
+    # juegos de WProton.
+    #
+    # EL CUARTO ES UN ARREGLO Y VA EN LA LISTA A PROPOSITO, aunque la regla sea
+    # que los arreglos internos no se anuncian. Este no era interno: la opcion
+    # "Arreglo mando SteamOS" CERRABA WPROTON al pulsarla, y le pasaba a todo
+    # el que no la hubiera tocado nunca -o sea a cualquiera que entrara ahi-.
+    # Quien se lo encontro necesita saber que ya esta, y quien no lo intento
+    # nunca merece saber que esa opcion ahora se puede usar.
+    #
+    # Lo de MAKO 5.0 NO va como punto aparte: para quien usa el programa, "ya
+    # no necesita Lossless Scaling" ES la noticia; que por dentro sea seguir el
+    # ritmo de otra version es cosa nuestra.
+    #
     # 09/11, AL SUBIR A LA 2.27: fuera los SIETE de la 2.26 y dentro TRES.
     #
     # Los tres son de Arcade Loader, que es en lo unico que se ha trabajado
@@ -42501,11 +42817,13 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arcade Loader 2.0: se te ofrece la actualizacion y guarda tus partidas.
+  Generar fotogramas con MAKO ya no necesita Lossless Scaling.
 
-  Las configuraciones de mandos de sus juegos se vuelven a traer solas.
+  Y puedes escalar la imagen con el MAKO Scaler, que tampoco lo pide.
 
-  Y puedes abrirlo desde el menu para tocar los mandos de un juego.
+  El plugin de Decky de lsfg-vk ya funciona con los juegos de WProton.
+
+  Arreglado: el arreglo de mando de SteamOS cerraba WProton al tocarlo.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -61807,6 +62125,7 @@ lanzar_arcade_loader() {
     # serie y solo se enciende si el perfil lo pide.
     mando_virtual_del_juego "$kf"
     pad_fantasma_aplicar
+    lsfg_entorno
     capa_vulkan_entorno
     guardia_salida_start "$bin"
     ultimo_juego_recordar "$juego"
@@ -61896,6 +62215,7 @@ lanzar_nativo_suelto() {
     # los sticks al reves, que vienen del .keys, no aplican.
     mando_virtual_del_juego ""
     pad_fantasma_aplicar
+    lsfg_entorno
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
     capa_vulkan_entorno
@@ -61992,6 +62312,7 @@ lanzar_script_si_existe() {
     # botones remapeados-.
     mando_virtual_del_juego ""
     pad_fantasma_aplicar
+    lsfg_entorno
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
     capa_vulkan_entorno
@@ -62603,6 +62924,394 @@ mando_es_integrado() {
         internal) printf '1' ;;
         external) printf '0' ;;
         *)        return 1 ;;
+    esac
+}
+
+# ===========================================================================
+# LOSSLESS SCALING FRAME GENERATION (lsfg-vk) — 12/11
+#
+# QUE ES. Lossless Scaling es un programa de Steam (appid 993090) que genera
+# fotogramas intermedios. lsfg-vk es la capa de Vulkan que hace eso mismo en
+# Linux usando el lsfg-vk.dll que viene con la compra. En la Steam Deck se
+# instala con el plugin de Decky "decky-lossless-scaling-vk".
+#
+# POR QUE NO FUNCIONABA CON WPROTON. No es que la capa no cargue -es IMPLICITA,
+# o sea que el cargador de Vulkan la mete en toda aplicacion Vulkan de la
+# maquina, WProton incluido-. Lo que no llegaba era su CONFIGURACION.
+#
+# Todo lo que el plugin hace por juego vive en ~/.lsfg, un envoltorio que Steam
+# ejecuta por las opciones de inicio y que, leido de su propio codigo
+# (wrapper_service.py, _render_wrapper), hace esto:
+#
+#     appid=
+#     case "${SteamAppId-}" in ... esac      # y SteamGameId, STEAM_COMPAT_APP_ID
+#     case "$appid" in
+#       480)  unset ...; export LSFGVK_CONFIG=...; ENABLE_GAMESCOPE_WSI=0 ...
+#       ;;
+#     esac
+#     exec "$@"
+#
+# O sea: SE RAMIFICA POR EL IDENTIFICADOR DE STEAM DEL JUEGO. Y con WProton el
+# juego no lo lanza Steam: lo lanza WProton. El identificador que hay en el
+# entorno es el del atajo de WProton, no el del juego, asi que ese "case" no
+# coincide con nada y NO SE EXPORTA NADA: ni la configuracion, ni los apaños.
+#
+# Y los apaños no son opcionales. El plugin trae ENABLE_GAMESCOPE_WSI=0 activado
+# POR DEFECTO, y la documentacion de lsfg-vk lo confirma como requisito en su
+# lista de "no me funciona": "Vsync on Gamescope or Steam Deck -> Set
+# ENABLE_GAMESCOPE_WSI=0". WProton ya sabia de ese choque de capas, pero solo lo
+# arreglaba cuando era EL quien lanzaba gamescope; en Modo Juego de SteamOS
+# -que es donde esta la gente- lo dejaba puesto.
+#
+# COMO SE ARREGLA SIN DEPENDER DE STEAM. lsfg-vk v2 trae LSFGVK_ENV=1, que
+# apaga el sistema de configuracion por fichero y lo coge TODO del entorno. Eso
+# es exactamente lo que necesitamos: WProton puede encenderlo por juego desde su
+# propio perfil, sin identificador de Steam, sin envoltorio y sin tocarle el
+# conf.toml a nadie. Las variables son las documentadas:
+#
+#     LSFGVK_ENV=1               configurar por entorno
+#     LSFGVK_DLL_PATH            el lsfg-vk.dll de Lossless Scaling
+#     LSFGVK_MULTIPLIER          2, 3, 4
+#     LSFGVK_FLOW_SCALE          1.0 .. 0.25 (menos = mas rapido)
+#     LSFGVK_PERFORMANCE_MODE    1 o 0
+#     LSFGVK_PACING_MODE         vsync, immediate, mailbox, fifo
+#     DISABLE_LSFGVK             apagarla del todo
+#
+# LO QUE NO SE HACE, Y POR QUE. No se le toca el conf.toml del plugin: es suyo,
+# lo reescribe cuando quiere y dos programas escribiendo el mismo fichero acaba
+# mal. Con LSFGVK_ENV=1 no hace falta.
+# ===========================================================================
+
+lsfg_capa_json() {
+    # EL MANIFIESTO DE LA CAPA. Si no esta, lsfg-vk no esta instalado.
+    # El nombre sale de las constantes del plugin (constants.py):
+    # JSON_FILENAME = "VkLayer_LSFGVK_frame_generation.json".
+    local d="${XDG_DATA_HOME:-$HOME/.local/share}/vulkan/implicit_layer.d"
+    local f
+    for f in "$d/VkLayer_LSFGVK_frame_generation.json" \
+             "$d/VkLayer_LS_frame_generation.json"; do
+        [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+    done
+    return 1
+}
+
+lsfg_lib() {
+    # LA BIBLIOTECA DE LA CAPA. Se saca del propio manifiesto cuando se puede
+    # -ahi esta la ruta buena- y solo si no, se prueban las de siempre.
+    local j lib
+    if j="$(lsfg_capa_json)"; then
+        lib="$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$j" 2>/dev/null | head -n1)"
+        case "$lib" in
+            /*) [ -f "$lib" ] && { printf '%s' "$lib"; return 0; } ;;
+            ?*) # relativa al manifiesto
+                lib="$(dirname "$j")/$lib"
+                [ -f "$lib" ] && { printf '%s' "$lib"; return 0; } ;;
+        esac
+    fi
+    for lib in "${XDG_DATA_HOME:-$HOME/.local}/lib/liblsfg-vk-layer.so" \
+               "$HOME/.local/lib/liblsfg-vk-layer.so" \
+               "$HOME/.local/lib/liblsfg-vk.so"; do
+        [ -f "$lib" ] && { printf '%s' "$lib"; return 0; }
+    done
+    return 1
+}
+
+lsfg_capa_nombre() {
+    # EL NOMBRE DE LA CAPA, SACADO DEL MANIFIESTO y no de una constante, por lo
+    # mismo que mako_capa_nombre: si el proyecto lo cambia, lo que metamos en
+    # VK_INSTANCE_LAYERS tiene que seguirlo o no se inserta nada.
+    local j; j="$(lsfg_capa_json)" || return 1
+    local n
+    n="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(VK_LAYER_[^"]*\)".*/\1/p' "$j" 2>/dev/null | head -n1)"
+    [ -n "$n" ] || return 1
+    printf '%s' "$n"
+}
+
+lsfg_cli() {
+    local c
+    for c in "$HOME/.local/bin/lsfg-vk-cli" "$(command -v lsfg-vk-cli 2>/dev/null)"; do
+        [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+}
+
+lsfg_steam_bibliotecas() {
+    # TODAS LAS BIBLIOTECAS DE STEAM, LEIDAS DE libraryfolders.vdf.
+    #
+    # Y NO UNA LISTA DE RUTAS A MANO, que es como empezo esto. Las rutas fijas
+    # cubren la instalacion de siempre y la tarjeta de una Deck
+    # (/run/media/...), pero no a quien tenga la biblioteca en un segundo disco
+    # -/mnt/juegos, /games, lo que sea-, que es justo la gente que mas probable
+    # es que tenga Lossless Scaling fuera del disco principal.
+    #
+    # El fichero lo escribe Steam y trae una linea "path" por biblioteca. Se
+    # lee igual que lo hace el propio plugin de Decky (steam_service.py,
+    # _steam_library_roots): sus dos ubicaciones posibles y un patron sobre
+    # "path". Las rutas fijas se dejan DETRAS como respaldo, para cuando el
+    # fichero no esta o no se puede leer.
+    local raiz vdf
+    for raiz in "$HOME/.steam/steam" "$HOME/.steam/root" \
+                "$HOME/.local/share/Steam" \
+                "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
+                ${WP_STEAM_RAIZ_EXTRA:-}; do
+        [ -d "$raiz" ] || continue
+        printf '%s\n' "$raiz"
+        for vdf in "$raiz/steamapps/libraryfolders.vdf" "$raiz/config/libraryfolders.vdf"; do
+            [ -r "$vdf" ] || continue
+            sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$vdf" 2>/dev/null
+        done
+    done
+    # El respaldo de siempre, por si no hay vdf legible.
+    printf '%s\n' /run/media/*/ /run/media/*/*/ 2>/dev/null
+    return 0
+}
+
+lsfg_dll() {
+    # EL lsfg-vk.dll, QUE VIENE CON LOSSLESS SCALING.
+    #
+    # Se busca en todas las bibliotecas de Steam, la de la tarjeta incluida. Y
+    # eso no es por completismo: la propia documentacion avisa de que "the
+    # Steam runtime may hide other partitions from the game" y de que si la
+    # capa carga pero no encuentra el dll hay que moverlo a la particion
+    # principal. O sea que saber DONDE esta es justo lo que hace falta para
+    # poder montarlo, que es lo que hace lsfg_entorno.
+    local b d
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        d="${b%/}/steamapps/common/Lossless Scaling"
+        [ -f "$d/lsfg-vk.dll" ] && { printf '%s' "$d/lsfg-vk.dll"; return 0; }
+    done <<EOF
+$(lsfg_steam_bibliotecas)
+EOF
+    return 1
+}
+
+lsfg_dll_en_sd() {
+    # ¿ESTA EL DLL FUERA DE $HOME? Entonces el contenedor del runtime de Steam
+    # puede no verlo, y es un fallo con sintoma raro: la capa carga, dice que
+    # esta activa, y no genera ni un fotograma.
+    local f; f="$(lsfg_dll)" || return 1
+    case "$f" in "$HOME"/*) return 1 ;; *) return 0 ;; esac
+}
+
+lsfg_instalado() {
+    lsfg_capa_json >/dev/null 2>&1 && lsfg_lib >/dev/null 2>&1
+}
+
+lsfg_label() {
+    # LA FILA DEL MENU. Dice el estado Y si falta algo, porque encenderlo sin
+    # tener el dll no da ningun aviso por si solo: el juego arranca igual y no
+    # pasa nada, que es lo peor que puede hacer un ajuste.
+    if [ "${LSFG:-0}" != 1 ]; then printf 'OFF'; return 0; fi
+    if ! lsfg_instalado; then printf 'ON (pero lsfg-vk no esta instalado)'; return 0; fi
+    if ! lsfg_dll >/dev/null 2>&1; then printf 'ON (falta el lsfg-vk.dll de Lossless Scaling)'; return 0; fi
+    printf 'ON x%s' "${LSFG_MULT:-2}"
+    return 0
+}
+
+lsfg_entorno() {
+    # PONE EL ENTORNO DE lsfg-vk PARA ESTE JUEGO. No devuelve error nunca: que
+    # la generacion de fotogramas no se pueda poner no es motivo para no jugar.
+    #
+    # SE LLAMA DESDE LOS DOS CAMINOS, el de Windows y el nativo. Es la cuarta
+    # vez que en este proyecto algo se pone solo en export_game_env y los
+    # juegos de Linux se quedan sin el (paso con el vigilante de salida, con la
+    # capa de Vulkan y con el mando). lsfg-vk vale para los dos: su active_in
+    # acepta nombres de binarios de Linux igual que .exe.
+    if [ "${LSFG:-0}" != 1 ]; then
+        # APAGADO QUIERE DECIR APAGADO, Y HAY QUE DECIRLO EN VOZ ALTA.
+        #
+        # La capa es implicita: esta metida en todas las aplicaciones Vulkan de
+        # la maquina. Si el usuario tiene un perfil suyo en conf.toml cuyo
+        # active_in cace con este juego, se le activaria sin que WProton lo
+        # sepa ni lo diga. Con DISABLE_LSFGVK el ajuste de WProton significa lo
+        # que dice.
+        if lsfg_instalado; then
+            export DISABLE_LSFGVK=1
+            log "lsfg-vk: instalado pero APAGADO para este juego (DISABLE_LSFGVK=1)"
+        fi
+        return 0
+    fi
+    # MAKO Y lsfg-vk NO PUEDEN IR LOS DOS.
+    #
+    # Hacen LO MISMO con EL MISMO Lossless.dll: generar fotogramas enganchando
+    # la presentacion. Dos capas peleandose por el swapchain no es "el doble de
+    # fotogramas", es imagen a tirones o el juego cerrandose, y encima sin un
+    # mensaje que lo explique.
+    #
+    # Gana MAKO porque es el de la casa: esta probado con umu, tiene su informe
+    # de despues de jugar y su modo adaptativo. Y se DICE, que es lo que
+    # importa: un ajuste que se ignora en silencio es peor que uno que falla.
+    if [ "${MAKO:-0}" = 1 ]; then
+        export DISABLE_LSFGVK=1
+        say "[i] Generacion de fotogramas: se usa MAKO, no lsfg-vk."
+        say "    Los dos hacen lo mismo y no pueden ir juntos. Si prefieres"
+        say "    lsfg-vk, apaga MAKO en Rendimiento y compatibilidad."
+        log "lsfg-vk: PEDIDO a la vez que MAKO; manda MAKO y lsfg-vk se apaga (DISABLE_LSFGVK=1)" WARN
+        return 0
+    fi
+    if ! lsfg_instalado; then
+        say "[!] Generacion de fotogramas: lsfg-vk no esta instalado, se sigue sin ella."
+        say "    Se instala con el plugin de Decky \"Lossless Scaling VK\"."
+        log "lsfg-vk: PEDIDO pero no instalado (no esta el manifiesto de la capa)" WARN
+        return 0
+    fi
+    local _dll=""
+    _dll="$(lsfg_dll 2>/dev/null)" || _dll=""
+    if [ -z "$_dll" ]; then
+        say "[!] Generacion de fotogramas: no se encuentra el lsfg-vk.dll."
+        say "    Viene con Lossless Scaling (Steam), en su rama 'lsfg-vk'."
+        log "lsfg-vk: PEDIDO pero no se encuentra lsfg-vk.dll en ninguna biblioteca de Steam" WARN
+        return 0
+    fi
+    # ===================================================================
+    # LA CAPA SE FUERZA A MANO. ESTO ES EL ARREGLO DE VERDAD.
+    #
+    # lsfg-vk se instala como capa IMPLICITA en
+    # ~/.local/share/vulkan/implicit_layer.d, y dentro de umu eso no sirve:
+    # pressure-vessel ESCONDE esa carpeta al contenedor para imponer las
+    # suyas. Lo dice su propio registro, y esta apuntado en mako_exportar
+    # desde que nos paso con MAKO:
+    #
+    #   "Hiding .../vulkan/implicit_layer.d from the container so that
+    #    .../overrides/... will be used instead"
+    #
+    # O sea que con WProton la capa de lsfg-vk NO SE CARGABA SIQUIERA. No es
+    # que estuviera mal configurada: el cargador de Vulkan de dentro del
+    # contenedor no sabia que existia. Eso explica el "no funciona" sin
+    # ningun mensaje de error por ninguna parte.
+    #
+    # Se arregla igual que con MAKO: dandole al cargador la carpeta del
+    # manifiesto y el nombre de la capa. Por el ayudante comun, que no pisa
+    # las que ya hubiera -el menu, ReShade, MAKO-, que es un fallo que ya
+    # tuvimos una vez.
+    local _nlsfg _dirlsfg
+    _dirlsfg="$(dirname "$(lsfg_capa_json)")"
+    _nlsfg="$(lsfg_capa_nombre 2>/dev/null)"
+    if [ -z "$_nlsfg" ]; then
+        # Sin nombre no se puede forzar, pero fuera de umu la capa se descubre
+        # sola, asi que no es motivo para no intentarlo.
+        log "lsfg-vk: no se pudo leer el nombre de la capa de su manifiesto; se deja al descubrimiento automatico" WARN
+    else
+        vk_capa_anadir "$_dirlsfg" "$_nlsfg"
+        log "lsfg-vk: capa forzada -> VK_LAYER_PATH+=$_dirlsfg, capa=$_nlsfg"
+    fi
+    # Y SI LA BIBLIOTECA O EL DLL ESTAN FUERA DE $HOME, SE MONTAN.
+    #
+    # pressure-vessel monta $HOME, asi que lo que esta dentro se ve. Lo de
+    # fuera -tipicamente Lossless Scaling instalado en la tarjeta- no, y el
+    # sintoma es el peor posible: la capa carga, dice que esta activa, y no
+    # genera ni un fotograma. La documentacion de lsfg-vk lo describe tal cual
+    # ("Steam's sandboxing hides lsfg-vk.dll") y su arreglo es mover el
+    # fichero; aqui se monta, que no obliga a mover nada.
+    local _p
+    for _p in "$_dll" "$(lsfg_lib 2>/dev/null)"; do
+        [ -n "$_p" ] || continue
+        case "$_p" in
+            "$HOME"/*) continue ;;
+        esac
+        _p="$(dirname "$_p")"
+        case ":${STEAM_COMPAT_MOUNTS:-}:" in
+            *":$_p:"*) continue ;;
+        esac
+        export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$_p"
+        log "lsfg-vk: '$_p' esta fuera de \$HOME; se monta con STEAM_COMPAT_MOUNTS"
+    done
+    # ===================================================================
+    export LSFGVK_ENV=1
+    export LSFGVK_DLL_PATH="$_dll"
+    export LSFGVK_MULTIPLIER="${LSFG_MULT:-2}"
+    export LSFGVK_FLOW_SCALE="${LSFG_FLUJO:-0.8}"
+    export LSFGVK_PERFORMANCE_MODE="${LSFG_RENDIM:-0}"
+    export LSFGVK_PACING_MODE="${LSFG_RITMO:-vsync}"
+    unset DISABLE_LSFGVK DISABLE_LSFG 2>/dev/null || true
+    # EL CHOQUE CON LA CAPA WSI DE GAMESCOPE.
+    #
+    # Requisito documentado: "Vsync on Gamescope or Steam Deck -> Set
+    # ENABLE_GAMESCOPE_WSI=0". Y el plugin de Decky lo trae encendido por
+    # defecto, o sea que en la practica casi nadie lo necesita apagado.
+    #
+    # NO SE PISA SI EL USUARIO YA LO PUSO: si trae un ENABLE_GAMESCOPE_WSI en
+    # sus variables extra, manda el suyo y se dice que manda el suyo.
+    if [ -z "${ENABLE_GAMESCOPE_WSI+x}" ]; then
+        export ENABLE_GAMESCOPE_WSI=0
+        log "lsfg-vk: ENABLE_GAMESCOPE_WSI=0 (requisito documentado en gamescope y Steam Deck)"
+    else
+        log "lsfg-vk: ENABLE_GAMESCOPE_WSI lo trae el usuario en ${ENABLE_GAMESCOPE_WSI}; no se toca"
+    fi
+    say "[+] Generacion de fotogramas (lsfg-vk): x${LSFG_MULT:-2}, flujo ${LSFG_FLUJO:-0.8}, ritmo ${LSFG_RITMO:-vsync}"
+    log "lsfg-vk: ACTIVADO -> dll=$_dll mult=${LSFG_MULT:-2} flujo=${LSFG_FLUJO:-0.8} rendim=${LSFG_RENDIM:-0} ritmo=${LSFG_RITMO:-vsync}"
+    log "lsfg-vk: capa=$(lsfg_capa_json 2>/dev/null) lib=$(lsfg_lib 2>/dev/null)"
+    # AVISOS DE LO QUE SABEMOS QUE LA DEJA SIN FUNCIONAR. Van a la pantalla
+    # porque el sintoma -no pasa nada- no se parece a un fallo, y quien no sepa
+    # esto se queda mirando.
+    if lsfg_dll_en_sd; then
+        say "[!] El lsfg-vk.dll esta fuera de tu carpeta personal:"
+        say "    $_dll"
+        say "    El runtime de Steam puede no dejar verlo al juego. Si no notas"
+        say "    la diferencia, instala Lossless Scaling en el disco interno."
+        log "lsfg-vk: OJO -> el dll esta fuera de \$HOME ($_dll); el contenedor puede ocultarlo" WARN
+    fi
+    if [ "${HDR:-0}" = 1 ]; then
+        # El plugin apaga DXVK_HDR por defecto. Aqui NO se apaga a escondidas:
+        # el HDR lo ha pedido el usuario expresamente en su perfil, y apagarle
+        # un ajuste que pidio para que funcione otro es decidir por el.
+        say "[i] Tienes HDR encendido. El plugin de Decky lo apaga por defecto"
+        say "    con lsfg-vk; si la imagen sale rara, prueba a quitar el HDR."
+        log "lsfg-vk: HDR=1 a la vez que lsfg-vk; el plugin lo apaga por defecto (DXVK_HDR=0)"
+    fi
+    return 0
+}
+
+pad_steamfix_resuelto() {
+    # DEVUELVE 1 o 0: lo que hay que HACER, resuelto el "auto".
+    #
+    # PAD_STEAMFIX es una opcion de TRES estados -auto, 1, 0-, como PAD_SDL,
+    # PAD_SONY, PAD_FANTASMA o PAD_SIFALLBACK. Lo declara perfil.py:
+    #
+    #     ("PAD_STEAMFIX", "opcion", "auto", ("auto", "1", "0")),
+    #
+    # Y "auto" quiere decir: decidelo tu mirando la maquina. El criterio es el
+    # mismo que usa el puente de Steam Input a XInput justo al lado -si el
+    # UNICO mando que hay es el virtual de Steam, Steam esta escondiendo el
+    # fisico y hay que destaparlo-, asi que se resuelve igual y en un solo
+    # sitio, que es esta funcion.
+    #
+    # NO ESCRIBE EN PAD_STEAMFIX A PROPOSITO, y ese detalle importa: tras cada
+    # partida de mas de 20 segundos se reescribe el perfil ENTERO
+    # (play_time_sumar -> write_full_profile, con todos los WP_CAMPOS_PERFIL
+    # dentro). Si esto resolviera "auto" encima de la variable del perfil, al
+    # usuario se le quedaria guardado un 1 o un 0 fijo sin haberlo tocado, y el
+    # automatico desapareceria de su perfil para siempre. Se devuelve y quien
+    # llama se lo guarda en una local, como hace PAD_SIFALLBACK con su _si.
+    case "${PAD_STEAMFIX:-auto}" in
+        1) printf '1'; return 0 ;;
+        0) printf '0'; return 0 ;;
+    esac
+    if mando_solo_virtual_de_steam; then printf '1'; else printf '0'; fi
+    return 0
+}
+
+pad_steamfix_label() {
+    # LA FILA DEL MENU, con los tres estados.
+    #
+    # En automatico se dice TAMBIEN como ha salido ("automatico (ON)"), porque
+    # si no, la fila miente por omision: un tester del 12/11 vio "OFF" con la
+    # opcion en automatico, entendio -con razon- que estaba apagada, y la
+    # intento encender. Un "OFF" a secas no distingue "apagado" de "en
+    # automatico y ahora mismo no hace falta", y son cosas muy distintas.
+    #
+    # LAS PALABRAS SON NEUTRAS A PROPOSITO: auto, ON y OFF se escriben igual en
+    # español y en ingles. La tabla de traduccion de la interfaz va por la
+    # etiqueta de la fila -"Arreglo mando SteamOS (Steam Input)"- y no toca el
+    # valor que va detras, asi que un "automatico (ON)" o un "ON (fijado)" se
+    # quedarian en español con la interfaz puesta en ingles. Y fijado se pinta
+    # como ON/OFF a secas, igual que lo pintaba onoff() antes, para que a quien
+    # ya conocia la fila no le cambie debajo de los pies.
+    case "${PAD_STEAMFIX:-auto}" in
+        1) printf 'ON' ;;
+        0) printf 'OFF' ;;
+        *) printf 'auto (%s)' "$([ "$(pad_steamfix_resuelto)" = 1 ] && printf ON || printf OFF)" ;;
     esac
 }
 
@@ -69643,7 +70352,10 @@ pad_avisar_steam_oculta() {
         [ -n "$val" ] && n=$((n+1))
     done
     [ "$n" -gt 0 ] || return 0
-    [ "${PAD_STEAMFIX:-0}" = 1 ] && return 0    # ya se esta quitando
+    # 12/11: aqui tambien se comparaba con 1 teniendo "auto" por defecto, asi
+    # que el aviso salia aunque el arreglo fuera a aplicarse de todas formas.
+    # Molesto pero inofensivo, al contrario que los otros dos sitios.
+    [ "$(pad_steamfix_resuelto)" = 1 ] && return 0    # ya se esta quitando
     # LA RUTA, TAL Y COMO SE VE EN PANTALLA.
     #
     # Un aviso que manda a un sitio que no existe es peor que no avisar: el
@@ -72633,13 +73345,60 @@ cfg_rendimiento_menu() {
     # juego, que habia llegado a 42 lineas y era incomodo de recorrer con el
     # mando. Aqui se guardan igual: al volver, el perfil se escribe entero.
     local gid="$1" squash="${2:-}" sel gs_row bat_row hdr_row
+    local lsfg_row lsfg_mult_row lsfg_flu_row lsfg_ren_row lsfg_rit_row lsfg_chk_row
+    local mako_esc_row mako_esc_f_row mako_esc_n_row mako_mod_row mako_fgm_row
     while :; do
         gs_row="Gamescope anidado: $(onoff "${NESTED_GAMESCOPE:-0}")"
         bat_row="Wayland nativo: $(onoff "$WAYLAND")"
         hdr_row="HDR: $(onoff "${HDR:-0}")$(hdr_pega || printf ' [%s]' "$(hdr_pega_texto)")"
+        # LAS FILAS DE lsfg-vk. Las de ajuste solo se ponen si esta encendido:
+        # cinco filas para algo apagado es ruido en un menu que ya tiene
+        # veintitantas, y con el mando se recorre una por una.
+        # MODELO Y MODO DE MAKO. Solo si MAKO esta encendido, y el modo solo
+        # si el modelo es el propio: el de Lossless no tiene modos.
+        mako_mod_row=""; mako_fgm_row=""
+        if [ "${MAKO:-0}" = 1 ]; then
+            if mako_trae_fg; then
+                mako_mod_row="MAKO: modelo $([ "$(mako_modelo_resuelto)" = lossless ] \
+                    && printf 'Lossless Scaling' || printf 'MAKO FG (sin Lossless.dll)')"
+            fi
+            [ "$(mako_modelo_resuelto)" = mako-fg ] \
+                && mako_fgm_row="MAKO FG: modo ${MAKO_FG_MODO:-balanced}"
+        fi
+        # EL MAKO SCALER. Va pegado a MAKO porque es del mismo paquete, pero
+        # es otra cosa: escala en vez de generar, y NO necesita el
+        # Lossless.dll. Por eso se ofrece aunque falte el dll, que es cuando la
+        # fila de MAKO dice "falta Lossless.dll" y se queda sin nada que hacer.
+        mako_esc_row="Escalar con MAKO Scaler: $(mako_escala_etiqueta)"
+        mako_esc_f_row=""; mako_esc_n_row=""
+        if [ "${MAKO_ESCALA:-0}" = 1 ]; then
+            mako_esc_f_row="MAKO Scaler: factor x${MAKO_ESCALA_FACTOR:-1.5} (mas = mas rapido y menos nitido)"
+            mako_esc_n_row="MAKO Scaler: nitidez ${MAKO_ESCALA_NITIDEZ:-0.8}"
+        fi
+        lsfg_row="Generar fotogramas (lsfg-vk de Decky): $(lsfg_label)"
+        lsfg_mult_row=""; lsfg_flu_row=""; lsfg_ren_row=""; lsfg_rit_row=""
+        if [ "${LSFG:-0}" = 1 ]; then
+            lsfg_mult_row="lsfg-vk: multiplicador x${LSFG_MULT:-2}"
+            lsfg_flu_row="lsfg-vk: escala de flujo ${LSFG_FLUJO:-0.8} (menos = mas rapido)"
+            lsfg_ren_row="lsfg-vk: modo rendimiento: $(onoff "${LSFG_RENDIM:-0}")"
+            lsfg_rit_row="lsfg-vk: ritmo ${LSFG_RITMO:-vsync}"
+        fi
+        lsfg_chk_row=""
+        lsfg_instalado && lsfg_chk_row="Comprobar lsfg-vk"
         sel="$(menu "Rendimiento y compatibilidad - $gid" \
             "MangoHud: $(onoff "$MANGOHUD")" \
             "Generar fotogramas (MAKO): $(mako_etiqueta)" \
+            "$mako_mod_row" \
+            "$mako_fgm_row" \
+            "$mako_esc_row" \
+            "$mako_esc_f_row" \
+            "$mako_esc_n_row" \
+            "$lsfg_row" \
+            "$lsfg_mult_row" \
+            "$lsfg_flu_row" \
+            "$lsfg_ren_row" \
+            "$lsfg_rit_row" \
+            "$lsfg_chk_row" \
             "HelixSR (DLSS en FSR 3.1): $(helixsr_etiqueta)" \
             "ReShade (Linux/Vulkan, beta): $(reshade_lx_etiqueta)" \
             "GameMode: $(onoff "$GAMEMODE")" \
@@ -72651,7 +73410,7 @@ cfg_rendimiento_menu() {
             "FSR escalado pantalla completa: $(onoff "$FSR")" \
             "Memoria 4 GB para juegos de 32 bits (LAA): $(onoff "$LAA")" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
-            "Arreglo mando SteamOS (Steam Input): $(onoff "${PAD_STEAMFIX:-0}")" \
+            "Arreglo mando SteamOS (Steam Input): $(pad_steamfix_label)" \
             "$bat_row" \
             "$hdr_row" \
             "Gamescope: ${GAMESCOPE:-OFF}" \
@@ -75042,6 +75801,163 @@ Si no ves nada: esta version solo va en Wayland, y bajo
 gamescope el juego puede acabar en Xwayland. Para esos casos
 usa ReShade (Windows), en Herramientas del prefijo."
             fi ;;
+        "MAKO: modelo"*)
+            # Solo se ofrece cambiar si el MAKO instalado trae los dos, que es
+            # de la 5.0 en adelante.
+            if [ "${MAKO_MODELO:-mako-fg}" = lossless ]; then
+                MAKO_MODELO="mako-fg"
+            else
+                if ! mako_dll >/dev/null; then
+                    ui_info "Para el modelo de Lossless Scaling hace falta su
+Lossless.dll, y no aparece.
+
+El modelo propio de MAKO (MAKO FG) no lo necesita y viene
+dentro del paquete, asi que se queda ese."
+                    return 0
+                fi
+                MAKO_MODELO="lossless"
+            fi
+            write_full_profile "$gid" ;;
+        "MAKO FG: modo"*)
+            case "${MAKO_FG_MODO:-balanced}" in
+                quality)     MAKO_FG_MODO="balanced" ;;
+                balanced)    MAKO_FG_MODO="performance" ;;
+                performance) MAKO_FG_MODO="extra-performance" ;;
+                *)           MAKO_FG_MODO="quality" ;;
+            esac
+            write_full_profile "$gid" ;;
+        "Escalar con MAKO Scaler:"*)
+            # SE PUEDE ENCENDER SIN TENER EL Lossless.dll, al contrario que la
+            # generacion de fotogramas: "The open MAKO Scaler does not require
+            # Lossless.dll" (README del paquete 4.6.0). Lo unico que hace falta
+            # es MAKO instalado.
+            if [ "${MAKO_ESCALA:-0}" != 1 ]; then
+                if ! mako_disponible >/dev/null; then
+                    ui_ask "MAKO no esta instalado.
+
+El MAKO Scaler escala la imagen: el juego se dibuja a menos
+resolucion y se sube, lo que da bastante aire en una maquina
+justa. NO hace falta Lossless Scaling para esto.
+
+Se descargan unos 3 MB.
+
+Instalarlo ahora?" || return 0
+                    mako_instalar || return 0
+                fi
+                if ! mako_escala_manifiestos >/dev/null 2>&1; then
+                    ui_info "El MAKO que tienes instalado no trae la capa de
+escalado.
+
+Es de la 4.x en adelante. Reinstala MAKO desde Runners y
+herramientas para tener la ultima."
+                    return 0
+                fi
+            fi
+            MAKO_ESCALA=$((1-${MAKO_ESCALA:-0}))
+            write_full_profile "$gid" ;;
+        "MAKO Scaler: factor"*)
+            case "${MAKO_ESCALA_FACTOR:-1.5}" in
+                1.3) MAKO_ESCALA_FACTOR="1.5" ;;
+                1.5) MAKO_ESCALA_FACTOR="1.7" ;;
+                1.7) MAKO_ESCALA_FACTOR="2.0" ;;
+                *)   MAKO_ESCALA_FACTOR="1.3" ;;
+            esac
+            write_full_profile "$gid" ;;
+        "MAKO Scaler: nitidez"*)
+            case "${MAKO_ESCALA_NITIDEZ:-0.8}" in
+                0.0) MAKO_ESCALA_NITIDEZ="0.5" ;;
+                0.5) MAKO_ESCALA_NITIDEZ="0.8" ;;
+                0.8) MAKO_ESCALA_NITIDEZ="1.0" ;;
+                *)   MAKO_ESCALA_NITIDEZ="0.0" ;;
+            esac
+            write_full_profile "$gid" ;;
+        "Generar fotogramas (lsfg-vk"*)
+            # EL DE DECKY, el que instala el plugin "Lossless Scaling VK".
+            #
+            # No se ofrece instalarlo desde aqui, al contrario que con MAKO:
+            # lsfg-vk no es nuestro, se instala con su plugin de Decky, y
+            # ponerse a descargarlo por nuestra cuenta seria pisarle el trabajo
+            # a otro programa que ademas lo sabe hacer mejor.
+            if [ "${LSFG:-0}" != 1 ] && ! lsfg_instalado; then
+                ui_info "lsfg-vk no esta instalado.
+
+Se instala con el plugin de Decky \"Lossless Scaling VK\", y
+necesita Lossless Scaling comprado en Steam (de ahi sale su
+lsfg-vk.dll).
+
+Si lo que quieres es generar fotogramas y no tienes ese plugin,
+usa MAKO: es el que trae WProton y hace lo mismo."
+                return 0
+            fi
+            if [ "${LSFG:-0}" != 1 ] && [ "${MAKO:-0}" = 1 ]; then
+                ui_ask "Ya tienes MAKO encendido para este juego.
+
+Los dos generan fotogramas con la misma tecnologia y NO pueden
+ir juntos: si se dejan los dos, manda MAKO.
+
+Apagar MAKO y usar lsfg-vk?" || return 0
+                MAKO=0
+            fi
+            LSFG=$((1-${LSFG:-0}))
+            write_full_profile "$gid"
+            if [ "$LSFG" = 1 ] && ! lsfg_dll >/dev/null 2>&1; then
+                ui_info "Encendido, pero NO se encuentra el lsfg-vk.dll.
+
+Viene con Lossless Scaling (Steam), en su rama 'lsfg-vk'. Sin
+el, lsfg-vk no genera nada.
+
+El plugin de Decky lo deja en su sitio al instalarlo."
+            fi ;;
+        "lsfg-vk: multiplicador"*)
+            case "${LSFG_MULT:-2}" in
+                2) LSFG_MULT=3 ;; 3) LSFG_MULT=4 ;; *) LSFG_MULT=2 ;;
+            esac
+            write_full_profile "$gid" ;;
+        "lsfg-vk: escala de flujo"*)
+            # Los cuatro valores son los de la documentacion de lsfg-vk.
+            case "${LSFG_FLUJO:-0.8}" in
+                1.0)  LSFG_FLUJO="0.8" ;;
+                0.8)  LSFG_FLUJO="0.5" ;;
+                0.5)  LSFG_FLUJO="0.25" ;;
+                *)    LSFG_FLUJO="1.0" ;;
+            esac
+            write_full_profile "$gid" ;;
+        "lsfg-vk: modo rendimiento:"*)
+            LSFG_RENDIM=$((1-${LSFG_RENDIM:-0})); write_full_profile "$gid" ;;
+        "lsfg-vk: ritmo"*)
+            case "${LSFG_RITMO:-vsync}" in
+                vsync)     LSFG_RITMO=immediate ;;
+                immediate) LSFG_RITMO=mailbox ;;
+                mailbox)   LSFG_RITMO=fifo ;;
+                *)         LSFG_RITMO=vsync ;;
+            esac
+            write_full_profile "$gid" ;;
+        "Comprobar lsfg-vk"*)
+            # SU PROPIO COMPROBADOR, EJECUTADO POR NOSOTROS.
+            #
+            # lsfg-vk trae un lsfg-vk-cli con 'validate' y 'healthcheck'. Es
+            # mejor ejecutarlo y ensenar lo que diga que pedirle al usuario que
+            # abra una terminal: el sabe de su instalacion mas que nosotros.
+            local _cli _sal
+            if ! _cli="$(lsfg_cli)"; then
+                ui_info "No se encuentra lsfg-vk-cli.
+
+Deberia estar en ~/.local/bin/lsfg-vk-cli; lo pone el plugin de
+Decky al instalarlo. Sin el no se puede comprobar la
+instalacion desde aqui, pero lsfg-vk puede funcionar igual."
+                return 0
+            fi
+            say "[+] Comprobando lsfg-vk..."
+            _sal="$( { "$_cli" healthcheck 2>&1; echo "--- validate ---"; "$_cli" validate 2>&1; } | head -c 3000)"
+            log "lsfg-vk: comprobacion -> $_sal"
+            ui_info "Comprobacion de lsfg-vk:
+
+$_sal
+
+Lo que WProton ve por su parte:
+  capa:  $(lsfg_capa_json 2>/dev/null || printf 'NO la encuentro')
+  lib:   $(lsfg_lib 2>/dev/null || printf 'NO la encuentro')
+  dll:   $(lsfg_dll 2>/dev/null || printf 'NO lo encuentro')" ;;
         "Generar fotogramas (MAKO):"*)
             # MAKO mete fotogramas intermedios con la tecnologia de Lossless
             # Scaling, que el usuario tiene que haber comprado: se usa SU
@@ -75174,7 +76090,32 @@ Se pone al lanzar, y al empaquetar a .wsquashfs se saca solo
         "NTsync"*)
             NTSYNC=$((1-${NTSYNC:-0})); write_full_profile "$gid" ;;
         "Arreglo mando SteamOS"*)
-            PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-0})); write_full_profile "$gid" ;;
+            # ESTO CERRABA WPROTON. Arreglado el 12/11.
+            #
+            # Aqui habia PAD_STEAMFIX=$((1-${PAD_STEAMFIX:-0})), o sea un
+            # interruptor de dos estados para una opcion de TRES cuyo valor por
+            # defecto es la palabra "auto". Y en una cuenta de bash, una palabra
+            # no es texto: es el NOMBRE de otra variable. Asi que $((1-auto))
+            # va a buscar una variable llamada "auto", no la encuentra, y como
+            # el script corre con "set -u" el interprete se va:
+            #
+            #     wproton.sh: linea N: auto: unbound variable
+            #
+            # No es un aviso ni un valor raro: es el proceso entero cerrandose.
+            # Lo que vio el tester -"si la pones en ON, se cierra WPROTON"- es
+            # literalmente eso, y pasaba SIEMPRE que la opcion estuviera en su
+            # valor de fabrica, que es el caso de todo el mundo que no la haya
+            # tocado nunca.
+            #
+            # Ahora se recorren los tres estados, como PAD_FANTASMA:
+            #
+            #     automatico -> ON fijado -> OFF fijado -> automatico
+            case "${PAD_STEAMFIX:-auto}" in
+                auto) PAD_STEAMFIX=1 ;;
+                1)    PAD_STEAMFIX=0 ;;
+                *)    PAD_STEAMFIX=auto ;;
+            esac
+            write_full_profile "$gid" ;;
         "Gamescope anidado"*)
             NESTED_GAMESCOPE=$((1-${NESTED_GAMESCOPE:-0}))
             write_full_profile "$gid"
