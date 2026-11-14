@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.29"
+WPROTON_VERSION="2.30"
 # ----------------------------------------------------------------------------
 # EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
 #
@@ -12199,9 +12199,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 227b1406a513" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 3b2710c0034b" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 227b1406a513
+# WPROTON_HELPER menu_pygame.py 3b2710c0034b
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -15008,6 +15008,7 @@ def toggle():
 # menos columnas y carátulas MAS GRANDES; en monitores grandes, más columnas.
 # WP_GRID_COLS fuerza un numero concreto de columnas (0 = automático).
 GCOLS = 5
+GROWS = 2
 GCW, GCH = 176, 268
 GIMG_W, GIMG_H = 150, 225
 
@@ -15033,12 +15034,95 @@ def set_aspecto(valor):
         _imgcache.clear()      # las caratulas escaladas ya no valen
 _imgcache = {}
 
+def rejilla_calcular(aw, ah, aspecto, forzadas, w_obj, pad_lat, pad_tit,
+                     filas_max, w_min=90):
+    """Que cuadricula LLENA MEJOR el hueco. Devuelve (cols, filas, iw, ih).
+
+    EL FALLO QUE LA ESCRIBIO (un tester de Dani, 14-11-2026): "cuando hago
+    pantalla completa a 2560x1440 con esa vista las caratulas salen mal, no
+    llena todo el espacio". Con el pantallazo delante salen los numeros
+    exactos, y son los que da el codigo de antes:
+
+        pantalla 2560x1440, vista 4:3, hueco 2502x1199
+        caratula 504 de ancho (el tope de tamaño), casilla 530x426
+        4 columnas -> 2120 de 2502 : 382 px de margen
+        2 filas    ->  852 de 1199 : 347 px vacios abajo
+
+    Y la causa son dos numeros fijos que no miran la pantalla:
+
+      - el TOPE de ancho de la caratula (240 px, o 504 en las apaisadas) esta
+        en pixeles, asi que en un monitor de 1440p la caratula mide lo mismo
+        que en uno de 1080p y sobra sitio por todas partes;
+      - las FILAS eran 1 o 2 segun la altura, decidido antes de saber lo que
+        iba a medir la caratula. Con 426 px de casilla y 1199 de hueco caben
+        2,8 filas: se pintaban 2 y el tercio de abajo se quedaba en blanco.
+
+    ASI QUE NO SE DECIDE, SE BUSCA. Se prueban todas las cuadriculas posibles
+    -de 1 a 12 columnas y de 1 a filas_max filas- y de cada una sale el tamaño
+    de caratula que cabe:
+
+        iw = min(ancho que da la columna, alto que da la fila / proporcion)
+
+    Gana la que mas superficie cubre, PERO solo entre las que dejan la
+    caratula cerca del tamaño preferido (del 75% al 135%). Sin esa banda, "lo
+    que mas cubre" seria siempre una sola caratula gigante, porque cada
+    casilla gasta un margen fijo y cuantas menos haya menos margen se gasta.
+
+    Es una busqueda de 96 cuentas enteras, una vez por cambio de tamaño de
+    ventana. No se nota.
+
+    aw, ah   = hueco util (sin margenes ni barra de desplazamiento)
+    aspecto  = alto = ancho * aspecto (1.5 vertical, 0.75 cuadrada, 0.47 ancha)
+    forzadas = columnas que ha fijado la persona (0 = automatico)
+    w_obj    = ancho preferido de la caratula para esta pantalla
+    pad_lat  = separacion entre columnas; pad_tit = sitio para el titulo
+    filas_max= tope de filas (1 en una consola portatil: ver grid_metrics)
+    """
+    mejor = None
+    uno = max(1, int(forzadas or 0))
+    cols_ini = uno if forzadas > 0 else 1
+    cols_fin = uno if forzadas > 0 else 12
+    w_obj = max(1, int(w_obj or 1))
+    # SI LAS COLUMNAS LAS HA PEDIDO LA PERSONA, EL MINIMO SE APARTA. Con doce
+    # columnas en una Deck no caben carátulas de 90 px, y si el minimo manda no
+    # sale ninguna cuadricula valida: antes se devolvia el minimo igualmente y
+    # la rejilla se salia de la pantalla. Manda lo que pidio: mas pequeñas.
+    if forzadas > 0:
+        w_min = min(w_min, max(24, aw // max(1, uno) - pad_lat))
+    for cols in range(cols_ini, cols_fin + 1):
+        w_col = aw // cols - pad_lat
+        if w_col < w_min and forzadas <= 0:
+            break                      # mas columnas solo salen mas pequeñas
+        for filas in range(1, max(1, filas_max) + 1):
+            h_fil = ah // filas - pad_tit
+            if h_fil < int(w_min * aspecto) and forzadas <= 0:
+                break
+            iw = int(min(w_col, h_fil / float(aspecto)))
+            if iw < w_min:
+                continue
+            ih = int(iw * aspecto)
+            cerca = iw / float(w_obj)
+            lleno = (cols * filas * iw * ih) / float(max(1, aw * ah))
+            if 0.75 <= cerca <= 1.35:
+                # En banda: manda lo que se llena, y a igualdad la mas grande.
+                clave = (1, round(lleno, 3), iw)
+            else:
+                # Fuera de banda solo se usa si no hubiera nada mejor.
+                clave = (0, -abs(1.0 - cerca), iw)
+            if mejor is None or clave > mejor[0]:
+                mejor = (clave, cols, filas, iw, ih)
+    if mejor is None:
+        # Nada cabe con el minimo: se da lo mas pequeño que se puede dibujar.
+        cols = uno if forzadas > 0 else max(1, aw // (w_min + pad_lat))
+        return (cols, 1, w_min, int(w_min * aspecto))
+    return (mejor[1], mejor[2], mejor[3], mejor[4])
+
 def grid_metrics():
-    # Tamaño de carátula según la pantalla. La regla que manda es la ALTURA:
-    # la caratura debe caber en su fila con holgura (2 filas en monitores,
-    # 1 fila grande en consolas portatiles). Antes solo se repartia el ancho
-    # y en un monitor de sobremesa salian gigantes.
-    global GCOLS, GCW, GCH, GIMG_W, GIMG_H
+    # Tamaño de carátula según la pantalla. El tamaño PREFERIDO sale de la
+    # altura de la fila y de un tope por tamaño de pantalla; la cuadricula que
+    # mejor lo aprovecha la busca rejilla_calcular (ahi esta contado el fallo
+    # del 14/11: en 1440p sobraba un tercio de pantalla).
+    global GCOLS, GROWS, GCW, GCH, GIMG_W, GIMG_H
     # Se reserva un margen a la derecha para el indicador de desplazamiento.
     # Sin el, las caratulas anchas de la ultima columna se metian debajo de la
     # barra y parecia que se salian de la pantalla.
@@ -15049,42 +15133,53 @@ def grid_metrics():
         forced = int(os.environ.get('WP_GRID_COLS', '0'))
     except ValueError:
         forced = 0
-    if forced > 0:
-        rows = 1 if avail_h < 620 else 2
-    elif avail_h < 620:          # Steam Deck, Legion Go, ventana baja
-        rows = 1
-    else:                        # monitor: dos filas de carátulas
-        rows = 2
-    # altura por fila (incluye el hueco del titulo): así las filas CABEN
-    h_max = int(avail_h / rows) - 48
-    w_from_h = int(h_max / ASPECTO)
-    # ancho maximo razonable por carátula según el tamaño de pantalla
+    # EL SITIO DEL TITULO SE MIDE, no se supone. Eran 48 px fijos, que es lo
+    # que ocupa el titulo con la letra sin agrandar; en un monitor grande la
+    # letra sube (AUTO_ESCALA) y el titulo no cabria.
+    pad_tit = max(40, f_sm.get_height() + FS(26))
+    pad_lat = max(16, FS(26))
+    # UNA SOLA FILA EN CONSOLAS PORTATILES, y esto no se toca: en una Deck o
+    # una Legion Go lo que se quiere son pocas carátulas y GRANDES, y partir la
+    # pantalla en dos filas las dejaria diminutas. El fallo del 14/11 es de
+    # monitores, y el arreglo no entra aqui.
+    #
+    # CON LA CARATULA APAISADA SI CABEN DOS, y ahi la regla de una fila hacia
+    # lo contrario de lo que pretende: una carátula 4:3 mide la mitad de alto
+    # que una vertical, asi que en una Deck quedaban dos columnas y media
+    # pantalla en blanco. Con dos filas salen tres columnas y se llena.
+    filas_max = 8 if avail_h >= 620 else (2 if ASPECTO < 1 else 1)
+    # Tamaño preferido: el que cabe de alto, con un tope por pantalla para que
+    # en un monitor grande no salga una carátula gigante por fila.
+    h_pref = int(avail_h / min(2, filas_max)) - pad_tit
+    w_pref = int(h_pref / ASPECTO)
     w_cap = 190 if W <= 1400 else (210 if W <= 1920 else 240)
     if ASPECTO < 1:          # horizontales: mas anchas, caben menos por fila
         w_cap = int(w_cap * 2.1)
-    if forced > 0:
-        # columnas fijadas por el usuario: el tamaño de la carátula se calcula
-        # para que QUEPAN esas columnas (antes se mantenía el tamaño y con
-        # muchas columnas se salían de la pantalla)
-        GCOLS = forced
-        GCW = max(80, avail_w // forced)
-        GIMG_W = max(90, GCW - 26)
-        # y que la fila siga cabiendo de alto
-        if int(GIMG_W * ASPECTO) + 48 > int(avail_h / rows):
-            GIMG_W = max(90, int((int(avail_h / rows) - 48) / ASPECTO))
-        GIMG_H = int(GIMG_W * ASPECTO)
-        GCH = GIMG_H + 48
-    else:
-        GIMG_W = max(120, min(w_from_h, w_cap))
-        GIMG_H = int(GIMG_W * ASPECTO)
-        GCW = GIMG_W + 26
-        GCH = GIMG_H + 48
-        GCOLS = max(3, min(9, avail_w // GCW))
+    # EL TOPE SUBE CON LA PANTALLA. Era un numero de pixeles fijo, asi que en
+    # 1440p la carátula salia del mismo tamaño que en 1080p y sobraba sitio.
+    # Se escala con la misma cuenta que la letra (AUTO_ESCALA), que es la que
+    # dice cuanto mas grande es esta pantalla que una de 1080p.
+    w_cap = int(w_cap * max(1.0, AUTO_ESCALA))
+    w_obj = max(120, min(w_pref, w_cap))
+    GCOLS, GROWS, GIMG_W, GIMG_H = rejilla_calcular(
+        avail_w, avail_h, ASPECTO, forced, w_obj, pad_lat, pad_tit, filas_max)
+    GCW = GIMG_W + pad_lat
+    GCH = GIMG_H + pad_tit
+    # Las columnas se reparten el ancho sobrante en vez de amontonarse a la
+    # izquierda; cada carátula va centrada en su columna (ver draw_grid).
+    if GCOLS > 0:
+        GCW = max(GCW, avail_w // GCOLS)
     _imgcache.clear()          # las imagenes se reescalan al nuevo tamaño
 
 def grid_rows_vis():
-    area = H - TOP - 60 - (KB_H if kb_open else 0)
-    return max(1, area // GCH)
+    # LAS FILAS LAS DECIDE grid_metrics, que es quien sabe lo que mide una
+    # casilla. Aqui se miraba "H - TOP - 60", que es TREINTA Y DOS pixeles mas
+    # de lo que tiene el panel por dentro: con la casilla justa se pintaba una
+    # fila que no cabia y se salia por debajo del panel.
+    if kb_open:
+        area = max(1, (LIST_H - 16) - KB_H)
+        return max(1, min(GROWS, area // max(1, GCH)))
+    return max(1, GROWS)
 
 def grid_move(dx, dy):
     global sel, scroll
@@ -15336,12 +15431,17 @@ def grid_img(path):
 def draw_grid():
     gx0 = LIST_X + max(0, (LIST_W - GCOLS * GCW) // 2) + (GCW - GIMG_W) // 2
     vis_r = grid_rows_vis()
+    # Y EL BLOQUE DE FILAS, CENTRADO DE ALTO. Cuando la carátula la limita el
+    # ancho de la columna, la fila sobra por abajo; dejarlo todo arriba es lo
+    # que se veia como "no llena la pantalla".
+    _libre = max(0, (LIST_H - 16) - vis_r * GCH)
+    gy0 = LIST_Y + 8 + (_libre // 2)
     first = scroll
     for i in range(first, min(first + vis_r * GCOLS, len(view))):
         col = (i - first) % GCOLS
         rowi = (i - first) // GCOLS
         x = gx0 + col * GCW
-        y = LIST_Y + 8 + rowi * GCH
+        y = gy0 + rowi * GCH
         _cell = (x - 6, y - 6, GIMG_W + 12, GCH - 18)
         if TH['panel'] is not None:
             pygame.draw.rect(screen, TH['card'], _cell, border_radius=RAD)
@@ -32011,6 +32111,12 @@ bat_resolver_instalacion() {
         say "    se ejecuta el .bat tal cual."
         return 0
     }
+    # SOLO SE SALTA UN .bat QUE INSTALE ALGO. Ver bat_es_instalador.
+    if ! bat_es_instalador "$EXE_PATH"; then
+        say "[i] El .bat abre '$bjuego' y no instala nada: se ejecuta tal cual"
+        say "    (saltarselo le quitaria al juego lo que hace antes de lanzar)"
+        return 0
+    fi
     if bat_ya_instalado "$gid"; then
         say "[+] Ya se instalo antes: se abre el juego directamente"
         say "    ($bjuego, sin repetir la instalacion del .bat)"
@@ -32024,6 +32130,7 @@ bat_resolver_instalacion() {
 }
 
 bat_juego_real() {
+    # Que programa abre de verdad este .bat. $1 = ruta del .bat.
     local bat="$1"
     [ -f "$bat" ] || return 1
     local linea
@@ -32032,12 +32139,63 @@ bat_juego_real() {
     [ -n "$linea" ] || return 1
     local resto
     resto="$(printf '%s' "$linea" | sed -E 's/^[[:space:]]*[Ss][Tt][Aa][Rr][Tt][[:space:]]+//')"
+    # LAS OPCIONES DE "start" NO SON EL PROGRAMA.
+    #
+    # EL CASO (Dani, 14-11-2026): el tekno.bat de dos juegos de Triforce lleva
+    #
+    #   start /wait TeknoParrotUi.exe --profile=MarioKartGP.xml
+    #
+    # ...y esto se quedaba con "/wait" como si fuera un fichero. El registro
+    # decia "El .bat abre '/wait', pero ese fichero no esta aqui", que no es
+    # verdad y manda a buscar el fallo donde no esta. Lo lei yo mismo asi.
+    #
+    # "start" tiene una docena de opciones y todas empiezan por barra. Las
+    # tres que llevan valor aparte -/d ruta, /node N, /affinity N- se comen
+    # tambien el valor.
+    while :; do
+        case "$resto" in
+            /[Dd][[:space:]]*|/[Nn][Oo][Dd][Ee][[:space:]]*|/[Aa][Ff][Ff][Ii][Nn][Ii][Tt][Yy][[:space:]]*)
+                resto="$(printf '%s' "$resto" \
+                    | sed -E 's/^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]*//')" ;;
+            /*) resto="$(printf '%s' "$resto" | sed -E 's/^[^[:space:]]+[[:space:]]*//')" ;;
+            *)  break ;;
+        esac
+        [ -n "$resto" ] || return 1
+    done
+    # EL TITULO DE LA VENTANA, QUE VA DESPUES DE LAS OPCIONES.
+    #
+    # "start "" prog.exe" es la forma normal de escribirlo. Solo se quita si
+    # detras queda algo mas: en "start "C:\juego\juego.exe"" ese entrecomillado
+    # NO es un titulo, es el programa, y quitarlo lo perderia.
     resto="$(printf '%s' "$resto" | sed -E 's/^"[^"]*"[[:space:]]+//')"
     local exe
     exe="$(printf '%s' "$resto" | sed -E 's/^"([^"]+)".*/\1/; t; s/^([^[:space:]]+).*/\1/')"
     [ -n "$exe" ] || return 1
     printf '%s' "$exe"
     return 0
+}
+
+bat_es_instalador() {
+    # Este .bat, ¿INSTALA algo antes de abrir el juego, o solo lo abre?
+    # $1 = ruta del .bat.
+    #
+    # POR QUE HACE FALTA DISTINGUIRLO
+    #
+    # bat_resolver_instalacion se invento para los .bat que instalan
+    # dependencias y luego arrancan el juego: la primera vez se ejecuta el
+    # .bat, y a partir de la segunda se va derecho al juego para no esperar
+    # minutos cada arranque.
+    #
+    # Pero hay .bat que no instalan nada: solo preparan algo y lanzan -un
+    # "taskkill" detras, una variable, un copiado-. Saltarse uno de esos a
+    # partir del segundo arranque le quita al juego justo lo que lo hace
+    # funcionar. Mientras el analisis se quedaba con "/wait" esto no se notaba
+    # porque no se saltaba NINGUNO; arreglado el analisis, hay que decidirlo.
+    #
+    # La regla: se considera instalador si nombra algo que se instale. Si no,
+    # se ejecuta tal cual, que es lo que se hacia hasta ahora.
+    [ -f "${1:-}" ] || return 1
+    grep -qiE 'vcredist|vc_redist|dxsetup|directx|dotnet|ndp[0-9]|oalinst|openal|xnafx|msiexec|winetricks|regsvr32|\.msi([^a-zA-Z]|$)|setup\.exe|install\.exe|instalar' "$1" 2>/dev/null
 }
 bat_ya_instalado() {
     # ¿Ya se ejecuto el .bat de instalacion de este juego? $1 = gid.
@@ -42252,22 +42410,28 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # juego devuelve su propia DLL de FSR a su sitio. Es idempotente, y solo
     # mira la carpeta del JUEGO: no toca el prefijo.
     helixsr_antes_de_jugar "${merged:-}"
+    # TEKNOPARROT, ANTES DE avisar_64_en_32 Y DE exe_a_ruta_windows.
+    #
+    # Estaba DESPUES de las dos, y era otro fallo del mismo sitio: si aqui se
+    # cambia el ejecutable -que es lo que hace el salto del .bat-, las dos
+    # funciones de arriba ya habian mirado el .bat y no el programa que de
+    # verdad se lanza. exe_a_ruta_windows habria dejado en EXE_WIN la ruta de
+    # Windows del .bat, que es la que se le pasa al runner: el salto no habria
+    # servido de nada.
+    #
+    # Los dos caminos usan la misma funcion: ver el porque en
+    # teknoparrot_preparar.
+    if teknoparrot_preparar "$merged" "${EXE_PATH:-}"; then
+        EXE_PATH="${WP_TKP_EXE:-$EXE_PATH}"
+        EXE_ARGS="${WP_TKP_ARGS:-}"
+        ARGS_OVERRIDE="$EXE_ARGS"
+        # El "Ejecutable:" de mas arriba decia el .bat, porque esto se decide
+        # despues. Se repite con el bueno para que el registro no mienta.
+        say "Ejecutable: $EXE_PATH"
+        [ -n "$EXE_ARGS" ] && say "Argumentos: $EXE_ARGS"
+    fi
     avisar_64_en_32 "${EXE_PATH:-}"
     exe_a_ruta_windows "$rdir"
-    # Los perfiles de TeknoParrot llevan la ruta del juego dentro y aqui se
-    # monta en otro sitio distinto cada vez. Se corrigen al vuelo.
-    # CADA PASO LENTO DICE QUE ESTA HACIENDO.
-    #
-    # Aqui hay tres cosas que pueden tardar -revisar TeknoParrot, marcar el
-    # prefijo, instalar las librerias- y todas se hacian con el mismo mensaje
-    # "Preparando el entorno de Windows" en pantalla. Un tester lo vio quieto
-    # y penso que se habia colgado, sin forma de saber en cual estaba.
-    if teknoparrot_detectar "$merged"; then
-        loading_say "Preparando TeknoParrot..."
-        say "[+] Juego de TeknoParrot detectado"
-        WP_TKP_RAIZ="$merged"
-        teknoparrot_rutas "$merged"
-    fi
     # La version del prefijo, con el runner que HAYAS ELEGIDO.
     #
     # SE MARCA SIEMPRE, no solo con prefijo incluido.
@@ -42899,13 +43063,34 @@ Que cumplas muchos mas.
     # esta". Esta contado en COMPATIBILIDAD.md. Se deja el parrafo porque
     # cuenta por que existe esta suite, pero no se lea como el estado de hoy.
     #
-    # 14/11, AL SUBIR A LA 2.29: fuera los SEIS de la 2.28 y dentro TRES.
+    # 14/11 (tarde), AL SUBIR A LA 2.30: fuera los TRES de la 2.29 y dentro DOS.
+    #
+    # La 2.29 se publico esta misma manana con sus tres arreglos. Lo de esta
+    # tarde son dos cosas mas, y son las DOS que se notan desde fuera:
+    #
+    #   - en un monitor de 1440p o 4K la rejilla de caratulas dejaba un tercio
+    #     de la pantalla en blanco (pantallazo de un tester);
+    #   - los juegos de TeknoParrot que vienen con su .bat -los de Triforce,
+    #     Mario Kart Arcade GP y GP 2- funcionaban en carpeta y no en
+    #     .wsquashfs: moria el .bat buscando la ISO en rutas de Batocera.
+    #
+    # LOS DOS CONFIRMADOS POR DANI jugando antes de publicar ("Ha funcionado
+    # bien"), que es la condicion de esta suite desde el fallo de la 2.15.
+    #
+    # Y LA TENTACION DE SIEMPRE, hoy mas fuerte que nunca: la 2.29 es de HACE
+    # UNAS HORAS, asi que sus tres puntos suenan completamente a nuevos y la
+    # lista de la 2.30 queda en dos. Dos es lo que trae. Lo que no es nuevo de
+    # esta version no va en el aviso de esta version.
+    #
+    # 14/11, AL SUBIR A LA 2.29: fuera los SEIS de la 2.28 y dentro CUATRO.
+    # (Se publico con TRES: la rejilla de 1440p se arreglo despues de cerrarla
+    # y es de la 2.30. Lo de abajo se deja como quedo escrito aquel rato.)
     #
     # Y aqui la tentacion era la de siempre, pero por el otro lado: la 2.28 se
     # publico ANOCHE y sus seis puntos todavia suenan a nuevos, asi que dejar
     # alguno "porque la lista queda corta" es exactamente la forma que tuvo el
     # fallo de la 2.15. La 2.29 es una tanda de UNA NOCHE y son tres arreglos,
-    # los tres salidos de registros de Dani y de un tester:
+    # los cuatro salidos de registros y pantallazos de Dani y de un tester:
     #
     #   - el perfil y la caratula de la comunidad se iban al juego anterior de
     #     la saga ("Sega Rally 2 25th Aniversario" se bajaba el de "Sega
@@ -42914,7 +43099,9 @@ Que cumplas muchos mas.
     #     carpeta del juego estaba abierta en el gestor de archivos, y encima
     #     cerrarlo con el mando le habria cerrado esa ventana;
     #   - un juego de Linux con su carpeta lib/ podia no arrancar, y arrancaba
-    #     fuera de WProton (Banjo Recompiled).
+    #     fuera de WProton (Banjo Recompiled);
+    #   - y en un monitor de 1440p o 4K la rejilla de caratulas dejaba un
+    #     tercio de la pantalla en blanco.
     #
     # Los dos primeros confirmados por Dani con el registro delante. El
     # tercero quedo confirmado jugando esa misma noche: el juego arranco, dejo
@@ -43010,11 +43197,9 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arreglado: la configuracion de la comunidad se confundia de juego.
+  Arreglado: las caratulas ya llenan la pantalla en monitores grandes.
 
-  Arreglado: WProton se colgaba al salir de un juego de Linux.
-
-  Arreglado: juegos de Linux con su carpeta lib/ que no arrancaban.
+  Arreglado: juegos de TeknoParrot que no arrancaban en .wsquashfs.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -47833,6 +48018,85 @@ teknoparrot_lanzador() {
     return 0
 }
 
+teknoparrot_preparar() {
+    # TODO lo que un juego de TeknoParrot necesita antes de lanzarse, EN UN
+    # SOLO SITIO: detectarlo, corregir las rutas de sus perfiles y decidir si
+    # hay que saltarse el .bat.
+    #
+    # $1 = raiz del juego, $2 = ejecutable elegido.
+    #
+    # Deja el ejecutable en WP_TKP_EXE y los argumentos en WP_TKP_ARGS, y
+    # devuelve 0, SOLO si hay que saltarse el .bat. Devuelve 1 en los demas
+    # casos -no es de TeknoParrot, o su .bat se ejecuta tal cual-, pero la
+    # deteccion y los perfiles YA estan hechos: el 1 no significa "no se ha
+    # hecho nada", significa "el ejecutable no cambia".
+    #
+    # POR QUE EXISTE ESTA FUNCION (caso de Dani, 14-11-2026)
+    #
+    # Esto estaba escrito DOS veces y solo una de las dos estaba completa:
+    #
+    #   launch_loose_exe (carpeta)    detectar + rutas + SALTAR EL .bat
+    #   launch_game      (.wsquashfs) detectar + rutas
+    #
+    # O sea que el mismo juego funcionaba en carpeta y no en .wsquashfs,
+    # aunque el manual (seccion 10) dice que el .bat se salta en los dos
+    # casos. Y no era un detalle: es LO QUE HACE FUNCIONAR a estos juegos.
+    #
+    # Dos juegos de Triforce en .wsquashfs -Mario Kart Arcade GP y GP 2-
+    # morian asi. En el registro se ve el trabajo bien hecho:
+    #
+    #   [+] TeknoParrot: 1 perfil(es) con la ruta corregida
+    #       -> G:\Mario_Kart_Arcade_GP\game\Mario Kart Arcade GP ....iso
+    #
+    # ...y acto seguido WProton ejecutaba el tekno.bat, que NO mira el
+    # perfil: busca la ISO en las rutas de Batocera por su cuenta, no la
+    # encuentra y se para:
+    #
+    #   No se encontro el archivo ISO en ninguna de las rutas.
+    #
+    # La ruta de la ISO estaba puesta donde tenia que estar. Lo que fallaba
+    # era que nadie llegaba a leerla.
+    #
+    # Es el fallo recurrente del proyecto -lo que se arregla en un camino no
+    # llega al otro- y la regla 11 de la auditoria no lo veia porque solo
+    # miraba de launch_game hacia launch_loose_exe, no al reves. Ahora mira
+    # en las dos direcciones.
+    WP_TKP_EXE=""; WP_TKP_ARGS=""
+    local root="${1:-}" exe="${2:-}"
+    [ -n "$root" ] || return 1
+    teknoparrot_detectar "$root" || return 1
+    # CADA PASO LENTO DICE QUE ESTA HACIENDO.
+    #
+    # Aqui hay varias cosas que pueden tardar -revisar TeknoParrot, marcar el
+    # prefijo, instalar las librerias- y todas se hacian con el mismo mensaje
+    # "Preparando el entorno de Windows" en pantalla. Un tester lo vio quieto
+    # y penso que se habia colgado, sin forma de saber en cual estaba.
+    loading_say "Preparando TeknoParrot..."
+    say "[+] Juego de TeknoParrot detectado"
+    WP_TKP_RAIZ="$root"
+    # Los perfiles de TeknoParrot llevan la ruta del juego dentro y aqui se
+    # monta en otro sitio distinto cada vez. Se corrigen al vuelo.
+    teknoparrot_rutas "$root"
+    # El .bat de estos juegos comprueba rutas de Batocera y se para si no las
+    # encuentra, sin llegar a lanzar TeknoParrot. Se salta.
+    local _cmd
+    _cmd="$(teknoparrot_lanzador "$root" "$exe")" || return 1
+    [ -n "$_cmd" ] || return 1
+    WP_TKP_EXE="${_cmd%%	*}"
+    WP_TKP_ARGS="${_cmd#*	}"
+    [ -n "$WP_TKP_EXE" ] || { WP_TKP_ARGS=""; return 1; }
+    say "[+] Se salta el .bat: comprueba rutas de Batocera que aqui no"
+    say "    existen y no llegaria a lanzar TeknoParrot."
+    say "    Se lanza directamente: $(basename "$WP_TKP_EXE") $WP_TKP_ARGS"
+    # TeknoParrot es un LANZADOR: se queda abierto mientras el juego corre, y
+    # tambien si el juego no llega a arrancar. WProton espera a que termine,
+    # asi que conviene decir como salir ANTES de que alguien piense que se ha
+    # quedado bloqueado.
+    say "[i] TeknoParrot se queda abierto: es un lanzador, no el juego."
+    say "    Para volver a WProton, cierra su ventana o manten Select."
+    return 0
+}
+
 teknoparrot_devolver_rutas() {
     # Devuelve al perfil las rutas que tenia el original, dejando el resto
     # como este ahora. $1 = copia intacta, $2 = perfil actual.
@@ -48637,8 +48901,48 @@ teknoparrot_rutas() {
     [ -d "$root/drive_c" ] && _raiz_unidad="$root/drive_c"
     local _letra; _letra="$(teknoparrot_unidad "$_raiz_unidad")" || _letra=""
     if [ -n "$_letra" ]; then
-        say "[+] TeknoParrot: la carpeta del juego es la unidad ${_letra^}:"
+        # DONDE APUNTA DE VERDAD ESA LETRA, Y NO "la carpeta del juego".
+        #
+        # EL CASO (Dani, 14-11-2026): dos juegos de Triforce que dejaron de
+        # funcionar. El registro decia "la carpeta del juego es la unidad G:" y
+        # la ruta escrita en el perfil era
+        # "G:\Mario_Kart_Arcade_GP\game\...iso" -con el nombre del juego por
+        # medio-, o sea que G: NO era la carpeta del juego sino la de ARRIBA.
+        # Es correcto y esta buscado (teknoparrot_unidad reutiliza una letra
+        # que ya contenga el juego, para no crear dos para lo mismo), pero el
+        # mensaje decia otra cosa y mandaba a buscar el fallo donde no estaba.
+        #
+        # Y cambia con el prefijo: en uno hay ya una letra que contiene la
+        # carpeta y se reutiliza; en otro no la hay y se crea apuntando al
+        # juego. La misma partida escribe rutas DISTINTAS en el perfil segun el
+        # prefijo, y un lanzador del repack que espere una de las dos deja de
+        # encontrar sus ficheros.
+        local _ap; _ap="$(readlink -f "$WINEPREFIX/dosdevices/$_letra:" 2>/dev/null)"
+        if [ "$_ap" = "$(readlink -f "$_raiz_unidad" 2>/dev/null)" ]; then
+            say "[+] TeknoParrot: el juego se ve en la unidad ${_letra^}:"
+            say "    ${_letra^}: -> $_ap (la carpeta del juego)"
+        else
+            say "[+] TeknoParrot: el juego se ve en la unidad ${_letra^}:"
+            say "    ${_letra^}: -> $_ap"
+            say "    OJO: esa letra NO es la carpeta del juego sino una de"
+            say "    arriba que ya estaba en el prefijo y lo contiene, asi que"
+            say "    las rutas del perfil llevan el nombre del juego por medio."
+            say "    Con otro prefijo la letra puede apuntar a otro sitio."
+        fi
         say "    (asi las rutas del perfil son cortas, como en Batocera)"
+        # LAS UNIDADES QUE VA A VER EL JUEGO, TODAS.
+        #
+        # Un lanzador .bat del repack suele buscar sus ficheros en VARIAS
+        # unidades, y cuando no los encuentra dice "en ninguna de las rutas" y
+        # se acabo: no dice cuales miro. Sin esta lista no hay forma de saber
+        # desde el registro que veia el juego.
+        local _dl _dt
+        say "[i] TeknoParrot: unidades que vera el juego en este prefijo:"
+        for _dl in "$WINEPREFIX"/dosdevices/?:; do
+            [ -e "$_dl" ] || continue
+            _dt="$(readlink -f "$_dl" 2>/dev/null)"
+            say "      $(basename "$_dl") -> ${_dt:-?}"
+        done
     else
         say "[i] TeknoParrot: sin unidad propia, se usara Z: (ruta larga)."
         say "    Motivo: ${WP_UNIDAD_MOTIVO:-desconocido}"
@@ -58480,29 +58784,14 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # Estaba mas arriba y no habia prefijo todavia, asi que no se podia crear
     # la unidad del juego y las rutas salian con Z: y la ruta larga. En el
     # registro se veia como "sin unidad propia".
-    if teknoparrot_detectar "$_tkp_root"; then
-        say "[+] Juego de TeknoParrot detectado"
-        WP_TKP_RAIZ="$_tkp_root"
-        teknoparrot_rutas "$_tkp_root"
-        # El .bat de estos juegos comprueba rutas de Batocera y se para si no
-        # las encuentra, sin llegar a lanzar TeknoParrot. Se salta.
-        local _tkp_cmd
-        if _tkp_cmd="$(teknoparrot_lanzador "$_tkp_root" "$abs_exe")"; then
-            local _tkp_exe="${_tkp_cmd%%	*}"
-            local _tkp_args="${_tkp_cmd#*	}"
-            say "[+] Se salta el .bat: comprueba rutas de Batocera que aqui no"
-            say "    existen y no llegaria a lanzar TeknoParrot."
-            say "    Se lanza directamente: $(basename "$_tkp_exe") $_tkp_args"
-            # TeknoParrot es un LANZADOR: se queda abierto mientras el juego
-            # corre, y tambien si el juego no llega a arrancar. WProton espera
-            # a que termine, asi que conviene decir como salir ANTES de que
-            # alguien piense que se ha quedado bloqueado.
-            say "[i] TeknoParrot se queda abierto: es un lanzador, no el juego."
-            say "    Para volver a WProton, cierra su ventana o manten Select."
-            abs_exe="$_tkp_exe"
-            exe="$_tkp_exe"
-            ARGS_OVERRIDE="$_tkp_args"
-        fi
+    # LOS DOS CAMINOS USAN LA MISMA FUNCION.
+    #
+    # Esto estaba escrito aqui a mano y en launch_game a medias: ver el porque
+    # entero en teknoparrot_preparar.
+    if teknoparrot_preparar "$_tkp_root" "$abs_exe"; then
+        abs_exe="${WP_TKP_EXE:-$abs_exe}"
+        exe="$abs_exe"
+        ARGS_OVERRIDE="${WP_TKP_ARGS:-}"
     fi
     # El runner en uso, para que el vigilante de salida sepa donde esta el
     # wineserver si hay que cerrar el prefijo a la fuerza. Este es el camino
