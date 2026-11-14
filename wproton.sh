@@ -54,7 +54,43 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.28"
+WPROTON_VERSION="2.29"
+# ----------------------------------------------------------------------------
+# EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
+#
+# POR QUE EXISTE ESTO (13/11). Un tester dijo que lsfg-vk "lo reconoce pero no
+# hace su efecto, y al salir del juego dice que no esta el plugin instalado". Y
+# en el registro de esa partida estan las dos cosas, a treinta segundos una de
+# otra:
+#
+#   23:51:15  lsfg-vk: comprobacion -> Healthcheck did not find any issues
+#             Installed lsfg-vk-cli version: 2.0.0
+#   23:51:45  lsfg-vk: PEDIDO pero no instalado (no esta el manifiesto)
+#
+# La diferencia entre los dos momentos no era lsfg-vk: ERA NUESTRO ENTORNO.
+# export_game_env hace "export XDG_DATA_HOME=$RUNTIME_DIR/xdg-data" para umu, y
+# lsfg_entorno se llama 486 lineas DESPUES, en esa misma funcion. Asi que
+# cuando buscaba el manifiesto en "$XDG_DATA_HOME/vulkan/implicit_layer.d" ya
+# estaba mirando dentro de nuestra carpeta de runtime, donde lsfg-vk no va a
+# estar nunca. La fila "Comprobar lsfg-vk" del menu funcionaba porque corre
+# ANTES de todo eso.
+#
+# Y con la opcion de hogar portable encendida es peor: home_portable_exportar
+# cambia HOME y las cuatro XDG_* a la carpeta del juego.
+#
+# LA REGLA, QUE VALE PARA CUALQUIER COSA QUE SE BUSQUE EN LA MAQUINA: lo que
+# esta instalado en el equipo del usuario -una capa de Vulkan, una biblioteca
+# de Steam, un programa en ~/.local/bin- se busca con ESTOS valores, no con los
+# del entorno de turno. El entorno de turno es el del JUEGO y lo cambiamos
+# nosotros a proposito.
+WP_HOME_REAL="${HOME:-}"
+WP_XDG_DATA_REAL="${XDG_DATA_HOME:-${HOME:-}/.local/share}"
+
+wp_casa_real() { printf '%s' "${WP_HOME_REAL:-${HOME:-}}"; }
+wp_xdg_data_real() {
+    printf '%s' "${WP_XDG_DATA_REAL:-${WP_HOME_REAL:-${HOME:-}}/.local/share}"
+}
+# ----------------------------------------------------------------------------
 # Repo de GitHub para las auto-actualizaciones (rellenar al subirlo):
 #   formato "usuario/repo", p.ej. "dani/wproton". Las releases deben llevar
 #   tag "v<versión>" (v0.5, v0.51...) y el script como asset o en la rama main.
@@ -318,6 +354,19 @@ LOGS=1
 #                        0 = no se toca ninguno.
 # Solo afecta a los de ESE juego y a los que nacieron despues de lanzarlo.
 NATIVO_LIMPIAR_WINE=1
+# LAS LIBRERIAS QUE TRAE EL JUEGO EN SU CARPETA lib/ (juegos de Linux).
+#   LIBS_DEL_JUEGO  auto    = se usan SOLO las que este equipo no tiene (por
+#                             defecto). Lo demas se deja al sistema.
+#                   todas   = la carpeta del juego delante de todo, como hasta
+#                             la 2.28. Es la salida para un juego que traiga una
+#                             version MAS NUEVA de algo que el sistema tambien
+#                             tiene.
+#                   ninguna = no se usa la carpeta lib/ del juego.
+# Por que "auto" y no "todas": ver libs_del_juego_preparar. Poniendo la carpeta
+# del juego delante, el Vulkan del sistema y el driver de la GPU cargan SUS
+# dependencias desde ahi, y hay juegos que entonces no llegan ni a abrir la
+# ventana (Banjo Recompiled, 13-11-2026).
+LIBS_DEL_JUEGO=auto
 # EL PREFIJO DE LAS INSTALACIONES (ISO, GOG, instaladores).
 #   PREFIX_BATOCERA_AL_INSTALAR  1 = el prefijo propio que se crea al instalar
 #                                    un juego se hace con el procedimiento de
@@ -634,6 +683,10 @@ RATON_RUEDA=$RATON_RUEDA
 # --------------------------------------------------------------------------
 LOGS=$LOGS
 NATIVO_LIMPIAR_WINE=$NATIVO_LIMPIAR_WINE
+# Librerias propias de un juego de Linux (carpeta lib/): auto = solo las que
+# falten en este equipo; todas = la del juego delante de todo; ninguna = no se
+# usan. Con "todas" puede que un juego no llegue a abrir la ventana.
+LIBS_DEL_JUEGO=$LIBS_DEL_JUEGO
 PREFIX_BATOCERA_AL_INSTALAR=$PREFIX_BATOCERA_AL_INSTALAR
 # De donde se descarga Arcade Loader. Admite la pagina de MediaFire o un
 # enlace directo a un .tar.gz.
@@ -32170,26 +32223,76 @@ home_portable_exportar() {
     return 0
 }
 
-lanzador_en_la_raiz() {
-    # EL LANZADOR QUE HAY EN LA RAIZ DEL PAQUETE, si hay alguno. $1 = raiz.
+lanzadores_en_la_raiz() {
+    # TODOS LOS LANZADORES DE LINUX QUE HAY EN LA RAIZ, uno por linea. $1 = raiz.
     #
-    # Se mira SOLO el primer nivel, y se saltan los nombres de instalar: un
-    # "setup.sh" en la raiz no es el lanzador del juego, es el instalador, y
-    # tomarlo por el punto de entrada seria peor que no encontrar nada.
+    # POR QUE EXISTE EN PLURAL (13/11). Un tester: "en los juegos de linux, a
+    # la hora de decirle cual es el sh, el pilla el primero por orden
+    # alfabetico pero no te deja elegir, si le das te lo vuelve a poner en vez
+    # de ir saltando, que te permita elegir como hace con los exe".
+    #
+    # Tenia razon: wizard_pick_exe se volvia sin enseñar menu en los juegos
+    # nativos, con este comentario escrito al lado: "estos juegos tienen UN
+    # lanzador y punto". Y no es verdad -Screamer ya lo demostro en noviembre-,
+    # asi que lo que hacia la fila "Ejecutable:" era volver a poner el mismo.
+    #
+    # Se mira SOLO el primer nivel, que es lo que pidio el tester ("aunque sea
+    # solo los de la raiz del juego, no hace falta que mire carpetas"), y es
+    # ademas lo sensato: los de dentro son bibliotecas y herramientas.
+    #
+    # Y SE SALTAN LOS NOMBRES DE INSTALAR: un "setup.sh" en la raiz no es el
+    # lanzador del juego, y ofrecerlo en una lista invita a elegirlo.
+    #
+    # EL ORDEN SE FIJA CON LC_ALL=C, y no es un adorno. "sort" a secas ordena
+    # segun el idioma del sistema: en C, las mayusculas van antes que las
+    # minusculas y el guion antes que el punto, y en otras configuraciones no.
+    # Como de esta lista sale el lanzador que se coge AUTOMATICAMENTE, sin
+    # fijar el orden el mismo paquete podria arrancar con un .sh distinto en
+    # dos maquinas, y eso es imposible de diagnosticar desde un registro.
+    # Salio al escribir la prueba: yo esperaba que el primero de
+    # Screamer.sh / Screamer-vulkan.sh / aScreamer-debug.sh fuera el tercero.
     local root="${1:-}" c
     [ -n "${root:-}" ] && [ -d "$root" ] || return 1
+    local n=0
     while IFS= read -r c; do
         [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
         case "$(basename "$c")" in
-            install*|setup*|uninstall*|patch*|Install*|Setup*) continue ;;
+            install*|setup*|uninstall*|patch*|Install*|Setup*|Uninstall*) continue ;;
         esac
-        printf '%s' "$c"
-        return 0
+        printf '%s\n' "$c"
+        n=$((n+1))
     done <<EOFRAIZ
 $(find -H "$root" -mindepth 1 -maxdepth 1 -type f \
-       \( -iname '*.sh' -o -iname '*.AppImage' \) 2>/dev/null | sort)
+       \( -iname '*.sh' -o -iname '*.AppImage' \) 2>/dev/null | LC_ALL=C sort)
 EOFRAIZ
-    return 1
+    # Y LOS BINARIOS DE LINUX SUELTOS EN LA RAIZ, que tambien son lanzadores:
+    # hay juegos que no traen .sh y arrancan con su ELF directamente, y
+    # juego_es_nativo ya los reconoce. Se comprueba que sean ELF de verdad para
+    # no colar un README con permiso de ejecucion.
+    while IFS= read -r c; do
+        [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ] || continue
+        case "$(basename "$c")" in
+            install*|setup*|uninstall*|patch*|Install*|Setup*|Uninstall*) continue ;;
+            *.sh|*.AppImage) continue ;;   # ya salieron arriba
+        esac
+        case "$(head -c 4 "$c" 2>/dev/null | tr -d '\0')" in
+            *ELF*) printf '%s\n' "$c"; n=$((n+1)) ;;
+        esac
+    done <<EOFELFR
+$(find -H "$root" -mindepth 1 -maxdepth 1 -type f -perm -u+x 2>/dev/null | LC_ALL=C sort)
+EOFELFR
+    [ "$n" -gt 0 ] || return 1
+    return 0
+}
+
+lanzador_en_la_raiz() {
+    # EL PRIMERO de los de la raiz, que es con lo que se decide si un paquete
+    # es nativo. Sale de la lista de arriba para que no haya dos criterios.
+    local uno
+    uno="$(lanzadores_en_la_raiz "${1:-}" | head -n1)" || return 1
+    [ -n "$uno" ] || return 1
+    printf '%s' "$uno"
+    return 0
 }
 
 juego_hay_windows() {
@@ -34608,8 +34711,69 @@ wizard_pick_exe() {
     local root="$1" list rels sel sugerido
     local _nat
     if _nat="$(juego_es_nativo "$root")" && [ -n "$_nat" ]; then
-        EXE_OVERRIDE="${_nat#"$root"/}"
-        say "[+] Juego de Linux: se usa $EXE_OVERRIDE sin preguntar"
+        # SI HAY MAS DE UN LANZADOR EN LA RAIZ, SE PREGUNTA. (13/11)
+        #
+        # El comentario de arriba decia "estos juegos tienen UN lanzador y
+        # punto" y por eso esta funcion se volvia aqui sin enseñar nada. No es
+        # verdad: hay paquetes con varios .sh en la raiz -uno por idioma, uno
+        # para OpenGL y otro para Vulkan, el del juego y el de un editor- y a
+        # esos se les ponia el primero por orden alfabetico sin opcion.
+        #
+        # Y lo peor era lo que veia el usuario: la fila "Ejecutable:" existia,
+        # se podia pulsar, y lo unico que hacia era volver a poner el mismo. Un
+        # mando que no responde se entiende; uno que responde y no cambia nada
+        # parece que el programa esta roto.
+        #
+        # CUANDO HAY UNO SOLO SE SIGUE SIN PREGUNTAR, que la idea original era
+        # buena: enseñar una lista de un elemento es hacer trabajar para nada.
+        local _cands _n_cands
+        _cands="$(lanzadores_en_la_raiz "$root" 2>/dev/null)" || _cands=""
+        # El detectado entra en la lista aunque este en un subnivel: si no, el
+        # que ya esta puesto no se podria volver a elegir.
+        case "
+$_cands
+" in
+            *"
+$_nat
+"*) ;;
+            *) _cands="$(printf '%s\n%s' "$_nat" "$_cands" | awk 'NF')" ;;
+        esac
+        _n_cands="$(printf '%s\n' "$_cands" | awk 'NF' | wc -l | tr -d ' ')"
+        if [ "${_n_cands:-0}" -le 1 ]; then
+            EXE_OVERRIDE="${_nat#"$root"/}"
+            say "[+] Juego de Linux: se usa $EXE_OVERRIDE sin preguntar (es el unico)"
+            return 0
+        fi
+        local _rels_nat="" _c _rel
+        while IFS= read -r _c; do
+            [ -n "$_c" ] || continue
+            _rel="${_c#"$root"/}"
+            if [ "$_c" = "$_nat" ]; then
+                _rels_nat="$_rels_nat
+> $_rel  (sugerido)"
+            else
+                _rels_nat="$_rels_nat
+$_rel"
+            fi
+        done <<EOFNAT
+$(printf '%s\n' "$_cands" | awk 'NF')
+EOFNAT
+        log "lanzador nativo: $_n_cands candidato(s) en la raiz; se pregunta"
+        # shellcheck disable=SC2046
+        sel="$(IFS=$'\n'; set -f; menu "Lanzador del juego (Linux)" \
+                "(automatico: el primero de la raiz)" \
+                $(printf '%s' "$_rels_nat" | awk 'NF'))" || return 1
+        if [ "$sel" = "(automatico: el primero de la raiz)" ]; then
+            EXE_OVERRIDE=""
+            say "[+] Juego de Linux: lanzador automatico"
+        else
+            sel="${sel#> }"; sel="${sel%  (sugerido)}"
+            case "$sel" in
+                "$root"/*) sel="${sel#"$root"/}" ;;
+            esac
+            EXE_OVERRIDE="$sel"
+            say "[+] Juego de Linux: lanzador elegido -> $EXE_OVERRIDE"
+        fi
         return 0
     fi
     sugerido="$(find_game_exe "$root" 2>/dev/null)" || sugerido=""
@@ -36507,7 +36671,7 @@ mako_escala_exportar() {
     export MAKO_SCALING_FACTOR="${MAKO_ESCALA_FACTOR:-1.5}"
     export MAKO_SCALING_SHARPNESS="${MAKO_ESCALA_NITIDEZ:-0.8}"
     case "$MAKO_DIR" in
-        "$HOME"/*) ;;
+        "$(wp_casa_real)"/*) ;;
         *) export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$MAKO_DIR" ;;
     esac
     say "[+] MAKO Scaler: escalado x${MAKO_ESCALA_FACTOR:-1.5} (nitidez ${MAKO_ESCALA_NITIDEZ:-0.8})"
@@ -36630,7 +36794,7 @@ mako_exportar() {
     fi
     log "MAKO: modelo=$modelo (perfil='${MAKO_MODELO:-mako-fg}', el paquete trae FG: $(mako_trae_fg && echo si || echo no))"
     case "$MAKO_DIR" in
-        "$HOME"/*) ;;
+        "$(wp_casa_real)"/*) ;;
         *) export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$MAKO_DIR"
            log "MAKO fuera de \$HOME: se monta con STEAM_COMPAT_MOUNTS" ;;
     esac
@@ -41987,7 +42151,7 @@ No se arranca ningun otro para no jugar a algo distinto de
 lo que elegiste.
 
 Elige otro en: Ajustes del juego -> Ejecutable
-(o ponlo en automatico para que WProton decida)."
+(o ponlo en automatico para que WProton decida).$(exe_no_esta_pista "$gid")"
             cleanup_mount
             partida_fin; return 1
         fi
@@ -42735,6 +42899,35 @@ Que cumplas muchos mas.
     # esta". Esta contado en COMPATIBILIDAD.md. Se deja el parrafo porque
     # cuenta por que existe esta suite, pero no se lea como el estado de hoy.
     #
+    # 14/11, AL SUBIR A LA 2.29: fuera los SEIS de la 2.28 y dentro TRES.
+    #
+    # Y aqui la tentacion era la de siempre, pero por el otro lado: la 2.28 se
+    # publico ANOCHE y sus seis puntos todavia suenan a nuevos, asi que dejar
+    # alguno "porque la lista queda corta" es exactamente la forma que tuvo el
+    # fallo de la 2.15. La 2.29 es una tanda de UNA NOCHE y son tres arreglos,
+    # los tres salidos de registros de Dani y de un tester:
+    #
+    #   - el perfil y la caratula de la comunidad se iban al juego anterior de
+    #     la saga ("Sega Rally 2 25th Aniversario" se bajaba el de "Sega
+    #     Rally", teniendo el repositorio tambien el de "Sega Rally 2");
+    #   - WProton no volvia al menu al salir de un juego de Linux si la
+    #     carpeta del juego estaba abierta en el gestor de archivos, y encima
+    #     cerrarlo con el mando le habria cerrado esa ventana;
+    #   - un juego de Linux con su carpeta lib/ podia no arrancar, y arrancaba
+    #     fuera de WProton (Banjo Recompiled).
+    #
+    # Los dos primeros confirmados por Dani con el registro delante. El
+    # tercero quedo confirmado jugando esa misma noche: el juego arranco, dejo
+    # sus 33 lineas en el registro y salio limpio dos veces. (De camino se vio
+    # que el arreglo tardaba tres minutos en decidir y eso tambien esta
+    # arreglado; no llego a publicarse, asi que no es punto de novedades.)
+    #
+    # DE LO DE AYER NO ENTRA NADA, y dos cosas que podrian parecerlo tampoco:
+    # elegir el .sh en los juegos de Linux y los archivos con el prefijo
+    # incluido sin hacer son del 13/11 y SI iban dentro de la 2.28 que se
+    # publico (lo confirmo Dani), aunque su aviso no las nombrara. Estan
+    # contadas en NOVEDADES-2.28.md.
+    #
     # 12/11, AL SUBIR A LA 2.28: fuera los TRES de la 2.27 y dentro CUATRO.
     #
     # Los tres primeros son cosas que la gente no podia hacer y ahora si:
@@ -42817,13 +43010,11 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Generar fotogramas con MAKO ya no necesita Lossless Scaling.
+  Arreglado: la configuracion de la comunidad se confundia de juego.
 
-  Y puedes escalar la imagen con el MAKO Scaler, que tampoco lo pide.
+  Arreglado: WProton se colgaba al salir de un juego de Linux.
 
-  El plugin de Decky de lsfg-vk ya funciona con los juegos de WProton.
-
-  Arreglado: el arreglo de mando de SteamOS cerraba WProton al tocarlo.
+  Arreglado: juegos de Linux con su carpeta lib/ que no arrancaban.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -43735,10 +43926,17 @@ conexión: sale de esta carpeta."
 }
 
 nombre_clave() {
-    # Nombre normalizado para comparar: sin mayusculas, sin separadores y sin
-    # la coletilla de version o grupo que traen las descargas. Es la base de
-    # TODAS las busquedas (umu, caratulas, ficha del juego): si esto falla,
-    # se muestran datos de otro juego, que es peor que no mostrar ninguno.
+    # Nombre normalizado para comparar: sin mayusculas y sin separadores
+    # (espacios, puntos, guiones y subrayados), que es lo que hace que
+    # "Mina the Hollower", "Mina_the_Hollower" y "Mina.the.Hollower" sean el
+    # mismo juego. Es la base de TODAS las busquedas (perfiles, caratulas,
+    # umu, ficha del juego): si esto falla, se instalan o se muestran datos de
+    # otro juego, que es peor que no mostrar ninguno.
+    #
+    # LO QUE NO HACE, aunque el comentario de aqui lo dijera antes: NO quita
+    # la coletilla de version o grupo. Eso se decide aparte y con el nombre EN
+    # CRUDO, en nombre_coletilla, porque aqui se quitan los separadores y son
+    # justo ellos los que distinguen " 2" de ".1.0.2".
     printf '%s' "$1" | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-'
 }
 
@@ -43774,55 +43972,153 @@ nombre_resto_bruto() {
     printf '%s' "${nom:$i}"
 }
 
+nombre_tok_numero() {
+    # ¿ESTE TROZO DE LO QUE SOBRA ES UN GRUPO DE NUMEROS?
+    #
+    # Se admite UNA letra de revision detras ("1.0.2b"), pero no dos: "25th"
+    # es un ordinal -"25th Aniversario"- y no un numero de version. Tomarlo
+    # por uno es justo lo que metio el perfil de "Sega Rally" en "Sega Rally 2
+    # 25th Aniversario".
+    local p="${1:-}"
+    [ -n "$p" ] || return 1
+    case "$p" in
+        *[!0-9]*) ;;            # tiene algo que no es un numero: se mira abajo
+        *) return 0 ;;          # solo numeros
+    esac
+    case "$p" in
+        [0-9]*[a-z])
+            case "${p%?}" in
+                *[!0-9]*) return 1 ;;      # "25th": dos letras, no es version
+                *) return 0 ;;             # "2b": el numero y su revision
+            esac ;;
+    esac
+    return 1
+}
+
+nombre_tok_grupo() {
+    # ¿ESTE TROZO ES LA MARCA DEL GRUPO, EL FORMATO O EL IDIOMA DE LA
+    # DESCARGA, O UNA VERSION CON LA V DELANTE?
+    #
+    # La lista es la de siempre. La diferencia con antes es que ahora tiene
+    # que ser el trozo ENTERO -una palabra de lo que sobra- y no el principio
+    # de todo lo que sobra: "gog" valia tambien para "gog y lo que venga
+    # detras", y ese "lo que venga detras" era el agujero.
+    #
+    # Aqui habia ademas un "remastered0*" que no podia casar con nada real
+    # (hacia falta un "remastered0..." literal) y se ha quitado: "Remastered"
+    # no es una coletilla de descarga sino OTRO JUEGO -"Dark Souls" y "Dark
+    # Souls Remastered"-, que es el fallo que esta funcion existe para evitar.
+    local p="${1:-}"
+    case "$p" in
+        v[0-9]*)
+            case "${p#v}" in
+                *[!0-9]*) return 1 ;;      # "v2limited": no es solo la version
+                *) return 0 ;;
+            esac ;;
+        # Con cola, porque la traen de serie ("gog2", "update3", "multi7").
+        gog*|repack*|fitgirl*|dodi*|elamigos*|proper*|update*|multi[0-9]*|build*)
+            return 0 ;;
+        # Exactos: "rip" si, "ripley" no.
+        p2p|rip) return 0 ;;
+    esac
+    return 1
+}
+
 nombre_coletilla() {
     # ¿Lo que sobra tras el nombre es una version o un grupo? Sirve para
     # aceptar "Mina.the.Hollower.v1.0.2" como "Mina the Hollower" sin que
     # "Doom" se lleve por delante a "Doom Eternal".
     #
-    # EL FALLO QUE LA REESCRIBIO, de un tester, literal:
+    # EL FALLO QUE LA ESCRIBIO, de un tester, literal:
     #
     #   "si tienes un juego llamado Killer Instinct.wsquashfs pues hasta ahi
     #    todo bien... Ahora haces el Killer Instinct 2.wsquashfs, pues si le
     #    das te baja el perfil del Killer Instinct, no distingue ese numero 2"
     #
-    # Y dio en el clavo con el detalle que lo explica: con numeros ROMANOS
-    # (Killer Instinct II) SI funcionaba. Porque aqui habia un "[0-9]*" suelto
-    # al lado de gog, repack y p2p, diciendo "lo que empiece por un numero es
-    # una version". Y un 2 detras de un titulo casi nunca es una version: es
-    # la segunda parte.
+    # Y dio en el clavo con el detalle que lo explicaba: con numeros ROMANOS
+    # (Killer Instinct II) SI funcionaba, porque habia un "[0-9]*" suelto al
+    # lado de gog, repack y p2p diciendo "lo que empiece por un numero es una
+    # version". Y un 2 detras de un titulo casi nunca es una version: es la
+    # segunda parte.
     #
-    # Equivocarse aqui no es quedarse sin perfil: es bajarse el de OTRO JUEGO
-    # y arrancar con los ajustes, el runner y las teclas que no son. Por eso
-    # ante la duda se dice que NO.
+    # EL FALLO QUE LA REESCRIBIO (Dani, 13-11-2026, con el registro delante):
+    # el juego "Sega Rally 2 25th Aniversario (antiguo)" se bajo el perfil -y
+    # la caratula- de "Sega Rally", teniendo el repositorio ademas un "Sega
+    # Rally 2". Lo que sobraba era "2 25th Aniversario (antiguo)", y la regla
+    # de entonces miraba solo el PRINCIPIO: "¿empieza por un numero y hay otro
+    # numero mas adelante?". Pues si -el 2 y el 25-, asi que lo dio por una
+    # version del estilo "1.0.2" y se llevo el perfil del juego anterior de la
+    # saga. "Aniversario" y "(antiguo)" no se miraban siquiera.
+    #
+    # COMO SE MIRA AHORA: lo que sobra se parte en palabras por los
+    # separadores y TODAS tienen que ser de coletilla (un grupo de numeros,
+    # "v1", o un nombre de grupo/formato/idioma). Con una sola palabra de
+    # verdad -"Aniversario", "Eternal", "Remake"- ya no hay coletilla, y por
+    # tanto no hay perfil. Que es lo que tiene que pasar: equivocarse aqui no
+    # es quedarse sin perfil, es arrancar con los ajustes, el runner y las
+    # teclas de OTRO JUEGO. Ante la duda, no.
+    #
+    # Y UN NUMERO SUELTO DELANTE SIGUE SIENDO EL DE LA SAGA, aunque detras
+    # venga una version o un grupo de verdad: "Killer Instinct 2 v1.0.2" es el
+    # 2, no una version del 1. Para eso se cuentan los grupos de numeros que
+    # hay ANTES de la primera palabra de grupo:
+    #
+    #   dos o mas ("1.0.2", "1-2-3", "1.0.2-GOG") -> es la version   -> SI
+    #   ninguno   ("v1.0.2", "GOG", "MULTI7")     -> es la coletilla -> SI
+    #   uno solo  (" 2", " 2016", " 2 GOG")       -> es la saga o el año -> NO
     #
     # $1 = lo que sobra, EN CRUDO (con separadores). Ver nombre_resto_bruto.
-    local resto; resto="$(printf '%s' "${1:-}" | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ')"
-    # Los separadores de delante no cuentan: "Juego-GOG" y "Juego GOG" son lo
-    # mismo, y "Juego 2" y "Juego-2" tambien.
-    while :; do
-        case "$resto" in
-            ' '*|'.'*|'_'*|'-'*) resto="${resto#?}" ;;
-            *) break ;;
-        esac
-    done
+    local resto p cab=0 contando=1
+    resto="$(printf '%s' "${1:-}" | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ')"
     [ -n "$resto" ] || return 1
-    case "$resto" in
-        # Version con la v delante: no hay duda.
-        v[0-9]*) return 0 ;;
-        # Grupos, formatos e idiomas de las descargas.
-        gog*|repack*|p2p*|fitgirl*|dodi*|elamigos*|multi[0-9]*|rip*|proper*|update*|build*|remastered0*)
-            return 0 ;;
-        # Version SIN la v, pero con forma de version: DOS grupos de numeros
-        # separados ("1.0.2", "1-2-3"). Un numero solo NO entra aqui.
-        [0-9]*)
-            case "$resto" in
-                [0-9]*[.\ _-][0-9]*) return 0 ;;
-            esac
-            # UN NUMERO SOLO ES LA SAGA, Y SE RESPETA. Tambien los años:
-            # "Juego 2015" y "Juego 2016" son juegos distintos.
-            return 1 ;;
-    esac
+    # SE PARTE A MANO, SIN WORD SPLITTING: con "set -- $resto" bash haria
+    # tambien expansion de nombres de fichero, y un juego con un corchete o un
+    # asterisco en el nombre acabaria comparandose contra lo que haya en la
+    # carpeta. Esto no toca el disco.
+    while [ -n "$resto" ]; do
+        case "$resto" in
+            ' '*|'.'*|'_'*|'-'*) resto="${resto#?}"; continue ;;
+        esac
+        p="${resto%%[ ._-]*}"              # hasta el primer separador
+        resto="${resto#"$p"}"
+        if nombre_tok_numero "$p"; then
+            [ "$contando" = 1 ] && cab=$((cab+1))
+        elif nombre_tok_grupo "$p"; then
+            contando=0
+        else
+            return 1                       # una palabra de verdad: no es coletilla
+        fi
+    done
+    [ "$cab" -ge 2 ] && return 0
+    [ "$cab" -eq 0 ] && [ "$contando" = 0 ] && return 0
     return 1
+}
+
+nombre_tabla_claves() {
+    # DE UNA LISTA DE NOMBRES A UNA TABLA "clave<TAB>nombre", DE UNA PASADA.
+    #
+    # Lee los nombres por la entrada estandar, uno por linea, y escribe por la
+    # salida la clave normalizada y el nombre tal cual, separados por un
+    # tabulador. $1 = la expresion de sed que quita la extension.
+    #
+    # POR QUE DE UNA PASADA: antes se llamaba a nombre_clave una vez por linea
+    # del indice, y nombre_clave son tres procesos. Con los 817 perfiles y las
+    # 838 caratulas que tiene hoy el repositorio, y dos pasadas en cada
+    # busqueda, salian MILES de procesos cada vez que se toca un juego; en el
+    # registro de Dani del 13-11-2026 se ven dos segundos de reloj entre pedir
+    # la lista y saber que perfil tocaba. Aqui son cuatro procesos en total.
+    #
+    # El juego de caracteres es el MISMO que el de nombre_clave a proposito:
+    # si se toca uno hay que tocar el otro, o las dos vias dejan de decir lo
+    # mismo. La prueba prueba_saga.sh compara las dos.
+    local quita="${1:-}" t
+    t="$(mktemp)" || return 1
+    cat > "$t"
+    if [ -s "$t" ]; then
+        sed "$quita" "$t" | tr 'A-ZÁÉÍÓÚÑ' 'a-záéíóúñ' | tr -d ' ._-' | paste - "$t"
+    fi
+    rm -f "$t"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -43938,8 +44234,11 @@ umudb_index() {
 
 umudb_buscar() {
     # $1 = nombre del juego (o del ejecutable). Imprime "titulo|umu_id".
-    # Exacto primero; luego admitiendo la coletilla de version o grupo.
-    local clave linea lclave resto t
+    # Exacto primero; luego admitiendo la coletilla de version o grupo, y de
+    # los que admitan, el titulo MAS LARGO: la base de umu tiene a la vez
+    # "Sega Rally" y "Sega Rally 2", igual que el repositorio de perfiles.
+    local clave linea lclave titulo id resto t
+    local mejor_t="" mejor_i="" mejor_n=0
     t="$(umudb_titles)"
     [ -s "$t" ] || return 1
     clave="$(nombre_clave "$1")"
@@ -43953,13 +44252,18 @@ umudb_buscar() {
     while IFS='|' read -r lclave titulo id; do
         [ -n "$lclave" ] || continue
         [ ${#lclave} -ge 6 ] || continue
+        [ ${#lclave} -gt "$mejor_n" ] || continue   # ya hay uno mas preciso
         case "$clave" in
             "$lclave"*)
                 resto="$(nombre_resto_bruto "$1" "${#lclave}")"
-                nombre_coletilla "$resto" && { printf '%s|%s' "$titulo" "$id"; return 0; } ;;
+                nombre_coletilla "$resto" && {
+                    mejor_t="$titulo"; mejor_i="$id"; mejor_n=${#lclave}
+                } ;;
         esac
     done < "$t"
-    return 1
+    [ -n "$mejor_t" ] || return 1
+    printf '%s|%s' "$mejor_t" "$mejor_i"
+    return 0
 }
 
 umudb_parecidos() {
@@ -44288,9 +44592,8 @@ community_match() {
     # ("Mina.the.Hollower.v1.0.2", "Constance-GOG", "...-P2P"), pero SOLO si
     # lo que sobra es claramente eso: asi "Doom" no se lleva por delante a
     # "Doom Eternal".
-    local gid="$1" clave linea lclave resto
     [ -f "$COMMUNITY_INDEX" ] || return 1
-    community_match_en "$COMMUNITY_INDEX" "$gid"
+    community_match_en "$COMMUNITY_INDEX" "$1"
 }
 
 community_match_en() {
@@ -44299,38 +44602,76 @@ community_match_en() {
     # Esta aparte para que community_match y community_match_local usen LA
     # MISMA regla mirando listas distintas: tenerla escrita dos veces seria
     # tener dos reglas que se separan con el tiempo.
-    local indice="$1" gid="$2" clave linea lclave resto
-    [ -f "$indice" ] || return 1
-    clave="$(printf '%s' "$gid" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
-    [ -n "$clave" ] || return 1
-    # SOLO LOS .conf.
     #
-    # El indice lleva ahora tambien los .keys que acompanan a los perfiles.
-    # Sin este filtro, un "Juego.keys" podria devolverse como si fuera el
-    # perfil y se intentaria instalar un JSON como .conf.
-    # 1) coincidencia exacta
-    while IFS= read -r linea; do
-        case "$linea" in *.conf) ;; *) continue ;; esac
-        [ -n "$linea" ] || continue
-        lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
-        [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
-    done < "$indice"
-    # 2) el juego lleva version/grupo detras del nombre del perfil
-    while IFS= read -r linea; do
-        case "$linea" in *.conf) ;; *) continue ;; esac
-        [ -n "$linea" ] || continue
-        lclave="$(printf '%s' "${linea%.conf}" | tr 'A-Z' 'a-z' | tr -d ' ._-')"
-        [ ${#lclave} -ge 6 ] || continue          # nombres muy cortos: no arriesgar
-        case "$clave" in
-            "$lclave"*)
-                # SE DECIDE CON EL NOMBRE TAL CUAL, no con el normalizado: los
-                # separadores son justo lo que distingue " 2" de ".1.0.2".
-                resto="$(nombre_resto_bruto "$gid" "${#lclave}")"
-                nombre_coletilla "$resto" \
-                    && { printf '%s' "$linea"; return 0; } ;;
-        esac
-    done < "$indice"
-    return 1
+    # DOS PASADAS, Y LA SEGUNDA SE QUEDA CON EL NOMBRE MAS LARGO:
+    #
+    #   1) el nombre normalizado es igual -> ese es, y no se mira nada mas.
+    #   2) el juego lleva version o grupo detras del nombre del perfil.
+    #
+    # LO DEL NOMBRE MAS LARGO lo pidio el registro de Dani del 13-11-2026: el
+    # repositorio tiene "Sega Rally.conf" Y "Sega Rally 2.conf", y la pasada
+    # floja devolvia el PRIMERO del indice que encajara. El indice viene
+    # ordenado, asi que el primero es siempre el nombre mas corto: el perfil
+    # del juego anterior de la saga. Si encajan dos, manda el que dice MAS del
+    # juego.
+    local indice="$1" gid="$2" clave tabla linea lclave nombre resto
+    local mejor="" mejor_n=0 cands=0
+    [ -f "$indice" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    [ -n "$clave" ] || return 1
+    # SOLO LOS .conf, Y LAS CLAVES DE TODO EL INDICE DE UNA VEZ.
+    #
+    # El indice lleva tambien los .keys que acompanan a los perfiles. Sin este
+    # filtro, un "Juego.keys" podria devolverse como si fuera el perfil y se
+    # intentaria instalar un JSON como .conf. El filtro es el mismo -grep -i-
+    # que usa el cruce masivo de la biblioteca: con "case *.conf)" un ".CONF"
+    # del repositorio se quedaba fuera en una via y dentro en la otra.
+    tabla="$(mktemp)" || return 1
+    grep -i '\.conf$' "$indice" 2>/dev/null \
+        | nombre_tabla_claves 's/\.[Cc][Oo][Nn][Ff]$//' > "$tabla"
+    if [ ! -s "$tabla" ]; then
+        rm -f "$tabla"
+        return 1
+    fi
+    # 1) COINCIDENCIA EXACTA
+    # substr y no $2: si un nombre llevara un tabulador, $2 lo cortaria por
+    # la mitad y se pediria al repositorio un fichero que no existe.
+    nombre="$(awk -F'\t' -v k="$clave" '$1==k{print substr($0, index($0,"\t")+1); exit}' "$tabla")"
+    if [ -n "$nombre" ]; then
+        rm -f "$tabla"
+        printf '%s' "$nombre"
+        return 0
+    fi
+    # 2) EL JUEGO LLEVA VERSION O GRUPO DETRAS DEL NOMBRE DEL PERFIL
+    while IFS=$'\t' read -r lclave nombre; do
+        [ -n "$lclave" ] || continue
+        [ -n "$nombre" ] || continue
+        [ ${#lclave} -ge 6 ] || continue       # nombres muy cortos: no arriesgar
+        case "$clave" in "$lclave"*) ;; *) continue ;; esac
+        cands=$((cands+1))
+        # SE DECIDE CON EL NOMBRE TAL CUAL, no con el normalizado: los
+        # separadores son justo lo que distingue " 2" de ".1.0.2".
+        resto="$(nombre_resto_bruto "$gid" "${#lclave}")"
+        if ! nombre_coletilla "$resto"; then
+            log "comunidad: '$nombre' NO vale para '$gid': lo que sobra ('$resto') no es una version ni un grupo de descarga"
+            continue
+        fi
+        if [ ${#lclave} -gt "$mejor_n" ]; then
+            [ -n "$mejor" ] && log "comunidad: '$nombre' dice mas del juego que '$mejor'; se queda el primero"
+            mejor="$nombre"
+            mejor_n=${#lclave}
+        else
+            log "comunidad: '$nombre' encaja con '$gid' pero '$mejor' es mas preciso"
+        fi
+    done < "$tabla"
+    rm -f "$tabla"
+    if [ "$cands" -gt 0 ] && [ -z "$mejor" ]; then
+        log "comunidad: '$gid' -> $cands perfil(es) empiezan igual y ninguno encaja; se queda SIN perfil, que es mejor que el de otro juego"
+    fi
+    [ -n "$mejor" ] || return 1
+    log "comunidad: '$gid' -> $mejor (por la coletilla, de $cands candidato(s))"
+    printf '%s' "$mejor"
+    return 0
 }
 
 community_ya_preguntado() {
@@ -44405,6 +44746,15 @@ community_traer_ahora() {
         community_index_refresh forzar || true
         loading_clear
         cand="$(community_match "$gid")" || cand=""
+    fi
+    if [ -z "$cand" ]; then
+        # LO PIDE EL USUARIO: si no hay el suyo pero hay alguno de nombre
+        # parecido, se le ensenan igual que en el aviso automatico. Y lo que
+        # elija sigue el camino de siempre, con su aviso de "sustituira el
+        # tuyo" y su .bak: aqui el juego ya tiene perfil casi seguro.
+        local _rc_par=0
+        cand="$(community_elegir_parecido "$gid")" || _rc_par=$?
+        [ "$_rc_par" = 2 ] && return 1          # se le ensenaron y dijo que no
     fi
     if [ -z "$cand" ]; then
         ui_info "La comunidad no tiene una configuración para:
@@ -44559,6 +44909,137 @@ Quieres la nueva?"; then
     return 1
 }
 
+exe_no_esta_pista() {
+    # UNA PISTA MAS EN EL ERROR DE "EL EJECUTABLE ELEGIDO NO ESTA": decir que
+    # la configuracion la trajo la comunidad, cuando es el caso.
+    #
+    # EL CASO (Dani, 13-11-2026): el emparejado por nombre le dio el perfil de
+    # "Sega Rally" al juego "Sega Rally 2 25th Aniversario", y ese perfil pedia
+    # "drive_c/Sega Rally/segarally.exe". El juego no arranco y el error decia
+    # "elige otro ejecutable", callandose lo importante: que la configuracion
+    # entera era de OTRO JUEGO. Con eso delante, lo que hay que hacer no es
+    # elegir un ejecutable, es quitar ese perfil.
+    #
+    # El emparejado ya no se equivoca asi, pero la pista sigue valiendo: pasa
+    # igual cuando uno elige a mano un perfil de nombre parecido -ahora se
+    # puede- y cuando el contenido del juego cambia despues de traer el perfil.
+    #
+    # $1 = gid. Imprime el trozo de texto a pegar al final del error, o nada.
+    local gid="${1:-}"
+    [ -n "$gid" ] || return 0
+    community_marca_leer "$gid" || return 0
+    [ -n "${WP_CM_NOMBRE:-}" ] || return 0
+    printf '%s' "
+
+Esta configuracion la trajo la comunidad ($WP_CM_NOMBRE).
+Si no es la de tu juego, borra el perfil en:
+Biblioteca y preferencias -> Perfiles guardados."
+    return 0
+}
+
+community_parecidos() {
+    # LOS PERFILES DE NOMBRE PARECIDO, PARA PREGUNTAR EN VEZ DE ADIVINAR.
+    #
+    # $1 = gid. Imprime un nombre de .conf por linea, el que mas dice del
+    # juego primero, cinco como mucho.
+    #
+    # EXISTE POR EL CASO DE DANI DEL 13-11-2026: el juego "Sega Rally 2 25th
+    # Aniversario (antiguo)" con "Sega Rally.conf" y "Sega Rally 2.conf" en el
+    # repositorio. Ninguno de los dos ES ese juego -lo que le sobra al nombre
+    # no es una version ni un grupo-, y que WProton eligiera uno por su cuenta
+    # es justo como se acabo instalando el del juego equivocado. Pero callarse
+    # tampoco sirve de nada: el perfil que probablemente le vale esta ahi
+    # delante. Asi que se le ensenan y elige el, que es el unico que sabe que
+    # juego tiene.
+    #
+    # Se mira en los DOS sentidos: perfiles cuyo nombre esta al principio del
+    # del juego ("Sega Rally 2" dentro de "Sega Rally 2 25th...") y perfiles
+    # que empiezan por el nombre del juego ("Sega Rally 2 Deluxe" cuando el
+    # juego se llama "Sega Rally 2"). Los dos casos son el mismo juego escrito
+    # de otra forma.
+    local gid="${1:-}" clave tabla tab
+    [ -n "$gid" ] || return 1
+    [ -f "$COMMUNITY_INDEX" ] || return 1
+    clave="$(nombre_clave "$gid")"
+    # NOMBRES CORTOS, NO: con "GTA" o "Doom" se parece todo, y una lista de
+    # cinco perfiles que no son el juego es peor que no decir nada.
+    [ ${#clave} -ge 6 ] || return 1
+    tabla="$(mktemp)" || return 1
+    grep -i '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null \
+        | nombre_tabla_claves 's/\.[Cc][Oo][Nn][Ff]$//' > "$tabla"
+    tab="$(printf '\t')"
+    # LC_ALL=C en el orden: si el orden depende del idioma del sistema, el
+    # perfil que sale primero -el que la gente va a pulsar- puede ser otro en
+    # cada maquina. Ya paso con la lista de lanzadores de los juegos nativos.
+    awk -F'\t' -v k="$clave" '
+        # El exacto no: si existiera, lo habria devuelto community_match_en
+        # y no estariamos preguntando por parecidos.
+        $1 != k && length($1) >= 6 && (index(k, $1) == 1 || index($1, k) == 1) {
+            print length($1) "\t" $2
+        }' "$tabla" \
+        | LC_ALL=C sort -t"$tab" -k1,1nr -k2,2 | cut -f2- | head -n 5
+    rm -f "$tabla"
+    return 0
+}
+
+community_elegir_parecido() {
+    # NO HAY PERFIL PARA ESTE JUEGO, PERO HAY ALGUNO DE NOMBRE PARECIDO:
+    # ensenarlos y DEVOLVER el que elija (vacio = ninguno).
+    #
+    # El aviso dice claramente que es de OTRO juego, porque lo es: puede ser
+    # la misma saga, otra edicion o otra version, y el runner y las teclas
+    # pueden no valer. Lo que no puede pasar es que WProton lo decida solo.
+    #
+    # Esta solo ELIGE, y no instala, para poder llamarla desde los dos sitios:
+    # el aviso automatico instala a continuacion, y la peticion a mano sigue
+    # con su camino de siempre -el aviso de "sustituira el tuyo", el .bak y la
+    # recarga en memoria-, que es justo lo que no se puede saltar.
+    local gid="${1:-}" lista sel l n=0
+    local -a ops=()
+    lista="$(community_parecidos "$gid")" || lista=""
+    [ -n "$lista" ] || return 1
+    while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        ops+=("$l")
+        n=$((n+1))
+    done <<EOFP
+$lista
+EOFP
+    [ "$n" -gt 0 ] || return 1
+    log "comunidad: '$gid' no tiene perfil propio, pero hay $n de nombre parecido: $(printf '%s' "$lista" | tr '\n' ' ')"
+    sel="$(menu "La comunidad no tiene una configuracion para:
+
+$gid
+
+Pero si para estos, que se llaman casi igual. Si alguno es tu
+juego -otra edicion, otra version, la misma saga- puedes usar
+su configuracion; si no, mejor dejarlo.
+
+OJO: la configuracion de OTRO juego puede no irle bien." \
+        "(ninguna, gracias)" "${ops[@]}")" || return 1
+    case "$sel" in
+        ''|'(ninguna, gracias)')
+            log "comunidad: el usuario no quiso ninguno de los perfiles parecidos de '$gid'"
+            # 2 = SE LE PREGUNTO Y DIJO QUE NO, que no es lo mismo que "no
+            # habia nada que preguntar" (1). Quien llama lo usa para no
+            # soltarle a continuacion la explicacion de "no hay configuracion
+            # para este juego": acaba de verla y de decir que no.
+            return 2 ;;
+    esac
+    log "comunidad: '$gid' -> '$sel' ELEGIDO A MANO entre los parecidos (no es su perfil: es el de otro juego)"
+    printf '%s' "$sel"
+    return 0
+}
+
+community_ofrecer_parecido() {
+    # Lo mismo, pero instalando el que elija. 0 = se instalo uno.
+    local gid="${1:-}" sel
+    sel="$(community_elegir_parecido "$gid")" || sel=""
+    [ -n "$sel" ] || return 1
+    say "[comunidad] se usa el perfil parecido '$sel' para $gid"
+    community_fetch "$sel" "$gid"
+}
+
 community_offer_for() {
     # Al configurar o lanzar un juego por primera vez: si la comunidad tiene
     # un perfil con ese nombre, ofrecerlo. Solo se pregunta UNA vez por juego.
@@ -44610,6 +45091,14 @@ funcione bien.$_conkl Quieres instalarla?"; then
         fi
         if [ -z "$cand" ]; then
             log "comunidad: no hay perfil para '$gid' (clave buscada: '$(nombre_clave "$gid")', $(grep -ci '\.conf$' "$COMMUNITY_INDEX" 2>/dev/null) perfiles en la lista)"
+            # NO HAY EL DE ESTE JUEGO. ¿HAY ALGUNO DE NOMBRE PARECIDO?
+            #
+            # Aqui es donde se queda el caso de "Sega Rally 2 25th
+            # Aniversario": el repositorio tiene "Sega Rally" y "Sega Rally
+            # 2", y ninguno es ese juego. Antes WProton se bajaba el primero
+            # que empezara igual -o sea, el del juego equivocado-; ahora no se
+            # baja ninguno, pero tampoco se calla: se ensenan y elige Dani.
+            community_ofrecer_parecido "$gid" && return 0
             community_marcar_preguntado "$gid"
             return 1
         fi
@@ -47189,10 +47678,54 @@ prefijo_incluido_a_disco() {
         [ -e "$destino/drive_c/$nombre" ] || ln -s "$d" "$destino/drive_c/$nombre" 2>/dev/null
     done
 
+    # ¿SIN REGISTRO? NO SE TIRA LA COPIA: LA TERMINA PROTON. (13/11)
+    #
+    # DE DONDE SALE. Un tester con Sega Rally 2: "wproton no es capaz de
+    # gestionar el juego en wsquashfs". En su registro:
+    #
+    #   [+] Sacando el prefijo del archivo a disco (8 MB)...
+    #   AVISO: fallo al sacar el prefijo (no se copio el registro).
+    #   AVISO: no se ha podido sacar el prefijo del archivo.
+    #          El juego arrancara con un prefijo nuevo y vacio.
+    #   AVISO: el juego no aparece dentro del prefijo (drive_c/SEGA RALLY 2/...)
+    #   Proton: Error: unable to use parent for game drive, path ...
+    #
+    # Los 8 MB ya lo dicen todo: un prefijo de Wine de verdad tiene cientos de
+    # megas solo en windows/. Ese archivo NO TRAIA UN PREFIJO, traia un drive_c
+    # con el juego dentro -estilo Batocera- y sin registro.
+    #
+    # Y aqui se tiraba la copia entera y se devolvia error. A partir de ahi se
+    # caia todo en cascada: prefijo nuevo y vacio, el juego fuera de el, y el
+    # lanzamiento por Z: que Proton rechaza. El juego no arrancaba.
+    #
+    # PERO LA COPIA NO ESTABA MAL HECHA: los enlaces al drive_c del montaje -el
+    # juego- estan puestos y son lo que hace falta. Lo unico que falta es el
+    # registro, Y ESO LO SABE HACER PROTON. Lo dice el comentario de
+    # proton_marcar_prefijo: sin "version" ni ".update-timestamp", Proton
+    # prepara el prefijo en cada arranque, y "esa copia solo añade lo que
+    # falta". O sea que anade el registro y respeta los enlaces.
+    #
+    # Es exactamente lo que el tester consiguio a mano: cargarlo en modo
+    # carpeta, dejar que WProton le actualizara el prefijo -"antes era de
+    # batocera"- y volver a comprimirlo. Esto lo hace solo.
+    #
+    # La marca de copia completa SE PONE IGUAL: si no, la proxima partida
+    # repetiria la extraccion y el "rm -rf" de arriba se llevaria por delante
+    # el registro que acaba de construir Proton.
+    local _sin_reg=0
     if [ ! -f "$destino/system.reg" ]; then
-        rm -rf "$destino" 2>/dev/null
-        say "AVISO: fallo al sacar el prefijo (no se copio el registro)."
-        return 1
+        if [ ! -d "$destino/drive_c" ] || [ "$n_enl" -eq 0 ]; then
+            # Esto si es una copia fallida: ni registro ni juego.
+            rm -rf "$destino" 2>/dev/null
+            say "AVISO: fallo al sacar el prefijo (ni registro ni juego)."
+            log "prefijo incluido: '$origen' no trae ni system.reg ni nada enlazable en drive_c" WARN
+            return 1
+        fi
+        _sin_reg=1
+        say "[i] El archivo trae el juego en drive_c pero no un prefijo hecho"
+        say "    (no hay registro). Se deja que Proton lo construya encima:"
+        say "    el juego ya esta enlazado dentro y no se pierde nada."
+        log "prefijo incluido: '$origen' sin system.reg; se entrega con $n_enl enlace(s) y lo termina Proton" WARN
     fi
     [ -e "$destino/pfx" ] || ln -s . "$destino/pfx" 2>/dev/null
     # Ya esta todo: ahora si se marca como completa.
@@ -57884,7 +58417,7 @@ No se arranca ningun otro para no jugar a algo distinto de
 lo que elegiste.
 
 Elige otro en: Ajustes del juego -> Ejecutable
-(o ponlo en automatico para que WProton decida)."
+(o ponlo en automatico para que WProton decida).$(exe_no_esta_pista "$gid")"
             partida_fin; return 1
         fi
     fi
@@ -58376,13 +58909,38 @@ procesos_usando() {
     # lineas, todas iguales, cada una con su escritura a disco y dentro del
     # bucle que se repite cada dos segundos. Ademas de ensuciar el registro,
     # frenaba el arranque de los juegos.
+    # $3 = la marca de la hora del lanzamiento. LO QUE YA ESTABA ANTES DE
+    # LANZAR NO SE DEVUELVE, Y AQUI ESO ES IMPORTANTE DE VERDAD: esta lista se
+    # usa para MATAR.
+    #
+    # EL CASO (Dani, 13-11-2026, Eternal Sonata en modo carpeta): tenia la
+    # carpeta del juego abierta en Dolphin, el gestor de archivos de KDE, y sus
+    # ocho procesos -dolphin y siete kioworker- "trabajan desde la carpeta".
+    # El cuelgue de la espera se vio porque cuelga; esto no se habria visto
+    # hasta que pasara: mantener SELECT cinco segundos para cerrar el juego
+    # manda TERM y luego KILL a "todo el que use la carpeta", y la fila de
+    # "forzar el cierre" del menu de dentro va directa a KILL. O sea que
+    # cerrar el juego con el mando le habria cerrado el gestor de archivos, con
+    # lo que tuviera a medias dentro.
+    #
+    # El grupo del lanzador -que es lo que de verdad alcanza al juego- se cierra
+    # aparte y no depende de esto; esta barrida es el "por si algo se quedo
+    # fuera del grupo". Dejar vivo un resto es malo; cerrarle a alguien su
+    # ventana es peor.
+    #
+    # Por defecto se protege aunque no se pase la marca: es lo que no se puede
+    # olvidar en un sitio nuevo. Para no protegerse hay que pasar la cadena
+    # vacia queriendo.
     trap - ERR
-    local raiz="${1:-}" p _e _c _yo _mios=" "
+    local raiz="${1:-}" p _e _c _yo _mios=" " _nom
+    local marca="${3-$RUNTIME_DIR/.juego_arranque}"
     # El arbol de procesos se puede cambiar para las pruebas: sin esto no hay
     # forma de comprobar esta funcion ni la espera que la usa, porque harian
     # falta procesos de verdad colgados de una carpeta de verdad.
     local _proc="${WP_PROC:-/proc}"
     [ -n "$raiz" ] || return 0
+    local _hay_marca=0
+    [ -n "$marca" ] && [ -e "$marca" ] && _hay_marca=1
     # Ademas de la cadena de padres, se descartan los PIDs que nos pasen en $2:
     # son procesos NUESTROS de la propia espera. El "sleep" del bucle hereda el
     # directorio de trabajo del juego, asi que sin esto la espera se cuenta a si
@@ -58403,6 +58961,20 @@ procesos_usando() {
         # solo con "$raiz/*" ese proceso no casaba y se daba por terminado el
         # juego cuando seguia vivo: en la prueba, el juego duraba 6 segundos y
         # se dejaba de esperar a los 2.
+        # ANTES DE NADA: ¿ya estaba cuando lanzamos? Entonces no es el juego,
+        # y esta lista se usa para matar.
+        if [ "$_hay_marca" = 1 ] && [ ! "$p" -nt "$marca" ]; then
+            # Solo se apunta en el registro si de verdad tenia la carpeta: si
+            # no, serian cientos de lineas por recorrido.
+            _e="$(readlink "$p/exe" 2>/dev/null)"
+            _c="$(readlink "$p/cwd" 2>/dev/null)"
+            case "$_e$_c" in
+                *"$raiz"*)
+                    _nom=""; read -r _nom < "$p/comm" 2>/dev/null || true
+                    log "cerrar el juego: ${p#$_proc/} ${_nom:-?} tiene la carpeta del juego pero YA ESTABA antes de lanzarlo; no es el juego y no se toca" ;;
+            esac
+            continue
+        fi
         _e="$(readlink "$p/exe" 2>/dev/null)"
         case "$_e" in "$raiz"|"$raiz"/*) printf '%s\n' "${p#$_proc/}"; continue ;; esac
         _c="$(readlink "$p/cwd" 2>/dev/null)"
@@ -58518,11 +59090,53 @@ procesos_usando_detalle() {
     # numero bajo alguna vez: la funcion medía y tiraba la medida.
     #
     # Imprime una linea por proceso: "<pid> <clase> <nombre> <motivo>", donde
-    # la clase es "juego", "wine" o "nuestro". $1 = carpeta, $2 = PIDs nuestros.
+    # la clase es "juego", "wine" o "ajeno". $1 = carpeta, $2 = PIDs nuestros,
+    # $3 = la marca de la hora del lanzamiento (por defecto la del juego en
+    # marcha; ver abajo por que no hace falta pasarla).
+    #
+    # LA CLASE "ajeno", Y EL CUELGUE QUE LA TRAJO (Dani, 13-11-2026)
+    #
+    # Eternal Sonata, en modo carpeta. El lanzador salio con codigo 0 a los 33
+    # segundos y la espera se quedo para siempre con esto:
+    #
+    #   quien tiene la carpeta al empezar (8):
+    #       1226567 juego dolphin    (trabaja desde la carpeta)
+    #       1227702 juego kioworker  (trabaja desde la carpeta)
+    #       ... y seis kioworker mas
+    #
+    # Dolphin es el gestor de archivos de KDE, y los kioworker son sus
+    # ayudantes. Dani tenia la carpeta del juego abierta en una ventana. WProton
+    # los tomo por el juego, espero a que se fueran -y no se van: es una ventana
+    # abierta- y hubo que forzar el cierre. Sus PID son ADEMAS mas bajos que los
+    # nuestros: existian antes de que WProton arrancara.
+    #
+    # ASI QUE LA PRUEBA DE "TRABAJA DESDE LA CARPETA" NO BASTA SOLA.
+    #
+    #   prueba FUERTE: su ejecutable esta dentro, o tiene abierto algo de
+    #       dentro (su binario, una biblioteca, un dato). Eso es el juego.
+    #   prueba FLOJA: solo que su directorio de trabajo cae dentro. Eso lo
+    #       cumple el juego lanzado por un interprete -java, python, love- y lo
+    #       cumple igual un gestor de archivos o una terminal abiertos ahi.
+    #
+    # Lo que los separa NO es el nombre -una lista de nombres se queda corta el
+    # dia que alguien use Thunar- sino LA HORA: un proceso que ya existia antes
+    # de que lanzaramos el juego no puede ser el juego. Es la misma regla que ya
+    # estaba escrita en wine_restos_cerrar para no matar el Wine de la persona,
+    # aplicada aqui.
+    #
+    # Con prueba fuerte se cuenta siempre, venga de donde venga: si alguien
+    # arranco el juego a mano antes, no se desmonta el archivo que esta usando.
     trap - ERR
-    local raiz="${1:-}" p _e _c _yo _mios=" " _nom _clase _motivo
+    local raiz="${1:-}" p _e _c _yo _mios=" " _nom _clase _motivo _fuerte
+    local marca="${3-$RUNTIME_DIR/.juego_arranque}"
     local _proc="${WP_PROC:-/proc}"
     [ -n "$raiz" ] || return 0
+    # LA MARCA, POR DEFECTO Y A PROPOSITO.
+    #
+    # Quien llame sin pasarla recibe igual la proteccion: es lo que no se puede
+    # olvidar. Para no protegerse hay que pasar la cadena vacia queriendo.
+    local _hay_marca=0
+    [ -n "$marca" ] && [ -e "$marca" ] && _hay_marca=1
     _mios="$_mios${2:-} "
     # Nuestros ayudantes: el servidor de menus, el guardian y el fondo. Son
     # HIJOS de WProton, no padres, asi que la cadena de padres de abajo no los
@@ -58536,16 +59150,21 @@ procesos_usando_detalle() {
     for p in "$_proc"/[0-9]*; do
         [ -d "$p" ] || continue
         case "$_mios" in *" ${p#$_proc/} "*) continue ;; esac
-        _motivo=""
+        _motivo=""; _fuerte=0
         _e="$(readlink "$p/exe" 2>/dev/null)"
-        case "$_e" in "$raiz"|"$raiz"/*) _motivo="su ejecutable esta dentro" ;; esac
+        case "$_e" in "$raiz"|"$raiz"/*) _motivo="su ejecutable esta dentro"; _fuerte=1 ;; esac
+        # EL MAPA DE MEMORIA SE MIRA ANTES QUE EL DIRECTORIO DE TRABAJO.
+        #
+        # Las dos pruebas se hacian en el orden contrario, y con eso un juego
+        # que cumple las DOS se quedaba etiquetado con la floja. Como la hora
+        # solo se mira en los flojos, habria dependido del orden que un juego
+        # de verdad se tomara por una ventana del gestor de archivos.
+        if [ "$_fuerte" = 0 ] && grep -qF "$raiz/" "$p/maps" 2>/dev/null; then
+            _motivo="tiene abierto algo de dentro"; _fuerte=1
+        fi
         if [ -z "$_motivo" ]; then
             _c="$(readlink "$p/cwd" 2>/dev/null)"
             case "$_c" in "$raiz"|"$raiz"/*) _motivo="trabaja desde la carpeta" ;; esac
-        fi
-        if [ -z "$_motivo" ]; then
-            grep -qF "$raiz/" "$p/maps" 2>/dev/null \
-                && _motivo="tiene abierto algo de dentro"
         fi
         [ -n "$_motivo" ] || continue
         _nom=""
@@ -58565,7 +59184,14 @@ procesos_usando_detalle() {
         case " readlink grep awk sed cat tr sleep wc head dirname basename " in
             *" $_nom "*) continue ;;
         esac
-        if proceso_es_servicio_de_wine "$p"; then _clase=wine; else _clase=juego; fi
+        if [ "$_fuerte" = 0 ] && [ "$_hay_marca" = 1 ] && [ ! "$p" -nt "$marca" ]; then
+            # Solo tiene la carpeta como directorio de trabajo Y ya estaba
+            # antes de lanzar: no es el juego. No se espera y no se cierra.
+            _clase=ajeno
+            _motivo="$_motivo, pero ya estaba antes de lanzar"
+        elif proceso_es_servicio_de_wine "$p"; then _clase=wine
+        else _clase=juego
+        fi
         printf '%s %s %s (%s)\n' "${p#$_proc/}" "$_clase" "$_nom" "$_motivo"
     done
     return 0
@@ -58692,10 +59318,22 @@ esperar_juego_nativo() {
     # QUIEN TIENE LA CARPETA, NO CUANTOS. Antes se escribia solo el numero y
     # eso no sirve para nada: 4 procesos pueden ser el juego jugandose o cuatro
     # restos que no se van a ir nunca, y son situaciones opuestas.
-    local _det _firma _firma_ant="" _n_juego _n_wine _ultimo_aviso=0 _ahora
+    local _det _firma _firma_ant="" _n_juego _n_wine _n_ajeno _ultimo_aviso=0 _ahora
     _det="$(procesos_usando_detalle "$raiz" "$_sp")"
     log "juego nativo: quien tiene la carpeta al empezar ($(contar_lineas "$_det")):"
     espera_apuntar "$_det"
+    # LOS QUE NO SON EL JUEGO, DICHOS CON SU NOMBRE Y UNA SOLA VEZ.
+    #
+    # Es el caso de Dani del 13-11-2026: ocho procesos de Dolphin -el gestor de
+    # archivos- con la carpeta del juego abierta. La espera los tomaba por el
+    # juego y no terminaba nunca. Ahora no se esperan, pero se DICE: si el juego
+    # tarda en volver y en el registro no hay una linea que lo explique, el
+    # siguiente que lo mire vuelve a empezar de cero.
+    _n_ajeno="$(contar_lineas "$(espera_solo_clase "$_det" ajeno)")"
+    if [ "${_n_ajeno:-0}" -gt 0 ]; then
+        log "juego nativo: OJO -> $_n_ajeno proceso(s) tienen la carpeta del juego pero YA ESTABAN antes de lanzarlo, y solo la tienen como directorio de trabajo: NO son el juego, no se esperan y no se cierran. Es lo que pasa con un gestor de archivos (Dolphin, Nautilus, Thunar) o una terminal abiertos en la carpeta del juego" WARN
+        espera_apuntar "$(espera_solo_clase "$_det" ajeno)"
+    fi
     local _pgid
     _pgid="$(cat "$RUNTIME_DIR/.juego_pgid" 2>/dev/null)"
     while :; do
@@ -58737,7 +59375,7 @@ esperar_juego_nativo() {
         # Se escribe cuando CAMBIA quien esta (es la informacion de verdad) y,
         # si no cambia nada, una vez por minuto para que se vea que seguimos
         # esperando y a quien.
-        _firma="$(printf '%s' "$_det" | tr '\n' ';')"
+        _firma="$(printf '%s' "$(espera_solo_clase "$_det" juego)$(espera_solo_clase "$_det" wine)" | tr '\n' ';')"
         _ahora="$(date +%s)"
         if [ "$_firma" != "$_firma_ant" ]; then
             log "juego nativo: cambia quien tiene la carpeta ($_n_juego del juego, $_n_wine de Wine):"
@@ -60212,8 +60850,23 @@ clase_elf() {
     # garantizados, y esto se necesita justo cuando no se puede instalar nada.
     # La clase de un ELF esta en el quinto byte: 1 = ELFCLASS32, 2 = ELFCLASS64.
     # Es la cabecera, no una heuristica.
+    #
+    # Y SIN LANZAR NI UN PROCESO EN EL CASO NORMAL (14/11). Bash puede leer los
+    # cinco primeros bytes el solo con "read -n", y los cinco de un ELF no
+    # llevan NUL -7f 'E' 'L' 'F' y luego 01 o 02-, asi que caben en una
+    # variable. Con "od | tr" dentro de un $( ) eran TRES procesos por fichero,
+    # y esto se llama una vez por cada libreria del juego y por cada candidata
+    # del sistema: con las cien de Banjo Recompiled se noto.
     local f="${1:-}"
     [ -n "${f:-}" ] && [ -f "$f" ] || return 0
+    local _b=""
+    IFS= read -r -n5 -d '' _b < "$f" 2>/dev/null
+    case "${_b:-}" in
+        $'\177ELF\001'*) printf '32'; return 0 ;;
+        $'\177ELF\002'*) printf '64'; return 0 ;;
+    esac
+    # Si el read no pudo con el fichero -uno que empiece por NUL, un sistema
+    # cuyo bash no traiga "-n"-, se mira con od, que es lo de siempre.
     local _m
     _m="$(od -An -tx1 -N5 "$f" 2>/dev/null | tr -d ' \n')" || return 0
     case "${_m:-}" in
@@ -60223,6 +60876,229 @@ clase_elf() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# LAS LIBRERIAS QUE TRAE EL JUEGO: SOLO LAS QUE AQUI FALTAN
+#
+# EL CASO QUE LO ESCRIBIO (Dani, 13-11-2026, Banjo Recompiled): "dicen que no
+# arranca en WProton, pero fuera de el si que va". El juego se moria en un
+# segundo con dos lineas:
+#
+#   Failed to create window: Invalid window
+#   Exiting with exit status '1'. Function exit_error, at .../src/main/main.cpp:75
+#
+# Leyendo el codigo del juego (BanjoRecomp/BanjoRecomp): en Linux la ventana se
+# crea con la bandera SDL_WINDOW_VULKAN (CMakeLists.txt pone
+# RT64_SDL_WINDOW_VULKAN), y eso hace que SDL, DENTRO de SDL_CreateWindow,
+# cargue el Vulkan del sistema -dlopen de libvulkan.so.1 y sus dependencias- y
+# compruebe las extensiones de superficie. Si eso falla, la ventana no se crea.
+# El "Invalid window" no dice nada: es el error que SDL se pisa a si mismo al
+# deshacer la ventana a medio hacer, y por eso no se entendia nada.
+#
+# Y LO QUE LO HACIA FALLAR ERA NUESTRO: el paquete del juego traia una carpeta
+# lib/ y WProton la ponia DELANTE de todo en LD_LIBRARY_PATH. A partir de ahi
+# no solo el juego usa esas librerias: tambien el Vulkan del sistema y el
+# driver de la GPU resuelven SUS dependencias contra la carpeta del juego. Si
+# una de ellas es mas vieja o de otro sitio, el driver no carga. Dani lo
+# confirmo probandolo: "es por la carpeta lib".
+#
+# El paquete de arriba del juego NO trae lib/ -su CI empaqueta solo el binario,
+# assets/ y recompcontrollerdb.txt-, asi que esa carpeta la anadio quien lo
+# repaquetó, que es justo lo que WProton anima a hacer para que un juego sea
+# portatil. O sea que el caso va a repetirse.
+#
+# LA REGLA: se usan SOLO las librerias que este equipo NO tiene.
+#
+# Es lo que resuelve los dos casos conocidos con un mismo criterio:
+#
+#   - Halo (28/09), que no arrancaba en la Deck por "libSDL3.so.0: cannot open
+#     shared object file": el sistema NO la trae, asi que se usa la del juego y
+#     el paquete sigue siendo portatil. Para eso se hizo esto.
+#   - Banjo Recompiled (13/11): el sistema trae todo lo que hay en lib/, asi
+#     que no se usa nada y la carpeta deja de estorbar.
+#
+# Y no hace falta mantener una lista de nombres prohibidos -libvulkan, libGL,
+# libdrm, libwayland, libX11...-, que es como lo resuelve el mundo de los
+# AppImage: aqui la pregunta "¿la tiene el sistema?" ya las descarta todas,
+# porque un equipo que corre juegos las tiene.
+#
+# Se puede forzar con LIBS_DEL_JUEGO en settings.conf: "auto" (lo de arriba,
+# por defecto), "todas" (como antes: la carpeta del juego delante de todo) o
+# "ninguna" (no se usa). "todas" es la salida para un juego que traiga una
+# version MAS NUEVA de algo que el sistema tambien tiene; el registro lo dice
+# cuando puede ser el caso.
+# ---------------------------------------------------------------------------
+
+libs_indice_sistema() {
+    # "nombre<TAB>ruta" de las librerias que este equipo ya tiene. Se hace UNA
+    # vez por sesion: ldconfig es un proceso y esto se consulta en bucle.
+    local f="$RUNTIME_DIR/.libs_sistema"
+    [ -s "$f" ] && { printf '%s' "$f"; return 0; }
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null
+    if command -v ldconfig >/dev/null 2>&1; then
+        ldconfig -p 2>/dev/null \
+            | awk -F' => ' 'NF == 2 {
+                  n = $1; sub(/^[ \t]+/, "", n); sub(/ .*$/, "", n)
+                  r = $2; sub(/^[ \t]+/, "", r)
+                  if (n != "" && r != "") print n "\t" r
+              }' > "$f.tmp" 2>/dev/null
+    fi
+    # SIN ldconfig -o si no dijo nada-, A MANO POR LAS CARPETAS DE SIEMPRE.
+    #
+    # Pasa en contenedores y en sistemas sin la cache hecha. Quedarse sin
+    # indice haria creer que el sistema no tiene NADA, y entonces se usarian
+    # todas las librerias del juego: justo el fallo que esto viene a arreglar.
+    if [ ! -s "$f.tmp" ]; then
+        # Las carpetas se pueden cambiar para las pruebas, igual que /proc con
+        # WP_PROC: sin esto no hay forma de comprobar que pasa en un equipo del
+        # que no se sabe que librerias tiene, y eso es justo el caso en el que
+        # NO hay que adivinar.
+        local _d
+        for _d in ${WP_LIBS_SISDIRS:-/lib /lib64 /usr/lib /usr/lib64 \
+                  /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu \
+                  /lib/i386-linux-gnu /usr/lib/i386-linux-gnu /usr/lib32 \
+                  /lib/aarch64-linux-gnu /usr/lib/aarch64-linux-gnu}; do
+            [ -d "$_d" ] || continue
+            find -H "$_d" -maxdepth 1 -name '*.so*' -printf '%f\t%p\n' 2>/dev/null
+        done > "$f.tmp" 2>/dev/null
+        log "libs: este equipo no tiene cache de ldconfig; el indice se ha hecho mirando las carpetas del sistema"
+    fi
+    if [ -s "$f.tmp" ]; then
+        mv -f "$f.tmp" "$f" 2>/dev/null
+        printf '%s' "$f"
+        return 0
+    fi
+    rm -f "$f.tmp" 2>/dev/null
+    return 1
+}
+
+libs_del_juego_preparar() {
+    # DEJA LISTA LA CARPETA DE LIBRERIAS QUE SE LE VA A DAR AL JUEGO.
+    #
+    # $1 = carpetas del juego separadas por ':', $2 = nombre para la carpeta
+    # de trabajo. Imprime lo que hay que poner en LD_LIBRARY_PATH, o nada si no
+    # hace falta ninguna.
+    #
+    # No se toca la carpeta del juego -puede estar en un archivo de solo
+    # lectura, y no es nuestra-: se hace una carpeta aparte en runtime/ con
+    # ENLACES a las librerias que si hacen falta. Asi el camino que ve el juego
+    # lleva solo esas, y el Vulkan del sistema y el driver de la GPU resuelven
+    # sus dependencias con las del sistema, como cuando el juego se lanza a
+    # mano.
+    #
+    # DE TRES MINUTOS A UN PARPADEO (14/11). La primera version preguntaba al
+    # indice del sistema libreria por libreria, y cada pregunta recorria el
+    # indice ENTERO en un bucle de bash. Con las cien librerias que trae Banjo
+    # Recompiled y las cuatro mil entradas de un sistema con multilib son
+    # 400.000 vueltas de bucle, y el registro de Dani lo midio sin querer: dos
+    # o tres segundos POR LIBRERIA, casi tres minutos entre darle a jugar y que
+    # el juego arrancara. "Le cuesta bastante cargar", dijo, y tenia razon.
+    #
+    # Ahora son DOS pasadas de awk y ni un proceso por fichero:
+    #
+    #   1. la lista del juego, con la clase de cada una (clase_elf ya no lanza
+    #      procesos: lee los cinco bytes con el propio bash);
+    #   2. awk cruza esa lista con el indice y saca las candidatas del sistema
+    #      -son pocas-, a las que se les lee la clase igual de gratis;
+    #   3. awk decide, de una vez, que se usa y que no.
+    #
+    # El registro tambien sale de una pasada: cien llamadas a log() son cien
+    # procesos "date" y cien escrituras, y eso se notaba tambien.
+    local lp="${1:-}" nom="${2:-juego}"
+    local idx granja f base clase n_usadas=0 n_saltadas=0 _OLDIFS="$IFS"
+    [ -n "$lp" ] || return 1
+    idx="$(libs_indice_sistema)" || idx=""
+    if [ -z "$idx" ]; then
+        # Sin indice no se puede decidir: se deja como estaba (la carpeta del
+        # juego delante), que es lo de siempre, y se dice por que.
+        log "libs: no se ha podido saber que librerias tiene este equipo; se usan las del juego tal cual (como antes)" WARN
+        printf '%s' "$lp"
+        return 0
+    fi
+    granja="$RUNTIME_DIR/libs/$nom"
+    rm -rf "$granja" 2>/dev/null
+    mkdir -p "$granja" 2>/dev/null || return 1
+    local pedir cand sisc dec tab
+    tab="$(printf '\t')"
+    pedir="$(mktemp)" || return 1
+    cand="$(mktemp)"  || { rm -f "$pedir"; return 1; }
+    sisc="$(mktemp)"  || { rm -f "$pedir" "$cand"; return 1; }
+    dec="$(mktemp)"   || { rm -f "$pedir" "$cand" "$sisc"; return 1; }
+    # 1) LO QUE TRAE EL JUEGO: "nombre<TAB>clase<TAB>ruta".
+    local _dir
+    IFS=':'
+    for _dir in $lp; do
+        IFS="$_OLDIFS"
+        [ -n "${_dir:-}" ] && [ -d "$_dir" ] || { IFS=':'; continue; }
+        for f in "$_dir"/*.so*; do
+            [ -f "$f" ] || continue
+            base="${f##*/}"
+            # La clase de ESTA libreria, para no comparar peras con manzanas.
+            # Si no se puede leer -no es un ELF: un script de enlazado, un
+            # fichero que acaba en .so y no lo es-, se le da al juego: lo
+            # desconocido no se le quita.
+            clase="$(clase_elf "$f")"
+            # "-" Y NO VACIO, Y NO ES UN DETALLE: estos ficheros se leen luego
+            # con "read" y el IFS puesto a un tabulador, y el tabulador es
+            # ESPACIO EN BLANCO para bash: dos seguidos cuentan como uno solo y
+            # el campo vacio desaparece, con lo que la ruta se corria un hueco
+            # y el enlace no se hacia. Lo cazo la seccion 5 de
+            # prueba_libs_del_juego.sh con un fichero que no es un ELF.
+            printf '%s\t%s\t%s\n' "$base" "${clase:--}" "$f" >> "$pedir"
+        done
+        IFS=':'
+    done
+    IFS="$_OLDIFS"
+    if [ ! -s "$pedir" ]; then
+        rm -rf "$granja" 2>/dev/null; rm -f "$pedir" "$cand" "$sisc" "$dec"
+        log "libs: el juego trae carpeta de librerias pero esta vacia; no se usa"
+        return 1
+    fi
+    # 2) LAS CANDIDATAS DEL SISTEMA PARA ESOS NOMBRES, DE UNA PASADA.
+    awk -F'\t' 'NR == FNR { q[$1] = 1; next } ($1 in q) { print $1 "\t" $2 }' \
+        "$pedir" "$idx" > "$cand" 2>/dev/null
+    # 3) SU CLASE (gratis, como arriba). Son pocas: una o dos por nombre.
+    local _n _r _cl
+    while IFS="$tab" read -r _n _r; do
+        [ -n "${_n:-}" ] && [ -n "${_r:-}" ] || continue
+        [ -e "$_r" ] || continue
+        _cl="$(clase_elf "$_r")"
+        printf '%s\t%s\t%s\n' "$_n" "${_cl:--}" "$_r" >> "$sisc"
+    done < "$cand"
+    # 4) LA DECISION, DE UNA VEZ.
+    awk -F'\t' -v OFS='\t' '
+        NR == FNR {
+            if ($2 != "-" && !(($1 SUBSEP $2) in sis)) sis[$1 SUBSEP $2] = $3
+            next
+        }
+        {
+            if ($2 != "-" && (($1 SUBSEP $2) in sis)) print "SALTA", $1, $2, sis[$1 SUBSEP $2]
+            else print "USA", $1, $2, $3
+        }' "$sisc" "$pedir" > "$dec" 2>/dev/null
+    # 5) EL REGISTRO, EN UNA SOLA ESCRITURA Y CON LA HORA PUESTA.
+    #
+    # Mismo formato que log(): si se toca uno hay que tocar el otro. Se escribe
+    # aqui y no con log() porque son cien lineas, y cien log() son cien "date".
+    awk -F'\t' -v h="$(date '+%H:%M:%S' 2>/dev/null)" '
+        $1 == "SALTA" { printf "%s [INFO] libs: %s (de %s bits) la trae ya este equipo (%s); se usa la del sistema y NO la del juego\n", h, $2, $3, $4 }
+        $1 == "USA"   { printf "%s [INFO] libs: %s%s NO esta en este equipo; se usa la que trae el juego\n", h, $2, ($3 == "-" ? "" : " (de " $3 " bits)") }
+    ' "$dec" >> "$LOG_FILE" 2>/dev/null
+    # 6) LOS ENLACES, solo de las que se usan.
+    local _q
+    while IFS="$tab" read -r _q _n _cl _r; do
+        if [ "$_q" = SALTA ]; then n_saltadas=$((n_saltadas+1)); continue; fi
+        [ -n "${_n:-}" ] && [ -n "${_r:-}" ] || continue
+        ln -sfn "$_r" "$granja/$_n" 2>/dev/null && n_usadas=$((n_usadas+1))
+    done < "$dec"
+    rm -f "$pedir" "$cand" "$sisc" "$dec"
+    if [ "$n_usadas" -eq 0 ]; then
+        rm -rf "$granja" 2>/dev/null
+        log "libs: de las $n_saltadas libreria(s) que trae el juego, este equipo tiene todas: la carpeta lib/ del juego NO se usa. (Ponerla delante hace que el Vulkan del sistema y el driver de la GPU carguen SUS dependencias desde ahi, y hay juegos que entonces no llegan ni a abrir la ventana.) Si este juego necesita las suyas, LIBS_DEL_JUEGO=todas en settings.conf"
+        return 1
+    fi
+    log "libs: se le dan al juego $n_usadas libreria(s) de las suyas (las que aqui faltan) y se dejan $n_saltadas al sistema -> $granja"
+    printf '%s' "$granja"
+    return 0
+}
 diag_arquitectura_nativa() {
     # DE QUE ARQUITECTURA ES EL JUEGO Y DE QUE SON LAS LIBRERIAS QUE LE DAMOS.
     # $1 = el ejecutable del juego. $2 = el LD_LIBRARY_PATH que se le puso.
@@ -60531,9 +61407,24 @@ ejecutar_nativo() {
             say "    DESDE este equipo, que es el que tiene la glibc mas vieja."
             log "libs: la carpeta lib/ del juego pide glibc $_pide y aqui hay $_hay: se ignora" WARN
         else
-            export LD_LIBRARY_PATH="$_lp${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            say "[+] Librerias propias del juego: $_lp"
-            diag_arquitectura_nativa "$exe" "$_lp"
+            # QUE LIBRERIAS DE LAS SUYAS SE LE DAN: ver libs_del_juego_preparar.
+            # Por defecto, solo las que este equipo no tiene.
+            local _modo_libs="${LIBS_DEL_JUEGO:-auto}" _lp_dar=""
+            case "$_modo_libs" in
+                ninguna)
+                    log "libs: LIBS_DEL_JUEGO=ninguna en settings.conf: la carpeta lib/ del juego no se usa" ;;
+                todas)
+                    _lp_dar="$_lp"
+                    log "libs: LIBS_DEL_JUEGO=todas en settings.conf: la carpeta lib/ del juego va delante de todo, como antes" ;;
+                *)
+                    _lp_dar="$(libs_del_juego_preparar "$_lp" \
+                                   "$(basename "$_raiz_lib")")" || _lp_dar="" ;;
+            esac
+            if [ -n "$_lp_dar" ]; then
+                export LD_LIBRARY_PATH="$_lp_dar${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                say "[+] Librerias propias del juego: $_lp_dar"
+                diag_arquitectura_nativa "$exe" "$_lp_dar"
+            fi
         fi
     fi
     [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
@@ -62982,16 +63873,71 @@ mando_es_integrado() {
 # mal. Con LSFGVK_ENV=1 no hace falta.
 # ===========================================================================
 
-lsfg_capa_json() {
-    # EL MANIFIESTO DE LA CAPA. Si no esta, lsfg-vk no esta instalado.
-    # El nombre sale de las constantes del plugin (constants.py):
-    # JSON_FILENAME = "VkLayer_LSFGVK_frame_generation.json".
-    local d="${XDG_DATA_HOME:-$HOME/.local/share}/vulkan/implicit_layer.d"
-    local f
-    for f in "$d/VkLayer_LSFGVK_frame_generation.json" \
-             "$d/VkLayer_LS_frame_generation.json"; do
-        [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+lsfg_capa_dirs() {
+    # DONDE PUEDE ESTAR EL MANIFIESTO DE UNA CAPA IMPLICITA.
+    #
+    # Con los valores REALES del usuario, no con los del entorno del juego (ver
+    # el comentario de WP_HOME_REAL arriba). Y en todas las carpetas que mira
+    # el cargador de Vulkan, no solo en la del usuario: lsfg-vk se puede haber
+    # instalado para todo el sistema -por un paquete de la distribucion- y no
+    # solo con el plugin de Decky.
+    local casa; casa="$(wp_casa_real)"
+    printf '%s\n' "$(wp_xdg_data_real)/vulkan/implicit_layer.d"
+    printf '%s\n' "$casa/.local/share/vulkan/implicit_layer.d"
+    printf '%s\n' "$casa/.config/vulkan/implicit_layer.d"
+    printf '%s\n' /usr/local/share/vulkan/implicit_layer.d
+    printf '%s\n' /usr/share/vulkan/implicit_layer.d
+    printf '%s\n' /etc/vulkan/implicit_layer.d
+    # Y las de XDG_DATA_DIRS, que es donde las ponen algunas distribuciones.
+    local d
+    # OJO AL SALTO DE LINEA FINAL: con printf '%s' la ultima ruta sale sin
+    # salto, y entonces "read" devuelve error al llegar al final y EL CUERPO DEL
+    # BUCLE NO SE EJECUTA PARA ESA RUTA. Con una sola carpeta en XDG_DATA_DIRS
+    # -lo normal- eso significa que no se miraba ninguna. Lo cazo la prueba de
+    # la instalacion para todo el sistema.
+    printf '%s\n' "${XDG_DATA_DIRS:-}" | tr ':' '\n' | while IFS= read -r d; do
+        [ -n "$d" ] && printf '%s\n' "$d/vulkan/implicit_layer.d"
     done
+    return 0
+}
+
+lsfg_capa_json() {
+    # EL MANIFIESTO DE LA CAPA DE lsfg-vk, BUSCADO POR LO QUE ES Y NO POR COMO
+    # SE LLAMA EL FICHERO.
+    #
+    # Antes se probaban dos nombres sacados de las constantes del plugin de
+    # Decky (VkLayer_LSFGVK_frame_generation.json y el antiguo
+    # VkLayer_LS_frame_generation.json). Eso ata nuestro codigo a la version del
+    # plugin que yo lei un dia: si el proyecto renombra el fichero, o si alguien
+    # instala lsfg-vk por su cuenta con otro nombre, dejamos de verlo y decimos
+    # "no esta instalado" con la capa ahi puesta.
+    #
+    # Lo que de verdad identifica la capa es el NOMBRE DE LA CAPA que lleva
+    # dentro, que es con lo que hay que hablarle al cargador de Vulkan de todas
+    # formas. Asi que se recorren las carpetas de manifiestos y se mira dentro.
+    local d f
+    while IFS= read -r d; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.json; do
+            [ -f "$f" ] || continue
+            # SE BUSCA "lsfg" EN CUALQUIER PARTE DEL MANIFIESTO, no solo en
+            # el nombre de la capa.
+            #
+            # Al principio el filtro pedia que el NOMBRE DE LA CAPA llevara
+            # LSFG dentro, y eso vuelve a atar el codigo a un detalle que el
+            # proyecto puede cambiar: si renombran la capa -no el fichero, la
+            # capa- dejamos de verla. La prueba que renombra la capa lo cazo.
+            #
+            # Un manifiesto de lsfg-vk menciona lsfg en su nombre, en su
+            # library_path (liblsfg-vk-layer.so) o en su descripcion, y ningun
+            # otro manifiesto de la maquina habla de lsfg. Asi que basta con
+            # eso, y el nombre de la capa se lee aparte, sea el que sea.
+            grep -qi 'lsfg' "$f" 2>/dev/null \
+                && { printf '%s' "$f"; return 0; }
+        done
+    done <<EOF
+$(lsfg_capa_dirs)
+EOF
     return 1
 }
 
@@ -63008,9 +63954,17 @@ lsfg_lib() {
                 [ -f "$lib" ] && { printf '%s' "$lib"; return 0; } ;;
         esac
     fi
-    for lib in "${XDG_DATA_HOME:-$HOME/.local}/lib/liblsfg-vk-layer.so" \
-               "$HOME/.local/lib/liblsfg-vk-layer.so" \
-               "$HOME/.local/lib/liblsfg-vk.so"; do
+    # Y SI EL MANIFIESTO NO LA DICE, las de siempre. Con la casa REAL.
+    #
+    # Aqui habia un error de bulto: la primera candidata era
+    # "${XDG_DATA_HOME:-$HOME/.local}/lib/...", y XDG_DATA_HOME apunta a
+    # ".../.local/share", asi que salia ".../.local/share/lib", que no existe.
+    # No rompia nada porque la siguiente candidata acertaba, pero estaba mal.
+    local casa; casa="$(wp_casa_real)"
+    for lib in "$casa/.local/lib/liblsfg-vk-layer.so" \
+               "$casa/.local/lib/liblsfg-vk.so" \
+               /usr/lib/liblsfg-vk-layer.so \
+               /usr/lib64/liblsfg-vk-layer.so; do
         [ -f "$lib" ] && { printf '%s' "$lib"; return 0; }
     done
     return 1
@@ -63028,8 +63982,8 @@ lsfg_capa_nombre() {
 }
 
 lsfg_cli() {
-    local c
-    for c in "$HOME/.local/bin/lsfg-vk-cli" "$(command -v lsfg-vk-cli 2>/dev/null)"; do
+    local c casa; casa="$(wp_casa_real)"
+    for c in "$casa/.local/bin/lsfg-vk-cli" "$(command -v lsfg-vk-cli 2>/dev/null)"; do
         [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
     done
     return 1
@@ -63049,10 +64003,10 @@ lsfg_steam_bibliotecas() {
     # _steam_library_roots): sus dos ubicaciones posibles y un patron sobre
     # "path". Las rutas fijas se dejan DETRAS como respaldo, para cuando el
     # fichero no esta o no se puede leer.
-    local raiz vdf
-    for raiz in "$HOME/.steam/steam" "$HOME/.steam/root" \
-                "$HOME/.local/share/Steam" \
-                "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
+    local raiz vdf casa; casa="$(wp_casa_real)"
+    for raiz in "$casa/.steam/steam" "$casa/.steam/root" \
+                "$casa/.local/share/Steam" \
+                "$casa/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
                 ${WP_STEAM_RAIZ_EXTRA:-}; do
         [ -d "$raiz" ] || continue
         printf '%s\n' "$raiz"
@@ -63091,7 +64045,7 @@ lsfg_dll_en_sd() {
     # puede no verlo, y es un fallo con sintoma raro: la capa carga, dice que
     # esta activa, y no genera ni un fotograma.
     local f; f="$(lsfg_dll)" || return 1
-    case "$f" in "$HOME"/*) return 1 ;; *) return 0 ;; esac
+    case "$f" in "$(wp_casa_real)"/*) return 1 ;; *) return 0 ;; esac
 }
 
 lsfg_instalado() {
@@ -63208,7 +64162,7 @@ lsfg_entorno() {
     for _p in "$_dll" "$(lsfg_lib 2>/dev/null)"; do
         [ -n "$_p" ] || continue
         case "$_p" in
-            "$HOME"/*) continue ;;
+            "$(wp_casa_real)"/*) continue ;;
         esac
         _p="$(dirname "$_p")"
         case ":${STEAM_COMPAT_MOUNTS:-}:" in
@@ -63246,7 +64200,7 @@ lsfg_entorno() {
     # porque el sintoma -no pasa nada- no se parece a un fallo, y quien no sepa
     # esto se queda mirando.
     if lsfg_dll_en_sd; then
-        say "[!] El lsfg-vk.dll esta fuera de tu carpeta personal:"
+        say "[!] El lsfg-vk.dll esta fuera de tu carpeta personal ($(wp_casa_real)):"
         say "    $_dll"
         say "    El runtime de Steam puede no dejar verlo al juego. Si no notas"
         say "    la diferencia, instala Lossless Scaling en el disco interno."
@@ -70731,33 +71685,61 @@ covers43_match() {
     # $1 = gid -> nombre del fichero de covers_43/ que le corresponde, si lo hay.
     #
     # Mismo criterio que community_match (de donde viene esto): se compara sin
-    # mayusculas ni separadores, y se admite la coletilla de version o grupo
-    # que traen las descargas, pero solo si lo que sobra es claramente eso.
-    # Asi "Doom" no se lleva por delante a "Doom Eternal".
-    local gid="$1" clave linea lclave resto
+    # mayusculas ni separadores, se admite la coletilla de version o grupo que
+    # traen las descargas -pero solo si lo que sobra es claramente eso-, y si
+    # encajan dos nombres manda el mas largo. Asi "Doom" no se lleva por
+    # delante a "Doom Eternal", y "Sega Rally 2 25th Aniversario" no se lleva
+    # la caratula de "Sega Rally", que es lo que paso el 13-11-2026: el perfil
+    # y la caratula se equivocaron JUNTOS, cada uno en su funcion, porque la
+    # regla era la misma.
+    local gid="$1" clave tabla linea lclave nombre resto
+    local mejor="" mejor_n=0 cands=0
     [ -f "$COVERS43_INDEX" ] || return 1
     clave="$(nombre_clave "$gid")"
     [ -n "$clave" ] || return 1
+    # El indice lleva "nombre<TAB>bytes": se queda la primera columna, y las
+    # claves de todas las caratulas salen de una pasada.
+    tabla="$(mktemp)" || return 1
+    cut -f1 "$COVERS43_INDEX" 2>/dev/null \
+        | nombre_tabla_claves 's/\.[^.]*$//' > "$tabla"
+    if [ ! -s "$tabla" ]; then
+        rm -f "$tabla"
+        return 1
+    fi
     # 1) coincidencia exacta
-    while IFS= read -r linea; do
-        linea="${linea%%	*}"          # el indice lleva "nombre<TAB>bytes"
-        [ -n "$linea" ] || continue
-        lclave="$(nombre_clave "${linea%.*}")"
-        [ "$lclave" = "$clave" ] && { printf '%s' "$linea"; return 0; }
-    done < "$COVERS43_INDEX"
-    # 2) el juego lleva version o grupo detras del nombre de la carátula
-    while IFS= read -r linea; do
-        linea="${linea%%	*}"
-        [ -n "$linea" ] || continue
-        lclave="$(nombre_clave "${linea%.*}")"
+    # substr y no $2: si un nombre llevara un tabulador, $2 lo cortaria por
+    # la mitad y se pediria al repositorio un fichero que no existe.
+    nombre="$(awk -F'\t' -v k="$clave" '$1==k{print substr($0, index($0,"\t")+1); exit}' "$tabla")"
+    if [ -n "$nombre" ]; then
+        rm -f "$tabla"
+        printf '%s' "$nombre"
+        return 0
+    fi
+    # 2) el juego lleva version o grupo detras del nombre de la caratula
+    while IFS=$'\t' read -r lclave nombre; do
+        [ -n "$lclave" ] || continue
+        [ -n "$nombre" ] || continue
         [ ${#lclave} -ge 6 ] || continue      # nombres muy cortos: no arriesgar
-        case "$clave" in
-            "$lclave"*)
-                resto="$(nombre_resto_bruto "$gid" "${#lclave}")"
-                nombre_coletilla "$resto" && { printf '%s' "$linea"; return 0; } ;;
-        esac
-    done < "$COVERS43_INDEX"
-    return 1
+        case "$clave" in "$lclave"*) ;; *) continue ;; esac
+        cands=$((cands+1))
+        resto="$(nombre_resto_bruto "$gid" "${#lclave}")"
+        if ! nombre_coletilla "$resto"; then
+            log "covers_43: '$nombre' NO vale para '$gid': lo que sobra ('$resto') no es una version ni un grupo de descarga"
+            continue
+        fi
+        if [ ${#lclave} -gt "$mejor_n" ]; then
+            mejor="$nombre"
+            mejor_n=${#lclave}
+        fi
+    done < "$tabla"
+    rm -f "$tabla"
+    if [ "$cands" -gt 0 ] && [ -z "$mejor" ]; then
+        log "covers_43: '$gid' -> $cands caratula(s) empiezan igual y ninguna encaja; se queda sin caratula antes que con la de otro juego"
+    fi
+    [ -n "$mejor" ] || return 1
+    log "covers_43: '$gid' -> $mejor (por la coletilla, de $cands candidata(s))"
+    printf '%s' "$mejor"
+    return 0
 }
 
 url_escapar() {
@@ -78117,28 +79099,56 @@ EOFJ
             }
             return ""
         }
-        function coletilla(r) {
-            r = tolower(r)
-            sub(/^[ ._-]+/, "", r)
-            if (r == "") return 0
-            if (r ~ /^v[0-9]/) return 1
-            if (r ~ /^(gog|repack|p2p|fitgirl|dodi|elamigos|multi[0-9]|rip|proper|update|build|remastered0)/) return 1
-            # Un numero: solo es version si trae OTRO grupo de numeros detras
-            # ("1.0.2"). Un numero solo es la saga, o el año.
-            if (r ~ /^[0-9]/) return (r ~ /^[0-9]+[ ._-][0-9]/)
+        # LA MISMA DECISION QUE nombre_tok_numero / nombre_tok_grupo /
+        # nombre_coletilla, palabra por palabra. Antes esto miraba solo el
+        # PRINCIPIO de lo que sobra, y por eso "2 25th Aniversario (antiguo)"
+        # pasaba por una version "1.0.2": habia un numero delante y otro
+        # numero mas adelante, y lo demas no se miraba.
+        function tok_numero(p) {
+            if (p ~ /^[0-9]+$/) return 1          # "2", "2016"
+            if (p ~ /^[0-9]+[a-z]$/) return 1     # "2b": el numero y su revision
+            return 0                              # "25th": dos letras, no
+        }
+        function tok_grupo(p) {
+            if (p ~ /^v[0-9]+$/) return 1
+            if (p ~ /^(gog|repack|fitgirl|dodi|elamigos|proper|update|build)/) return 1
+            if (p ~ /^multi[0-9]/) return 1
+            if (p == "p2p" || p == "rip") return 1
             return 0
         }
-        function cual(bruto, clave, mapa, claves_, n,   i, lc, resto) {
+        function coletilla(r,   n, i, t, cab, contando) {
+            r = tolower(r)
+            n = split(r, t, /[ ._-]+/)
+            cab = 0; contando = 1
+            for (i = 1; i <= n; i++) {
+                if (t[i] == "") continue          # separadores seguidos
+                if (tok_numero(t[i])) { if (contando) cab++ }
+                else if (tok_grupo(t[i])) contando = 0
+                else return 0                     # una palabra de verdad
+            }
+            # dos grupos de numeros o mas -> la version ("1.0.2", "1.0.2-GOG")
+            # ninguno                      -> la coletilla ("v1.0.2", "GOG")
+            # uno solo                     -> la saga o el año (" 2", " 2016")
+            if (cab >= 2) return 1
+            if (cab == 0 && contando == 0) return 1
+            return 0
+        }
+        # Y SI ENCAJAN DOS, EL NOMBRE MAS LARGO, como en community_match_en:
+        # con "Sega Rally" y "Sega Rally 2" en la lista, devolver el primero
+        # que encaje es devolver el del juego anterior de la saga.
+        function cual(bruto, clave, mapa, claves_, n,   i, lc, resto, mejor, mejorl) {
             if (clave in mapa) return mapa[clave]
+            mejor = ""; mejorl = 0
             for (i = 1; i <= n; i++) {
                 lc = claves_[i]
                 if (length(lc) < 6) continue
+                if (length(lc) <= mejorl) continue
                 if (index(clave, lc) == 1) {
                     resto = resto_bruto(bruto, length(lc))
-                    if (coletilla(resto)) return mapa[lc]
+                    if (coletilla(resto)) { mejor = mapa[lc]; mejorl = length(lc) }
                 }
             }
-            return ""
+            return mejor
         }
         BEGIN {
             FS = "\t"; np = 0; nc = 0
