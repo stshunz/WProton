@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.30"
+WPROTON_VERSION="2.31"
 # ----------------------------------------------------------------------------
 # EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
 #
@@ -284,6 +284,7 @@ LANGUAGE=es                              # idioma de los menus: es | en
 GAMES_SORT=nombre                        # nombre | recientes | jugados
 PACK_FORMAT=wsquashfs                    # wsquashfs | dwarfs (más compresion) | carpeta (sin empaquetar)
 PACK_NIVEL=normal                        # rapida | normal | maxima (cuanto comprime al empaquetar)
+PACK_BLOQUE=1M                           # 1M | 512K | 128K (tamaño de bloque al empaquetar)
 # JUEGOS CON MUCHISIMOS FICHEROS: se avisa ANTES de empaquetar.
 #
 # Un juego empaquetado se lee a traves de DOS capas FUSE (la imagen y la
@@ -300,6 +301,10 @@ PACK_AVISO_FICHEROS=20000
 # como nucleos tenga el equipo (hasta 4). Solo se pasan si este binario de
 # dwarfs las entiende: ver dwarfs_opciones_monta().
 DWARFS_CACHE="1g"
+DWARFS_BLOQUE=""                         # bits del bloque al empaquetar (20=1MiB, 22=4MiB); vacio = lo que elija mkdwarfs
+DWARFS_READAHEAD=""                      # lectura adelantada al montar (4m|16m|64m); vacia = desactivada, que es lo de serie en dwarfs
+DWARFS_PERFMON=""                        # 1 = pedirle a dwarfs sus propias cuentas y latencias por operacion (solo para diagnosticar)
+DWARFS_PERFMON_TRAZA=""                  # fichero donde dwarfs deja la traza; se rellena solo al lado del registro
 DWARFS_WORKERS=0
 GAME_MODE_CANVAS=1                       # fondo entre menus (evita ver el escritorio)
 TEMAS_TEMPORADA=1                        # fondos de temporada (Halloween, Navidad...)
@@ -656,6 +661,7 @@ GAMES_SORT="$GAMES_SORT"
 PACK_FORMAT="$PACK_FORMAT"
 # Cuanto comprimir al empaquetar: rapida | normal | maxima
 PACK_NIVEL="$PACK_NIVEL"
+PACK_BLOQUE="$PACK_BLOQUE"
 # --------------------------------------------------------------------------
 # JUEGOS CON MUCHISIMOS FICHEROS
 #   Al empaquetar, si el juego pasa de estos ficheros, WProton avisa y
@@ -694,6 +700,9 @@ ARCADE_LOADER_URL="$ARCADE_LOADER_URL"
 # Montaje DwarFS: cache de bloques y numero de hilos que descomprimen.
 # 0 hilos = automatico (tantos como nucleos, hasta 4).
 DWARFS_CACHE="$DWARFS_CACHE"
+DWARFS_BLOQUE="$DWARFS_BLOQUE"
+DWARFS_READAHEAD="$DWARFS_READAHEAD"
+DWARFS_PERFMON="$DWARFS_PERFMON"
 DWARFS_WORKERS=$DWARFS_WORKERS
 # --------------------------------------------------------------------------
 # FONDO ENTRE MENUS
@@ -948,7 +957,16 @@ punto_de_montaje() {
 declare -A WP_TR
 LANG_DIR="$BASE_DIR/lang"
 
-LANG_EN_VERSION="1"
+# LA VERSION DE LA TABLA DE INGLES LA PONE EL BUILD, del hash de su contenido.
+#
+# Estaba clavada a "1", y write_lang_en no reescribe lang/en.json si el que
+# hay ya dice esa version: toda traduccion añadida despues no llegaba nunca a
+# quien ya tuviera el fichero. Con el hash, cambiar una cadena cambia la
+# version sola.
+# La linea LANG_EN_VERSION la escribe el build aqui, con el hash del
+# contenido de la tabla. Va en linea propia porque asi son todos los
+# marcadores de este fichero, y porque auditoria_final.py los cuenta asi.
+LANG_EN_VERSION="74fddbf70175"
 
 write_lang_en() {
     # El ingles viaja DENTRO de wproton.sh y se escribe en lang/en.json si
@@ -985,6 +1003,7 @@ write_lang_en() {
  ">> USAR ESTA CARPETA <<": ">> USE THIS FOLDER <<",
  "ACEPTAR": "ACCEPT",
  "Abriendo Steam...": "Opening Steam...",
+ "Abrir el explorador de Windows (ver los archivos del prefijo)": "Open the Windows file browser (see the prefix files)",
  "Abrir winecfg": "Open winecfg",
  "Abrir winetricks": "Open winetricks",
  "Acceso directo en el escritorio": "Desktop shortcut",
@@ -1008,10 +1027,13 @@ write_lang_en() {
  "BUSCANDO: %s": "SEARCHING: %s",
  "Batocera": "Batocera",
  "Biblioteca y preferencias": "Library and preferences",
+ "Borrar TODOS los datos de este juego": "Delete ALL data for this game",
  "Borrar TODOS los perfiles": "Delete ALL profiles",
  "Borrar copias de saves antiguas": "Delete old save backups",
+ "Borrar este juego DEL DISCO (no se puede deshacer)": "Delete this game FROM DISK (cannot be undone)",
  "Borrar la configuración de este juego": "Delete this game's settings",
  "Borrar prefijo": "Delete prefix",
+ "Borrar prefijo (reinstala DLLs)": "Delete prefix (reinstalls DLLs)",
  "Borrar runner": "Delete runner",
  "Borrar saves del overlay (upper/)": "Delete overlay saves (upper/)",
  "Borrar un runner": "Delete a runner",
@@ -1046,6 +1068,7 @@ write_lang_en() {
  "Copiando el juego dentro de drive_c...": "Copying the game into drive_c...",
  "Copiando el prefijo...": "Copying the prefix...",
  "Crear copia de seguridad ahora": "Create a backup now",
+ "Crear prefijo de Batocera (de cero, su procedimiento)": "Create a Batocera prefix (from scratch, their way)",
  "Crear un .keys de ejemplo (Alt+Tab, Alt+F4)": "Create an example .keys (Alt+Tab, Alt+F4)",
  "Cuadrada 4:3": "Square 4:3",
  "Cuadrada 4:3 (640x480)": "Square 4:3 (640x480)",
@@ -1110,9 +1133,13 @@ write_lang_en() {
  "Imagenes de la comunidad (neon, con Wine/Proton/Linux)": "Community artwork (neon, with Wine/Proton/Linux)",
  "Imagenes sencillas dibujadas por WProton": "Simple artwork drawn by WProton",
  "Importar configuración desde un zip": "Import a setup from a zip",
+ "Importar un fichero .reg (idioma, ajustes del juego)": "Import a .reg file (language, game settings)",
  "Incluido en el wsquashfs (estilo Batocera)": "Bundled in the wsquashfs (Batocera style)",
  "Instalando datos de duración...": "Installing playtime data...",
+ "Instalar OptiScaler (FSR/DLSS/XeSS upscaling)": "Install OptiScaler (FSR/DLSS/XeSS upscaling)",
  "Instalar OptiScaler (FSR/DLSS/XeSS)": "Install OptiScaler (FSR/DLSS/XeSS)",
+ "Instalar ReShade (Windows: D3D8-12 y OpenGL)": "Install ReShade (Windows: D3D8-12 and OpenGL)",
+ "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)": "Install dgVoodoo2 (DX1-9/Glide for old games)",
  "Instalar dgVoodoo2 (DX1-9/Glide)": "Install dgVoodoo2 (DX1-9/Glide)",
  "Instalar evdev (para los ficheros .keys)": "Install evdev (for .keys files)",
  "Instalar librerias - elige el prefijo destino": "Install libraries - choose target prefix",
@@ -1217,7 +1244,7 @@ write_lang_en() {
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
  "Xbox": "Xbox",
- "__version__": "1",
+ "__version__": "74fddbf70175",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
  "auto (autorun.cmd / escaneo)": "auto (autorun.cmd / scan)",
@@ -1899,7 +1926,8 @@ squashfuse_monta_bin() {
         _tam="$(stat -c%s "$img" 2>/dev/null || printf '')"
         case "${_tam:-}" in
             ''|*[!0-9]*) : ;;
-            *) if [ "$_tam" -ge "$SQFS_TECHO_DE_32_BITS" ]; then
+            *) if [ "$_tam" -ge "$SQFS_TECHO_DE_32_BITS" ] \
+                  && [ "${2:-}" != "rapido" ]; then
                    log "squashfuse: este archivo mide $_tam bytes, o sea que pasa de 4 GB. Se monta con el driver ALTO ($SQUASHFUSE_BIN) y no con squashfuse_ll, porque el bajo usa la referencia de inodo de squashfs -(bloque<<16)|offset- como numero de inodo, y por encima de 4 GB esa referencia NO CABE EN 32 BITS. Un juego nativo de 32 bits que hiciera stat() de esos ficheros recibiria EOVERFLOW y los daria por desaparecidos (esto era lo de Jurassic Park)"
                    printf '%s' "$SQUASHFUSE_BIN"
                    return 0
@@ -12199,9 +12227,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 3b2710c0034b" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 3ac2637f79fa" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 3b2710c0034b
+# WPROTON_HELPER menu_pygame.py 3ac2637f79fa
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -15096,19 +15124,43 @@ def rejilla_calcular(aw, ah, aspecto, forzadas, w_obj, pad_lat, pad_tit,
         for filas in range(1, max(1, filas_max) + 1):
             h_fil = ah // filas - pad_tit
             if h_fil < int(w_min * aspecto) and forzadas <= 0:
-                break
+                break                      # mas filas solo salen mas pequeñas
             iw = int(min(w_col, h_fil / float(aspecto)))
             if iw < w_min:
                 continue
             ih = int(iw * aspecto)
             cerca = iw / float(w_obj)
             lleno = (cols * filas * iw * ih) / float(max(1, aw * ah))
-            if 0.75 <= cerca <= 1.35:
-                # En banda: manda lo que se llena, y a igualdad la mas grande.
-                clave = (1, round(lleno, 3), iw)
-            else:
-                # Fuera de banda solo se usa si no hubiera nada mejor.
-                clave = (0, -abs(1.0 - cerca), iw)
+            # LA BANDA ES UNA PREFERENCIA, NO UNA PUERTA.
+            #
+            # EL FALLO (tester de Dani, 14-11-2026, "sale peor que antes en
+            # 2k"): con la banda como puerta, TODA cuadricula cuyo tamaño de
+            # caratula se saliera del 75-135% quedaba descartada aunque
+            # llenara la pantalla entera. Si en una pantalla concreta solo
+            # habia una cuadricula dentro de la banda, se usaba esa aunque
+            # dejara media pantalla en blanco: no habia nada con que
+            # compararla, porque las demas ni se miraban.
+            #
+            # Ahora se miran todas y la banda PENALIZA en vez de descartar:
+            # una caratula un 40% mas pequeña de lo preferido vale el 72% de
+            # lo que llene, asi que solo gana si llena bastante mas. El suelo
+            # de 0.35 evita que una sola caratula gigante -que llena mucho
+            # porque gasta un solo margen- se lleve el premio.
+            # EL TECHO SIGUE SIENDO UN TECHO: nada mas grande del 135% de lo
+            # preferido, pase lo que pase. Es lo que protege a la Deck, donde
+            # la regla es pocas y grandes PERO del tamaño que toca: sin el,
+            # cuatro carátulas de 279 px le ganan a cinco de 218 por llenar
+            # mas, y la pantalla donde mas se usa WProton cambia sola.
+            if cerca > 1.35:
+                continue
+            # EL SUELO NO, el suelo penaliza. Una caratula mas pequeña de lo
+            # preferido se acepta si a cambio llena bastante mas: un 40% mas
+            # pequeña vale el 72% de lo que llene. Asi una cuadricula que deja
+            # media pantalla en blanco siempre tiene con quien competir, que
+            # es lo que no pasaba cuando la banda descartaba por los dos
+            # lados.
+            factor = 1.0 if cerca >= 0.75 else max(0.35, cerca / 0.75)
+            clave = (round(lleno * factor, 4), iw)
             if mejor is None or clave > mejor[0]:
                 mejor = (clave, cols, filas, iw, ih)
     if mejor is None:
@@ -15147,7 +15199,13 @@ def grid_metrics():
     # lo contrario de lo que pretende: una carátula 4:3 mide la mitad de alto
     # que una vertical, asi que en una Deck quedaban dos columnas y media
     # pantalla en blanco. Con dos filas salen tres columnas y se llena.
-    filas_max = 8 if avail_h >= 620 else (2 if ASPECTO < 1 else 1)
+    #
+    # Y SI LA PERSONA HA FIJADO LAS COLUMNAS, LA REGLA NO APLICA. Ya ha dicho
+    # lo que quiere: ocho carátulas por fila es pedir muchas y pequeñas, que es
+    # lo contrario de "pocas y grandes". Dejarle UNA fila de ocho miniaturas y
+    # el resto del panel vacio no respeta lo que pidio, lo estropea. Es lo que
+    # se veia en el pantallazo del tester del 14/11 con las columnas forzadas.
+    filas_max = 8 if (avail_h >= 620 or forced > 0) else (2 if ASPECTO < 1 else 1)
     # Tamaño preferido: el que cabe de alto, con un tope por pantalla para que
     # en un monitor grande no salga una carátula gigante por fila.
     h_pref = int(avail_h / min(2, filas_max)) - pad_tit
@@ -15169,6 +15227,25 @@ def grid_metrics():
     # izquierda; cada carátula va centrada en su columna (ver draw_grid).
     if GCOLS > 0:
         GCW = max(GCW, avail_w // GCOLS)
+    # LAS CUENTAS DE LA REJILLA VAN AL REGISTRO.
+    #
+    # POR QUE: el 14/11 llego un pantallazo de un tester -"en 2k sale peor que
+    # antes"- y no hubo forma de reproducirlo. Midiendo pixeles en un JPEG
+    # reescalado no se saca ni la resolucion de la ventana ni la vista ni si
+    # tenia las columnas forzadas, que son justo los tres datos que deciden
+    # todo esto. Con esta linea, el proximo pantallazo viene con sus numeros.
+    try:
+        sys.stderr.write(
+            'menu_pygame: rejilla ventana=%dx%d hueco=%dx%d vista=%.2f '
+            'escala=%.2f columnas_forzadas=%d objetivo=%dpx -> %d col x %d '
+            'fil, caratula %dx%d, casilla %dx%d, llena %d%% de ancho y %d%% '
+            'de alto\n'
+            % (W, H, avail_w, avail_h, ASPECTO, AUTO_ESCALA, forced, w_obj,
+               GCOLS, GROWS, GIMG_W, GIMG_H, GCW, GCH,
+               100 * GCOLS * GCW // max(1, avail_w),
+               100 * GROWS * GCH // max(1, avail_h)))
+    except Exception:
+        pass
     _imgcache.clear()          # las imagenes se reescalan al nuevo tamaño
 
 def grid_rows_vis():
@@ -15431,11 +15508,21 @@ def grid_img(path):
 def draw_grid():
     gx0 = LIST_X + max(0, (LIST_W - GCOLS * GCW) // 2) + (GCW - GIMG_W) // 2
     vis_r = grid_rows_vis()
-    # Y EL BLOQUE DE FILAS, CENTRADO DE ALTO. Cuando la carátula la limita el
-    # ancho de la columna, la fila sobra por abajo; dejarlo todo arriba es lo
-    # que se veia como "no llena la pantalla".
+    # EL BLOQUE DE FILAS, CENTRADO DE ALTO... PERO SOLO SI SOBRA POCO.
+    #
+    # Centrar esta bien cuando lo que sobra es un dedo: la carátula la limita
+    # el ancho de la columna y la fila sobra un poco por abajo.
+    #
+    # EL FALLO (tester de Dani, 14-11-2026, "sale peor que antes en 2k"):
+    # cuando sobra MUCHO -una fila entera o mas- centrar es lo peor que se
+    # puede hacer. Una sola fila de carátulas pequeñas se quedaba flotando en
+    # mitad de la pantalla, con hueco arriba Y abajo, en vez de arriba como
+    # antes. Se veia peor que el fallo que venia a arreglar.
+    #
+    # Si cabe otra fila entera, es que la cuadricula no ha llenado: entonces
+    # arriba, que es donde la gente espera que empiece una lista.
     _libre = max(0, (LIST_H - 16) - vis_r * GCH)
-    gy0 = LIST_Y + 8 + (_libre // 2)
+    gy0 = LIST_Y + 8 + (0 if _libre >= GCH else _libre // 2)
     first = scroll
     for i in range(first, min(first + vis_r * GCOLS, len(view))):
         col = (i - first) % GCOLS
@@ -28524,6 +28611,90 @@ runner_kind() {
     return 1
 }
 
+explorador_win_abrir() {
+    # ABRE EL EXPLORADOR DE WINDOWS EN EL PREFIJO DEL JUEGO.
+    # $1 = wsquashfs, $2 = gid.
+    #
+    # SE ABRE EN C:\ Y NO SIN ARGUMENTOS, a proposito: si el runner no trae
+    # winefile y hay que caer en explorer.exe, el caso "sin argumentos" es
+    # justo el que lleva años flojo en Wine. Con una ruta los dos se portan.
+    #
+    # Para quien lo use: C: es el prefijo de Wine de ESTE juego, y los
+    # archivos del juego estan en Z: (que es el sistema de ficheros de Linux)
+    # cuando el juego esta montado. Eso se dice en el aviso, no aqui.
+    local squash="${1:-}" gid="${2:-}" rdir="" bin=""
+    load_profile "$gid"
+    rdir="$(get_runner_path)"
+    if [ -n "$rdir" ]; then
+        bin="$(explorador_win_elegir "$rdir")"
+        if [ -z "$bin" ]; then
+            # NO SE LANZA ALGO QUE NO ESTA. Lanzarlo igual deja un error en el
+            # registro y al usuario mirando una pantalla donde no pasa nada,
+            # que es la peor forma de fallar.
+            log "explorador: $(basename "$rdir") no trae winefile.exe ni explorer.exe" AVISO
+            ui_info "Este runner no trae explorador de Windows.
+
+$(basename "$rdir") no incluye ni winefile.exe ni explorer.exe, asi
+que no hay nada que abrir. No todos los Proton llevan los mismos
+programas que un Wine normal.
+
+Si lo necesitas, en 'Runners y herramientas' puedes instalar otro
+runner y volver a probar."
+            return 1
+        fi
+        log "explorador: se abre $bin (encontrado en $(basename "$rdir"))"
+    else
+        # Sin runner resuelto todavia -el incluido en el juego no se puede
+        # mirar sin montarlo- se pide winefile por su nombre y que lo resuelva
+        # el propio Wine. Queda dicho, que si no aparece nada hay que saber
+        # por que.
+        bin=winefile
+        log "explorador: sin runner que mirar todavia; se pide $bin por su nombre" AVISO
+    fi
+    run_in_prefix "$squash" "$gid" "$bin" 'C:\'
+    return 0
+}
+
+explorador_win_elegir() {
+    # QUE "EXPLORADOR DE WINDOWS" SE ABRE, MIRANDO EL RUNNER QUE HAY.
+    #
+    # $1 = carpeta del runner. Imprime el nombre del programa a lanzar, o nada
+    # si ese runner no trae ninguno.
+    #
+    # Hay DOS candidatos y no son lo mismo:
+    #
+    #   winefile.exe -> el gestor de archivos de Wine. Su manual lo describe
+    #     como "the Wine file manager, with a similar design to early
+    #     Microsoft Windows explorer", y acepta una ruta, de Windows o de
+    #     Unix. Es lo que la gente quiere cuando pide "el explorador".
+    #   explorer.exe -> en Wine es sobre todo el que monta el escritorio
+    #     virtual (/desktop=nombre,WxH). Sin argumentos lleva años siendo
+    #     flojo: hay un fallo abierto en WineHQ titulado precisamente
+    #     "Explorer (wine builtin) fails when run with no command line args".
+    #
+    # Asi que se prefiere winefile y explorer queda de respaldo.
+    #
+    # Y NO SE SUPONE QUE PROTON LO TRAIGA: los Proton de Valve y los
+    # Frankenstein no llevan los mismos programas que un Wine normal, y mirar
+    # listas por internet para adivinarlo es justo lo que no hay que hacer
+    # cuando el runner esta ahi mismo para preguntarselo. Se busca en EL
+    # runner del usuario.
+    local rdir="${1:-}"
+    [ -n "$rdir" ] && [ -d "$rdir" ] || return 0
+    local cand
+    for cand in winefile explorer; do
+        # -maxdepth 6 porque el .exe vive hondo (files/lib64/wine/
+        # x86_64-windows/ en Proton, lib/wine/ en Wine) y porque un find sin
+        # tope en un runner con el prefijo dentro tarda de verdad.
+        if find "$rdir" -maxdepth 6 -type f -name "$cand.exe" 2>/dev/null \
+           | head -n1 | grep -q .; then
+            printf '%s' "$cand"
+            return 0
+        fi
+    done
+    return 0
+}
+
 runner_wine_bin() {
     [ -x "$1/bin/wine" ] && { printf '%s' "$1/bin/wine"; return; }
     find "$1" -maxdepth 3 -type f -name wine -path '*/bin/wine' | head -n1
@@ -28746,6 +28917,7 @@ get_runner_path() {
 #    Si el overlay esta ya montado se REUTILIZA; si falla, modo solo lectura.
 # ----------------------------------------------------------------------------
 MOUNT_RO=""
+MOUNT_IMG=""     # el archivo montado ahora (para encontrar su proceso)
 MOUNT_RW=""
 MOUNT_POINT=""
 MOUNT_OK=0
@@ -28819,7 +28991,37 @@ montaje_motivo() {
     esac
 }
 
-SQUASHFUSE_OPTS=""   # se calcula una vez por sesion
+SQUASHFUSE_OPTS=""   # se calcula una vez por DRIVER (ver squashfuse_opciones_monta)
+SQUASHFUSE_OPTS_DE=""  # para cual de los dos drivers son las de arriba
+# AQUI ESTUVO squashfuse_lectura(), Y SE QUITO PORQUE NO HIZO NADA.
+#
+# La hipotesis era que el desajuste entre la peticion de FUSE (128 KB) y el
+# bloque del squashfs (1 MB) obligaba a descomprimir el mismo megabyte hasta
+# ocho veces, y que pidiendo max_read=1048576,max_readahead=1048576 cada
+# bloque se descomprimiria una vez.
+#
+# SE PROBO Y SE MIDIO (Dani, 15-11-2026, 01:02). El driver acepto las opciones
+# -se ven enteras en su registro- y no cambio nada:
+#
+#                        antes            con max_read de 1 MB
+#   leidos del archivo   2490 MB          2358 MB
+#   CPU del montaje       178%             174%
+#   hasta el fotograma   130,2 s          131,1 s
+#   1200
+#
+# Todo dentro del ruido. Asi que fuera: lo que no se ha demostrado que sirva
+# no se queda puesto "por si acaso", que es como se llena un programa de
+# ajustes que nadie sabe para que estan.
+#
+# Y DE PASO, UNA LECCION SOBRE LA MEDIDA. La hipotesis salia de comparar
+# "leidos" (rchar) con "servidos" (wchar) y ver un factor de tres y medio. Esa
+# cuenta NO ES FIABLE: rchar suma los dos procesos del montaje -squashfuse lee
+# comprimido del archivo y fuse-overlayfs lee sin comprimir del montaje de
+# abajo-, y wchar puede quedarse corto porque libfuse puede contestar con
+# splice, que no pasa por write(). Los dos numeros que SI valen son los otros
+# dos, y los dos siguen diciendo lo mismo: el disco da 135 MB en 60 segundos
+# (no es el cuello) y el montaje esta al 174% de un nucleo (si lo es).
+
 squashfuse_opciones_monta() {
     # Las opciones con las que se monta un wsquashfs. $1 = binario elegido.
     #
@@ -28851,11 +29053,37 @@ squashfuse_opciones_monta() {
     # la libreria fuse"-, asi que aqui no sirve el truco de leer la ayuda que
     # se usa con dwarfs: se intenta montar y, si no las acepta, mount_image_ro
     # reintenta sin ellas.
-    [ -n "$SQUASHFUSE_OPTS" ] && return 0
-    case "${1##*/}" in
-        *_ll) SQUASHFUSE_OPTS="ro" ;;
+    # LA CACHE ES POR DRIVER, NO POR SESION. Y ESTO ES UN FALLO QUE METI YO.
+    #
+    # EL CASO (Dani, 15-11-2026): "yo creo que ahora ha ido mas lento todavia".
+    # Y era verdad: el parón del primer video paso de 111 a 174 segundos.
+    #
+    # Desde el 14/11 se monta primero con squashfuse_ll y, si los inodos se
+    # pasan de 32 bits, se vuelve a montar con el driver ALTO. Para el bajo las
+    # opciones son solo "ro" -y tiene que ser asi, su "-o timeout=N" significa
+    # "desmontate tras N segundos sin uso", no la caducidad de los atributos-.
+    # Pero la cache de aqui era de una por sesion: al volver a montar con el
+    # alto, SQUASHFUSE_OPTS ya valia "ro" y esta funcion se iba por la puerta
+    # de arriba sin recalcular nada.
+    #
+    # Resultado: el driver alto montado SIN kernel_cache y SIN los tiempos de
+    # una hora, que es justo lo unico que lo hace soportable. En el registro de
+    # Dani se ve el precio: 2482 MB leidos del archivo para servir 696 MB. El
+    # nucleo tiraba lo ya leido en cada apertura y el mismo bloque de 1 MB se
+    # leia y se descomprimia una y otra vez, con el montaje clavado al 178% de
+    # un nucleo y el disco dando solo 113 MB.
+    #
+    # La cache sigue haciendo falta -guarda las opciones DEGRADADAS cuando un
+    # driver no las traga, para no repetir el intento fallido en cada juego-,
+    # pero tiene que acordarse de PARA QUE DRIVER eran.
+    local _clase="alto"
+    case "${1##*/}" in *_ll) _clase="bajo" ;; esac
+    [ -n "$SQUASHFUSE_OPTS" ] && [ "${SQUASHFUSE_OPTS_DE:-}" = "$_clase" ] && return 0
+    case "$_clase" in
+        bajo) SQUASHFUSE_OPTS="ro" ;;
         *)    SQUASHFUSE_OPTS="ro,kernel_cache,attr_timeout=3600,entry_timeout=3600,negative_timeout=3600" ;;
     esac
+    SQUASHFUSE_OPTS_DE="$_clase"
     log "squashfuse: driver = ${1:-?} | opciones de montaje = $SQUASHFUSE_OPTS"
 }
 
@@ -28897,6 +29125,65 @@ dwarfs_opciones_monta() {
     ayuda="$("$DWARFS_BIN" --help 2>&1)"
     case "$ayuda" in
         *cachesize*) [ -n "${DWARFS_CACHE:-}" ] && opts="$opts,cachesize=$DWARFS_CACHE" ;;
+    esac
+    # LA LECTURA ADELANTADA VIENE APAGADA DE SERIE EN dwarfs, y eso importa
+    # aqui: su propia documentacion dice de readahead "This is experimental and
+    # disabled by default", y de seq_detector "This can significantly increase
+    # throughput if data is accessed sequentially".
+    #
+    # POR QUE SE PRUEBA ESTO (15-11-2026): la unica muestra limpia de la carga
+    # del FF7 -antes de que la sonda la ensuciara- dice que el montaje esta al
+    # 14% de CPU, que el juego esta DURMIENDO y que lee a 8 MB/s. Eso no es
+    # descomprimir ni es el disco: es esperar. El juego pide un trozo, espera
+    # la ida y vuelta de FUSE, pide el siguiente. Leer por delante es
+    # literalmente la opcion documentada para ese patron.
+    #
+    # NO SE ENCIENDE SOLA. Esta marcada como experimental por su autor, y el
+    # efecto hay que medirlo en el juego, no suponerlo: se elige en el menu.
+    case "$ayuda" in
+        *readahead*)
+            if [ -n "${DWARFS_READAHEAD:-}" ]; then
+                opts="$opts,readahead=$DWARFS_READAHEAD"
+            fi ;;
+        *)
+            [ -n "${DWARFS_READAHEAD:-}" ] && \
+                log "dwarfs: este binario no conoce readahead; se monta sin ella" AVISO ;;
+    esac
+    # perfmon: LO QUE MIDE LAS OPERACIONES DE VERDAD, EN VEZ DE INFERIRLAS.
+    #
+    # POR QUE HACE FALTA (16-11-2026): llevo dos dias sacando el numero de
+    # operaciones de "syscw" de /proc, y me he equivocado dos veces con la
+    # misma clase de error. La segunda es de libro: escribi en el propio
+    # registro que fuse-overlayfs sirve con splice y que por eso sus BYTES no
+    # se cuentan... y dos lineas despues use SU CUENTA como "las lecturas del
+    # juego". Si splice no pasa por write, no se cuentan los bytes NI las
+    # operaciones. Con eso se caen "183 lecturas por segundo", "5,5 ms por
+    # lectura" y "311 operaciones por lectura".
+    #
+    # dwarfs trae el instrumento hecho. Su documentacion: "-o perfmon=name1[+
+    # name2...]  Enable performance monitoring for the comma-separated list of
+    # components" y "-o perfmon_trace=file  Write a performance trace to file".
+    # Da cuentas y latencias POR OPERACION DE FUSE, no un syscw que hay que
+    # interpretar.
+    #
+    # NO VA PUESTO DE SERIE: solo cuando se pide diagnostico. Y solo si este
+    # binario lo trae, que la documentacion avisa de que puede venir sin
+    # compilar ("if the binary was built with performance monitoring support").
+    case "$ayuda" in
+        *perfmon*)
+            if [ -n "${DWARFS_PERFMON:-}" ]; then
+                # Al lado del registro y con su mismo nombre, que buscarla es
+                # trabajo de quien la escribe, no de quien la lee.
+                [ -z "${DWARFS_PERFMON_TRAZA:-}" ] && [ -n "${LOG_FILE:-}" ] \
+                    && DWARFS_PERFMON_TRAZA="${LOG_FILE%.log}-dwarfs-perfmon.txt"
+                opts="$opts,perfmon=fuse+inode_reader_v2+block_cache"
+                [ -n "${DWARFS_PERFMON_TRAZA:-}" ] \
+                    && opts="$opts,perfmon_trace=$DWARFS_PERFMON_TRAZA"
+                log "dwarfs: perfmon PUESTO; al desmontar deja las cuentas y latencias por operacion"
+            fi ;;
+        *)
+            [ -n "${DWARFS_PERFMON:-}" ] && \
+                log "dwarfs: este binario viene SIN perfmon compilado; no se puede medir por dentro" AVISO ;;
     esac
     case "$ayuda" in
         *workers*)
@@ -29213,6 +29500,9 @@ mount_image_ro() {
         return 1
     fi
     fmt="$(image_format "$img")"
+    # SE APUNTA QUE ARCHIVO ES: el vigilante de carga lo necesita para
+    # encontrar al proceso que lo monta (ver diag_carga_juego).
+    MOUNT_IMG="$img"
     if [ "$fmt" = "dwarfs" ]; then
         find_dwarfs_tools
         if [ -z "$DWARFS_BIN" ]; then
@@ -29222,6 +29512,9 @@ $(basename "$img")"; return 1; }
         fi
         say "[+] Montando imagen DwarFS con $(basename "$DWARFS_BIN")"
         dwarfs_opciones_monta
+        # LA FICHA TAMBIEN PARA dwarfs, y DESPUES de calcular las opciones,
+        # que la ficha las nombra.
+        squashfuse_ficha_imagen "$img"
         if ! montar_suelto "$DWARFS_BIN" "$img" "$mp" -o "$DWARFS_OPTS"; then
             # Si ya iba con las opciones de siempre, no hay nada que
             # reintentar: el fallo es otro.
@@ -29246,31 +29539,51 @@ $(basename "$img")"; return 1; }
                 || { fuse_diagnostico; return 1; }
         fi
     else
-        local sqbin; sqbin="$(squashfuse_monta_bin "$img")"
+        squashfuse_ficha_imagen "$img"
+        # SE EMPIEZA POR EL RAPIDO, aunque el archivo pase de 4 GB: despues se
+        # miran los inodos de verdad y, solo si se pasan, se vuelve a montar
+        # con el alto. Ver squashfuse_inodos_pasan_de_32.
+        local sqbin _sqclase; sqbin="$(squashfuse_monta_bin "$img" rapido)"
         [ -n "$sqbin" ] || { ui_error "Falta squashfuse para montar:
 $(basename "$img")"; return 1; }
         squashfuse_opciones_monta "$sqbin"
         case "${sqbin##*/}" in
             *_ll) say "[+] Montando imagen con squashfuse_ll (driver rapido)" ;;
         esac
-        # Tres intentos de menos a mas conservador, y el que funcione se queda
-        # para el resto de la sesion: si este driver no entiende algo, no lo
-        # va a entender en el juego siguiente.
+        # Tres intentos de menos a mas conservador (ver la escalera abajo).
         #
         # El valor "ninguna" significa montar SIN "-o" ninguno, que es como se
         # montaba hasta ahora. Hace falta un centinela y no la cadena vacia:
         # vacia es "todavia no se ha calculado", y guardar ahi el ultimo
         # recurso haria que la siguiente imagen volviera a probar las opciones
         # que ya sabemos que no valen.
-        if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
-            [ "$SQUASHFUSE_OPTS" = "ninguna" ] && return 1
+        # LA ESCALERA, EN UN BUCLE Y CON UN PELDAÑO MAS.
+        #
+        # Antes eran dos reintentos escritos a mano, uno debajo del otro, y
+        # bajaban de golpe de TODAS las opciones a "ro": si el driver rechazaba
+        # una sola de ellas se perdia tambien kernel_cache, que es justo la que
+        # mas se nota. Ahora se baja de uno en uno:
+        #
+        #   1. todas  (cache + tiempos largos)
+        #   2. solo "ro"
+        #   3. sin "-o" ninguno
+        #
+        # (El 15/11 hubo un cuarto peldaño para quitar max_read/max_readahead
+        # por separado. Esas opciones se quitaron al medir que no servian de
+        # nada, asi que su peldaño se fue con ellas.)
+        #
+        # El que funcione se queda para el resto de la sesion: si este driver
+        # no entiende algo, no lo va a entender en el juego siguiente.
+        _sqclase="$(case "${sqbin##*/}" in *_ll) printf bajo ;; *) printf alto ;; esac)"
+        while ! squashfuse_montar "$sqbin" "$img" "$mp"; do
+            [ "$SQUASHFUSE_OPTS" = "ninguna" ] && { fuse_diagnostico; return 1; }
             say "AVISO: squashfuse no acepto '$SQUASHFUSE_OPTS'; se monta con menos opciones"
             log "squashfuse: montaje con '$SQUASHFUSE_OPTS' fallo" AVISO
             # SI EL MOTIVO NO ES LAS OPCIONES, NO SE REINTENTA.
             #
             # Cambiar de opciones solo arregla un driver que no las entiende.
             # Si el sistema no nos deja montar -dentro de un contenedor, por
-            # ejemplo- los tres intentos fallan igual y lo unico que se
+            # ejemplo- todos los intentos fallan igual y lo unico que se
             # consigue es tardar el triple y llenar el registro de ruido que
             # despista. Se para aqui y se dice la verdad.
             if [ "$(montaje_motivo)" = permiso ]; then
@@ -29283,31 +29596,185 @@ $(basename "$img")"; return 1; }
             # Y OJO CON EL PUNTO DE MONTAJE: umount_dir termina con un rmdir
             # -su trabajo es dejar tmp_mount/ vacio-, asi que despues de
             # limpiarlo la carpeta YA NO ESTA y el reintento moria con "bad
-            # mount point: No such file or directory". O sea: los dos
-            # reintentos no podian funcionar nunca, y el motivo que llegaba
-            # arriba era el de la carpeta que faltaba, no el de verdad.
+            # mount point: No such file or directory". O sea: los reintentos
+            # no podian funcionar nunca, y el motivo que llegaba arriba era el
+            # de la carpeta que faltaba, no el de verdad.
             umount_dir "$mp"
             mkdir -p "$mp" 2>/dev/null
-            if [ "$SQUASHFUSE_OPTS" = "ro" ]; then
-                SQUASHFUSE_OPTS="ninguna"
-            else
-                SQUASHFUSE_OPTS="ro"
-            fi
-            if ! squashfuse_montar "$sqbin" "$img" "$mp"; then
-                [ "$SQUASHFUSE_OPTS" = "ninguna" ] && { fuse_diagnostico; return 1; }
-                if [ "$(montaje_motivo)" = permiso ]; then
-                    log "squashfuse: el sistema no deja montar; no se reintenta" AVISO
-                    fuse_diagnostico
-                    return 1
+            case "$SQUASHFUSE_OPTS" in
+                ro) SQUASHFUSE_OPTS="ninguna" ;;
+                *)  SQUASHFUSE_OPTS="ro" ;;
+            esac
+            # Degradadas, pero SIGUEN SIENDO DE ESTE DRIVER: si luego se
+            # cambia de driver hay que volver a calcularlas enteras, porque lo
+            # que este no tragaba no dice nada del otro.
+            SQUASHFUSE_OPTS_DE="$_sqclase"
+            log "squashfuse: se reintenta con '$SQUASHFUSE_OPTS'"
+        done
+        # YA MONTADO: AHORA SE MIRAN LOS INODOS DE VERDAD.
+        #
+        # Solo hace falta si se monto con el driver bajo y el archivo pasa de
+        # 4 GB, que es el unico caso en que la referencia de inodo de squashfs
+        # puede no caber en 32 bits. Si se pasa, se desmonta y se vuelve a
+        # montar con el alto: la imagen recien montada no ha leido nada, asi
+        # que rehacerlo no cuesta nada.
+        case "${sqbin##*/}" in
+            *_ll)
+                local _lento=""
+                _lento="$(squashfuse_monta_bin "$img")"
+                if [ "$_lento" != "$sqbin" ] \
+                   && squashfuse_inodos_pasan_de_32 "$mp"; then
+                    log "squashfuse: se vuelve a montar $(basename "$img") con el driver ALTO ($_lento)"
+                    umount_dir "$mp"
+                    mkdir -p "$mp" 2>/dev/null
+                    squashfuse_opciones_monta "$_lento"
+                    squashfuse_montar "$_lento" "$img" "$mp" \
+                        || { fuse_diagnostico; return 1; }
                 fi
-                log "squashfuse: tampoco con -o ro; se monta sin opciones" AVISO
-                SQUASHFUSE_OPTS="ninguna"
-                umount_dir "$mp"
-                mkdir -p "$mp" 2>/dev/null
-                squashfuse_montar "$sqbin" "$img" "$mp" || { fuse_diagnostico; return 1; }
-            fi
-        fi
+                ;;
+        esac
     fi
+    return 0
+}
+
+squashfuse_inodos_pasan_de_32() {
+    # ¿Los inodos de ESTE montaje de squashfuse_ll pasan de 32 bits? $1 = el
+    # punto de montaje. Devuelve 0 si alguno se pasa (o sea, si hay problema).
+    #
+    # POR QUE SE MIRA EN VEZ DE DEDUCIRLO DEL TAMAÑO (caso de Dani, 14-11-2026)
+    #
+    # La regla era "si el archivo pasa de 4 GB, driver ALTO", que es el lento.
+    # El tamaño es solo un INDICIO: lo que de verdad rompe es que la referencia
+    # de inodo -(bloque de metadatos << 16) | offset- no quepa en 32 bits, y
+    # eso depende de DONDE acabe escribiendo mksquashfs los metadatos de los
+    # directorios, no de lo que ocupe el archivo.
+    #
+    # Y el indicio falla por exceso. El Final Fantasy VII Satsuki Yatoshi de
+    # Dani mide 11 GB y sus inodos se quedan en 30 millones: el techo son
+    # 4.294 millones, o sea que no se acercan. Por el tamaño le tocaba el
+    # driver lento, y el lento es justo el que peor le viene a un juego asi:
+    # 71.093 entradas, con Wine resolviendo rutas sin distinguir mayusculas
+    # -lee la carpeta entera- y preguntando por un monton de ficheros que no
+    # existen. Todo eso lo contesta el kernel de su cache con el driver bajo, y
+    # sale a espacio de usuario con el alto.
+    #
+    # Asi que ahora se monta con el rapido y SE MIRAN LOS NUMEROS DE VERDAD. Si
+    # alguno se pasa, se desmonta y se vuelve a montar con el alto: una imagen
+    # recien montada no ha leido nada todavia, asi que rehacerlo no cuesta.
+    #
+    # DONDE HAY QUE MIRAR: en la RAIZ. En el Jurassic Park solo 54 ficheros de
+    # 8089 se pasaban y eran los de la raiz, porque mksquashfs escribe los
+    # metadatos de los directorios DESPUES de los datos y son los ultimos en
+    # entrar. Mirar solo hacia dentro daria "todo bien" con el fallo delante.
+    local mp="${1:-}"
+    [ -n "${mp:-}" ] && [ -d "$mp" ] || return 1
+    local _lista="" _max=0 _n=0 _i=""
+    # Primero la raiz entera -que es donde estan los numeros altos- y despues
+    # una muestra de lo de dentro.
+    _lista="$( { ls -1i "$mp" 2>/dev/null | awk '{print $1}'
+                 find "$mp" -maxdepth 3 -printf '%i\n' 2>/dev/null | head -n 400
+               } )"
+    [ -n "${_lista:-}" ] || return 1
+    while IFS= read -r _i; do
+        case "${_i:-}" in ''|*[!0-9]*) continue ;; esac
+        _n=$((_n+1))
+        [ "$_i" -gt "$_max" ] && _max="$_i"
+    done <<FINSQINO
+$_lista
+FINSQINO
+    [ "$_n" -gt 0 ] || return 1
+    if [ "$_max" -ge 4294967296 ]; then
+        log "squashfuse: los inodos de este montaje PASAN de 32 bits (el mas alto de $_n mirados: $_max = $(printf '0x%x' "$_max" 2>/dev/null || printf '?')). Hay que volver a montar con el driver ALTO: un juego nativo de 32 bits recibiria EOVERFLOW al hacerles stat() y los daria por desaparecidos" WARN
+        return 0
+    fi
+    log "squashfuse: inodos del montaje dentro de 32 bits (el mas alto de $_n mirados: $_max, el techo es 4294967295): el driver rapido vale para este archivo aunque pase de 4 GB"
+    return 1
+}
+
+squashfuse_ficha_imagen() {
+    # LA FICHA DEL ARCHIVO, AL REGISTRO. $1 = el .wsquashfs.
+    #
+    # POR QUE: el 14-11-2026 llego un registro con "leidos 2608 MB del archivo
+    # (43 MB/s)" y no habia forma de saber si eso era mucho o poco, porque en
+    # ninguna parte decia con que compresion ni con que tamaño de bloque se
+    # habia empaquetado esa imagen. Un bloque de 128 KB y uno de 1 MB se leen
+    # muy distinto, y zstd 15 y zstd 22 se descomprimen muy distinto. Son tres
+    # datos que estan en la cabecera del archivo y que cuestan una orden.
+    local img="${1:-}"
+    [ -f "${img:-}" ] || return 0
+    # UN .dwarfs NO SE MIRA CON unsquashfs.
+    #
+    # Sin esto, al empaquetar un juego en dwarfs la ficha salia en blanco y el
+    # registro no decia ni con que compresion ni con que tamaño de bloque
+    # estaba hecho: justo los dos datos que hacen falta para entender por que
+    # va como va. Es el mismo agujero que tenia squashfs hace dos dias.
+    case "$img" in
+        *.dwarfs|*.wdwarfs)
+            local _ck=""
+            _ck="$(command -v dwarfsck 2>/dev/null || true)"
+            local _arg=""
+            # dwarfs-universal HACE DE dwarfsck, y es lo que suele haber.
+            #
+            # En la maquina de Dani no hay dwarfsck suelto y la ficha salia
+            # "sin ficha": justo en la partida en la que se estaba probando
+            # dwarfs y en la que mas falta hacia saber con que bloque y con
+            # que compresion estaba empaquetado.
+            if [ -z "${_ck:-}" ]; then
+                for _c in "$(dirname "${DWARFS_BIN:-/nada}")/dwarfs-universal" \
+                          "$(command -v dwarfs-universal 2>/dev/null || true)"; do
+                    [ -x "${_c:-}" ] || continue
+                    _ck="$_c"; _arg="--tool=dwarfsck"; break
+                done
+            fi
+            [ -n "${_ck:-}" ] || {
+                log "imagen: no hay dwarfsck ni dwarfs-universal para leer la cabecera de $(basename "$img"); sin ficha"
+                return 0
+            }
+            local _info=""
+            if [ -n "${_arg:-}" ]; then
+                _info="$("$_ck" "$_arg" "$img" 2>&1 | head -n 60)"
+            else
+                _info="$("$_ck" "$img" 2>&1 | head -n 60)"
+            fi
+            local _bl="" _cm=""
+            _bl="$(printf '%s\n' "$_info" | grep -i -m1 'block size' | tr -d '\r')"
+            _cm="$(printf '%s\n' "$_info" | grep -i -m1 'compress' | tr -d '\r')"
+            log "imagen: $(basename "$img") (dwarfs) -> ${_bl:-sin tamaño de bloque}; ${_cm:-sin compresion}"
+            log "imagen: se monta con '${DWARFS_OPTS:-sin calcular todavia}'. La cache (cachesize) es LO QUE squashfuse no tiene: si el registro dice que lee mas de lo que sirve, es que se queda corta"
+            return 0
+            ;;
+    esac
+    command -v unsquashfs >/dev/null 2>&1 || {
+        log "imagen: no hay unsquashfs para leer la cabecera de $(basename "$img"); sin ficha"
+        return 0
+    }
+    local _s=""
+    _s="$(unsquashfs -s "$img" 2>/dev/null)" || return 0
+    [ -n "${_s:-}" ] || return 0
+    local _comp="" _blo="" _inos="" _frag=""
+    _comp="$(printf '%s\n' "$_s" | sed -n 's/^Compression[[:space:]]*//p' | head -n1)"
+    _blo="$(printf '%s\n' "$_s" | sed -n 's/^Block size[[:space:]]*//p' | head -n1)"
+    _inos="$(printf '%s\n' "$_s" | sed -n 's/^Number of inodes[[:space:]]*//p' | head -n1)"
+    _frag="$(printf '%s\n' "$_s" | sed -n 's/^Number of fragments[[:space:]]*//p' | head -n1)"
+    log "imagen: $(basename "$img") -> compresion ${_comp:-?}, bloque ${_blo:-?} bytes, ${_inos:-?} inodo(s), ${_frag:-?} fragmento(s)"
+    # UN BLOQUE PEQUEÑO SE PAGA LEYENDO, y conviene decirlo donde se nota.
+    case "${_blo:-}" in
+        ''|*[!0-9]*) : ;;
+        *) if [ "$_blo" -lt 262144 ]; then
+               # SIN RECOMENDAR NADA, QUE YA ME EQUIVOQUE DOS VECES.
+               #
+               # Aqui hubo primero un aviso diciendo que el bloque pequeño era
+               # malo, y despues otro diciendo justo lo contrario. Los dos con
+               # mucha seguridad y los dos de mas: depende del trabajo. Para
+               # leer de seguido gana el pequeño; para leer a trozos esperando
+               # -que es lo que hace un juego- gana el grande, porque el
+               # bloque de 1 MB le hace de lectura adelantada.
+               #
+               # Asi que esto solo APUNTA el dato y manda al banco, que es
+               # quien puede medirlo en cada juego.
+               log "imagen: bloque de ${_blo} bytes, mas pequeño que el 1 MB con el que empaqueta WProton. No es un fallo: se lee distinto, y cual va mejor depende del juego (banco_empaquetado.sh lo mide)"
+           fi ;;
+    esac
     return 0
 }
 
@@ -29741,6 +30208,63 @@ FINLISTA
     return 0
 }
 
+OVL_NUCLEO_PROBADO=""   # "" = sin probar, si/no = veredicto de esta sesion
+
+overlay_nucleo_probar() {
+    # ¿PODRIA ESTE EQUIPO USAR EL OVERLAY DEL NUCLEO EN VEZ DE fuse-overlayfs?
+    # $1 = la carpeta que se usaria de lowerdir (el montaje de squashfuse).
+    #
+    # No cambia nada: solo lo prueba, lo apunta y deshace. Pero es EL dato que
+    # falta para decidir el paso siguiente, y conviene tenerlo medido en la
+    # maquina de verdad antes de escribir nada.
+    #
+    # DE DONDE SALE LA PREGUNTA (Dani, 15-11-2026). Dani avisa de que el
+    # fichero de FF7 esta empaquetado DESDE Batocera y que alli, en wsquashfs,
+    # va bien. Asi que fui a ver que hace Batocera, y hace esto
+    # (batocera-wine, play_squashfs):
+    #
+    #   mount "${GAMENAME}" "${SQUASHFSPOINT}"
+    #   mount -t overlay -o rw,lowerdir=...,upperdir=...,workdir=...,\
+    #         redirect_dir=on overlay "${WINEPOINT}"
+    #
+    # O sea: NADA DE FUSE. Un "mount" pelado monta el squashfs con el driver
+    # del NUCLEO sobre un loop, y el overlay es el del NUCLEO. Batocera puede
+    # porque corre como root; WProton no corre como root, y de ahi salen las
+    # DOS capas de FUSE que tenemos (squashfuse + fuse-overlayfs).
+    #
+    # De las dos, la del squashfs NO se puede cambiar: squashfs no esta
+    # marcado como montable desde un espacio de nombres de usuario, asi que
+    # sin root no hay driver del nucleo que valga. La del overlay SI podria:
+    # el nucleo admite montar overlay dentro de un espacio de nombres de
+    # usuario desde la 5.11. Quitaria UNA de las dos capas.
+    #
+    # Lo que esta sonda contesta es si en ESTA maquina funciona de verdad, que
+    # es distinto de si el nucleo dice que si: el lowerdir esta en FUSE, y eso
+    # ha tenido restricciones segun la version.
+    [ -n "$OVL_NUCLEO_PROBADO" ] && return 0
+    OVL_NUCLEO_PROBADO="no"
+    local lower="${1:-}"
+    [ -n "${lower:-}" ] && [ -d "$lower" ] || return 0
+    command -v unshare >/dev/null 2>&1 || {
+        log "overlay del nucleo: no hay 'unshare' para probarlo; se sigue con fuse-overlayfs"
+        return 0
+    }
+    local _t=""
+    _t="$(mktemp -d 2>/dev/null)" || return 0
+    mkdir -p "$_t/up" "$_t/work" "$_t/mp" 2>/dev/null
+    local _err=""
+    _err="$(unshare -Urm --map-root-user sh -c \
+        "mount -t overlay -o lowerdir='$lower',upperdir='$_t/up',workdir='$_t/work' overlay '$_t/mp' && ls '$_t/mp' >/dev/null" 2>&1)"
+    if [ $? -eq 0 ]; then
+        OVL_NUCLEO_PROBADO="si"
+        log "overlay del nucleo: SI se puede montar en un espacio de nombres de usuario con el lowerdir en FUSE. Quitaria una de las dos capas de FUSE (es lo que hace Batocera, que corre como root y usa los dos drivers del nucleo). PENDIENTE de escribirlo: ver CONTINUAR.md"
+    else
+        log "overlay del nucleo: no se puede aqui ($(printf '%s' "${_err:-sin motivo}" | head -n1)); se sigue con fuse-overlayfs"
+    fi
+    rm -rf "$_t" 2>/dev/null
+    return 0
+}
+
 montar_overlay_escalera() {
     # Monta el overlay pidiendo lo MEJOR primero y bajando escalon a escalon.
     #
@@ -29751,6 +30275,9 @@ montar_overlay_escalera() {
     # arriba; squash_to_uid es lo que deja escribir el prefix incluido.
     local opts="$1" punto="$2"
     local squash="squash_to_uid=$(id -u),squash_to_gid=$(id -g)"
+    # Una vez por sesion, y solo para dejar el dato escrito: ver
+    # overlay_nucleo_probar.
+    overlay_nucleo_probar "$(printf '%s' "$opts" | sed -n 's/.*lowerdir=\([^,]*\).*/\1/p')"
     overlay_ino32_detectar
     local _ino=""
     [ -n "$OVL_INO32" ] && _ino=",$OVL_INO32"
@@ -30190,6 +30717,102 @@ steam_ocultar_ventanas() {
     return 0
 }
 
+diag_perfmon_resumen() {
+    # LAS CUENTAS DE dwarfs, DE SU PROPIA BOCA.
+    #
+    # dwarfs escribe la traza al desmontar, asi que esto se llama DESPUES de
+    # que el juego haya terminado y el montaje se haya ido. Si no hay traza no
+    # pasa nada: perfmon es opcional y hay binarios sin el.
+    local _t="${DWARFS_PERFMON_TRAZA:-}"
+    [ -n "${_t:-}" ] && [ -s "$_t" ] || return 0
+    log "[perfmon] las cuentas de dwarfs, medidas por dwarfs y no inferidas de /proc:"
+    # Se vuelca TAL CUAL, que es lo unico honesto con una medida ajena: si se
+    # resume mal, el resumen tapa el dato. Acotado, que no es un volcado de
+    # megas al registro.
+    local _n=0
+    while IFS= read -r _l; do
+        _n=$(( _n + 1 ))
+        [ "$_n" -gt 200 ] && { log "[perfmon] (cortado a 200 lineas; la traza entera esta en $_t)"; break; }
+        log "[perfmon] $_l"
+    done < "$_t"
+    log "[perfmon] traza completa en $_t"
+    # Y LO QUE HAY QUE MIRAR EN ELLA, dicho aqui para que no haya que
+    # recordarlo: cuantas operaciones de 'read' hay y cuanto tarda cada una.
+    log "[perfmon] que mirar: el numero de operaciones 'read' y su latencia. Si salen"
+    log "[perfmon] MUCHAS y CORTAS, el coste es por operacion y lo que sobra es una"
+    log "[perfmon] capa; si salen POCAS y LARGAS, el coste esta dentro de dwarfs."
+    return 0
+}
+
+diag_por_peticion() {
+    # El tamaño medio de cada ida y venida, EN LA UNIDAD QUE TOCA. $1 = bytes,
+    # $2 = numero de peticiones.
+    #
+    # Decirlo siempre en KB fue un error de bulto: las respuestas del paron son
+    # de 39 bytes y salian como "0 KB cada una". El caso que habia que ver era
+    # justo ese, y lo tapaba la propia linea que lo medía.
+    local _b="${1:-0}" _n="${2:-0}"
+    [ "${_n:-0}" -gt 0 ] || { printf '0 B'; return 0; }
+    local _por=$(( _b / _n ))
+    if [ "$_por" -lt 1024 ]; then
+        printf '%s B' "$_por"
+    elif [ "$_por" -lt 1048576 ]; then
+        printf '%s KB' "$(( _por / 1024 ))"
+    else
+        printf '%s MB' "$(( _por / 1048576 ))"
+    fi
+}
+
+diag_resumen_carga() {
+    # CUANTO TARDO EL JUEGO EN ESTAR LISTO, EN UNA LINEA Y SIN CRONOMETRO.
+    #
+    # POR QUE EXISTE (Dani, 15-11-2026). Llevabamos la tarde comparando
+    # formatos de empaquetado mirando "el segundo en que llega al fotograma
+    # 1200". Dani lo midio a mano y no cuadraba: «en tiempo de juego, con
+    # dwarfs empieza el juego despues de cargar el video en 3:30 y con
+    # wsquashfs 5:30 mas o menos». Tenia razon, y el fallo era mio: estaba
+    # mirando el fotograma equivocado.
+    #
+    # EL PARON CAMBIA DE SITIO. En unas partidas se come los fotogramas 600 a
+    # 1200 y en otras los primeros 600, asi que un fotograma temprano mide
+    # DONDE cayo el paron, no cuanto duro. Sacando las series enteras se ve de
+    # golpe:
+    #
+    #   formato              f600    f3600   f5400
+    #   carpeta (sin FUSE)    18,7    118,7   153,5
+    #   dwarfs                95,5    195,5   232,1
+    #   dwarfs                98,2    198,2   233,9
+    #   squashfs 1 MB         16,6    210,2   250,7
+    #   squashfs 1 MB        111,1    211,1   248,6
+    #   squashfs 128 KB      176,0    276,0   313,7
+    #
+    # Las columnas de la izquierda no ordenan nada -16,6 y 111,1 son el mismo
+    # formato- y la de la derecha ordena solo. Un fotograma TARDIO ya ha
+    # pasado el paron, caiga donde caiga.
+    #
+    # Asi que al terminar la partida se saca del propio registro y se escribe,
+    # con el formato al lado, para que dos partidas se puedan comparar sin
+    # cronometro y sin tener que elegir a ojo que fotograma mirar.
+    [ -r "${LOG_FILE:-}" ] || return 0
+    local _marcas=""
+    _marcas="$(grep -o 'fotograma [0-9]* presentado ([0-9.]* s)' "$LOG_FILE" 2>/dev/null \
+               | awk '{print $2, $4}' | tr -d '(' | sort -k1,1n -u)"
+    [ -n "${_marcas:-}" ] || return 0
+    local _n_ult="" _t_ult="" _linea=""
+    _linea="$(printf '%s\n' "$_marcas" | tail -n1)"
+    _n_ult="${_linea%% *}"; _t_ult="${_linea##* }"
+    [ -n "${_n_ult:-}" ] && [ "${_n_ult:-0}" -ge 600 ] 2>/dev/null || return 0
+    local _que="carpeta (sin FUSE)"
+    [ -n "${MOUNT_IMG:-}" ] && _que="$(basename "$MOUNT_IMG")"
+    log "[carga] RESUMEN: $_t_ult s hasta el fotograma $_n_ult | $_que"
+    # Y LAS MARCAS DE EN MEDIO, que cuentan donde cayo el paron.
+    log "[carga] marcas: $(printf '%s\n' "$_marcas" | awk '{printf "%s@%ss ", $1, $2}')"
+    log "[carga] para comparar dos partidas se mira el ULTIMO numero, no el primero: el paron cambia de sitio y un fotograma temprano mide donde cayo, no cuanto duro"
+    # Y las cuentas de dwarfs, si se le pidieron.
+    diag_perfmon_resumen
+    return 0
+}
+
 diag_carga_juego() {
     # ¿EL JUEGO ESTA CARGANDO O ESTA PARADO? TRES MUESTRAS AL REGISTRO.
     #
@@ -30237,17 +30860,66 @@ diag_carga_juego() {
         #
         # Asi que de los que casan por ruta se quedan SOLO los que de verdad
         # son montadores, mirando su nombre de programa (/proc/<pid>/comm).
+        # Y TAMBIEN POR EL ARCHIVO, NO SOLO POR EL PUNTO DE MONTAJE.
+        #
+        # EL CASO (Dani, 15-11-2026, el juego empaquetado en dwarfs): el
+        # vigilante encontro UN solo proceso de montaje -fuse-overlayfs- y el
+        # de dwarfs no aparecio. Con eso, las dos lineas que reparten la CPU y
+        # los bytes decian "0%" y "0 MB" de la parte que mas importa, que es
+        # justo la que se estaba poniendo a prueba. El registro salio verde y
+        # vacio a la vez.
+        #
+        # Buscar tambien por la ruta del archivo lo arregla venga de donde
+        # venga el problema: el que monta SIEMPRE lleva el archivo en su linea
+        # de ordenes, aunque el punto de montaje no aparezca o aparezca de otra
+        # forma.
         _mpids=""
-        if [ -n "$mnt" ]; then
-            for _p in $(pgrep -f -- "$mnt" 2>/dev/null); do
+        _descartados=""
+        for _pat in "$mnt" "${MOUNT_IMG:-}"; do
+            [ -n "${_pat:-}" ] || continue
+            for _p in $(pgrep -f -- "$_pat" 2>/dev/null); do
                 [ -r "/proc/$_p/comm" ] || continue
-                case "$(cat "/proc/$_p/comm" 2>/dev/null)" in
+                case " $_mpids " in *" $_p "*) continue ;; esac
+                _cm="$(cat "/proc/$_p/comm" 2>/dev/null)"
+                # EL NOMBRE DEL PROGRAMA PUEDE NO SER EL DEL PROGRAMA.
+                #
+                # EL CASO, cazado por la linea de "descartados" el mismo dia
+                # que se añadio (15-11-2026):
+                #
+                #   [carga] descartados por su nombre: memfd:wrapped memfd:wrapped
+                #   [carga] vigilando ...: 1 proceso(s) del montaje
+                #
+                # El dwarfs de la maquina de Dani se ejecuta desde un memfd
+                # -asi arrancan los binarios estaticos empaquetados- y entonces
+                # /proc/<pid>/comm no dice "dwarfs", dice "memfd:wrapped". El
+                # filtro lo tiraba, y por eso el proceso del archivo no
+                # aparecia y todo su reparto salia en cero.
+                #
+                # Asi que cuando el nombre no sirve se mira la LINEA DE ORDENES,
+                # que es la que lleva la verdad: si ahi esta el archivo que
+                # estamos montando, ese proceso es el montaje, se llame como se
+                # llame. Y para la etiqueta se usa el nombre del programa de su
+                # argv[0], no el "memfd:wrapped".
+                case "$_cm" in
                     squashfuse*|dwarfs*|fuse-overlayfs*|mount.*|*fuse*) ;;
-                    *) continue ;;
+                    *)
+                        _ok=0
+                        if [ -n "${MOUNT_IMG:-}" ] && [ -r "/proc/$_p/cmdline" ]; then
+                            case "$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null)" in
+                                *"$MOUNT_IMG"*) _ok=1 ;;
+                            esac
+                        fi
+                        if [ "$_ok" = 1 ]; then
+                            _arg0="$(tr '\0' '\n' < "/proc/$_p/cmdline" 2>/dev/null | head -n1)"
+                            _descartados="$_descartados ${_cm}(es $(basename "${_arg0:-?}"), se acepta)"
+                        else
+                            _descartados="$_descartados $_cm"; continue
+                        fi
+                        ;;
                 esac
                 _mpids="$_mpids $_p"
             done
-        fi
+        done
         # SIN FORKS: SE LEE /proc CON EL PROPIO BASH.
         #
         # La primera version llamaba a awk y a sed UNA VEZ POR PROCESO, tres
@@ -30264,6 +30936,151 @@ diag_carga_juego() {
                 done < "/proc/$_p/io"
             done
             printf '%s' "$_t"
+        }
+        # LO QUE FALTABA PARA SABER DONDE SE VA EL TIEMPO.
+        #
+        # EL CASO (Dani, 14-11-2026, Final Fantasy VII Satsuki Yatoshi): "el
+        # primer video tarda mucho en cargar, pero luego el juego funciona
+        # bien". El registro decia "leidos 2608 MB del archivo (43 MB/s) | CPU
+        # del juego 5%", y con eso NO SE PUEDE DECIDIR NADA: 43 MB/s es lento,
+        # pero no dice si es por descomprimir, por el disco o por las idas y
+        # venidas de FUSE. Son tres arreglos distintos.
+        #
+        # Estos tres numeros lo separan, y cuestan lo mismo que el de arriba
+        # porque se leen los mismos ficheros de /proc:
+        #
+        #   CPU del montaje  si squashfuse esta clavado cerca del 100% de un
+        #                    nucleo, el cuello es DESCOMPRIMIR: el arreglo es
+        #                    el nivel de compresion o el tamaño de bloque.
+        #   del disco        bytes que han salido del disco de verdad
+        #                    (read_bytes). Si es mucho menos que lo leido, lo
+        #                    esta sirviendo la cache y el disco no es.
+        #   entregados       bytes que el montaje ha escrito al nucleo con
+        #                    write() (wchar). OJO: NO sirve para sacar la
+        #                    compresion comparandolo con "del archivo". Lo
+        #                    intente el 15/11 y la cuenta no vale: "del
+        #                    archivo" suma los DOS procesos -squashfuse lee
+        #                    comprimido del archivo y fuse-overlayfs lee sin
+        #                    comprimir del montaje de abajo- y "entregados"
+        #                    puede quedarse corto porque libfuse puede
+        #                    contestar con splice, que no pasa por write().
+        #                    Vale para ver si el montaje entrega algo o esta
+        #                    atascado, no para hacer divisiones.
+        #
+        # Si la CPU del montaje es baja, el disco va sobrado y aun asi va
+        # lento, entonces es FUSE -dos capas, squashfuse y fuse-overlayfs- y
+        # ahi el arreglo es otro.
+        _montaje_io() {   # "<read_bytes> <wchar> <write_bytes>" del montaje
+            # write_bytes ESTA AQUI POR UNA SOSPECHA CONCRETA (15-11-2026).
+            #
+            # Dani: el mismo juego en CARPETA carga el video al instante y en
+            # .wsquashfs tarda dos minutos. Una explicacion que encajaria del
+            # todo es que fuse-overlayfs este COPIANDO ARRIBA el video entero
+            # antes de dejar que el juego lo use -eso hace un overlay cuando
+            # alguien abre para escribir un fichero que esta en la capa de
+            # abajo-: un video de un giga copiado es justo "dos minutos", y en
+            # carpeta no pasa porque alli no hay overlay ninguno.
+            #
+            # Si eso esta pasando, aqui se vera: el montaje escribiendo cientos
+            # de MB en disco. Y si no, tambien se vera, que es igual de util.
+            # Y PARTIDO POR PROCESO, QUE SI NO LA CUENTA NO SIGNIFICA NADA.
+            #
+            # Sumar los dos montajes mezcla dos magnitudes distintas:
+            # squashfuse lee COMPRIMIDO del archivo y fuse-overlayfs lee SIN
+            # COMPRIMIR del montaje de abajo. Sumados no se puede comparar
+            # nada; separados sale la cuenta que de verdad importa:
+            #
+            #   lo que squashfuse LEE del archivo (comprimido)
+            #   contra
+            #   lo que squashfuse SIRVE (sin comprimir)
+            #
+            # Si lee MAS de lo que sirve, esta releyendo y volviendo a
+            # descomprimir los mismos bloques. Y releer comprimido no es
+            # gratis: cada relectura es una descompresion.
+            # Y SOBRE TODO: syscw, QUE ES EL NUMERO DE PETICIONES SERVIDAS.
+            #
+            # ESTO ES LO QUE LLEVABA DOS DIAS FALTANDO. Dani, otra vez y con
+            # razon: «en modo carpeta carga instantaneo y al montar no, que
+            # diferencia hay real para que no lo cargue de la misma forma».
+            # Con bytes solos no se puede contestar, y me he pasado la tarde
+            # cambiando cosas -tamaño de bloque, cache, lectura adelantada-
+            # que son todas palancas de CAUDAL. Los bytes decian que de caudal
+            # va sobrado: 200 MB en 60 s con 99 segundos de CPU.
+            #
+            # Un demonio FUSE trabaja asi: LEE la peticion de /dev/fuse y
+            # ESCRIBE la respuesta. Asi que syscw es, de una, LA CUENTA DE
+            # IDAS Y VENIDAS. Y wchar/syscw es el tamaño medio de cada una.
+            #
+            # Si sale que el juego pide de 4 KB en 4 KB, el problema no es
+            # descomprimir ni leer del disco: son cincuenta mil viajes a
+            # userspace, dos por lectura porque hay dos FUSE apilados. Eso no
+            # se arregla con ninguna opcion de montaje, y explica de paso por
+            # que en carpeta es instantaneo: alli no hay ni un viaje.
+            _rb=0; _wb=0; _sqr=0; _sqw=0; _sqc=0; _ovc=0; _ovw=0
+            for _p in $_mpids; do
+                [ -r "/proc/$_p/io" ] || continue
+                _esq=0
+                case "$(cat "/proc/$_p/comm" 2>/dev/null)" in
+                    *overlay*) ;;
+                    *) _esq=1 ;;
+                esac
+                while IFS=': ' read -r _k _v _resto; do
+                    case "$_k" in
+                        read_bytes)  _rb=$(( _rb + ${_v:-0} )) ;;
+                        write_bytes) _wb=$(( _wb + ${_v:-0} )) ;;
+                        rchar) [ "$_esq" = 1 ] && _sqr=$(( _sqr + ${_v:-0} )) ;;
+                        wchar)
+                            if [ "$_esq" = 1 ]; then _sqw=$(( _sqw + ${_v:-0} ))
+                            else _ovw=$(( _ovw + ${_v:-0} )); fi ;;
+                        syscw)
+                            if [ "$_esq" = 1 ]; then _sqc=$(( _sqc + ${_v:-0} ))
+                            else _ovc=$(( _ovc + ${_v:-0} )); fi ;;
+                    esac
+                done < "/proc/$_p/io"
+            done
+            printf '%s %s %s %s %s %s %s' "$_rb" "$_sqw" "$_wb" "$_sqr" "$_sqc" "$_ovc" "$_ovw"
+        }
+        _cpu_montaje() {  # relojes de CPU (utime+stime) de los del montaje
+            # "<total> <lo que gasta squashfuse> <lo que gasta el overlay>"
+            #
+            # POR QUE PARTIDO Y NO SOLO LA SUMA (15-11-2026)
+            #
+            # La suma dice que el cuello es la CPU del montaje, pero no CUAL
+            # de los dos procesos. Y es la pregunta que decide el trabajo
+            # siguiente: debajo hay DOS capas de FUSE -squashfuse para el
+            # archivo y fuse-overlayfs para poder escribir-, y la sonda de
+            # ayer dice que en esta maquina se puede cambiar la segunda por
+            # el overlay del NUCLEO, que es lo que hace Batocera.
+            #
+            # Cambiarla no es gratis: un montaje hecho dentro de un espacio de
+            # nombres de usuario SOLO SE VE DENTRO, asi que el juego entero
+            # tendria que correr ahi dentro. Eso toca Proton, el runtime de
+            # Steam, los mandos y la capa de Vulkan, o sea todo lo que ahora
+            # funciona bien.
+            #
+            # Asi que primero se mide el premio. Si fuse-overlayfs se lleva la
+            # mitad, el cambio vale la pena; si se lleva una decima parte, no
+            # se toca nada y el problema esta entero en descomprimir, que es
+            # otra conversacion (bloque de 128 KB, lz4 o dwarfs).
+            _t=0; _tsq=0; _tov=0
+            for _p in $_mpids; do
+                [ -r "/proc/$_p/stat" ] || continue
+                # El nombre del programa va entre parentesis y puede llevar
+                # espacios, asi que se corta por el ultimo ")" y se cuenta
+                # desde ahi: utime es el campo 12 y stime el 13.
+                while IFS= read -r _linea; do
+                    _nom="${_linea#*(}"; _nom="${_nom%%)*}"
+                    set -- ${_linea#*") "}
+                    _este=$(( ${12:-0} + ${13:-0} ))
+                    _t=$(( _t + _este ))
+                    case "$_nom" in
+                        *overlay*) _tov=$(( _tov + _este )) ;;
+                        *)         _tsq=$(( _tsq + _este )) ;;
+                    esac
+                    break
+                done < "/proc/$_p/stat"
+            done
+            printf '%s %s %s' "$_t" "$_tsq" "$_tov"
         }
         # EL JUEGO SE BUSCA POR SU NOMBRE DE PROGRAMA, Y ESTO IMPORTA.
         #
@@ -30367,7 +31184,177 @@ diag_carga_juego() {
             done
             printf '%s %s' "$_tc" "${_est:-?}"
         }
+        # LA PRUEBA DE LECTURA, QUE SE HACE SOLA CUANDO HACE FALTA.
+        #
+        # EL CASO (Dani, 15-11-2026): el mismo juego en CARPETA carga el video
+        # al instante y en .wsquashfs tarda dos minutos. «Puede que haya algo
+        # extraño en como hace la carga», y lo hay: 18 MB/s por el montaje
+        # cuando el banco, leyendo el mismo archivo de seguido, saca mas de
+        # mil. Un factor de setenta no es "FUSE va algo mas lento".
+        #
+        # LO QUE DISTINGUE: el TAMAÑO de cada peticion. Un programa que lee de
+        # seguido pide trozos grandes; uno que mapea el fichero en memoria
+        # -que es lo normal en un reproductor de video- provoca un fallo de
+        # pagina de 4 KB cada vez, y cada uno es un viaje de ida y vuelta a
+        # espacio de usuario por DOS capas de FUSE. A 0,2 ms por viaje, 4 KB
+        # por viaje son exactamente unos 18 MB/s.
+        #
+        # Asi que se mide: el MISMO fichero, leido de tres formas, en tres
+        # trozos distintos para que la cache no regale la segunda ni la
+        # tercera. Si la de 4 KB se parece a lo que estaba midiendo el
+        # vigilante, el fallo esta en el tamaño de peticion y hay por donde
+        # tirar. Si las tres van igual de lentas, es otra cosa.
+        #
+        # Dura segundo y medio por forma, y solo se hace UNA VEZ y solo si el
+        # juego va lento: no se le quita tiempo a nadie que vaya bien.
+        # LO QUE LA SONDA SE HA LEIDO ELLA MISMA, para poder descontarlo.
+        SONDA_BYTES=0; SONDA_RB=0; SONDA_WC=0; SONDA_SQR=0
+        SONDA_CPU=0; SONDA_CPU_SQ=0; SONDA_CPU_OV=0
+        SONDA_SQC=0; SONDA_OVC=0; SONDA_OVW=0
+        _probar_lectura() {
+            local m="${1:-}" f="" tam=0
+            [ -d "${m:-}" ] || return 0
+            f="$(find "$m" -type f -size +200M -printf '%s\t%p\n' 2>/dev/null \
+                 | sort -rn | head -n1 | cut -f2-)"
+            [ -n "${f:-}" ] || return 0
+            tam="$(stat -c%s "$f" 2>/dev/null || echo 0)"
+            [ "${tam:-0}" -gt 209715200 ] || return 0
+            # LA SONDA NO PUEDE COSTAR MAS QUE LO QUE MIDE.
+            #
+            # EL FALLO (visto el 15-11-2026 en el registro de las 19:36): la
+            # sonda leia DURANTE UN SEGUNDO Y MEDIO por cada forma y daba la
+            # vuelta al llegar al final del fichero. Entre las tres se leyo
+            # 9718 MB POR EL MONTAJE, y se ve en el propio registro:
+            #
+            #   21 s de partida: montaje 109 MB entregados, CPU 14%
+            #   -- aqui corre la sonda: 3282 + 3872 + 2564 MB --
+            #   45 s de partida: montaje 10005 MB entregados, CPU 142%
+            #
+            # 9896 MB de subida, 9718 de la sonda y 178 del juego. O sea que
+            # la CPU del 142% y del 171% de las muestras siguientes, y el
+            # "lee mas de lo que sirve", eran MIOS, no del juego. Con eso
+            # escribi que "el cuello es DESCOMPRIMIR"; la unica muestra limpia
+            # -la de los 21 s, antes de la sonda- dice lo contrario: CPU del
+            # montaje 14%, juego durmiendo y 8 MB/s. Eso es ESPERA, no CPU.
+            #
+            # Y encima se la lleva por delante: lo que la sonda mete en la
+            # cache de dwarfs echa de ahi los bloques que el juego estaba
+            # usando, justo mientras carga.
+            #
+            # Ahora se lee una CANTIDAD FIJA y pequeña, una sola vez, y se
+            # apunta lo que ha costado para poder descontarlo.
+            local _py=""
+            _py="${PY_BIN:-$(command -v python3 2>/dev/null || true)}"
+            if [ -z "${_py:-}" ]; then
+                printf '          [carga] sin python3 no se puede medir en frio (hay que tirar la cache).\n'
+                printf '          No se mide: mas vale no dar un numero que darlo mal.\n'
+                return 0
+            fi
+            printf '%s [carga] probando como se lee "%s" (%s MB) de tres formas\n' \
+                "$(date '+%H:%M:%S')" "$(basename "$f")" "$(( tam / 1048576 ))"
+            local _sal=""
+            _sal="$("$_py" - "$f" <<'PYFIN'
+import os, sys, time
+
+f = sys.argv[1]
+tam = os.path.getsize(f)
+
+# CADA FORMA LEE 24 MB Y NADA MAS: tres ventanas de 24 MB son 72 MB por el
+# montaje, no 9,7 GB. Si el fichero no da para tres ventanas separadas, se
+# reparte lo que haya.
+VENT = 24 * 1048576
+hueco = tam // 4
+if hueco < VENT:
+    VENT = max(4 * 1048576, hueco)
+
+filas = []
+for n, (etiqueta, trozo) in enumerate(
+        (('1M', 1048576), ('128k', 131072), ('4k', 4096)), start=1):
+    # UNA VENTANA DISTINTA PARA CADA FORMA, Y SIN DAR LA VUELTA.
+    #
+    # Dar la vuelta era lo que hacia que el numero fuese mentira: a la
+    # segunda pasada los bloques ya estaban descomprimidos dentro de dwarfs
+    # -cachesize=1g, y fadvise no llega ahi-, asi que se median 2500 MB/s de
+    # su cache interna y se ponia "en frio" al lado. Leyendo UNA sola vez
+    # una ventana que nadie ha tocado, el bloque hay que descomprimirlo de
+    # verdad, y eso si es el montaje.
+    inicio = hueco * n
+    if inicio + VENT > tam:
+        inicio = max(0, tam - VENT)
+    fd = os.open(f, os.O_RDONLY)
+    try:
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        except Exception:
+            pass
+        os.lseek(fd, inicio, os.SEEK_SET)
+        leido = 0
+        t0 = time.monotonic()
+        while leido < VENT:
+            d = os.read(fd, trozo)
+            if not d:
+                break
+            leido += len(d)
+        tardo = time.monotonic() - t0
+    finally:
+        os.close(fd)
+    mbs = (leido / 1048576.0) / tardo if tardo > 0 else 0
+    filas.append((etiqueta, mbs, leido, tardo))
+
+# UNA LECTURA QUE NO SE PUEDE CRONOMETRAR NO DA UNA VELOCIDAD.
+#
+# Es el fallo de las 18:45 del 15-11-2026 en su forma mas pura: "74 MB en
+# 0,0 s" salio como 1661 MB/s. Con centesimas de segundo cualquier numero
+# sale, y un numero inventado en el registro es peor que una linea diciendo
+# que no se pudo medir.
+
+total = sum(x[2] for x in filas)
+for etiqueta, mbs, leido, tardo in filas:
+    if tardo < 0.05:
+        print('          [carga] leyendo de %-4s -> no se puede medir (%d MB en %.2f s,'
+              ' demasiado poco para cronometrar)' % (etiqueta, leido // 1048576, tardo))
+    else:
+        print('          [carga] leyendo de %-4s -> %d MB/s (en frio, %d MB en %.2f s)'
+              % (etiqueta, mbs, leido // 1048576, tardo))
+print('          [carga] la sonda se ha leido %d MB por el montaje; se descuentan'
+      % (total // 1048576))
+print('          [carga] de las muestras siguientes para que los numeros sean del juego.')
+print('SONDA_BYTES=%d' % total)
+PYFIN
+)"
+            printf '%s\n' "$_sal" | grep -v '^SONDA_BYTES='
+            SONDA_BYTES="$(printf '%s\n' "$_sal" | sed -n 's/^SONDA_BYTES=//p')"
+            [ -n "${SONDA_BYTES:-}" ] || SONDA_BYTES=0
+            printf '          [carga] si la de 4k se parece a lo que va el juego, el problema es el\n'
+            printf '          TAMAÑO de cada peticion (el juego mapea el fichero en memoria y pide de\n'
+            printf '          pagina en pagina); si las tres van lentas, es el montaje entero.\n'
+        }
+        # COMO SE LLAMA EL QUE MONTA EL ARCHIVO.
+        #
+        # Debajo puede haber squashfuse o dwarfs, y las dos lineas que reparten
+        # la CPU y los bytes decian "squashfuse" siempre. Con un juego
+        # empaquetado en dwarfs -que es justo lo que se va a probar- el
+        # registro habria dicho "squashfuse 140%" sobre un proceso de dwarfs.
+        # Una etiqueta equivocada en el numero que decide es peor que no
+        # tenerlo.
+        _arch_nom="el montaje"
+        for _p in $_mpids; do
+            _cm="$(cat "/proc/$_p/comm" 2>/dev/null)"
+            case "$_cm" in
+                ''|*overlay*) continue ;;
+            esac
+            # Si el nombre del programa no dice nada -un binario lanzado desde
+            # un memfd dice "memfd:wrapped"-, se usa el de su argv[0].
+            case "$_cm" in
+                memfd:*|wrapped*|'')
+                    _cm="$(basename "$(tr '\0' '\n' < "/proc/$_p/cmdline" 2>/dev/null | head -n1)" 2>/dev/null)" ;;
+            esac
+            _arch_nom="${_cm:-el montaje}"; break
+        done
+        _probado=0
         _l0="$(_leidos)"; _c0="$(_cpu_juego)"; _t0="$(date +%s)"
+        _T_INICIO="$_t0"
+        _mio0="$(_montaje_io)"; _mc0="$(_cpu_montaje)"
         # SE DICE LO QUE SE VA A VIGILAR, Y SE DICE AHORA.
         #
         # Este diagnostico se callo entero en los dos registros del Witcher del
@@ -30379,6 +31366,12 @@ diag_carga_juego() {
         _n0="$(_pids_juego)"; _nm=0
         for _p in $_mpids; do _nm=$((_nm+1)); done
         {
+            # Y SE DICE A QUIEN SE HA DESCARTADO, que es la otra mitad de la
+            # informacion cuando falta alguien: con dwarfs faltaba el proceso
+            # del archivo y el registro no daba ni una pista de por que.
+            [ -n "${_descartados:-}" ] && \
+                printf '%s [carga] descartados por su nombre:%s\n' \
+                    "$(date '+%H:%M:%S')" "$_descartados"
             printf '%s [carga] vigilando "%s" (nombre de programa "%s"): %s proceso(s) del juego, %s del montaje\n' \
                 "$(date '+%H:%M:%S')" "$exe_nom" "$_comm_juego" \
                 "$(printf '%s' "$_n0" | wc -w)" "$_nm"
@@ -30395,17 +31388,234 @@ diag_carga_juego() {
                 exit 0
             fi
             _l1="$(_leidos)"; _c1="$(_cpu_juego)"; _t1="$(date +%s)"
+            _mio1="$(_montaje_io)"; _mc1="$(_cpu_montaje)"
             _dt=$(( _t1 - _t0 )); [ "$_dt" -gt 0 ] || _dt=1
             _dl=$(( _l1 - _l0 ))
             _dc=$(( ${_c1%% *} - ${_c0%% *} ))
+            set -- $_mio1; _rb1="$1"; _wc1="$2"; _wb1="$3"; _sqr1="$4"; _sqc1="$5"; _ovc1="$6"; _ovw1="$7"
+            set -- $_mio0; _rb0="$1"; _wc0="$2"; _wb0="$3"; _sqr0="$4"; _sqc0="$5"; _ovc0="$6"; _ovw0="$7"
+            _drb=$(( _rb1 - _rb0 ))
+            _dwc=$(( _wc1 - _wc0 ))
+            _dwb=$(( _wb1 - _wb0 ))
+            _dsqr=$(( _sqr1 - _sqr0 ))
+            _dsqc=$(( ${_sqc1:-0} - ${_sqc0:-0} ))
+            _dovc=$(( ${_ovc1:-0} - ${_ovc0:-0} ))
+            _dovw=$(( ${_ovw1:-0} - ${_ovw0:-0} ))
+            set -- $_mc1; _mc1t="$1"; _mc1s="$2"; _mc1o="$3"
+            set -- $_mc0; _mc0t="$1"; _mc0s="$2"; _mc0o="$3"
+            _dmc=$(( _mc1t - _mc0t ))
+            _dms=$(( _mc1s - _mc0s ))
+            _dmo=$(( _mc1o - _mc0o ))
+            # LO QUE SE LLEVO LA SONDA NO ES DEL JUEGO, Y SE DESCUENTA AQUI.
+            #
+            # La sonda corre DENTRO de una muestra y lo que lee cae en la
+            # siguiente. Sin descontarlo, esa muestra dice que el montaje va
+            # al 142% de CPU sirviendo 10 GB, y de esos 10 GB 9,7 son de la
+            # sonda. Con ese numero escribi "el cuello es DESCOMPRIMIR" y era
+            # mi propia sonda. Se descuenta UNA vez y se dice que se ha hecho.
+            if [ "${SONDA_WC:-0}" -gt 0 ] || [ "${SONDA_SQR:-0}" -gt 0 ] \
+               || [ "${SONDA_CPU:-0}" -gt 0 ]; then
+                printf '          [carga] (de esta muestra se han descontado %s MB y %s cs de CPU de la sonda)\n' \
+                    "$(( ${SONDA_WC:-0} / 1048576 ))" "${SONDA_CPU:-0}"
+                _drb=$(( _drb - ${SONDA_RB:-0} ));      [ "$_drb" -lt 0 ] && _drb=0
+                _dwc=$(( _dwc - ${SONDA_WC:-0} ));      [ "$_dwc" -lt 0 ] && _dwc=0
+                _dsqr=$(( _dsqr - ${SONDA_SQR:-0} ));   [ "$_dsqr" -lt 0 ] && _dsqr=0
+                _dmc=$(( _dmc - ${SONDA_CPU:-0} ));     [ "$_dmc" -lt 0 ] && _dmc=0
+                _dms=$(( _dms - ${SONDA_CPU_SQ:-0} ));  [ "$_dms" -lt 0 ] && _dms=0
+                _dmo=$(( _dmo - ${SONDA_CPU_OV:-0} ));  [ "$_dmo" -lt 0 ] && _dmo=0
+                _dsqc=$(( _dsqc - ${SONDA_SQC:-0} )); [ "$_dsqc" -lt 0 ] && _dsqc=0
+                _dovc=$(( _dovc - ${SONDA_OVC:-0} )); [ "$_dovc" -lt 0 ] && _dovc=0
+                _dovw=$(( _dovw - ${SONDA_OVW:-0} )); [ "$_dovw" -lt 0 ] && _dovw=0
+                SONDA_RB=0; SONDA_WC=0; SONDA_SQR=0
+                SONDA_SQC=0; SONDA_OVC=0; SONDA_OVW=0
+                SONDA_CPU=0; SONDA_CPU_SQ=0; SONDA_CPU_OV=0
+            fi
+            _pcpu_m=$(( _dmc / _dt ))
+            _pcpu_sq=$(( _dms / _dt ))
+            _pcpu_ov=$(( _dmo / _dt ))
             # MB/s del archivo y % de un nucleo, que es lo que se entiende de
             # un vistazo. Sin decimales: aqui interesa el orden de magnitud.
             _mbs=$(( _dl / 1048576 / _dt ))
             _pcpu=$(( _dc / _dt ))
             {
-                printf '%s [carga] %ss de partida: leidos %s MB del archivo (%s MB/s) | CPU del juego %s%% | estado %s\n' \
-                    "$(date '+%H:%M:%S')" "$(( _t1 - _t0 ))" \
+                # "Xs de partida" ERA MENTIRA: _t0 se arrastra, asi que ese
+                # numero es lo que ha durado ESTE intervalo, no lo que lleva
+                # la partida. Se dicen los dos, cada uno con su nombre.
+                printf '%s [carga] minuto %s de partida (ultimos %ss): leidos %s MB del archivo (%s MB/s) | CPU del juego %s%% | estado %s\n' \
+                    "$(date '+%H:%M:%S')" "$(( ( _t1 - _T_INICIO ) / 60 + 1 ))" "$(( _t1 - _t0 ))" \
                     "$(( _dl / 1048576 ))" "$_mbs" "$_pcpu" "${_c1#* }"
+                printf '          [carga] montaje: %s MB del disco, %s MB entregados por write, %s MB escritos a disco, CPU %s%% de un nucleo\n' \
+                    "$(( _drb / 1048576 ))" "$(( _dwc / 1048576 ))" \
+                    "$(( _dwb / 1048576 ))" "$_pcpu_m"
+                # ESCRIBIR MUCHO ES LA SEÑAL DE QUE SE ESTA COPIANDO ARRIBA.
+                if [ "$_dwb" -gt 104857600 ]; then
+                    printf '          [carga] el montaje esta ESCRIBIENDO en disco mientras el juego lee:\n'
+                    printf '          eso es fuse-overlayfs copiando un fichero de la capa de abajo a la de\n'
+                    printf '          arriba, que es lo que hace cuando el juego lo abre para escribir. En\n'
+                    printf '          carpeta no pasa porque no hay overlay, y ahi esta la diferencia.\n'
+                fi
+                printf '          [carga] de esa CPU: %s %s%%, fuse-overlayfs %s%%\n' \
+                    "$_arch_nom" "$_pcpu_sq" "$_pcpu_ov"
+                # EL NUMERO QUE CONTESTA A LA PREGUNTA DE DANI.
+                #
+                # «En modo carpeta carga instantaneo y al montar no, que
+                # diferencia hay real para que no lo cargue de la misma
+                # forma». Con bytes no se puede contestar; con el numero de
+                # idas y venidas, si.
+                #
+                # Un demonio FUSE escribe UNA respuesta por peticion, asi que
+                # syscw es la cuenta de peticiones servidas, y los bytes
+                # partidos por ella es el tamaño de cada una. En carpeta este
+                # numero NO EXISTE: no hay ninguna peticion, el nucleo sirve
+                # del disco sin salir a userspace.
+                if [ "${_dsqc:-0}" -gt 0 ] || [ "${_dovc:-0}" -gt 0 ]; then
+                    # EN BYTES CUANDO SON BYTES. El primer intento ponia esto
+                    # siempre en KB y el caso interesante salia como "0 KB
+                    # cada una", que no dice nada: las respuestas del paron
+                    # son de 39 bytes, y eso es un encabezado de FUSE sin
+                    # datos, que es justo lo que habia que ver.
+                    # DEL OVERLAY SE DA LA CUENTA, NO LOS BYTES POR OPERACION.
+                    #
+                    # Sus bytes vienen incompletos -splice no pasa por write-
+                    # y su cuenta tambien, asi que el cociente mezcla dos
+                    # numeros cojos y da algo que parece una medida y no lo
+                    # es. Del archivo si se puede: ese pasa por write.
+                    printf '          [carga] idas y venidas a userspace: %s al %s (%s cada una), %s a fuse-overlayfs\n' \
+                        "${_dsqc:-0}" "$_arch_nom" \
+                        "$(diag_por_peticion "${_dwc:-0}" "${_dsqc:-0}")" \
+                        "${_dovc:-0}"
+                    printf '          [carga] en CARPETA esta linea no existiria: cero peticiones, el nucleo\n'
+                    printf '          sirve del disco sin salir a userspace ni una vez. Ahi esta la diferencia.\n'
+                    printf '          [carga] OJO con los bytes de fuse-overlayfs: sirve los datos con splice,\n'
+                    printf '          que no pasa por write y por tanto no se cuenta aqui. Sus bytes salen\n'
+                    printf '          por debajo de lo que de verdad entrega; su CUENTA de peticiones si vale.\n'
+                    # LA RAZON ENTRE LAS DOS CAPAS ES LA SEÑAL, no el tamaño.
+                    #
+                    # DE DONDE SALE ESTO (registro de las 22:50 del 15-11-2026):
+                    #
+                    #   intervalo   ops dwarfs   ops overlay   razon   bytes/op
+                    #   20 s (antes)    314560        68899     4,6x      377
+                    #   41 s (paron)   3950939        15851      249x      39
+                    #   60 s (paron)   3263851        10597      308x      63
+                    #
+                    # Antes del paron dwarfs hace 4,6 operaciones por cada
+                    # peticion que le llega de la capa de arriba. DURANTE el
+                    # paron hace 250 o 300, de 39 bytes, o sea sin datos. La
+                    # explosion coincide EXACTAMENTE con el paron, y es lo
+                    # primero que señala un mecanismo concreto en vez de un
+                    # "FUSE es lento" generico.
+                    # LA SEÑAL, SIN DIVIDIR POR LA CUENTA DEL OVERLAY.
+                    #
+                    # Antes esto sacaba "_razon = _dsqc / _dovc", operaciones
+                    # del archivo por cada una del overlay. Pero _dovc esta
+                    # INCOMPLETA: fuse-overlayfs sirve con splice y splice no
+                    # pasa por write, asi que no cuenta ni bytes ni
+                    # operaciones. Dividir por ella infla la razon.
+                    #
+                    # Lo que no depende de esa cuenta: cuantos BYTES entrega
+                    # el archivo en cada operacion SUYA. Y ahi esta la
+                    # anomalia, medida el 16-11-2026: 3.419.264 operaciones
+                    # para 122 MB son 37 BYTES por operacion. Un FUSE normal
+                    # responde a una lectura con una escritura de hasta
+                    # 128 KB. 37 bytes no es servir datos.
+                    if [ "${_dsqc:-0}" -gt 0 ] && [ "${_dwc:-0}" -gt 0 ]; then
+                        _bpo=$(( _dwc / _dsqc ))
+                        printf '          [carga] el %s entrega %s en cada operacion suya\n' \
+                            "$_arch_nom" "$(diag_por_peticion "${_dwc:-0}" "${_dsqc:-0}")"
+                        if [ "$_bpo" -lt 1024 ]; then
+                            printf '          [carga] ESO ES LA PISTA: un FUSE normal contesta a una lectura con UNA\n'
+                            printf '          escritura de hasta 128 KB. Menos de 1 KB por operacion no es servir\n'
+                            printf '          datos: son millones de idas y venidas diminutas.\n'
+                            printf '          [carga] YA PROBADO Y DESCARTADO, no repetirlo: bloque de 16 MiB (232 s),\n'
+                            printf '          de 1 MiB (230.7 s), lectura adelantada puesta (229.3 s) y quitada\n'
+                            printf '          (229.6 s). Las cuatro son palancas de CAUDAL y esto no es de caudal.\n'
+                            printf '          [carga] LO QUE QUEDA: pedirle a dwarfs sus propias cuentas (Ajustes ->\n'
+                            printf '          "Pedir a DwarFS sus cuentas internas") y jugar otra vez. Eso dice\n'
+                            printf '          cuantas operaciones hace y cuanto tarda cada una, medido por el, en\n'
+                            printf '          vez de inferido de /proc, que es donde ya me he equivocado dos veces.\n'
+                        fi
+                    fi
+                fi
+                # LO QUE SE GANARIA QUITANDO LA CAPA DEL OVERLAY, dicho aqui.
+                #
+                # El overlay del nucleo (lo que hace Batocera) quitaria esa
+                # segunda capa. Si su parte es poca, el cambio no compensa el
+                # lio: un montaje dentro de un espacio de nombres de usuario
+                # solo se ve dentro, asi que el juego entero tendria que
+                # correr ahi.
+                if [ "$_pcpu_m" -ge 50 ]; then
+                    printf '          [carga] o sea que quitar fuse-overlayfs se llevaria un %s%% de la CPU del montaje\n' \
+                        "$(( _pcpu_ov * 100 / (_pcpu_m > 0 ? _pcpu_m : 1) ))"
+                fi
+                # Y LA LECTURA DE ESOS TRES NUMEROS, ESCRITA AQUI MISMO, que
+                # es donde hace falta: quien lea el registro dentro de un mes
+                # no tiene por que acordarse de que significa cada uno.
+                # Y SI VA LENTO, SE AVERIGUA POR QUE AQUI MISMO. Una vez.
+                if [ "$_mbs" -lt 50 ] && [ "${_probado:-0}" = 0 ] \
+                   && [ -n "${mnt:-}" ]; then
+                    _probado=1
+                    _sio0="$(_montaje_io)"; _sc0="$(_cpu_montaje)"
+                    _probar_lectura "$mnt"
+                    _sio1="$(_montaje_io)"; _sc1="$(_cpu_montaje)"
+                    set -- $_sio1; _srb1="$1"; _swc1="$2"; _ssqr1="$4"
+                    set -- $_sio0; _srb0="$1"; _swc0="$2"; _ssqr0="$4"
+                    SONDA_RB=$(( _srb1 - _srb0 ))
+                    SONDA_WC=$(( _swc1 - _swc0 ))
+                    SONDA_SQR=$(( _ssqr1 - _ssqr0 ))
+                    set -- $_sio1; _ssqc1="$5"; _sovc1="$6"; _sovw1="$7"
+                    set -- $_sio0; _ssqc0="$5"; _sovc0="$6"; _sovw0="$7"
+                    SONDA_SQC=$(( ${_ssqc1:-0} - ${_ssqc0:-0} ))
+                    SONDA_OVC=$(( ${_sovc1:-0} - ${_sovc0:-0} ))
+                    SONDA_OVW=$(( ${_sovw1:-0} - ${_sovw0:-0} ))
+                    set -- $_sc1; _sct1="$1"; _scs1="$2"; _sco1="$3"
+                    set -- $_sc0; _sct0="$1"; _scs0="$2"; _sco0="$3"
+                    SONDA_CPU=$(( _sct1 - _sct0 ))
+                    SONDA_CPU_SQ=$(( _scs1 - _scs0 ))
+                    SONDA_CPU_OV=$(( _sco1 - _sco0 ))
+                fi
+                # RELEER ES LO QUE SE PAGA, Y AQUI SE VE EN UNA LINEA.
+                #
+                # squashfuse lee COMPRIMIDO del archivo y sirve SIN COMPRIMIR.
+                # O sea que leer menos de lo que sirve es lo normal: con zstd,
+                # servir 700 MB deberia costar leer unos 200. Si lee MAS de lo
+                # que sirve, esta releyendo los mismos bloques una y otra vez,
+                # y cada relectura es una descompresion entera.
+                if [ "$_dwc" -gt 1048576 ] && [ "$_dsqr" -gt 0 ]; then
+                    printf '          [carga] %s: %s MB leidos del archivo para servir %s MB\n' \
+                        "$_arch_nom" "$(( _dsqr / 1048576 ))" "$(( _dwc / 1048576 ))"
+                    if [ "$_dsqr" -gt "$_dwc" ]; then
+                        printf '          [carga] LEE MAS DE LO QUE SIRVE: esta releyendo y volviendo a\n'
+                        # EL CONSEJO DEPENDE DE QUIEN ESTE DEBAJO. Decirle
+                        # "usa dwarfs" a quien ya esta usando dwarfs seria una
+                        # tonteria, y ademas se perderia el consejo util, que
+                        # ahi es otro: a dwarfs SI se le puede subir la cache.
+                        case "$_arch_nom" in
+                            dwarfs*)
+                                printf '          descomprimir los mismos bloques, Y ESO CON dwarfs, que SI tiene cache\n'
+                                printf '          ajustable: entonces es que se le ha quedado corta. Subir DWARFS_CACHE\n'
+                                printf '          (va en 1g) o empaquetar con bloques mas pequeños (-S) para que quepan\n'
+                                printf '          mas bloques en la misma cache.\n' ;;
+                            *)
+                                printf '          descomprimir los mismos bloques. Su cache de bloques es fija y pequeña\n'
+                                printf '          (va dentro del programa, no se puede ajustar), asi que un juego que\n'
+                                printf '          salte de un sitio a otro del archivo la tira constantemente. Aqui es\n'
+                                printf '          donde se va la CPU, y es lo que dwarfs si deja ajustar (cachesize).\n' ;;
+                        esac
+                    fi
+                fi
+                if [ "$_pcpu_m" -ge 80 ]; then
+                    printf '          [carga] el montaje esta clavado en la CPU, pero NO en descomprimir:\n'
+                    printf '          medido el 15-11-2026, se van 99 segundos de CPU en mover 200 MB, o sea\n'
+                    printf '          2 MB/s por nucleo, y zstd descomprime a cientos de MB/s. Y fuse-overlayfs\n'
+                    printf '          gasta lo mismo que el archivo sin descomprimir nada: lo que se paga es el\n'
+                    printf '          VIAJE, no el trabajo. El bloque y la compresion ya se probaron y no son\n'
+                    printf '          (16 MiB 232 s, 1 MiB 230.7 s): mirar la razon de operaciones de arriba.\n'
+                elif [ "$_dl" -gt 33554432 ] && [ "$_drb" -lt $(( _dl / 4 )) ]; then
+                    printf '          [carga] casi todo sale de la cache del nucleo, no del disco: el disco NO es el cuello.\n'
+                elif [ "$_dl" -gt 33554432 ] && [ "$_pcpu_m" -lt 30 ]; then
+                    printf '          [carga] lee mucho, descomprime poco y la CPU del montaje esta baja:\n'
+                    printf '          el cuello esta en el disco o en las idas y venidas de FUSE (squashfuse + fuse-overlayfs).\n'
+                fi
                 if [ "$_dl" -gt 33554432 ]; then
                     printf '          [carga] ESTA CARGANDO del archivo. Si la pantalla sigue en negro, dale tiempo:\n'
                     printf '          un juego grande comprimido tarda bastante mas desde el .wsquashfs que desde la carpeta.\n'
@@ -30416,7 +31626,26 @@ diag_carga_juego() {
                     printf '          [carga] eso ya NO es lentitud del archivo: mirar prefijo, video de presentacion o mando.\n'
                 fi
             } >> "$f"
+            # Y EL DEL MONTAJE TAMBIEN, QUE ES LO QUE FALTABA.
+            #
+            # EL FALLO (visto el 16-11-2026): aqui se arrastraban _l0, _c0 y
+            # _t0 -lo del juego- pero NO _mio0 ni _mc0 -lo del montaje-. O sea
+            # que en la misma linea iban cifras del INTERVALO y cifras DESDE
+            # EL PRINCIPIO, sin que nada lo dijera:
+            #
+            #   "21s de partida: leidos 170 MB"   <- del intervalo
+            #   "montaje: 102 MB entregados"      <- desde el principio
+            #
+            # Y peor: _pcpu_m = _dmc / _dt dividia una CPU acumulada por los
+            # segundos de UN intervalo, asi que el porcentaje crecia solo. El
+            # "165% de un nucleo" de los registros no era el montaje
+            # acelerando: eran 13% -> 108% -> 86% mal sumados.
+            #
+            # Tambien diluia la razon entre capas (321x salia como 79x) y
+            # dejaba lo de la sonda metido en todas las muestras siguientes,
+            # porque se descuenta una vez y el acumulado la arrastra siempre.
             _l0="$_l1"; _c0="$_c1"; _t0="$_t1"
+            _mio0="$_mio1"; _mc0="$_mc1"
         done
     ) >/dev/null 2>&1 &
     return 0
@@ -42692,6 +43921,8 @@ EOFRA
     # partida DESPUES de esta linea ya no puede calcularlo. El diagnostico de
     # fin de partida lo necesita para decidir si merece la pena rescatar las
     # ultimas lineas que escribio el juego.
+    # CUANTO TARDO EN ESTAR LISTO, antes de que se borre nada.
+    diag_resumen_carga
     if [ "${WP_T0_JUEGO:-0}" != 0 ]; then
         WP_DUR_PARTIDA=$(( $(date +%s) - WP_T0_JUEGO ))
     else
@@ -43188,6 +44419,51 @@ Que cumplas muchos mas.
     # tester lo ha confirmado funcionando (Football Life 2027, 03/11), y
     # porque es trabajo NUEVO y distinto del que sigue fuera: la tanda del
     # 18/10 sigue en PENDIENTE-PREFIJOS.md y no se promete nada de ella.
+    # 18/11, AL SUBIR A LA 2.31: CUATRO PUNTOS, Y LOS DOS DE LA 2.30 SE QUEDAN.
+    #
+    # Esto rompe a proposito la regla de "los puntos de la version anterior se
+    # van a la lista negra", y hay que explicar por que para que nadie lo
+    # arregle creyendo que es un descuido: LA 2.30 NO SE PUBLICO NUNCA. Se
+    # cerro el 14/11 y se quedo sin subir. Asi que quien actualice ahora viene
+    # de la 2.29, y las caratulas en monitores grandes y los TeknoParrot en
+    # .wsquashfs son novedades para el: no las ha visto nadie.
+    #
+    # La regla de la 2.15 es "la lista no se hereda", y su motivo es que el
+    # titulo cambia solo y tapa puntos YA PUBLICADOS. Aqui no hay nada
+    # publicado que tapar. Lo que seria faltar a la regla es lo contrario:
+    # quitarlos y dejar dos cambios sin anunciar a nadie.
+    #
+    # LOS CUATRO, Y SU CONFIRMACION:
+    #
+    #   1. Caratulas en monitores grandes -> Dani, 15/11: "Ha funcionado bien,
+    #      subimos a la 2.30 con el cambio de 2k y estos ajustes".
+    #   2. TeknoParrot en .wsquashfs -> Dani, 15/11, misma confirmacion.
+    #   3. Prefijo incluido, segundo arranque -> Dani, 18/11: "Me confirman que
+    #      funciona perfecto, subimos a la 2.31". ES EL MOTIVO DE ESTA VERSION.
+    #   4. Explorador de Windows del prefijo -> PEDIDO por los testers el
+    #      18/11 y escrito el mismo dia. CUBIERTO por suite (39
+    #      comprobaciones con runners de mentira) y seis mutaciones, pero
+    #      NADIE LO HA USADO TODAVIA. Se deja dicho aqui, como se hizo en la
+    #      2.25 con el titular de los 32 bits y en la 2.27 con el de abrirlo
+    #      desde el menu: si no llega confirmacion, se CAE antes de publicar.
+    #      Es una opcion nueva, no un arreglo prometido, asi que el riesgo de
+    #      la 2.15 -prometer que algo roto ya va- no es el mismo; pero la
+    #      regla es la regla y queda anotado.
+    #
+    # LO QUE NO ENTRA, Y ES MUCHO: toda la tanda del FF7 (quince dias de
+    # medidas sobre por que un juego empaquetado carga mas lento que en
+    # carpeta). Dani, 18/11: "sin tener en cuenta a la hora de las novedades
+    # todas las pruebas que hicimos con el ff7". Y es lo correcto aunque no lo
+    # hubiera dicho: de ahi NO salio ninguna mejora que la gente note. Salieron
+    # tres ajustes de diagnostico -tamaño de bloque, lectura adelantada y las
+    # cuentas internas de DwarFS- que son instrumentos para seguir mirandolo,
+    # no mejoras, y anunciar un instrumento como novedad es vender humo.
+    #
+    # Tampoco entran: las ocho traducciones que faltaban en el menu del
+    # prefijo ni el arreglo de que la tabla de ingles no llegaba al usuario.
+    # Lo segundo es un fallo de verdad, pero es fontaneria: quien lo nota es
+    # quien use el programa en ingles, y lo que ve es que el menu esta
+    # completo, no un anuncio.
     printf '%s' "WProton esta al dia (v$WPROTON_VERSION)
 
 GRACIAS A LOS TESTERS
@@ -43196,6 +44472,10 @@ GRACIAS A LOS TESTERS
   Sin vosotros este proyecto no habria sido posible.
 
 NOVEDADES DE LA $WPROTON_VERSION
+
+  Arreglado: un juego con prefijo incluido que fallaba al reabrirlo.
+
+  Nuevo: abrir el explorador de Windows del prefijo del juego.
 
   Arreglado: las caratulas ya llenan la pantalla en monitores grandes.
 
@@ -50689,7 +51969,45 @@ prefijo_hacer_portable() {
     # Los enlaces problematicos estan todos en drive_c/windows -son los del
     # runner- y en dosdevices. Fuera de ahi no hay nada que arreglar y si mucho
     # que romper. Una limpieza no debe pasearse por donde no la han llamado.
-    local pfx="${1:-}" pfx_real l dest n=0 ndd=0
+    # DOS SITUACIONES DISTINTAS, Y HASTA EL 18-11-2026 ESTABAN MEZCLADAS.
+    #
+    # $2 = modo:
+    #   portatil (por defecto) -> el prefijo VA A VIAJAR (se empaqueta o se
+    #     copia). Ahi hay que quitar TODO enlace absoluto que salga del
+    #     prefijo, aunque ahora funcione, porque en la maquina de destino no
+    #     va a existir.
+    #   en_uso -> el prefijo SE ESTA USANDO en esta maquina. Ahi solo se quita
+    #     lo que esta ROTO. Un enlace cuyo destino existe no es basura de otro
+    #     equipo: es algo de ESTA maquina, y casi siempre lo puso Proton o
+    #     WProton en el arranque anterior.
+    #
+    # EL FALLO QUE ESTO ARREGLA (registro de Dani, 18-11-2026): "la primera vez
+    # carga bien el juego, pero la segunda vez hacemos algo y el juego ya no
+    # funciona". Los dos lanzamientos del mismo registro, y la unica diferencia
+    # entre ellos:
+    #
+    #   17:00  lanzamiento 1 -> nada que quitar. El juego carga: 27 MB leidos,
+    #                           CPU del juego al 22%.
+    #   17:01  lanzamiento 2 -> "35 unidad(es) de dosdevices de otro equipo
+    #                           quitadas", "12 enlace(s) a rutas de otro equipo
+    #                           eliminados", "borrada la marca de version".
+    #                           El juego se queda PARADO: 7 MB y luego 0, CPU
+    #                           al 0%, y a los 40 s ya no esta.
+    #
+    # Lo que pasaba: el lanzamiento 1 deja el prefijo lleno de enlaces
+    # absolutos LEGITIMOS -Proton crea unidades para las bibliotecas de Steam,
+    # y WProton crea la unidad D: apuntando a la carpeta que contiene al
+    # juego-. Todos son absolutos y salen del prefijo, asi que en el
+    # lanzamiento 2 esta funcion los tomaba por "de otro equipo" y los
+    # borraba. Incluida la D: que WProton acababa de poner: se borraba a si
+    # misma. Y encima quitaba la marca de version, obligando a Proton a rehacer
+    # el prefijo entero.
+    #
+    # O sea que el criterio "absoluto y fuera del prefijo = de otro equipo" era
+    # falso en cuanto el juego se habia abierto una vez en esta maquina. El
+    # criterio bueno es ROTO: el fallo original -wineboot con error=80- lo causa
+    # un enlace COLGADO, no un enlace absoluto que funciona.
+    local pfx="${1:-}" modo="${2:-portatil}" pfx_real l dest n=0 ndd=0
     [ -d "$pfx" ] || return 1
     pfx_real="$(cd "$pfx" 2>/dev/null && pwd -P)" || return 1
     if [ -d "$pfx/drive_c/windows" ]; then
@@ -50698,6 +52016,9 @@ prefijo_hacer_portable() {
             dest="$(readlink "$l" 2>/dev/null)" || continue
             case "$dest" in /*) ;; *) continue ;; esac       # relativo: portatil
             case "$dest" in "$pfx_real"/*) continue ;; esac  # apunta dentro
+            # EN USO: solo lo roto. "[ -e ]" sobre un enlace sigue el destino,
+            # asi que es falso justo cuando el enlace esta colgado.
+            [ "$modo" = en_uso ] && [ -e "$l" ] && continue
             rm -f "$l" 2>/dev/null && n=$((n+1))
         done <<EOFPORT
 $(find "$pfx/drive_c/windows" -type l 2>/dev/null)
@@ -50718,7 +52039,20 @@ EOFPORT
                     case "$dest" in
                         /*) case "$dest" in
                                 "$pfx_real"/*) ;;
-                                *) rm -f "$l" 2>/dev/null && ndd=$((ndd+1)) ;;
+                                *)  # EN USO SE RESPETA LA UNIDAD QUE FUNCIONA.
+                                    #
+                                    # Aqui se iban las 35 del registro del
+                                    # 18-11-2026, y entre ellas la D: que
+                                    # WProton pone a proposito apuntando a la
+                                    # carpeta que contiene al juego, mas las
+                                    # que Proton crea para las bibliotecas de
+                                    # Steam. Ninguna era de otro equipo:
+                                    # estaban todas vivas en esta.
+                                    if [ "$modo" = en_uso ] && [ -e "$l" ]; then
+                                        :
+                                    else
+                                        rm -f "$l" 2>/dev/null && ndd=$((ndd+1))
+                                    fi ;;
                             esac ;;
                     esac ;;
             esac
@@ -51101,7 +52435,16 @@ bundled_prefix_prepare() {
     # empaquetar: asi los archivos nuevos nacen sin rutas del equipo de origen y
     # esto solo tiene trabajo con los que ya estaban por ahi.
     local n=0 ndd=0 _rp
-    _rp="$(prefijo_hacer_portable "$WINEPREFIX")" || _rp="0 0"
+    # EN MODO "en_uso": ESTE PREFIJO NO VA A VIAJAR, SE ESTA ABRIENDO AQUI.
+    #
+    # Con el modo por defecto, el segundo arranque de un juego se llevaba por
+    # delante lo que el primero habia dejado puesto -las unidades de Steam que
+    # crea Proton y la D: que pone WProton-, porque son absolutas y salen del
+    # prefijo. Se quitaba hasta la marca de version, asi que Proton rehacia el
+    # prefijo entero, y el juego se quedaba parado sin leer nada (registro del
+    # 18-11-2026: 27 MB y 22% de CPU en el primer arranque, 0 MB y 0% en el
+    # segundo). Aqui solo se quita lo ROTO.
+    _rp="$(prefijo_hacer_portable "$WINEPREFIX" en_uso)" || _rp="0 0"
     n="${_rp%% *}"; ndd="${_rp#* }"
     # SI SE HA QUITADO ALGO, PROTON TIENE QUE REHACER EL PREFIJO.
     #
@@ -51127,13 +52470,18 @@ bundled_prefix_prepare() {
               "$WINEPREFIX/.update-timestamp" "$WINEPREFIX/pfx/.update-timestamp" \
               2>/dev/null
         say "[+] Prefix incluido: se le quita la marca de version para que"
-        say "    Proton lo rehaga (venia de otro equipo y le faltan ficheros)"
-        log "prefijo portatil: borrada la marca de version; Proton rehara el prefijo"
+        say "    Proton lo rehaga (tenia enlaces rotos y le faltan ficheros)"
+        log "prefijo: borrada la marca de version por enlaces ROTOS; Proton rehara el prefijo"
     fi
+    # "DE OTRO EQUIPO" ERA MENTIRA AQUI, y la mentira tapaba el fallo: en el
+    # registro del 18-11-2026 ponia "35 unidad(es) de dosdevices de otro
+    # equipo quitadas" sobre un prefijo que llevaba abierto en ESTA maquina
+    # desde hacia un minuto. Un mensaje que explica mal lo que acaba de pasar
+    # hace perder el rato a quien lo lea. Lo que se quita aqui esta ROTO.
     [ "${ndd:-0}" -gt 0 ] \
-        && say "[+] Prefix incluido: $ndd unidad(es) de dosdevices de otro equipo quitadas"
+        && say "[+] Prefix incluido: $ndd unidad(es) de dosdevices ROTAS quitadas"
     if [ "$n" -gt 0 ]; then
-        say "[+] Prefix incluido: $n enlace(s) a rutas de otro equipo eliminados"
+        say "[+] Prefix incluido: $n enlace(s) ROTOS eliminados"
         rm -f "$WINEPREFIX/.wp_bundled_ready"
     fi
 
@@ -54835,7 +56183,8 @@ config_dgvoodoo_cpl() {
 #      * .exe: detectar raiz real (Unreal Binaries/WinXX, Win64, Unity _Data),
 #        empaquetar la carpeta y borrar la original
 #      * carpeta: empaquetar (o lanzar .sh si lo contiene)
-#      Salida siempre: $GAMES_PATH/<Nombre>.wsquashfs  (zstd -b 1M)
+#      Salida siempre: $GAMES_PATH/<Nombre>.wsquashfs  (zstd, bloque de
+#      pack_bloque_squashfs)
 # ----------------------------------------------------------------------------
 ARCHIVE_REGEX='\.(zip|7z|rar|wtgz)(\.001)?$|\.part[0-9]+\.rar$|\.r[0-9]{2}$|\.z01$'
 
@@ -55516,6 +56865,51 @@ EOFD
 # Y LA PALANCA GRANDE YA ESTA ECHADA: el bloque es de 1 MB, el maximo que
 # admite el formato, contra los 128 KB de por defecto. Ahi es donde se gana
 # ratio de verdad.
+pack_bloque_squashfs() {
+    # EL TAMAÑO DE BLOQUE CON EL QUE SE EMPAQUETA.
+    #
+    # 1M DE SERIE, Y ESTO ES UNA MARCHA ATRAS. Lo puse en 128K a mediodia del
+    # 15-11-2026 porque el banco decia que era la mitad de tiempo por un 0,35%
+    # mas de archivo. Dani reempaqueto el FF7, lo probo, y NO.
+    #
+    # EL BANCO (lectura seguida de la muestra entera, 14.337 MB):
+    #
+    #   zstd 1 MB     20,4 s
+    #   zstd 128 KB   10,5 s      <- la mitad
+    #
+    # EL JUEGO (segundo en el que llega al fotograma 1200, que es cuando ya va
+    # fino; seis partidas con 1 MB y una con 128 KB):
+    #
+    #   1 MB     128,0  128,9  130,2  131,1  139,9  192,2
+    #   128 KB   197,5                        <- peor que todas menos una
+    #
+    # POR QUE SE EQUIVOCO EL BANCO, que es lo que hay que recordar: el banco
+    # lee los ficheros ENTEROS y seguidos, asi que el nucleo va pidiendo por
+    # delante y hay muchas peticiones en vuelo a la vez. Eso mide CAUDAL.
+    #
+    # El juego no hace eso. En el registro se le ve esperando: CPU del juego
+    # al 4%, en estado S, 18 MB/s, y el montaje al 192%. Eso es ESPERA, no
+    # caudal: pide un trozo, espera, pide el siguiente.
+    #
+    # Y para quien esta limitado por la espera, el bloque grande es un regalo:
+    # squashfuse descomprime UN bloque de 1 MB y contesta con el las ocho
+    # peticiones siguientes sin volver a tocar el disco. El bloque grande
+    # hacia de lectura adelantada gratis. Con 128 KB cada peticion es un
+    # bloque, un viaje y una descompresion.
+    #
+    # Lo unico que si mejoro fue la amplificacion -de 2.482 a 1.127 MB leidos
+    # del archivo en los primeros 60 s-, que confirma el mecanismo. Pero leer
+    # menos no sirve de nada si cada lectura cuesta una espera.
+    #
+    # LA LECCION: un banco que mide caudal no predice un trabajo que esta
+    # limitado por la espera. El banco ya trae la columna que faltaba.
+    case "${PACK_BLOQUE:-1M}" in
+        128K|128k) printf '128K' ;;
+        512K|512k) printf '512K' ;;
+        *)         printf '1M'   ;;
+    esac
+}
+
 pack_nivel_zstd() {
     # El nivel para mksquashfs con zstd. La escala va de 1 a 22.
     case "${PACK_NIVEL:-normal}" in
@@ -55523,6 +56917,34 @@ pack_nivel_zstd() {
         maxima) printf '22' ;;
         *)      printf '15' ;;
     esac
+}
+
+pack_bloque_dwarfs() {
+    # LOS BITS DEL TAMAÑO DE BLOQUE DE dwarfs (-S). Vacio = lo que elija el.
+    #
+    # DE DONDE SALE LA PREGUNTA (15-11-2026). En cuanto la ficha del .dwarfs
+    # empezo a leerse, salio esto del archivo de Dani:
+    #
+    #   block size: 16 MiB
+    #
+    # DIECISEIS MEGAS por bloque, que es lo que elige mkdwarfs en el nivel 7.
+    # Para comparar: WProton empaqueta squashfs con 1 MB, y bajar ESE a 128 KB
+    # ya salio mal porque el bloque grande le hace de lectura adelantada al
+    # juego. Pero 16 MiB es otra escala: con cachesize=1g caben SESENTA Y
+    # CUATRO bloques, y cada fallo de cache descomprime 16 MB enteros para
+    # sacar lo que se haya pedido.
+    #
+    # NO SE CAMBIA EL VALOR DE SERIE. Ya he cambiado dos defaults esta semana
+    # con una medida que no predecia el juego, y las dos veces hubo que
+    # volver atras. Esto es una PALANCA para probar, y la prueba es jugar:
+    #
+    #   DWARFS_BLOQUE=20  ->  1 MiB, el mismo que le funciona a squashfs
+    #   DWARFS_BLOQUE=22  ->  4 MiB, a medio camino
+    #   (vacio)           ->  lo que elija mkdwarfs (16 MiB en el nivel 7)
+    #
+    # Con bloques mas pequeños caben muchos mas en la misma cache, que es
+    # justo donde Dani apunta que hay margen.
+    printf '%s' "${DWARFS_BLOQUE:-}"
 }
 
 pack_nivel_dwarfs() {
@@ -55541,6 +56963,45 @@ pack_nivel_texto() {
         rapida) printf 'rápida (ocupa más, se empaqueta antes)' ;;
         maxima) printf 'máxima (ocupa algo menos, tarda bastante más)' ;;
         *)      printf 'normal (recomendada)' ;;
+    esac
+}
+
+dwarfs_perfmon_texto() {
+    [ -n "${DWARFS_PERFMON:-}" ] && printf 'si' || printf 'no'
+}
+
+dwarfs_readahead_texto() {
+    case "${DWARFS_READAHEAD:-}" in
+        4m)  printf '4 MB' ;;
+        16m) printf '16 MB' ;;
+        64m) printf '64 MB' ;;
+        *)   printf 'desactivada (lo de serie)' ;;
+    esac
+}
+
+pack_bloque_texto() {
+    # EL BLOQUE SE DICE EN MB/KB, no en bits ni en potencias de dos. Y se dice
+    # distinto segun el formato porque son dos ajustes distintos: squashfs va
+    # en tamaño y DwarFS en bits del tamaño.
+    #
+    # POR QUE ESTE AJUSTE ESTA EN EL MENU (Dani, 15-11-2026): la prueba que
+    # hace falta para la carga lenta es empaquetar con otro bloque y jugar. Si
+    # para eso hay que editar el fichero de configuracion a mano, la prueba no
+    # se hace. Aqui se elige y ya.
+    case "${PACK_FORMAT:-wsquashfs}" in
+        dwarfs*)
+            case "${DWARFS_BLOQUE:-}" in
+                20) printf '1 MB' ;;
+                21) printf '2 MB' ;;
+                22) printf '4 MB' ;;
+                *)  printf 'el que elija DwarFS (16 MB)' ;;
+            esac ;;
+        *)
+            case "${PACK_BLOQUE:-1M}" in
+                512K) printf '512 KB' ;;
+                128K) printf '128 KB' ;;
+                *)    printf '1 MB (recomendado)' ;;
+            esac ;;
     esac
 }
 
@@ -55807,6 +57268,7 @@ $src"
         # -l7: buen equilibrio; zstd por defecto = montaje y lectura rapidos
         run_con_porcentaje "Empaquetando '$name' a DwarFS..." \
             "$MKDWARFS_BIN" -i "$src" -o "$out" -l"$(pack_nivel_dwarfs)" --log-level=warn \
+            ${DWARFS_BLOQUE:+-S "$(pack_bloque_dwarfs)"} \
             --progress=simple \
             || { rm -f "$out"; fallo "El empaquetado a DwarFS fallo (mira el registro)"; return 1; }
     else
@@ -55888,7 +57350,7 @@ $src"
         # era el del rm.)
         local _rc_ms=0
         run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
-                mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+                mksquashfs "$src" "$out" -comp zstd -b "$(pack_bloque_squashfs)" -noappend -no-xattrs \
                 -Xcompression-level "$(pack_nivel_zstd)" \
                 -no-duplicates -percentage || _rc_ms=$?
         if [ "$_rc_ms" != 0 ]; then
@@ -59064,6 +60526,8 @@ EOFRB
     # partida DESPUES de esta linea ya no puede calcularlo. El diagnostico de
     # fin de partida lo necesita para decidir si merece la pena rescatar las
     # ultimas lineas que escribio el juego.
+    # CUANTO TARDO EN ESTAR LISTO, antes de que se borre nada.
+    diag_resumen_carga
     if [ "${WP_T0_JUEGO:-0}" != 0 ]; then
         WP_DUR_PARTIDA=$(( $(date +%s) - WP_T0_JUEGO ))
     else
@@ -74918,6 +76382,7 @@ cfg_prefijo_menu() {
         sel="$(menu "Herramientas del prefijo - $gid" \
             "Crear prefijo de Batocera (de cero, su procedimiento)" \
             "Abrir winecfg" \
+            "Abrir el explorador de Windows (ver los archivos del prefijo)" \
             "Abrir winetricks" \
             "Instalar librerias en el prefijo: $(prefix_label)" \
             "Importar un fichero .reg (idioma, ajustes del juego)" \
@@ -77911,6 +79376,7 @@ arranca o no sale el menu, vuelve aqui y cambia de DLL." \
             load_profile "$gid" ;;
         "Crear prefijo de Batocera"*) bato_prefijo_ui "$gid" ;;
         "Abrir winecfg")    run_in_prefix "$squash" "$gid" winecfg ;;
+        "Abrir el explorador de Windows"*) explorador_win_abrir "$squash" "$gid" ;;
         "Instalar librerias en el prefijo:"*)
             # Directo al prefijo DE ESTE juego. Desde el menu principal hay
             # que elegir el juego otra vez, y quien viene de su pantalla de
@@ -79035,6 +80501,101 @@ ahorrados.
 
 Los juegos que ya tengas empaquetados no cambian." ;;
             esac ;;
+        "Tamaño de bloque al empaquetar:"*)
+            # LO QUE SE DICE AQUI ES LO MEDIDO, no lo que suena bien. Un bloque
+            # pequeño se lee antes por separado, pero el grande hace de lectura
+            # adelantada gratis, y midiendolo en el juego gano el grande: con
+            # 128 KB la intro de FF7 tardaba 313 s y con 1 MB 250 s. Por eso el
+            # recomendado es el de 1 MB y los otros llevan el aviso.
+            local pb
+            case "${PACK_FORMAT:-wsquashfs}" in
+                dwarfs*)
+                    pb="$(menu "Tamaño de bloque al empaquetar en DwarFS" \
+                        "El que elija DwarFS - 16 MB, lo de siempre" \
+                        "1 MB - más trozos en la caché, a prueba" \
+                        "2 MB" \
+                        "4 MB" \
+                        "<< Volver")" || pb=""
+                    case "$pb" in
+                        "El que elija"*) DWARFS_BLOQUE=""; save_settings ;;
+                        "1 MB"*)         DWARFS_BLOQUE=20; save_settings ;;
+                        "2 MB"*)         DWARFS_BLOQUE=21; save_settings ;;
+                        "4 MB"*)         DWARFS_BLOQUE=22; save_settings ;;
+                        *)               pb="" ;;
+                    esac ;;
+                *)
+                    pb="$(menu "Tamaño de bloque al empaquetar" \
+                        "1 MB - recomendado, el que mejor carga" \
+                        "512 KB" \
+                        "128 KB - el archivo ocupa menos, carga peor" \
+                        "<< Volver")" || pb=""
+                    case "$pb" in
+                        "1 MB"*)   PACK_BLOQUE=1M;   save_settings ;;
+                        "512 KB"*) PACK_BLOQUE=512K; save_settings ;;
+                        "128 KB"*) PACK_BLOQUE=128K; save_settings ;;
+                        *)         pb="" ;;
+                    esac ;;
+            esac
+            [ -n "$pb" ] && ui_info "Bloque de $(pack_bloque_texto).
+
+Esto solo afecta a los juegos que empaquetes a partir de ahora.
+Los que ya tienes no cambian: para cambiarlos hay que volver a
+empaquetarlos." ;;
+        "Lectura adelantada en DwarFS:"*)
+            # LO QUE SE DICE AQUI ES LO QUE DICE SU AUTOR, ni mas ni menos:
+            # la opcion viene apagada de serie y esta marcada como
+            # experimental. Se ofrece porque la carga del FF7 esta esperando,
+            # no descomprimiendo, y leer por delante es la opcion documentada
+            # para eso; pero hasta que una partida lo confirme no se
+            # recomienda ninguna.
+            local dr
+            dr="$(menu "Lectura adelantada al montar en DwarFS" \
+                "Desactivada - lo de serie en DwarFS" \
+                "4 MB - a prueba" \
+                "16 MB - a prueba" \
+                "64 MB - a prueba" \
+                "<< Volver")" || dr=""
+            case "$dr" in
+                "Desactivada"*) DWARFS_READAHEAD="";    save_settings ;;
+                "4 MB"*)        DWARFS_READAHEAD=4m;    save_settings ;;
+                "16 MB"*)       DWARFS_READAHEAD=16m;   save_settings ;;
+                "64 MB"*)       DWARFS_READAHEAD=64m;   save_settings ;;
+                *)              dr="" ;;
+            esac
+            [ -n "$dr" ] && ui_info "Lectura adelantada: $(dwarfs_readahead_texto).
+
+Esto se aplica al MONTAR, asi que vale para los juegos que ya
+tengas en DwarFS: no hay que volver a empaquetar nada. Si tu
+version de DwarFS no la conoce, se monta sin ella y queda
+dicho en el registro.
+
+Es una opcion que su autor marca como experimental: si algo
+va raro, se vuelve a dejar desactivada." ;;
+        "Pedir a DwarFS sus cuentas internas:"*)
+            # ES UN INSTRUMENTO, NO UN AJUSTE DE JUGAR. Se enciende para una
+            # partida, se mira la traza y se apaga. Lo digo en el propio aviso
+            # porque dejarlo puesto ensucia el registro de todas las partidas.
+            if [ -n "${DWARFS_PERFMON:-}" ]; then
+                DWARFS_PERFMON=""; save_settings
+                ui_info "Apagado.
+
+Ya no se le piden las cuentas internas a DwarFS."
+            else
+                DWARFS_PERFMON=1; save_settings
+                ui_info "Puesto.
+
+En la proxima partida DwarFS apuntara cuantas operaciones hace y
+cuanto tarda cada una, y al salir del juego eso queda en el
+registro y en un fichero al lado.
+
+Esto es un INSTRUMENTO para mirar por que un juego empaquetado
+carga mas lento que en carpeta: no mejora nada por si solo y
+hace trabajar un poco mas al montaje. Cuando ya se haya mirado,
+mejor apagarlo.
+
+Si tu version de DwarFS viene sin esa parte compilada, se dice
+en el registro y se monta igual."
+            fi ;;
         "Carátulas por fila:"*)
             local gc
             gc="$(menu "Cuántas carátulas por fila en la rejilla" \
@@ -79720,6 +81281,9 @@ library_menu() {
             "Ordenar juegos por: ${GAMES_SORT:-nombre}" \
             "Formato al empaquetar: ${PACK_FORMAT:-wsquashfs}" \
             "Compresión al empaquetar: $(pack_nivel_texto)" \
+            "Tamaño de bloque al empaquetar: $(pack_bloque_texto)" \
+            "Lectura adelantada en DwarFS: $(dwarfs_readahead_texto)" \
+            "Pedir a DwarFS sus cuentas internas: $(dwarfs_perfmon_texto)" \
             "Tema de los menus: $THEME" \
             "Motor de los menus: $(menu_motor_label)" \
             "Tamaño de la letra: $(font_label)" \
@@ -79925,7 +81489,8 @@ Se sobrescribe?" || return 0
         fi
         [ -n "${MKDWARFS_BIN:-}" ] || { ui_error "Sin mkdwarfs no se puede comprimir a DwarFS."; return 1; }
         run_con_porcentaje "Comprimiendo '$nombre' a DwarFS..." \
-            "$MKDWARFS_BIN" -i "$src" -o "$out" -l"$(pack_nivel_dwarfs)" --log-level=warn || {
+            "$MKDWARFS_BIN" -i "$src" -o "$out" -l"$(pack_nivel_dwarfs)" --log-level=warn \
+            ${DWARFS_BLOQUE:+-S "$(pack_bloque_dwarfs)"} || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
     else
         # AQUI NO SE USA need_mksquashfs: esa hace "die" y se lleva WProton
@@ -79946,7 +81511,7 @@ O cambia el formato a DwarFS en:
         # donde saca run_con_porcentaje la barra. Con -no-progress la barra se
         # queda a cero toda la compresion y parece colgada.
         run_con_porcentaje "Comprimiendo '$nombre'..." \
-            mksquashfs "$src" "$out" -comp zstd -b 1M -noappend -no-xattrs \
+            mksquashfs "$src" "$out" -comp zstd -b "$(pack_bloque_squashfs)" -noappend -no-xattrs \
                 -Xcompression-level "$(pack_nivel_zstd)" \
             -no-duplicates -percentage || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
