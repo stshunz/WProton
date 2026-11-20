@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.31"
+WPROTON_VERSION="2.32"
 # ----------------------------------------------------------------------------
 # EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
 #
@@ -966,7 +966,7 @@ LANG_DIR="$BASE_DIR/lang"
 # La linea LANG_EN_VERSION la escribe el build aqui, con el hash del
 # contenido de la tabla. Va en linea propia porque asi son todos los
 # marcadores de este fichero, y porque auditoria_final.py los cuenta asi.
-LANG_EN_VERSION="74fddbf70175"
+LANG_EN_VERSION="1feae4fef6a5"
 
 write_lang_en() {
     # El ingles viaja DENTRO de wproton.sh y se escribe en lang/en.json si
@@ -1044,6 +1044,7 @@ write_lang_en() {
  "CANCELAR": "CANCEL",
  "CARPETA": "FOLDER",
  "Cambiar las imágenes de WProton en Steam": "Change WProton's artwork in Steam",
+ "Carga del wsquashfs": ".wsquashfs loading",
  "Carpeta RAIZ del juego (se empaqueta ENTERA)": "ROOT folder of the game (the WHOLE folder is packed)",
  "Carpeta de juegos": "Games folder",
  "Carpeta principal de juegos": "Main games folder",
@@ -1124,6 +1125,7 @@ write_lang_en() {
  "Gestion de archivos": "File management",
  "Grande (recomendado en consolas portatiles)": "Large (recommended on handhelds)",
  "Género": "Genre",
+ "Hecho. Este juego vuelve a abrirse de la forma normal.": "Done. This game goes back to opening the normal way.",
  "Herramientas de montaje...": "Mount tools...",
  "Herramientas del prefijo >>": "Prefix tools >>",
  "INFO": "INFO",
@@ -1173,6 +1175,7 @@ write_lang_en() {
  "No": "No",
  "No montar nada": "Do not mount anything",
  "Normal": "Normal",
+ "Normal (recomendado)": "Normal (recommended)",
  "Nota": "Score",
  "Notas": "Notes",
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
@@ -1209,6 +1212,8 @@ write_lang_en() {
  "Restaurar una copia": "Restore a backup",
  "Runner (Proton/Wine)": "Runner (Proton/Wine)",
  "Runners y herramientas": "Runners and tools",
+ "Rápida": "Fast",
+ "Rápida (para los juegos que tardan mucho)": "Fast (for games that take a long time)",
  "SELECCION": "SELECTION",
  "Salir": "Exit",
  "Si": "Yes",
@@ -1244,7 +1249,7 @@ write_lang_en() {
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
  "Xbox": "Xbox",
- "__version__": "74fddbf70175",
+ "__version__": "1feae4fef6a5",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
  "auto (autorun.cmd / escaneo)": "auto (autorun.cmd / scan)",
@@ -1293,6 +1298,7 @@ write_lang_en() {
  "wsquashfs - compatible con Batocera y PortProton": "wsquashfs - compatible with Batocera and PortProton",
  "¿Crear un acceso directo a WProton en el escritorio?": "Create a WProton shortcut on the desktop?",
  "¿Cuál es?": "Which one is it?",
+ "¿Cómo se abre el paquete de este juego?": "How is this game's package opened?",
  "¿Qué carátulas quieres descargar?": "Which covers do you want to download?",
  "Última vez": "Last played",
  "Último log (B para volver)": "Last log (B to go back)"
@@ -12227,9 +12233,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py 3ac2637f79fa" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py a7c1a2b41670" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py 3ac2637f79fa
+# WPROTON_HELPER menu_pygame.py a7c1a2b41670
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -13998,6 +14004,17 @@ AYUDAS_ES = [
      'la Deck y otra en la tarjeta.'),
 
     # --- ajustes de un juego ---
+    # El tester lo habia puesto como "SquashFUSE + fuse-overlayfs" y "SquashFS
+    # + OverlayFS del kernel Linux". Eso es de dentro: va al registro, no a la
+    # pantalla. Aqui se dice para que sirve y cuando usarlo.
+    ('Carga del wsquashfs: Normal',
+     'Como se abre el paquete del juego. Normal es la forma de siempre y '
+     'funciona bien en casi todos los juegos.'),
+    ('Carga del wsquashfs: Rápida',
+     'Abre el paquete de otra manera y suele dejar los juegos grandes como si '
+     'estuvieran descomprimidos en una carpeta. Para los que tardan mucho en '
+     'arrancar, sobre todo con videos. Si tu sistema no puede, WProton carga '
+     'de la forma normal y el juego arranca igual.'),
     ('Runner (Proton/Wine):',
      'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
      'vale la pena probar otro.'),
@@ -21536,10 +21553,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py 4f8bf585adbf" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py dcea96026e73" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py 4f8bf585adbf
+# WPROTON_HELPER menu_qt.py dcea96026e73
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -22064,6 +22081,17 @@ AYUDAS_ES = [
      'la Deck y otra en la tarjeta.'),
 
     # --- ajustes de un juego ---
+    # El tester lo habia puesto como "SquashFUSE + fuse-overlayfs" y "SquashFS
+    # + OverlayFS del kernel Linux". Eso es de dentro: va al registro, no a la
+    # pantalla. Aqui se dice para que sirve y cuando usarlo.
+    ('Carga del wsquashfs: Normal',
+     'Como se abre el paquete del juego. Normal es la forma de siempre y '
+     'funciona bien en casi todos los juegos.'),
+    ('Carga del wsquashfs: Rápida',
+     'Abre el paquete de otra manera y suele dejar los juegos grandes como si '
+     'estuvieran descomprimidos en una carpeta. Para los que tardan mucho en '
+     'arrancar, sobre todo con videos. Si tu sistema no puede, WProton carga '
+     'de la forma normal y el juego arranca igual.'),
     ('Runner (Proton/Wine):',
      'Que version de Proton o Wine usa este juego. Si uno falla, casi siempre '
      'vale la pena probar otro.'),
@@ -31623,7 +31651,31 @@ PYFIN
                     printf '          [carga] no lee del archivo pero consume CPU: esta trabajando (o dando vueltas).\n'
                 else
                     printf '          [carga] ni lee del archivo ni consume CPU: esta PARADO esperando algo.\n'
-                    printf '          [carga] eso ya NO es lentitud del archivo: mirar prefijo, video de presentacion o mando.\n'
+                    # Y SE MIRA SI YA SABEMOS DE QUE SE TRATA, AQUI MISMO.
+                    #
+                    # POR QUE (18-11-2026): el consejo de debajo mandaba mirar
+                    # "prefijo, video de presentacion o mando", y en el caso de
+                    # Chronicle of Innsmouth los tres eran el sitio equivocado:
+                    # lo que habia pasado es que explorer.exe -el escritorio de
+                    # Wine- se habia colgado leyendo el modo de pantalla y
+                    # luego habia saltado por un puntero nulo. Estaba en el
+                    # registro, veinte lineas mas arriba, y el diagnostico
+                    # mandaba a otra parte.
+                    #
+                    # La huella ya se reconoce en fallo_analizar, pero eso solo
+                    # corre AL SALIR del juego. Aqui el usuario esta delante de
+                    # una pantalla negra preguntandose si esperar: es cuando
+                    # sirve saberlo.
+                    if grep -q 'X11DRV_EnumDisplaySettingsEx' "$LOG_FILE" 2>/dev/null \
+                       && grep -qE 'page fault on execute access to 0+ at address 0+|winedbg: Internal crash at 0+' "$LOG_FILE" 2>/dev/null; then
+                        printf '          [carga] Y YA SABEMOS QUE ES: Wine se ha colgado leyendo el modo de\n'
+                        printf '          pantalla (X11DRV_EnumDisplaySettingsEx) y ha saltado por un puntero nulo.\n'
+                        printf '          No es el prefijo, ni el video, ni el mando: el juego no va a arrancar.\n'
+                        printf '          Es intermitente -depende de una carrera con la pantalla-, asi que\n'
+                        printf '          cerrar y volver a lanzarlo suele entrar; si no, probar otro runner.\n'
+                    else
+                        printf '          [carga] eso ya NO es lentitud del archivo: mirar prefijo, video de presentacion o mando.\n'
+                    fi
                 fi
             } >> "$f"
             # Y EL DEL MONTAJE TAMBIEN, QUE ES LO QUE FALTABA.
@@ -33756,6 +33808,64 @@ version_juego_label() {
     esac
 }
 
+nativo_sh_puntua() {
+    # CUANTO SE PARECE ESTE .sh AL LANZADOR DEL JUEGO. Imprime un numero: mas
+    # alto, mejor candidato. $1 = ruta del .sh, $2 = nombre de la carpeta.
+    #
+    # POR QUE EXISTE (18-11-2026). Un tester, con Soulcalibur II Recompiled:
+    # «hay launcher-config.sh que es el que lanza el launcher de configuracion
+    # y el soulcaliburII.sh que lanza el juego directo; le digo que use ese,
+    # pero el sugerido es el otro, ya se por orden alfabetico o por lo que
+    # sea». Tenia razon en las dos cosas: en que la eleccion no se respetaba
+    # -arreglado aparte- y en el motivo de la sugerencia.
+    #
+    # Habia siete .sh en la raiz y se cogia el primero por orden alfabetico,
+    # saltandose solo los de instalar. "launcher-config.sh" gana a
+    # "soulcalibur2.sh" porque la l va antes que la s, y ya.
+    #
+    # Elegir el que SE PARECE AL NOMBRE DEL JUEGO es lo que haria cualquiera
+    # mirando la carpeta, y deja al usuario sin tener que entrar a elegir. Lo
+    # que NO se hace es saltarse los de configuracion: hay juegos cuyo unico
+    # lanzador se llama asi, y saltarselo los dejaria sin arrancar. Se ponen
+    # ultimos, que es distinto.
+    local f="${1:-}" carp="${2:-}" nom pun=0
+    nom="$(basename "$f")"; nom="${nom%.sh}"
+    # A minusculas y sin nada que no sea letra o numero, que "soulcalibur2" y
+    # "Soulcalibur II Recompiled" tienen que poder compararse.
+    local n_l c_l
+    n_l="$(printf '%s' "$nom"  | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+    c_l="$(printf '%s' "$carp" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')"
+    # SE PARECE AL NOMBRE DE LA CARPETA: lo mas fiable con diferencia.
+    if [ -n "$n_l" ] && [ -n "$c_l" ]; then
+        case "$c_l" in "$n_l"*) pun=$(( pun + 100 )) ;; esac
+        case "$n_l" in "$c_l"*) pun=$(( pun + 100 )) ;; esac
+        # Y con los primeros caracteres basta: "soulcalibur2" contra
+        # "soulcaliburiirecompiled" no encaja por prefijo entero, pero
+        # comparten los ocho primeros y eso ya no es casualidad.
+        if [ "${#n_l}" -ge 6 ] && [ "${#c_l}" -ge 6 ] \
+           && [ "$(printf '%s' "$n_l" | cut -c1-6)" = "$(printf '%s' "$c_l" | cut -c1-6)" ]; then
+            pun=$(( pun + 60 ))
+        fi
+    fi
+    # NOMBRES CLASICOS DE LANZADOR.
+    case "$n_l" in
+        start|run|play|launch|game|juego|startgame|rungame) pun=$(( pun + 40 )) ;;
+        start*|run*|play*|launch*) pun=$(( pun + 20 )) ;;
+    esac
+    # Y LOS QUE CLARAMENTE NO SON EL JUEGO, AL FINAL DE LA COLA.
+    #
+    # No se saltan: hay juegos cuyo unico .sh se llama "config.sh" o
+    # "launcher-config.sh", y saltarselo los deja sin arrancar. Restar es
+    # suficiente: si no hay otro, sigue ganando.
+    case "$n_l" in
+        *config*|*settings*|*options*|*ajustes*|*opciones*|*prefs*|\
+        *update*|*updater*|*tool*|*herramient*|*readme*|*debug*|*log*|\
+        *server*|*dedicated*|*editor*|*benchmark*)
+            pun=$(( pun - 50 )) ;;
+    esac
+    printf '%s' "$pun"
+}
+
 juego_es_nativo() {
     # ¿El paquete trae un juego de LINUX en vez de uno de Windows?
     # $1 = raiz del juego montado. Imprime el ejecutable si lo es.
@@ -33939,18 +34049,39 @@ juego_es_nativo() {
     local c _nivel
     for _nivel in 1 2; do
         log "juego_es_nativo: buscando lanzador de Linux en $_raiz_busq (nivel $_nivel)"
+        # SE VACIA EN CADA NIVEL: si no, los candidatos del nivel 1 competirian
+        # con los del 2, y la regla es que el de arriba manda.
+        local _mejores=""
         while IFS= read -r c; do
             [ -n "$c" ] && [ -f "$c" ] && [ -r "$c" ] || continue
             case "$(basename "$c")" in
                 install*|setup*|uninstall*|patch*|Install*|Setup*)
                     log "  se salta $(basename "$c") (parece de instalar)"; continue ;;
             esac
-            log "  lanzador .sh encontrado: $c"
-            printf '%s' "$c"
-            return 0
+            # SE GUARDA CON SU PUNTUACION EN VEZ DE COGER EL PRIMERO.
+            #
+            # Antes se devolvia aqui mismo el primero por orden alfabetico, y
+            # de ahi el "launcher-config.sh" en vez de "soulcalibur2.sh" del
+            # registro del 18-11-2026. Dentro del mismo nivel se elige el que
+            # mas se parece al juego; entre niveles sigue mandando el de
+            # arriba, que eso ya estaba bien.
+            _mejores="$_mejores
+$(nativo_sh_puntua "$c" "$(basename "$root")")	$c"
         done <<EOFSH
 $(find -H "$_raiz_busq" -mindepth "$_nivel" -maxdepth "$_nivel" -type f -iname '*.sh' 2>/dev/null | sort)
 EOFSH
+        if [ -n "$(printf '%s' "$_mejores" | awk 'NF')" ]; then
+            # -k1,1nr: por puntuacion de mayor a menor. -k2: a igual
+            # puntuacion, el alfabetico de siempre, para que un mismo juego
+            # sugiera SIEMPRE lo mismo.
+            local _elegido
+            _elegido="$(printf '%s\n' "$_mejores" | awk 'NF' \
+                        | sort -t"$(printf '\t')" -k1,1nr -k2,2 | head -n1 | cut -f2-)"
+            log "  lanzador .sh encontrado: $_elegido"
+            log "  (de $(printf '%s\n' "$_mejores" | awk 'NF' | wc -l | tr -d ' ') candidato(s) en el nivel $_nivel, por parecido con \"$(basename "$root")\")"
+            printf '%s' "$_elegido"
+            return 0
+        fi
     done
 
     # 3. Un binario ELF en la raiz. Se mira la firma del fichero, no el
@@ -34138,7 +34269,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO MONTAJE_NUCLEO'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -34218,15 +34349,16 @@ profile_defaults() {
     HELIXSR=0
     HELIXSR_NITIDEZ="off"
     VERSION_JUEGO="auto"
+    MONTAJE_NUCLEO="0"
 }
 
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py e3a8b1626c11" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py d8c759aad6ff" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py e3a8b1626c11
+# WPROTON_HELPER perfil.py d8c759aad6ff
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -34534,6 +34666,9 @@ ESQUEMA = [
     # Al final de la lista, como los anteriores: los campos no se mueven de
     # sitio, que los perfiles ya escritos se leen por orden.
     ("VERSION_JUEGO",     "opcion", "auto",           ("auto", "windows", "linux")),
+    # El montaje del nucleo (SquashFS + OverlayFS del kernel) en vez de FUSE.
+    # Por juego y apagado de fabrica: FUSE sigue siendo lo normal.
+    ("MONTAJE_NUCLEO",    "opcion", "0",              ("0", "1")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
@@ -42339,6 +42474,59 @@ $(tail -n 400 "$_gl" 2>/dev/null)"
 
     # 1. .NET SIN MONO. El caso Scott Pilgrim: rc=53 y ni una pista.
     # "IL-only binary ... cannot be loaded" es LA linea que suelta Wine
+    # WINE SE CUELGA LEYENDO EL MODO DE PANTALLA (18-11-2026)
+    #
+    # "A veces carga y otras no", dicho por un tester con Chronicle of
+    # Innsmouth - Mountains of Madness. En el registro de la vez que no:
+    #
+    #   [Gamescope WSI] Executable name: explorer.exe
+    #   0170:err:x11settings:X11DRV_EnumDisplaySettingsEx Failed to get
+    #        L"\\.\DISPLAY1" current display settings.        (x62)
+    #   wine: Unhandled page fault on execute access to 00000000 at
+    #        address 00000000 (thread 0170), starting debugger...
+    #   winedbg: Internal crash at 00000000
+    #
+    # Y despues de eso el juego NO LLEGA A APARECER: el vigilante de carga
+    # decia "0 proceso(s) del juego" y a los dos minutos seguia sin verse.
+    #
+    # QUIEN SE CUELGA NO ES EL JUEGO, ES explorer.exe -el escritorio de Wine-
+    # pidiendo el modo de la pantalla al driver de X11 y no obteniendolo. Luego
+    # salta por un puntero nulo (fallo de pagina en EJECUCION sobre la
+    # direccion 0), y winedbg se cae tambien al intentar contarlo, asi que no
+    # queda ni traza.
+    #
+    # ES INTERMITENTE porque depende de que la pantalla tenga modos legibles
+    # en el momento en que explorer.exe pregunta; bajo gamescope eso es una
+    # carrera. De ahi el "a veces si y a veces no".
+    #
+    # NO SE PUEDE ARREGLAR DESDE AQUI: es el driver de X11 del runner. Lo que
+    # si se puede es RECONOCERLO, que es lo que costo horas: el sintoma que se
+    # ve es una pantalla negra y un juego que "no carga", y no se parece en
+    # nada a la causa. Va PRIMERO porque su huella es la mas concreta de todas
+    # y porque, si casa, ninguna de las demas pistas sirve de nada.
+    if printf '%s' "$cola" | grep -q 'X11DRV_EnumDisplaySettingsEx' \
+       && printf '%s' "$cola" | grep -qE 'page fault on execute access to 0+ at address 0+|winedbg: Internal crash at 0+'; then
+        printf '%s' "Esto NO es un fallo del juego: es Wine colgandose al leer el modo
+de pantalla, y por eso a veces arranca y a veces no.
+
+Lo que dice el registro: explorer.exe -el escritorio de Wine- pide
+el modo de la pantalla, el driver de X11 no se lo da, y acaba
+saltando por un puntero nulo. El juego ni llega a arrancar.
+
+Depende de si la pantalla tiene modos legibles justo en ese
+momento, asi que es una carrera: el mismo juego carga o no sin
+cambiar nada.
+
+QUE PROBAR, en este orden:
+
+  1. Volver a lanzarlo. Al ser una carrera, muchas veces entra a
+     la segunda.
+  2. Ajustes del juego -> Runner -> probar OTRO runner. El cuelgue
+     esta en el driver de X11 del runner, no en WProton ni en el
+     juego, y los runners mas nuevos lo llevan arreglado."
+        return 0
+    fi
+
     # cuando el programa es .NET puro y no encuentra mscoree. Es mas fiable
     # que el codigo de salida y va primero.
     # HACE FALTA UN ERROR DE VERDAD, NO NUESTRA PROPIA CONFIGURACION.
@@ -43255,6 +43443,479 @@ keys_ocultar_mando_decidir() {
     return 0
 }
 
+# ======================= MONTAJE DEL NUCLEO (por juego) =======================
+#
+# QUE ES. Una segunda forma de montar un .wsquashfs: SquashFS + OverlayFS del
+# propio kernel, en vez de squashfuse + fuse-overlayfs. No sustituye a nada:
+# FUSE sigue siendo lo normal y esto se activa juego por juego en sus ajustes.
+#
+# DE DONDE SALE. Lo trajo un tester a partir del Final Fantasy VII con los mods
+# Satsuki/Chaos/ChiBi, que en .wsquashfs tardaba una eternidad en las
+# cinematicas y solo se podia jugar descomprimido en carpeta. Fue a ver como lo
+# hacia Batocera, y acerto.
+#
+# POR QUE ES MAS RAPIDO -que es la pregunta que Dani hizo tres veces y que las
+# medidas no habian contestado-:
+#
+#   Con FUSE, cada lectura sale del kernel a un proceso de usuario
+#   (squashfuse), vuelve, y pasa otra vez por fuse-overlayfs. Dos saltos de
+#   frontera por bloque. Y lo descomprimido NO queda en la cache de paginas
+#   del kernel: no se comparte, no se reutiliza y no hay lectura adelantada a
+#   lo largo del fichero.
+#
+#   Con SquashFS del kernel, los bloques descomprimidos caen en la cache
+#   normal del sistema y el readahead funciona.
+#
+# Encaja con lo que medimos en los registros de Dani: 321 veces mas
+# operaciones por el montaje que por la sonda, y menos de 1 KiB por operacion.
+# El cuello era CUANTAS VECES SE CRUZA LA FRONTERA, no descomprimir.
+#
+# COMO SE CONSIGUE SIN sudo. Montar squashfs necesita un dispositivo de bucle
+# y privilegios, asi que se le pide a UDisks -que es a lo que polkit da permiso
+# en una sesion local- y el OverlayFS se monta dentro de un namespace de
+# usuario. Si UDisks no contesta, o falta cualquier pieza, se devuelve 75 y se
+# vuelve a FUSE: el usuario no se queda sin jugar.
+#
+# LO QUE NO SE PUDO DEJAR COMO ESTABA: ver las dos notas largas de dentro
+# -sembrado de carpetas y ficheros de la carpeta del juego-. El tester tenia
+# ahi la ruta del FF7 escrita a mano; la causa es general y el arreglo tambien.
+# =============================================================================
+
+nucleo_pedido_para() {
+    # ¿ESTE JUEGO PIDE EL MONTAJE DEL NUCLEO? $1 = imagen, $2 = identificador.
+    #
+    # Va aparte y no en linea dentro de launch_game por una razon: asi hay un
+    # solo sitio donde se decide, y los tests pueden preguntarselo sin montar
+    # nada. La respuesta es NO salvo que el perfil de ese juego diga que si.
+    local img="$1" gid="$2" minusculas
+    # SOLO .wsquashfs. Una carpeta no se monta, y una imagen de otro tipo
+    # -.squashfs de Batocera, .dwarfs, .wtgz- no pasa por este camino: dwarfs
+    # no es squashfs y el .wtgz no es ni una imagen de bloques.
+    minusculas="$(printf '%s' "$img" | tr 'A-Z' 'a-z')"
+    case "$minusculas" in *.wsquashfs) ;; *) return 1 ;; esac
+    [ -f "$img" ] || return 1
+    # La puerta de pruebas, para los tests y para el modo desarrollo. No hay
+    # opcion en los menus a proposito.
+    [ "${WP_NUCLEO_PRUEBA:-0}" = 1 ] && return 0
+    # Y EL PERFIL DEL JUEGO, que es lo que de verdad manda. Se mira primero que
+    # la linea EXISTA en el fichero: un perfil viejo sin el campo no tiene por
+    # que pagar una llamada a perfil_py.
+    [ -n "${PROFILE_DIR:-}" ] || return 1
+    grep -q '^MONTAJE_NUCLEO=' "$PROFILE_DIR/$gid.conf" 2>/dev/null || return 1
+    [ "$(perfil_py ver "$PROFILE_DIR" "$gid" MONTAJE_NUCLEO 2>/dev/null)" = 1 ]
+}
+
+nucleo_recoger_work() {
+    python3 - "$1" <<'WP_WORK'
+import os, stat, sys
+path = sys.argv[1]
+def mount_id(fd):
+    with open("/proc/self/fdinfo/%d" % fd) as info:
+        return next(line for line in info if line.startswith("mnt_id:"))
+def erase(parent, name, mount):
+    fd = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        if mount_id(fd) != mount:
+            raise RuntimeError("montaje distinto en el directorio técnico")
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            if os.fstat(fd).st_uid != os.getuid():
+                raise RuntimeError("directorio técnico de otro propietario")
+            pinned = "/proc/self/fd/%d" % fd
+            os.chmod(pinned, 0o700)
+            for item in os.listdir(pinned):
+                erase(fd, item, mount)
+            os.rmdir(name, dir_fd=parent)
+        else:
+            os.unlink(name, dir_fd=parent)
+    finally:
+        os.close(fd)
+if not os.path.lexists(path):
+    sys.exit(0)
+parent = os.open(os.path.dirname(path), os.O_DIRECTORY | os.O_NOFOLLOW)
+root = os.open(os.path.basename(path), os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+if mount_id(parent) != mount_id(root) or set(os.listdir(root)) - {"work"}:
+    sys.exit("Contenido desconocido en el directorio técnico: " + path)
+if "work" in os.listdir(root):
+    erase(root, "work", mount_id(root))
+os.rmdir(os.path.basename(path), dir_fd=parent)
+WP_WORK
+}
+
+nucleo_partida() (
+    # Variante experimental: UDisks crea un loop temporal de solo lectura.
+    # El padre mantiene la referencia hasta que finaliza el WProton hijo.
+    local img="$1" gid="$2" modo="$3" cmd dev="" inferior="" respuesta="" rc=0
+    local datos="$WS_DIR/overlays-nucleo/$gid" anterior="$WS_DIR/nucleo/$gid"
+    local clave sesion="" trabajo="" etapa="" origen="" i WP_NUCLEO_ESTADO=""
+    [[ -n "$gid" && "$gid" != . && "$gid" != .. && "$gid" != */* ]] || return 1
+    umask 077
+    for cmd in udisksctl unshare setpriv python3 flock findmnt sha256sum; do
+        command -v "$cmd" >/dev/null || { echo "Falta $cmd"; return 75; }
+    done
+    mkdir -p -- "$datos" "$MOUNT_BASE" || return 1
+    exec 8<"$img" 9<"$datos" || return 1
+    flock -n 8 && flock -n 9 || { echo "El juego o su perfil están en uso"; return 1; }
+    clave=$(printf '%s' "$gid" | sha256sum) || return 1
+    sesion="$MOUNT_BASE/.native-${clave%% *}"
+    local pool="$WS_DIR/overlays-nucleo/.trabajos/${clave%% *}" job="" seq=""
+    mkdir -p -- "$pool" || return 1
+    [[ "$(findmnt -nro ID -T "$pool")" == "$(findmnt -nro ID -T "$datos")" ]] || return 75
+
+    # La desaparición del proceso hijo no prueba que otros procesos o namespaces
+    # hayan soltado la vista. Un overlay conserva una referencia a su lower y
+    # éste mantiene el dispositivo loop vivo hasta la última referencia.
+    soltar_loop() {
+        local dispositivo="$1" numero="$2" bloque="/sys/class/block/${1##*/}" fichero="" n
+        [[ "$dispositivo" =~ ^/dev/loop[0-9]+$ && "$numero" =~ ^[0-9]+$ ]] || return 1
+        [[ -d /sys/class/block ]] || return 1
+        [[ -e "$bloque/loop/backing_file" ]] || return 0
+        local actual
+        actual=$(cat "$bloque/diskseq") || return 1
+        if [[ "$actual" != "$numero" ]]; then
+            # Ante un número distinto y la misma imagen, no tocar un loop
+            # reutilizado ni presuponer que se ha liberado la sesión.
+            IFS= read -r fichero < "$bloque/loop/backing_file" || return 1
+            [[ ! "$fichero" -ef "$img" ]]
+            return $?
+        fi
+        IFS= read -r fichero < "$bloque/loop/backing_file" || return 1
+        [[ "$fichero" -ef "$img" ]] || return 1
+        if findmnt -rn -S "$dispositivo" >/dev/null; then
+            udisksctl unmount -b "$dispositivo" --no-user-interaction || return 1
+        fi
+        if [[ -e "$bloque/loop/backing_file" && "$(cat "$bloque/diskseq")" == "$numero" ]]; then
+            udisksctl loop-delete -b "$dispositivo" --no-user-interaction || {
+                [[ ! -e "$bloque/loop/backing_file" ]] || return 1
+            }
+        fi
+        for n in {1..40}; do
+            [[ ! -e "$bloque/loop/backing_file" ]] && return 0
+            actual=$(cat "$bloque/diskseq") || return 1
+            if [[ "$actual" != "$numero" ]]; then
+                IFS= read -r fichero < "$bloque/loop/backing_file" || continue
+                [[ ! "$fichero" -ef "$img" ]] && return 0
+            fi
+            sleep 0.1
+        done
+        return 1
+    }
+    recoger_job() {
+        local j="$1" dispositivo numero
+        [[ -d "$j" && ! -L "$j" ]] || return 1
+        if [[ -e "$j/loop" ]]; then
+            read -r dispositivo numero < "$j/loop" || return 1
+            soltar_loop "$dispositivo" "$numero" || return 1
+        elif [[ -d "$j/workdir/work" ]]; then
+            return 1
+        fi
+        nucleo_recoger_work "$j/workdir" || return 1
+        rm -f -- "$j/loop" "$j/fase" && rmdir -- "$j"
+    }
+    local antiguo
+    for antiguo in "$pool"/sesion.????????; do
+        [[ -d "$antiguo" ]] || continue
+        recoger_job "$antiguo" || { echo "Sesión pendiente u ocupada: $antiguo"; return 1; }
+    done
+    # Las revisiones antiguas no guardaban la identidad del loop. Sólo sanear
+    # sus dos patrones conocidos cuando el núcleo no tenga ningún loop asociado.
+    if [[ -d /sys/class/block ]] && ! compgen -G '/sys/class/block/loop*/loop/backing_file' >/dev/null; then
+        for antiguo in "$datos"/.trabajo.???????? "$datos/trabajo"; do
+            [[ -d "$antiguo" && ! -L "$antiguo" ]] || continue
+            nucleo_recoger_work "$antiguo" || return 1
+        done
+    fi
+    nucleo_limpieza() {
+        local resultado=$? fallo=0
+        trap - EXIT
+        if [[ -n "$job" ]]; then
+            if [[ -n "$dev" && ! -s "$job/loop" ]]; then
+                echo "Identidad del loop incompleta: $dev"; fallo=1
+            else
+                recoger_job "$job" || fallo=1
+            fi
+        fi
+        [[ -z "$etapa" ]] || rm -rf -- "$etapa" || fallo=1
+        rmdir -- "$sesion/upper" "$sesion" || fallo=1
+        if (( ! fallo )); then rmdir -- "$pool" 2>/dev/null || :; fi
+        if (( fallo )); then echo "Recogida incompleta: $sesion $trabajo $dev"; exit 1; fi
+        exit "$resultado"
+    }
+    mkdir -p -- "$sesion/upper" || return 1
+    mountpoint -q "$sesion/upper" && { echo "Montaje previo ocupado"; return 1; }
+    trap nucleo_limpieza EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    job=$(mktemp -d "$pool/sesion.XXXXXXXX") || return 1
+    trabajo="$job/workdir"
+    mkdir -- "$trabajo" || return 1
+    if [[ ! -d "$datos/escritura" ]]; then
+        origen="$anterior/escritura"
+        if [[ ! -d "$origen" ]]; then
+            origen="$OVERLAY_BASE/$gid/upper"
+            [[ -d "$origen" ]] || origen="$OVERLAY_BASE/$gid/data"
+            if [[ -d "$origen" ]]; then
+                python3 - "$origen" <<'CHECK_UPPER' || return 75
+import os, stat, sys
+def check(path):
+    attrs = os.listxattr(path, follow_symlinks=False)
+    if (os.path.basename(path).startswith(".wh.") or stat.S_ISCHR(os.lstat(path).st_mode)
+            or any("overlay" in key for key in attrs)):
+        sys.exit("La capa FUSE contiene marcas privadas; se conserva y se usa FUSE.")
+def fail(error):
+    raise error
+for root, dirs, files in os.walk(sys.argv[1], onerror=fail):
+    check(root)
+    for name in dirs + files:
+        check(os.path.join(root, name))
+CHECK_UPPER
+            fi
+        fi
+        etapa=$(mktemp -d "$datos/.inicio.XXXXXXXX") || return 1
+        if [[ -d "$origen" ]]; then
+            echo "Montaje núcleo: estado inicial copiado de $origen"
+            cp -a --reflink=auto -- "$origen/." "$etapa/" || return 1
+        fi
+    fi
+    echo "Montaje núcleo: preparando loop SquashFS temporal de solo lectura"
+    respuesta=$(LC_ALL=C udisksctl loop-setup --read-only --file "$img" --no-user-interaction) || { echo "Montaje núcleo: FALLO loop-setup (udisksctl)"; return 75; }
+    [[ "$respuesta" =~ (/dev/loop[0-9]+)\.?$ ]] || {
+        echo "Montaje núcleo: respuesta UDisks no reconocida: $respuesta"; return 75;
+    }
+    dev="${BASH_REMATCH[1]}"
+    # Verificación contra el backing_file para no tocar un loop ajeno.
+    local backing="/sys/class/block/${dev##*/}/loop/backing_file"
+    [[ -r "$backing" ]] || { echo "Montaje núcleo: no se puede verificar $dev"; return 75; }
+    local fichero
+    IFS= read -r fichero < "$backing"
+    [[ "$fichero" -ef "$img" ]] || { echo "Montaje núcleo: el loop no corresponde a la imagen"; return 75; }
+    seq=$(cat "/sys/class/block/${dev##*/}/diskseq") || return 1
+    printf '%s %s\n' "$dev" "$seq" > "$job/loop" || return 1
+    if ! findmnt -rn -S "$dev" -t squashfs >/dev/null 2>&1; then
+        udisksctl mount -b "$dev" -t squashfs -o ro --no-user-interaction || { echo "Montaje núcleo: FALLO mount squashfs (udisksctl)"; return 75; }
+    fi
+    inferior=$(findmnt -J -S "$dev" -t squashfs -o TARGET,OPTIONS | python3 -c '
+import json,sys
+for row in json.load(sys.stdin).get("filesystems",[]):
+    if "ro" in row.get("options","").split(","):
+        print(row["target"]); break
+') || return 75
+    [[ -n "$inferior" && -d "$inferior" ]] || {
+        echo "Montaje núcleo: no se encontró SquashFS de solo lectura"; return 75;
+    }
+    echo "Montaje núcleo: SquashFS activo en $inferior ($dev)"
+    # En un prefijo Batocera nuevo, los directorios de la imagen suelen ser
+    # de root y 0755. Un upper vacío permite crear en su raíz, pero no
+    # necesariamente en drive_c/windows o en users durante el primer wineboot.
+    if [[ -z "$etapa" && -d "$datos/escritura" && -z "$(ls -A -- "$datos/escritura")" ]]; then
+        etapa=$(mktemp -d "$datos/.inicio.XXXXXXXX") || return 1
+    fi
+    if [[ -z "$etapa" ]]; then
+        echo "Montaje núcleo: se reutiliza la escritura persistente"
+    fi
+    if [[ -n "$etapa" ]]; then
+        if [[ -z "$(ls -A -- "$etapa")" ]]; then
+            # SE SIEMBRA EL ARBOL DE CARPETAS ENTERO, NO SOLO EL DEL PREFIJO.
+            #
+            # POR QUE (20-11-2026, medido). Con el overlay del nucleo, la
+            # copia-arriba CONSERVA EL DUENO del fichero de abajo. Y si ese
+            # dueno es root -lo normal en una imagen empaquetada desde una
+            # carpeta de Batocera, o en cualquier imagen de terceros-, dentro
+            # del namespace root NO ESTA MAPEADO: el fichero aparece como uid
+            # 65534 y NO SE PUEDE ESCRIBIR. Comprobado aqui:
+            #
+            #   fichero de la imagen con dueno root     -> escritura DENEGADA
+            #   fichero de la imagen con dueno usuario  -> escritura ok
+            #
+            # Y no hay truco de capacidades que lo salve: CAP_DAC_OVERRIDE
+            # dentro del namespace tampoco deja escribirlo, porque el uid no
+            # esta mapeado. Probado tambien.
+            #
+            # ESO ES LO QUE FUSE HACIA SOLO Y EL NUCLEO NO: fuse-overlayfs
+            # copia arriba EN ESPACIO DE USUARIO, como el usuario, asi que un
+            # fichero de root se copiaba como tuyo sin que nadie lo notara.
+            #
+            # La salida que no cuesta datos es sembrar las CARPETAS en la capa
+            # de escritura: una carpeta nuestra tapa la de root y dentro ya se
+            # puede crear -registros, partidas guardadas, configuraciones-. No
+            # se copia ni un byte de datos del juego, solo inodos de carpeta.
+            #
+            # El tester lo hacia solo para drive_c y dosdevices de un prefijo
+            # empaquetado. Se hace para TODO el arbol porque el problema no es
+            # del prefijo: es de cualquier carpeta de la imagen donde el juego
+            # quiera escribir.
+            python3 - "$inferior" "$etapa" <<'SEMBRAR_CARPETAS' || return 1
+import os, shutil, stat, sys, time
+from pathlib import Path
+base, dest = map(Path, sys.argv[1:])
+def fail(error):
+    raise error
+t0 = time.monotonic()
+hechas = 0
+for root, dirs, _ in os.walk(base, followlinks=False, onerror=fail):
+    # No se sigue un enlace a otra carpeta: se ve desde la capa de abajo y
+    # seguirlo sembraria arboles que no son de la imagen.
+    dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+    rel = Path(root).relative_to(base)
+    if str(rel) == ".":
+        continue
+    (dest / rel).mkdir(mode=0o700, exist_ok=True)
+    hechas += 1
+# Los registros del prefijo de Wine SI se copian: wineboot los reescribe.
+for name in ("system.reg", "user.reg", "userdef.reg"):
+    src = base / name
+    if src.exists() and stat.S_ISREG(src.lstat().st_mode):
+        shutil.copyfile(src, dest / name)
+print("Montaje nucleo: %d carpetas sembradas para escritura en %.1f s"
+      % (hechas, time.monotonic() - t0), flush=True)
+SEMBRAR_CARPETAS
+        fi
+        # rename reemplaza exclusivamente un directorio vacío o inexistente.
+        mv -T -- "$etapa" "$datos/escritura" || return 1
+        etapa=""
+    fi
+    export WP_NUCLEO_VISTA="$sesion/upper" WP_NUCLEO_BASE_RO="$inferior"
+    WP_NUCLEO_ESTADO="$job/fase"
+    export WP_NUCLEO_ESTADO
+    echo "Montaje núcleo: preparando OverlayFS y prefijo en $WP_NUCLEO_VISTA"
+    unshare --fork --user --map-current-user --mount --propagation private --keep-caps \
+        python3 -c '
+import ctypes, os, sys, tempfile
+lower, session, data, script, image, mode, work = sys.argv[1:]
+# unshare --fork conserva el bloqueo hasta que el hijo termina.
+os.close(9)
+upper = os.path.join(data, "escritura")
+view = os.path.join(session, "upper")
+# Descriptores de directorio para nombres con comas, dos puntos o barras inversas.
+fds = [os.open(p, os.O_DIRECTORY | os.O_RDONLY) for p in (lower, upper, work)]
+options = os.fsencode("userxattr,lowerdir=/proc/self/fd/%d,upperdir=/proc/self/fd/%d,workdir=/proc/self/fd/%d" % tuple(fds))
+relative_view = view
+lib = ctypes.CDLL(None, use_errno=True)
+if lib.mount(b"overlay", os.fsencode(relative_view), b"overlay", ctypes.c_ulong(2|4), options):
+    sys.exit("Montaje núcleo: OverlayFS rechazado: " + os.strerror(ctypes.get_errno()))
+for fd in fds:
+    os.close(fd)
+# Comprobar acceso como el runner. CAP_DAC_OVERRIDE del montador podría
+# escribir un fichero 0444 que Wine no podrá abrir después del exec.
+header = (ctypes.c_uint32 * 2)(0x20080522, 0)
+caps = (ctypes.c_uint32 * 6)()
+if lib.capset(ctypes.byref(header), ctypes.byref(caps)):
+    sys.exit("No se pudieron soltar las capacidades de montaje: " + os.strerror(ctypes.get_errno()))
+print("Montaje núcleo: OverlayFS activo", flush=True)
+try:
+    with tempfile.NamedTemporaryFile(dir=view, prefix=".wp-check-"):
+        pass
+except OSError as exc:
+    sys.exit("Montaje núcleo: vista sin escritura: " + str(exc))
+# Preparar archivos visibles que deben poder abrirse para escritura.
+# No modificar directamente un upper activo. Operar siempre sobre la vista.
+from pathlib import Path
+import shutil, stat
+root = Path(view)
+upper_root = Path(upper)
+repaired_windows = False
+def prepare_file(path):
+    rel = path.relative_to(root)
+    if path.parent.resolve() != path.parent or path.is_symlink() or not path.is_file():
+        return
+    if os.path.lexists(upper_root / rel):
+        if not os.access(path, os.W_OK):
+            raise PermissionError("Archivo persistente sin escritura: " + str(path))
+        return
+    # Probar la operación que necesita Wine, sin truncar ni cambiar el contenido.
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        import errno
+        if exc.errno not in (errno.EACCES, errno.EPERM, errno.EOVERFLOW, errno.EROFS):
+            raise
+    else:
+        os.close(fd)
+        return
+    old = path.stat()
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".wp-copia-", delete=False) as out:
+        tmp = out.name
+    try:
+        shutil.copyfile(path, tmp)
+        os.chmod(tmp, stat.S_IMODE(old.st_mode) & 0o777 | 0o600)
+        os.utime(tmp, ns=(old.st_atime_ns, old.st_mtime_ns))
+        os.replace(tmp, path)
+        return True
+    finally:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+# Destinos de wineboot que el registro identifica con ERROR_ACCESS_DENIED.
+win = root / "drive_c/windows"
+for sub, pattern in (("system32", "*.nls"), ("globalization/sorting", "*.nls"),
+                     ("inf", "*.inf"), ("system32/winmetadata", "*.winmd"),
+                     ("system32/spool/drivers/color", "*.icm"), ("system32/drivers/etc", "*")):
+    directory = win / sub
+    if directory.resolve() == directory and directory.is_dir():
+        for path in directory.glob(pattern):
+            if prepare_file(path):
+                repaired_windows = True
+if repaired_windows:
+    # Un intento anterior pudo dejar esta marca después de que wineboot
+    # registrase ERROR_ACCESS_DENIED. Dejar actuar al preparador oficial.
+    ready = root / ".wp_bundled_ready"
+    if ready.is_file() and not ready.is_symlink():
+        ready.unlink()
+    print("Montaje núcleo: archivos de Windows preparados para wineboot", flush=True)
+# Y AHORA LOS FICHEROS QUE EL JUEGO REESCRIBE EN SU PROPIA CARPETA.
+#
+# AQUI EL TESTER TENIA LA RUTA DEL FINAL FANTASY VII ESCRITA A MANO, con la
+# lista de sus ficheros (ffnx.log, tf2d.p, tg3d.p...). Funcionaba, pero el
+# mismo decia que la idea no es arreglar solo ese juego, y con un nombre de
+# juego dentro no se arregla ningun otro.
+#
+# La regla general, sin nombres: la carpeta del juego es la que dice su
+# autorun.cmd -que es quien manda para encontrar el ejecutable- y en ELLA se
+# preparan los ficheros normales que la imagen marco como escribibles por su
+# dueno. Son los registros y las cacheras que un juego escribe al lado de su
+# .exe, que es justo lo que le pasaba al FF7.
+#
+# No se baja recursivamente a proposito: los datos del juego tambien son 0644
+# y copiarlos seria descomprimir el juego entero, que es exactamente lo que
+# este montaje viene a evitar.
+autorun = root / "autorun.cmd"
+carpeta_juego = None
+if autorun.is_file() and not autorun.is_symlink():
+    relativo = ""
+    for linea in autorun.read_text(errors="replace").splitlines():
+        if linea.startswith("DIR="):
+            relativo = linea[4:].strip().strip(chr(34)).replace(chr(92), "/")
+    candidato = (root / relativo) if relativo else root
+    if candidato.is_dir() and candidato.resolve() == candidato:
+        carpeta_juego = candidato
+if carpeta_juego is not None:
+    preparados = 0
+    for path in sorted(carpeta_juego.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if not path.lstat().st_mode & stat.S_IWUSR:
+            continue
+        if prepare_file(path):
+            preparados += 1
+    print("Montaje nucleo: %d ficheros preparados en la carpeta del juego (%s)"
+          % (preparados, carpeta_juego.name), flush=True)
+    with tempfile.NamedTemporaryFile(dir=carpeta_juego, prefix=".wp-escritura-"):
+        pass
+os.environ["WP_NUCLEO_VISTA"] = view
+os.chdir(os.path.dirname(script))
+print("Montaje núcleo: iniciando WProton para juego y prefijo", flush=True)
+with open(os.environ["WP_NUCLEO_ESTADO"], "w") as marker:
+    marker.write("preparacion\n")
+os.execvp("setpriv", ["setpriv", "--inh-caps=-all", "--ambient-caps=-all", "--", "bash", script, "--partida-nucleo", image, mode])
+' "$inferior" "$sesion" "$datos" "$SELF" "$img" "$modo" "$trabajo" 8<&- || rc=$?
+    if [[ -s "$WP_NUCLEO_ESTADO" ]]; then
+        echo "Montaje núcleo: fase=$(cat "$WP_NUCLEO_ESTADO") estado=$rc"
+        rm -- "$WP_NUCLEO_ESTADO" || return 1
+        # El estado 75 se reserva para un fallo previo a la preparación.
+        (( rc != 75 )) || rc=1
+        return "$rc"
+    fi
+    return 75
+)
+
 launch_game() {
     local squash="$1" mode="${2:-auto}"
     local gid; gid="$(game_id "$squash")"
@@ -43381,7 +44042,46 @@ Configurar juego -> Comprobar integridad"
         fi
     fi
 
-    mount_game "$squash" "$gid"
+    # DOS FORMAS DE MONTAR, Y FUSE ES LA NORMAL.
+    #
+    # El orden de las tres ramas importa:
+    #
+    # 1. Si ya venimos DENTRO del namespace del nucleo -WProton se ha vuelto a
+    #    llamar a si mismo con --partida-nucleo-, la vista ya esta montada y
+    #    aqui solo hay que usarla.
+    # 2. Si el perfil de ESTE juego pide el montaje del nucleo, se intenta. El
+    #    75 esta reservado para "no se pudo ni empezar": solo en ese caso se
+    #    cae a FUSE. Cualquier otro codigo es el resultado de la partida.
+    # 3. Y si no, FUSE, como siempre y para todos los juegos.
+    local vista_nucleo="${WP_NUCLEO_VISTA:-}"
+    if [ "${WP_NUCLEO_IMAGEN:-}" = "$abs_squash" ]; then
+        if [ "$(findmnt -rn -M "$vista_nucleo" -o FSTYPE 2>/dev/null)" != overlay ]; then
+            ui_error "La carga rapida de este juego ya no esta disponible."
+            partida_fin
+            return 1
+        fi
+        MOUNT_POINT="$vista_nucleo"
+        MOUNT_RO="${WP_NUCLEO_BASE_RO:?}"
+        MOUNT_RW=""
+        MOUNT_OK=0
+        say "[+] Carga rapida activada para $gid."
+    elif nucleo_pedido_para "$abs_squash" "$gid"; then
+        local estado_nucleo=0
+        menu_server_stop
+        nucleo_partida "$abs_squash" "$gid" "$mode" >>"$LOG_FILE" 2>&1 || estado_nucleo=$?
+        if [ "$estado_nucleo" != 75 ]; then
+            # El menu vuelve ANTES de bajar el blindaje, y partida_fin pegado
+            # al return: asi lo exige -con razon- la auditoria, que no se fia
+            # de un partida_fin a tres lineas de distancia.
+            if [ "${WP_HAY_MENU:-0}" = 1 ]; then menu_server_start || canvas_start; fi
+            partida_fin; return "$estado_nucleo"
+        fi
+        log "Montaje del nucleo fallido (estado $estado_nucleo): se vuelve a FUSE; mirar las fases de UDisks y OverlayFS de arriba" WARN
+        say "[!] La carga rapida no se puede usar en este sistema; se carga de la forma normal."
+        mount_game "$squash" "$gid"
+    else
+        mount_game "$squash" "$gid"
+    fi
     local merged="$MOUNT_POINT"
 
     BUNDLED_PREFIX_DIR=""
@@ -43449,11 +44149,20 @@ Configurar juego -> Comprobar integridad"
         #
         # Si el perfil trae un ejecutable y existe, manda ese -el usuario
         # puede haber elegido otro script-; si no, el que se detecto.
-        if [ -n "$EXE_OVERRIDE" ] && [ -f "$merged/$EXE_OVERRIDE" ]; then
-            EXE_PATH="$merged/$EXE_OVERRIDE"
-        else
-            EXE_PATH="$WP_NATIVO"
-        fi
+        #
+        # Y SE RESUELVE CON LA MISMA FUNCION QUE LAS CARPETAS (19-11-2026).
+        #
+        # Lo que habia aqui escrito a mano hacia lo mismo en el caso bueno,
+        # pero se callaba en los dos casos que importan: no decia cual de los
+        # dos se estaba usando -asi que el registro de un tester no servia para
+        # nada- y, con un EXE_OVERRIDE que no apareciera, se caia al detectado
+        # SIN AVISAR. Eso es exactamente la averia que se viene a arreglar:
+        # jugar a algo distinto de lo que se eligio y que nadie lo diga.
+        #
+        # La segunda ancla de exe_perfil_ancla no estorba en una imagen -su
+        # raiz es $merged y la carpeta del lanzador esta dentro-, asi que el
+        # unico cambio real es que ahora habla.
+        EXE_PATH="$(exe_elegido_nativo "$WP_NATIVO" "$merged")"
         EXE_ARGS="${ARGS_OVERRIDE:-}"
     elif [ -n "$EXE_OVERRIDE" ] && [ -f "$merged/$EXE_OVERRIDE" ] && [ "$mode" = "auto" ]; then
         EXE_PATH="$merged/$EXE_OVERRIDE"; EXE_ARGS="$ARGS_OVERRIDE"
@@ -43964,14 +44673,41 @@ EOFRA
     # misma linea 234.000 veces. Por duracion no era un fallo, y el analizador
     # no entraba. Si una misma linea se repite miles de veces, algo va mal y
     # hay que mirarlo, dure lo que dure la partida.
+    # LA CUENTA SE SACA CON awk, NO RECORTANDO LA CADENA A MANO.
+    #
+    # EL FALLO (18-11-2026): se hacia "${_linea_rep%%[!0-9 ]*}" sobre la salida
+    # de "uniq -c", y eso PEGA la cuenta con los digitos del principio de la
+    # linea. Con esta entrada de Wine:
+    #
+    #      44 0178:err:x11settings:X11DRV_EnumDisplaySettingsEx Failed to...
+    #
+    # salia "440178" repeticiones. Y TODA linea de Wine empieza por el id de
+    # hilo en hexadecimal, asi que el fallo no era raro: era casi siempre, y
+    # con numeros enormes.
+    #
+    # Lo que costo: un registro con 62 lineas de ese error en total decia
+    # "repite la misma linea 440178 veces", y me pase un buen rato buscando
+    # una tormenta de 440.000 lineas que no existia. Un diagnostico que
+    # inventa un numero es peor que no tenerlo.
+    #
+    # Y encima el umbral: con 440178 >= 1000, el aviso saltaba con 44
+    # repeticiones. Ahora con 44 no salta, que es lo correcto.
     local _repes _linea_rep
     _linea_rep="$(tail -n 5000 "$LOG_FILE" 2>/dev/null \
         | grep -v 'menu_pygame\|gamemodeauto' \
         | sed 's/[0-9a-fx]\{6,\}/N/g' | sort | uniq -c | sort -rn | head -n1)"
-    _repes="${_linea_rep%%[!0-9 ]*}"; _repes="${_repes// /}"
+    # Y SIEMPRE UN NUMERO: con el registro vacio, awk no imprime nada y
+    # _repes se queda en blanco. Funciona igual porque mas abajo va con
+    # ${_repes:-0}, pero dejar una variable que a veces es numero y a veces
+    # cadena vacia es dejar una trampa puesta para el siguiente.
+    _repes="$(printf '%s' "$_linea_rep" | awk '{print $1+0}')"
+    [ -n "$_repes" ] || _repes=0
     if [ "${_repes:-0}" -ge 1000 ] && [ $dur -ge 12 ]; then
-        say "AVISO: el registro del juego repite la misma linea $_repes veces:"
-        say "       ${_linea_rep#*[0-9] }"
+        # SE DICE LA VENTANA: se miran las ultimas 5000 lineas, asi que "N
+        # veces" sin mas suena a total y no lo es. Y un numero por encima de
+        # 5000 es imposible: si aparece, el contador esta roto otra vez.
+        say "AVISO: en las ultimas 5000 lineas del registro, una se repite $_repes veces:"
+        say "       $(printf '%s' "$_linea_rep" | sed 's/^ *[0-9]* //')"
         # ESTO NO ABRE NINGUN DIALOGO: VA AL REGISTRO Y YA.
         #
         # POR QUE SE QUITO EL AVISO EN PANTALLA
@@ -44473,13 +45209,9 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Arreglado: un juego con prefijo incluido que fallaba al reabrirlo.
+  Nuevo: carga rapida, juego por juego, para los que tardan en arrancar.
 
-  Nuevo: abrir el explorador de Windows del prefijo del juego.
-
-  Arreglado: las caratulas ya llenan la pantalla en monitores grandes.
-
-  Arreglado: juegos de TeknoParrot que no arrancaban en .wsquashfs.
+  Arreglado: en los juegos de Linux, arranca el lanzador que eliges.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -56865,6 +57597,29 @@ EOFD
 # Y LA PALANCA GRANDE YA ESTA ECHADA: el bloque es de 1 MB, el maximo que
 # admite el formato, contra los 128 KB de por defecto. Ahi es donde se gana
 # ratio de verdad.
+pack_duenos_squashfs() {
+    # LOS DUEÑOS QUE SE GUARDAN DENTRO DE LA IMAGEN.
+    #
+    # POR QUE (20-11-2026, medido). Con el montaje del nucleo, la copia-arriba
+    # de OverlayFS CONSERVA EL DUEÑO del fichero de abajo. Si ese dueño es
+    # root -lo normal al empaquetar una carpeta de Batocera, o cualquier
+    # carpeta que se copio con sudo-, dentro del namespace de usuario root NO
+    # ESTA MAPEADO: el fichero aparece como 65534 y el juego NO PUEDE
+    # ESCRIBIRLO. Medido aqui, y sin arreglo posible por capacidades:
+    # CAP_DAC_OVERRIDE dentro del namespace tampoco abre un uid sin mapear.
+    #
+    # Guardando los ficheros a nombre de quien empaqueta, el problema no llega
+    # a existir en las imagenes que haga WProton de ahora en adelante.
+    #
+    # NO CAMBIA NADA PARA FUSE NI PARA BATOCERA: fuse-overlayfs copia arriba
+    # como el usuario -por eso con FUSE esto nunca dio la cara- y Batocera
+    # monta como root, que lo ve todo. O sea que es gratis en los dos.
+    #
+    # Las imagenes YA EMPAQUETADAS no se tocan: para esas, el montaje del
+    # nucleo siembra las carpetas en la capa de escritura (ver nucleo_partida).
+    printf -- '-force-uid %s -force-gid %s' "$(id -u)" "$(id -g)"
+}
+
 pack_bloque_squashfs() {
     # EL TAMAÑO DE BLOQUE CON EL QUE SE EMPAQUETA.
     #
@@ -57352,6 +58107,7 @@ $src"
         run_con_porcentaje "Empaquetando '$name' a wsquashfs (zstd)..." \
                 mksquashfs "$src" "$out" -comp zstd -b "$(pack_bloque_squashfs)" -noappend -no-xattrs \
                 -Xcompression-level "$(pack_nivel_zstd)" \
+                $(pack_duenos_squashfs) \
                 -no-duplicates -percentage || _rc_ms=$?
         if [ "$_rc_ms" != 0 ]; then
             sleep 1
@@ -59913,13 +60669,19 @@ launch_loose_exe() {
     # que sale del asistente al empaquetar, y se le estaba pasando el run.sh a
     # Proton: "Executable is a unix path, launching with umu.exe". El juego no
     # arrancaba y el registro no decia que fuera nativo.
+    # SE LE PASA EL IDENTIFICADOR Y LA RAIZ, que aqui los tenemos buenos.
+    #
+    # Sin esto, lanzar_nativo_suelto se inventa el identificador desde la
+    # carpeta del ejecutable SUGERIDO, carga otro perfil -vacio- y la eleccion
+    # del usuario no aparece por ningun lado. Es lo que hacia que "sigue
+    # fallando la seleccion" despues de arreglarla.
     case "$exe" in
         *.sh|*.AppImage|*.appimage)
-            lanzar_nativo_suelto "$exe"
+            lanzar_nativo_suelto "$exe" "$gid" "${raiz_juego:-}"
             partida_fin; return $? ;;
     esac
     if juego_es_nativo "$(dirname "$exe")" >/dev/null 2>&1; then
-        lanzar_nativo_suelto "$exe"
+        lanzar_nativo_suelto "$exe" "$gid" "${raiz_juego:-}"
         partida_fin; return $?
     fi
     # EL PERFIL SE LLAMA COMO LA CARPETA, NO COMO EL LANZADOR.
@@ -60129,17 +60891,11 @@ launch_loose_exe() {
         # Al arreglar el primer caso se rompio el segundo: con la raiz como
         # unica ancla, "VORON.exe" se buscaba en "<raiz>/VORON.exe" y salia
         # "El ejecutable elegido para este juego no esta". Se prueban las dos.
-        local _anclas="" _a
-        [ -n "${raiz_juego:-}" ] && [ -d "${raiz_juego:-}" ] && _anclas="$raiz_juego"
-        _anclas="$_anclas
-$(dirname "$exe")"
-        _raiz_le=""
-        while IFS= read -r _a; do
-            [ -n "$_a" ] || continue
-            if [ -f "$_a/$EXE_OVERRIDE" ]; then _raiz_le="$_a"; break; fi
-        done <<EOFANC
-$_anclas
-EOFANC
+        # LA MISMA REGLA QUE EL CAMINO DE LOS JUEGOS DE LINUX, de una sola
+        # pieza. Esto era un bucle escrito aqui a mano; ahora las dos ramas
+        # preguntan a exe_perfil_ancla, que es lo unico que impide que una se
+        # quede atras cuando se arregle la otra.
+        _raiz_le="$(exe_perfil_ancla "${raiz_juego:-}" "$(dirname "$exe")" "$EXE_OVERRIDE")"
         [ -n "$_raiz_le" ] || _raiz_le="${raiz_juego:-$(dirname "$exe")}"
         # SI NO ESTA DONDE DICE EL PERFIL, SE BUSCA, como en launch_game.
         #
@@ -64801,14 +65557,137 @@ lanzar_arcade_loader() {
     return $_rc
 }
 
+exe_perfil_ancla() {
+    # DONDE ESTA EL EJECUTABLE QUE DICE EL PERFIL. Imprime la carpeta desde la
+    # que la ruta del perfil resuelve, o nada si no esta en ninguna.
+    #
+    # $1 = raiz del juego (puede venir vacia)   $2 = carpeta del sugerido
+    # $3 = EXE_OVERRIDE (ruta relativa guardada en el perfil)
+    #
+    # POR QUE DOS ANCLAS Y EN ESTE ORDEN: EXE_OVERRIDE se guarda relativo a la
+    # carpeta del juego que se uso al configurarlo, y esa no siempre es la
+    # misma. Si se añadio la carpeta entera, es la raiz ("Game/RingGame.exe");
+    # si se añadio un ejecutable suelto, es SU carpeta ("VORON.exe"). Arreglar
+    # uno con una sola ancla rompia el otro, asi que se prueban las dos.
+    #
+    # ESTO ESTABA ESCRITO A MANO DENTRO DE launch_loose_exe. Se saca aqui para
+    # que el camino de los juegos de Linux use LA MISMA regla y no una copia
+    # que se quede atras, que es el fallo que mas veces ha dado este proyecto.
+    local raiz="${1:-}" dir_sug="${2:-}" ov="${3:-}" a
+    [ -n "$ov" ] || return 0
+    for a in "$raiz" "$dir_sug"; do
+        [ -n "$a" ] || continue
+        [ -d "$a" ] || continue
+        if [ -f "$a/$ov" ]; then printf '%s' "$a"; return 0; fi
+    done
+    return 0
+}
+
+exe_elegido_nativo() {
+    # QUE EJECUTABLE SE LANZA DE VERDAD en un juego de Linux: el que eligio el
+    # usuario si eligio, y el sugerido si no. Imprime la ruta a lanzar.
+    #
+    # $1 = sugerido (ruta completa)    $2 = raiz del juego
+    #
+    # EL PERFIL TIENE QUE ESTAR YA CARGADO al llamar aqui: esta funcion lee
+    # EXE_OVERRIDE de memoria, no lo va a buscar.
+    #
+    # POR QUE EXISTE (19-11-2026, cuarto intento con el mismo fallo):
+    #
+    # El tester lo dijo tres veces -«siempre carga el sugerido», «sigue
+    # fallando la seleccion», «al seleccionar el launcher me ha cargado el
+    # juego sin launcher»- y las tres veces se arreglo en lanzar_nativo_suelto.
+    # Las tres veces quedo bien arreglado ahi. Y las tres veces siguio
+    # fallando, porque UNA CARPETA CON UN JUEGO DE LINUX NO PASA POR
+    # lanzar_nativo_suelto: play_folder llama antes a lanzar_script_si_existe,
+    # que devuelve 0 y corta el camino. Ese es un CUARTO lanzador, y era el
+    # unico que no miraba la eleccion.
+    #
+    # Lo mas grave es que ahi el perfil SI se cargaba -con EXE_OVERRIDE dentro,
+    # a la vista- y se lanzaba el sugerido de todas formas. No faltaba el dato:
+    # faltaba leerlo.
+    #
+    # Asi que la regla se escribe UNA vez y la usan los dos. No es cosmetica:
+    # es el fallo que mas veces ha dado este proyecto -arreglar un camino y
+    # dejar el otro- y en esta funcion concreta ya ha pasado cuatro veces. Si
+    # mañana entra un quinto lanzador, que al menos tenga de donde copiar una
+    # linea en vez de una regla de veinte.
+    local sug="$1" raiz="${2:-}" _anc _eleg=""
+    if [ -z "${EXE_OVERRIDE:-}" ]; then
+        # SE APUNTA AUNQUE NO HAYA NADA QUE HACER.
+        #
+        # Callarse aqui es lo que me dejo sin poder leer el registro del
+        # tester: un registro donde la eleccion llego y era la misma se veia
+        # EXACTAMENTE IGUAL que uno donde no llego nada. Son dos averias
+        # distintas y la diferencia era justo lo que hacia falta saber.
+        log "nativo: el perfil no trae ejecutable elegido; se usa el sugerido ($(basename "$sug"))"
+        printf '%s' "$sug"
+        return 0
+    fi
+    _anc="$(exe_perfil_ancla "$raiz" "$(dirname "$sug")" "$EXE_OVERRIDE")"
+    if [ -n "$_anc" ]; then
+        _eleg="$_anc/$EXE_OVERRIDE"
+    elif [ -f "$EXE_OVERRIDE" ]; then
+        # El perfil guardo la ruta entera. Pasa si la escribio una version
+        # antigua o el usuario a mano.
+        _eleg="$EXE_OVERRIDE"
+    fi
+    if [ -z "$_eleg" ]; then
+        # NO SE ARRANCA OTRO EN SU LUGAR A LA CALLADA, y se dice por que.
+        #
+        # Arrancar el sugerido cuando el usuario eligio otro es exactamente el
+        # fallo que se viene a arreglar: se juega a algo distinto de lo que se
+        # pidio y nadie avisa. Pero aqui tampoco se aborta: un juego con el
+        # perfil apuntando a un fichero que ya no esta se quedaria sin jugar, y
+        # eso es peor. Se avisa alto y se sigue con el sugerido.
+        say "[!] AVISO: el ejecutable elegido no esta: $EXE_OVERRIDE"
+        say "    Se arranca el sugerido ($(basename "$sug")). Si no es el que"
+        say "    querias, eligelo otra vez en Ajustes del juego -> Ejecutable."
+        printf '%s' "$sug"
+        return 0
+    fi
+    if [ "$(readlink -f "$_eleg")" = "$(readlink -f "$sug")" ]; then
+        log "nativo: el elegido y el sugerido son el mismo ($EXE_OVERRIDE); no hay nada que cambiar"
+    else
+        say "[+] Ejecutable del perfil: $EXE_OVERRIDE"
+        say "    (en vez del sugerido, $(basename "$sug"))"
+    fi
+    printf '%s' "$_eleg"
+    return 0
+}
+
 lanzar_nativo_suelto() {
     # Lanza un juego de Linux elegido a mano (.sh o AppImage). $1 = fichero.
     #
     # Con su carpeta personal, como los empaquetados: asi lo que pruebes
     # suelto se comporta igual que cuando lo metas en un .wsquashfs.
-    local exe="$1" gid _raiz
-    _raiz="$(dirname "$(readlink -f "$exe")")"
-    gid="$(game_id "$_raiz")"
+    # EL IDENTIFICADOR Y LA RAIZ LOS DA QUIEN LLAMA, SI LOS TIENE.
+    #
+    # EL FALLO (18-11-2026, segundo intento): el tester dijo «sigue fallando
+    # la seleccion» despues de que ya se mirara EXE_OVERRIDE aqui. Y seguia
+    # fallando por esto.
+    #
+    # launch_loose_exe tiene el identificador BUENO -lo acaba de dejar en
+    # WP_GID_ACTUAL dos lineas antes del atajo-, con todas sus correcciones:
+    # manda el nombre de la CARPETA y no el del lanzador, y nunca se acepta
+    # una carpeta que sea una PIEZA del juego (Binary, Media, x64...). Y
+    # llamaba aqui SIN PASARLO.
+    #
+    # Asi que esta funcion se inventaba otro con game_id(dirname(readlink -f
+    # exe)), que es el basename pelado de la carpeta del SUGERIDO. Cuando los
+    # dos no coinciden -el lanzador en una subcarpeta, un enlace simbolico en
+    # medio, o cualquiera de los casos que esas correcciones existen para
+    # arreglar- load_profile cargaba OTRO perfil, vacio, con EXE_OVERRIDE
+    # vacio. Y entonces mirar EXE_OVERRIDE no sirve de nada: no hay nada que
+    # mirar. El arreglo de la tanda anterior era correcto y no se notaba.
+    #
+    # La raiz, por lo mismo: EXE_OVERRIDE se guarda RELATIVO A LA RAIZ DEL
+    # JUEGO -el menu lo recorta con "${sel#"$root"/}"-, asi que resolverlo
+    # contra la carpeta del sugerido falla en cuanto el sugerido esta en una
+    # subcarpeta.
+    local exe="$1" gid="${2:-}" _raiz="${3:-}"
+    [ -n "$_raiz" ] && [ -d "$_raiz" ] || _raiz="$(dirname "$(readlink -f "$exe")")"
+    [ -n "$gid" ] || gid="$(game_id "$_raiz")"
     # EL PERFIL SE CARGA ANTES DE TOCAR NADA.
     #
     # No es un detalle: al acabar la partida se llama a stats_record, que
@@ -64818,6 +65697,16 @@ lanzar_nativo_suelto() {
     # los ajustes del juego -runner, prefijo, mandos, librerias- y se
     # quedarian los valores de fabrica.
     load_profile "$gid" >/dev/null 2>&1 || true
+    # SE APUNTA CON QUE PERFIL SE TRABAJA, en el registro y no en pantalla.
+    #
+    # Sin esto no se puede leer un registro del tester: no hay forma de
+    # distinguir "la eleccion no llego" de "la eleccion llego y era la misma",
+    # y la averia es distinta en cada caso.
+    log "nativo: identificador = '$gid', raiz = '$_raiz'"
+    log "nativo: perfil = ${PROFILE_DIR:-?}/$gid.conf $([ -f "${PROFILE_DIR:-}/$gid.conf" ] && printf '(existe)' || printf '(NO EXISTE: la eleccion no puede llegar)')"
+    # Y AHORA SE HACE CASO A LO QUE DICE EL PERFIL, con LA MISMA regla que el
+    # resto de los lanzadores (ver exe_elegido_nativo).
+    exe="$(exe_elegido_nativo "$exe" "$_raiz")"
     # La carátula 4:3 del repositorio, como en los otros lanzadores.
     covers43_offer_for "$gid" || true
     say "[+] Juego de Linux: $(basename "$exe")"
@@ -64889,11 +65778,18 @@ lanzar_nativo_suelto() {
         ( home_portable_exportar "$h"
           pad_bridge_stop
           cd "$(dirname "$exe")" || exit 1
-          ejecutar_nativo "$exe" )
+          ejecutar_nativo "$exe" ${ARGS_OVERRIDE:-} )
     else
         say "AVISO: sin carpeta propia; el juego escribira en la tuya"
         pad_bridge_stop
-        ( cd "$(dirname "$exe")" || exit 1; ejecutar_nativo "$exe" )
+        # Y LOS ARGUMENTOS DEL PERFIL, QUE AQUI TAMPOCO SE PASABAN.
+        #
+        # launch_game -el camino de los .wsquashfs- hace
+        # EXE_ARGS="${ARGS_OVERRIDE:-}" para los juegos de Linux desde hace
+        # tiempo. Aqui no, asi que un juego de Linux en carpeta ignoraba los
+        # argumentos del perfil igual que ignoraba el ejecutable elegido: el
+        # mismo descuido, en el mismo sitio, el mismo dia.
+        ( cd "$(dirname "$exe")" || exit 1; ejecutar_nativo "$exe" ${ARGS_OVERRIDE:-} )
     fi
     # Se apunta la partida: cuantas veces, cuanto tiempo y cuando fue la
     # ultima. stats_record ignora por su cuenta las de menos de 20 s, que
@@ -64918,8 +65814,54 @@ lanzar_script_si_existe() {
     # partidas van ahi y no a la carpeta del usuario. Asi lo que pruebes
     # suelto se comporta igual que cuando lo empaquetes.
     local dir="$1" launcher
+    # EL PERFIL, LO PRIMERO DE TODO (19-11-2026). ANTES ESTABA 50 LINEAS MAS
+    # ABAJO Y ESO ERAN TRES AVERIAS A LA VEZ.
+    #
+    # 1) LA ELECCION DEL USUARIO NO SE MIRABA. Es el fallo que el tester ha
+    #    contado tres veces y que se arreglo tres veces en el lanzador de al
+    #    lado. Este, que es el que de verdad usan las carpetas con un juego de
+    #    Linux, lanzaba el sugerido y punto.
+    #
+    # 2) mando_virtual_del_juego LEE MANDO_VIRTUAL y lsfg_entorno LEE LSFG_*,
+    #    y las dos se llamaban ANTES de cargar el perfil. O sea que el tipo de
+    #    mando y el generador de fotogramas de ESTE juego no se aplicaban: se
+    #    aplicaba lo que hubiera quedado en memoria del juego anterior, o los
+    #    valores de fabrica. Nadie lo habia notado porque no da error: hace lo
+    #    que no toca, en silencio.
+    #
+    # 3) guardia_salida_start recibia el sugerido, asi que el vigilante
+    #    esperaba a un proceso que no era el del juego.
+    #
+    # 4) Y juego_es_nativo -que es QUIEN DECIDE si este juego se trata como de
+    #    Linux o como de Windows- LEE VERSION_JUEGO, el ajuste "Version del
+    #    juego" de los ajustes. Tambien se llamaba antes de cargar el perfil,
+    #    asi que en una carpeta ese ajuste no hacia nada: un juego que trae las
+    #    dos versiones se quedaba con la que decidiera la deteccion por su
+    #    cuenta, aunque el usuario hubiera pedido la otra.
+    #
+    # Las tres se arreglan con el mismo cambio: cargar el perfil y resolver el
+    # ejecutable ANTES de que nada los use. No se adelanta solo load_profile
+    # -el orden importa- sino tambien el reloj, que tiene que empezar antes.
+    local _st0; _st0="$(date +%s)"
+    local gid; gid="$(game_id "$dir")"
+    # No es un detalle de orden: al acabar la partida se llama a stats_record,
+    # que usa write_full_profile, y ESE ESCRIBE EL PERFIL ENTERO desde las
+    # variables que haya en memoria. Sin cargarlo antes, no es que el contador
+    # de partidas se pusiera a cero: es que se borrarian TODOS los ajustes del
+    # juego -runner, prefijo, mandos, librerias- y se quedarian los de fabrica.
+    load_profile "$gid" >/dev/null 2>&1 || true
+    # AHORA SI: con el perfil puesto, juego_es_nativo puede hacer caso a
+    # VERSION_JUEGO. Si dice que no es un juego de Linux se vuelve con 1 y
+    # play_folder sigue por el camino de Windows, como siempre.
     launcher="$(juego_es_nativo "$dir")" || return 1
     [ -n "$launcher" ] || return 1
+    # LAS DOS LINEAS DE REGISTRO VAN AQUI Y NO ANTES: por esta funcion pasan
+    # TAMBIEN las carpetas de Windows -se vuelve con 1 y sigue el otro camino-
+    # y apuntarlas como "nativo (carpeta)" seria mentir en el registro justo
+    # donde hace falta leerlo con cuidado.
+    log "nativo (carpeta): identificador = '$gid', raiz = '$dir'"
+    log "nativo (carpeta): perfil = ${PROFILE_DIR:-?}/$gid.conf $([ -f "${PROFILE_DIR:-}/$gid.conf" ] && printf '(existe)' || printf '(NO EXISTE: la eleccion no puede llegar)')"
+    launcher="$(exe_elegido_nativo "$launcher" "$dir")"
     say "[+] Juego de Linux: $(basename "$launcher")"
     # EL VIGILANTE DE SALIDA, TAMBIEN POR AQUI.
     #
@@ -64972,17 +65914,9 @@ lanzar_script_si_existe() {
     # ajustes. Ver la nota larga en lanzar_nativo_suelto.
     # Es el mismo olvido de siempre: estaba en los dos lanzadores grandes
     # y no en estos.
-    local _st0; _st0="$(date +%s)"
-    local gid; gid="$(game_id "$dir")"
-    # EL PERFIL SE CARGA ANTES DE TOCAR NADA.
     #
-    # No es un detalle: al acabar la partida se llama a stats_record, que
-    # usa write_full_profile, y ESE ESCRIBE EL PERFIL ENTERO desde las
-    # variables que haya en memoria. Sin cargarlo antes, no es que el
-    # contador de partidas se pusiera a cero: es que se borrarian TODOS
-    # los ajustes del juego -runner, prefijo, mandos, librerias- y se
-    # quedarian los valores de fabrica.
-    load_profile "$gid" >/dev/null 2>&1 || true
+    # El reloj, el identificador y la carga del perfil estaban AQUI y se han
+    # subido al principio de la funcion: ver la nota larga de alli.
     # La carátula 4:3 del repositorio, como en los otros lanzadores.
     covers43_offer_for "$gid" || true
     local h
@@ -64991,11 +65925,23 @@ lanzar_script_si_existe() {
         ( home_portable_exportar "$h"
           pad_bridge_stop
           cd "$(dirname "$launcher")" || exit 1
-          ejecutar_nativo "$launcher" )
+          # LOS ARGUMENTOS DEL PERFIL, QUE TAMPOCO LLEGABAN (19-11-2026).
+          #
+          # Tercera divergencia de la misma funcion, de la misma clase y
+          # encontrada a la vez que las otras dos: launch_game manda
+          # $EXE_ARGS y lanzar_nativo_suelto manda ${ARGS_OVERRIDE:-}; este
+          # camino, que es el que usan las carpetas con un juego de Linux, no
+          # mandaba nada. O sea que la fila "Argumentos" de los ajustes no
+          # hacia absolutamente nada en esos juegos.
+          #
+          # SIN COMILLAS a proposito, igual que en los otros dos: tienen que
+          # partirse en palabras. Con comillas, "-windowed -nosound" llegaria
+          # como UN argumento y el juego no lo entenderia.
+          ejecutar_nativo "$launcher" ${ARGS_OVERRIDE:-} )
     else
         say "AVISO: sin carpeta propia; el juego escribira en la tuya"
         pad_bridge_stop
-        ( cd "$(dirname "$launcher")" || exit 1; ejecutar_nativo "$launcher" )
+        ( cd "$(dirname "$launcher")" || exit 1; ejecutar_nativo "$launcher" ${ARGS_OVERRIDE:-} )
     fi
     # Se apunta la partida: cuantas veces, cuanto tiempo y cuando fue la
     # ultima. stats_record ignora por su cuenta las de menos de 20 s, que
@@ -75840,6 +76786,55 @@ Tienes tres formas de añadir juegos:
     printf '%s' "${sel_ruta:-$sel}"
 }
 
+nucleo_label() {
+    # LO QUE SE LEE EN LA FILA DE LOS AJUSTES.
+    #
+    # Se dice el valor -Normal o Rapida- y no OFF/ON, porque "ON" no dice que
+    # se enciende. Ademas asi wp_tr puede traducirlo: parte la fila por ": " y
+    # traduce la etiqueta y el valor por separado.
+    case "${MONTAJE_NUCLEO:-0}" in
+        1) printf 'Rápida' ;;
+        *) printf 'Normal' ;;
+    esac
+}
+
+nucleo_menu() {
+    # LA PANTALLA DEL MONTAJE DEL NUCLEO, juego por juego.
+    #
+    # Se explica en palabras de quien juega -tiempos de carga- y no en palabras
+    # de dentro -SquashFS, OverlayFS, FUSE, namespaces-: eso va al registro.
+    # Lo unico que el usuario necesita saber para decidir es que es seguro
+    # probarlo y que si no funciona no se pierde nada.
+    local squash="$1" gid="$2" sel antes="${MONTAJE_NUCLEO:-0}"
+    sel="$(menu "¿Cómo se abre el paquete de este juego?
+Lo normal funciona bien en casi todos los juegos. Unos pocos
+juegos grandes, sobre todo si tienen vídeos, tardan mucho en
+cargar desde el paquete y van finos si los descomprimes en una
+carpeta. Para esos está la otra opción: abre el paquete de otra
+manera y suele dejarlos como en carpeta, sin descomprimir nada.
+Es seguro probarla: si tu sistema no puede, WProton vuelve solo
+a la forma normal y el juego arranca igual." \
+        "Normal (recomendado)" \
+        "Rápida (para los juegos que tardan mucho)" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "Normal"*) MONTAJE_NUCLEO=0 ;;
+        "Rápida"*) MONTAJE_NUCLEO=1 ;;
+        *) return 0 ;;
+    esac
+    [ "$MONTAJE_NUCLEO" = "$antes" ] && return 0
+    write_full_profile "$gid"
+    log "montaje del nucleo '$gid': $antes -> $MONTAJE_NUCLEO"
+    if [ "$MONTAJE_NUCLEO" = 1 ]; then
+        ui_info "Hecho. La próxima vez que juegues se usará la carga rápida.
+La primera vez tarda un poco más en empezar, porque prepara el
+sitio donde el juego guarda sus cosas. Las siguientes, no."
+    else
+        ui_info "Hecho. Este juego vuelve a abrirse de la forma normal."
+    fi
+    return 0
+}
+
 version_juego_menu() {
     # CON QUE VERSION SE JUEGA, cuando el juego trae las dos.
     #
@@ -77512,6 +78507,7 @@ cfg_ap_juego() {
             release_game_root
             wizard_pick_runner && write_full_profile "$gid" ;;
         "Versión del juego:"*) version_juego_menu "$squash" "$gid" ;;
+        "Carga del wsquashfs:"*) nucleo_menu "$squash" "$gid" ;;
         "Ejecutable:"*)   config_pick_exe "$squash" "$gid" ;;
         "Argumentos:"*)
             # EL CAMPO SALE CON LOS DEL AUTORUN SI NO TIENES LOS TUYOS.
@@ -79982,6 +80978,24 @@ game_config_menu() {
         if juego_trae_las_dos "${WP_RAIZ_JUEGO:-$squash}"; then
             r_version="Versión del juego: $(version_juego_label)"
         fi
+        # LA FILA DEL MONTAJE DEL NUCLEO, y solo donde significa algo.
+        #
+        # Sale unicamente en un .wsquashfs de verdad: en una carpeta no hay
+        # nada que montar, y en un prefijo de Batocera el montaje lo lleva
+        # Batocera. Una fila que no puede hacer nada es peor que no tenerla.
+        local r_nucleo=""
+        if [ -f "$squash" ] && [ "${IS_BATOCERA:-0}" != 1 ]; then
+            case "$(printf '%s' "$squash" | tr 'A-Z' 'a-z')" in
+                # "Carga del wsquashfs" Y NO "Montaje del nucleo".
+                #
+                # Lo de antes era jerga de dentro -la misma que le corregi al
+                # tester en su ayuda de pantalla- y encima no cuadraba con el
+                # ingles, que si estaba en palabras normales. Quien juega sabe
+                # lo que es un wsquashfs porque es lo que se descarga; no sabe
+                # ni tiene por que saber lo que es un montaje del nucleo.
+                *.wsquashfs) r_nucleo="Carga del wsquashfs: $(nucleo_label)" ;;
+            esac
+        fi
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
         [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
@@ -79990,6 +81004,7 @@ game_config_menu() {
             ">> JUGAR AHORA <<" \
             "$r_runner" \
             "$r_version" \
+            "$r_nucleo" \
             "$r_exe" \
             "$r_args" \
             "$r_deps" \
@@ -81513,6 +82528,7 @@ O cambia el formato a DwarFS en:
         run_con_porcentaje "Comprimiendo '$nombre'..." \
             mksquashfs "$src" "$out" -comp zstd -b "$(pack_bloque_squashfs)" -noappend -no-xattrs \
                 -Xcompression-level "$(pack_nivel_zstd)" \
+                $(pack_duenos_squashfs) \
             -no-duplicates -percentage || {
                 ui_error "Fallo al comprimir."; rm -f "$out"; return 1; }
     fi
@@ -82508,7 +83524,10 @@ arranque_del_programa() {
 # Cuando el fichero se ejecuta ("bash wproton.sh"), BASH_SOURCE[0] y $0 son el
 # mismo. Cuando se le hace "source" desde otro sitio, BASH_SOURCE[0] es este
 # fichero y $0 es quien lo cargo. Esa es toda la diferencia.
-if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
+# Y --partida-nucleo NO arranca los menus: es WProton volviendose a llamar a
+# si mismo ya dentro del namespace del montaje del nucleo, para jugar. Si
+# arrancara el programa entero se abriria un segundo WProton encima del juego.
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ] && [ "${1:-}" != --partida-nucleo ]; then
     arranque_del_programa
 fi
 
@@ -82587,6 +83606,21 @@ cli_ruta() {
 }
 
 case "${1:-}" in
+    --partida-nucleo)
+        # WProton volviendose a llamar a si mismo DENTRO del namespace del
+        # montaje del nucleo. No es una opcion para el usuario y no se
+        # documenta: la pone nucleo_partida y nadie mas.
+        #
+        # Aqui no se abren menus -WP_HAY_MENU=0- porque los menus ya estan
+        # abiertos en el WProton de fuera, que es quien espera a que esto
+        # acabe para recoger el montaje.
+        [ $# = 3 ] && [ -f "$2" ] || exit 2
+        WP_NUCLEO_IMAGEN="$(readlink -f -- "$2")" || exit 1
+        check_deps
+        bootstrap_if_needed
+        WP_HAY_MENU=0
+        launch_game "$WP_NUCLEO_IMAGEN" "$3"
+        exit $? ;;
     --setup)
         # El mismo procedimiento que el primer arranque, sin repetirlo aqui.
         WP_PRIMERA_VEZ=1
