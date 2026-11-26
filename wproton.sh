@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.32"
+WPROTON_VERSION="2.33"
 # ----------------------------------------------------------------------------
 # EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
 #
@@ -966,7 +966,7 @@ LANG_DIR="$BASE_DIR/lang"
 # La linea LANG_EN_VERSION la escribe el build aqui, con el hash del
 # contenido de la tabla. Va en linea propia porque asi son todos los
 # marcadores de este fichero, y porque auditoria_final.py los cuenta asi.
-LANG_EN_VERSION="1feae4fef6a5"
+LANG_EN_VERSION="18daded3fdc4"
 
 write_lang_en() {
     # El ingles viaja DENTRO de wproton.sh y se escribe en lang/en.json si
@@ -980,6 +980,7 @@ write_lang_en() {
     fi
     cat > "$f" <<'ENJSON'
 {
+ " (hay bloqueos de red en España: puede fallar)": " (network blocks in Spain: may fail)",
  "(automático: autorun.cmd / escaneo)": "(automatic: autorun.cmd / scan)",
  "(automático: último GE-Proton instalado)": "(automatic: latest installed GE-Proton)",
  "(juego suelto: elegir carpeta o exe...)": "(loose game: choose folder or exe...)",
@@ -1027,6 +1028,8 @@ write_lang_en() {
  "BUSCANDO: %s": "SEARCHING: %s",
  "Batocera": "Batocera",
  "Biblioteca y preferencias": "Library and preferences",
+ "Bloqueadas": "Blocked",
+ "Bloqueadas (no abre ninguna página)": "Blocked (opens no web page)",
  "Borrar TODOS los datos de este juego": "Delete ALL data for this game",
  "Borrar TODOS los perfiles": "Delete ALL profiles",
  "Borrar copias de saves antiguas": "Delete old save backups",
@@ -1061,6 +1064,8 @@ write_lang_en() {
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
  "Comprobar lo descargado (huellas SHA-256)": "Check downloads (SHA-256 hashes)",
+ "Con internet": "With internet",
+ "Con internet (normal)": "With internet (normal)",
  "Configuración de": "Settings for",
  "Configurar (runner, prefijo, opciones)": "Configure (runner, prefix, options)",
  "Configurar dgVoodoo (Cpl)": "Configure dgVoodoo (Cpl)",
@@ -1148,6 +1153,7 @@ write_lang_en() {
  "Instalar librerias de Windows (vcredist, PhysX...)": "Install Windows libraries (vcredist, PhysX...)",
  "Instalar redistribuibles (vcredist, DirectX, .NET...)": "Install redistributables (vcredist, DirectX, .NET...)",
  "Instalar/actualizar Python portable + pygame": "Install/update portable Python + pygame",
+ "Internet": "Internet",
  "Juego en carpeta": "Game in folder",
  "Jugado": "Played",
  "Jugar (elegir juego)": "Play (choose game)",
@@ -1178,6 +1184,7 @@ write_lang_en() {
  "Normal (recomendado)": "Normal (recommended)",
  "Nota": "Score",
  "Notas": "Notes",
+ "Ojo: ahora hay bloqueos de red en España (pasa cuando hay fútbol de liga). Esta descarga puede ir lenta o fallar, y no es cosa de WProton. Si falla, prueba otra vez al acabar el partido.": "Heads-up: there are network blocks in Spain right now (it happens during league football). This download may be slow or fail, and it is not WProton's fault. If it fails, try again once the match is over.",
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
  "Ordenar juegos por": "Sort games by",
  "Otra carpeta con juegos": "Another folder with games",
@@ -1192,6 +1199,8 @@ write_lang_en() {
  "Perfiles de la comunidad": "Community profiles",
  "Perfiles de la comunidad (juegos que necesitan ajustes)": "Community profiles (games needing tweaks)",
  "Perfiles guardados (ver y borrar)": "Saved profiles (view and delete)",
+ "Permitidas": "Allowed",
+ "Permitidas (normal)": "Allowed (normal)",
  "Personalizado (escribir argumentos)": "Custom (type arguments)",
  "Prefijo": "Prefix",
  "Prefijo compartido (default) - lo usan todos los juegos en modo compartido": "Shared prefix (default) - used by all games in shared mode",
@@ -1206,7 +1215,9 @@ write_lang_en() {
  "Propio del juego (prefixes/$gid)": "Per-game (prefixes/$gid)",
  "Proton-CachyOS [proton] - optimizado x86-64-v3": "Proton-CachyOS [proton] - optimized x86-64-v3",
  "Proton-LG [proton] - Castro-Fidel, basado en GE": "Proton-LG [proton] - Castro-Fidel, GE-based",
+ "Páginas web del juego": "Game web pages",
  "Quitar el .keys de profiles": "Remove the .keys from profiles",
+ "Red y páginas web >>": "Network and web pages >>",
  "Rendimiento y compatibilidad >>": "Performance and compatibility >>",
  "Repetir asistente": "Run the wizard again",
  "Restaurar una copia": "Restore a backup",
@@ -1217,6 +1228,8 @@ write_lang_en() {
  "SELECCION": "SELECTION",
  "Salir": "Exit",
  "Si": "Yes",
+ "Sin internet": "No internet",
+ "Sin internet (aislado del todo)": "No internet (fully isolated)",
  "Sincronizar AHORA con rsync": "Sync NOW with rsync",
  "Sincronizar backups/ con otro sitio": "Sync backups/ with another place",
  "Sincronizar la carpeta backups (rsync / Syncthing)": "Sync the backups folder (rsync / Syncthing)",
@@ -1249,7 +1262,7 @@ write_lang_en() {
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
  "Xbox": "Xbox",
- "__version__": "1feae4fef6a5",
+ "__version__": "18daded3fdc4",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
  "auto (autorun.cmd / escaneo)": "auto (autorun.cmd / scan)",
@@ -2437,6 +2450,12 @@ setup_squashfuse_ll() {
     # interfaz: no hay nada que configurar ni ningun riesgo de mezclar
     # versiones, porque cada uno monta por su cuenta.
     local a; a="$(arch_tag)"
+    # OJO: Azathothas/Toolpacks esta ARCHIVADO (comprobado el 25-11-2026). Sigue
+    # en linea y sirviendo descargas, asi que no se quita, pero no va a publicar
+    # versiones nuevas: aqui es la SEGUNDA fuente, no la primera -delante va
+    # bin.pkgforge.dev-, asi que el dia que deje de responder la cadena aguanta.
+    # Si algun dia desaparece como paso con AlpyneDreams/d7vk, se cae esta linea
+    # y nada mas.
     local ll_urls="https://bin.pkgforge.dev/$a/squashfuse_ll"
     ll_urls="$ll_urls
 $(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
@@ -2614,7 +2633,8 @@ setup_fuse_tools() {
         fi
     fi
     if ! tool_is_ours "$SQUASHFUSE_BIN"; then
-        # squashfuse no publica binarios: probamos fuentes de builds estaticos
+        # squashfuse no publica binarios: probamos fuentes de builds estaticos.
+        # (Toolpacks esta archivado; ver la nota en la funcion de squashfuse_ll.)
         local sq_urls="https://bin.pkgforge.dev/$a/squashfuse"
         sq_urls="$sq_urls
 $(curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/Azathothas/Toolpacks/releases/latest" 2>/dev/null \
@@ -12178,6 +12198,10 @@ WP_CIERRE_PEDIDO=0                       # 1 = el cierre lo pedimos nosotros
 WP_CIERRE_GRACIA=20                      # segundos de gracia: ver cierre_desde_fuera
 RUNNER_KIND=""                           # "proton" | "wine" | "nativo"
 RUN_CMD=()                               # la orden con la que se lanza el juego
+# LA ENVOLTURA DE "SIN INTERNET", declarada aqui y no solo dentro de
+# sinred_preparar: los sitios que lanzan el juego la leen con
+# ${WP_SINRED[@]+...} y con set -u un array que no existe mata el lanzamiento.
+WP_SINRED=()                             # unshare --net ... o vacio
 WP_PRIMERA_VEZ=0                         # 1 = puesta en marcha inicial
 WP_INSTALL_SILENCIOSO=0                  # 1 = instalar sin pedir "Aceptar"
 INSTALL_NOTICE_PID=""
@@ -12233,9 +12257,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py a7c1a2b41670" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py a224aeea1fa7" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py a7c1a2b41670
+# WPROTON_HELPER menu_pygame.py a224aeea1fa7
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -14007,6 +14031,21 @@ AYUDAS_ES = [
     # El tester lo habia puesto como "SquashFUSE + fuse-overlayfs" y "SquashFS
     # + OverlayFS del kernel Linux". Eso es de dentro: va al registro, no a la
     # pantalla. Aqui se dice para que sirve y cuando usarlo.
+    ('Red y páginas web >>',
+     'Dos cosas: que el juego no abra páginas web al cerrarse, y que no salga '
+     'a internet.'),
+    ('Páginas web del juego: Permitidas',
+     'El juego puede abrir el navegador. Es lo normal.'),
+    ('Páginas web del juego: Bloqueadas',
+     'El juego no abre ninguna página web. Para los que al cerrarse abren la '
+     'página de donde se descargaron. Sigue teniendo internet para partidas '
+     'en línea y parches.'),
+    ('Internet: Con internet',
+     'El juego sale a internet como cualquier programa. Es lo normal.'),
+    ('Internet: Sin internet',
+     'El juego arranca sin red ninguna: sin anuncios ni telemetría, pero '
+     'tampoco partidas en línea ni parches. Si lo único que molesta es la '
+     'página que se abre al salir, usa Páginas web del juego.'),
     ('Carga del wsquashfs: Normal',
      'Como se abre el paquete del juego. Normal es la forma de siempre y '
      'funciona bien en casi todos los juegos.'),
@@ -21553,10 +21592,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py dcea96026e73" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py 10f2efef3586" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py dcea96026e73
+# WPROTON_HELPER menu_qt.py 10f2efef3586
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -22084,6 +22123,21 @@ AYUDAS_ES = [
     # El tester lo habia puesto como "SquashFUSE + fuse-overlayfs" y "SquashFS
     # + OverlayFS del kernel Linux". Eso es de dentro: va al registro, no a la
     # pantalla. Aqui se dice para que sirve y cuando usarlo.
+    ('Red y páginas web >>',
+     'Dos cosas: que el juego no abra páginas web al cerrarse, y que no salga '
+     'a internet.'),
+    ('Páginas web del juego: Permitidas',
+     'El juego puede abrir el navegador. Es lo normal.'),
+    ('Páginas web del juego: Bloqueadas',
+     'El juego no abre ninguna página web. Para los que al cerrarse abren la '
+     'página de donde se descargaron. Sigue teniendo internet para partidas '
+     'en línea y parches.'),
+    ('Internet: Con internet',
+     'El juego sale a internet como cualquier programa. Es lo normal.'),
+    ('Internet: Sin internet',
+     'El juego arranca sin red ninguna: sin anuncios ni telemetría, pero '
+     'tampoco partidas en línea ni parches. Si lo único que molesta es la '
+     'página que se abre al salir, usa Páginas web del juego.'),
     ('Carga del wsquashfs: Normal',
      'Como se abre el paquete del juego. Normal es la forma de siempre y '
      'funciona bien en casi todos los juegos.'),
@@ -26995,6 +27049,23 @@ filter_assets() {
              -e '\.sha' -e '\.sum' -e '\.txt' -e '\.asc' -e '\.sig' -e 'debug'
 }
 
+gh_no_encontrado() {
+    # EL MENSAJE DE "NO ESTA EN GITHUB", CON EL NOMBRE DEL REPOSITORIO DENTRO.
+    #
+    # POR QUE (25-11-2026). Un tester vio "No se encontro D7VK en GitHub" y con
+    # eso no se puede hacer nada: no dice DONDE se miro. Dani tuvo que venir a
+    # preguntar y resulto que el repositorio que teniamos puesto -AlpyneDreams/
+    # d7vk- habia desaparecido de GitHub.
+    #
+    # Con el nombre delante, ese mismo aviso se resuelve solo: se abre la
+    # direccion y se ve en dos segundos si el repositorio ya no esta, si se ha
+    # quedado sin publicaciones o si es que no hay internet. Son cuatro sitios
+    # en el programa y los cuatro se callaban lo mismo.
+    #
+    # $1 = como lo llama el usuario    $2 = el repositorio de GitHub
+    printf 'No se encontro %s en GitHub.\n\nSe busco en: github.com/%s\n\nSi esa pagina no existe, el proyecto ha cambiado de sitio:\navisa y se actualiza. Si existe, mira si tiene publicaciones\n(releases) o si es que ahora mismo no hay internet.' "$1" "$2"
+}
+
 gh_latest_asset() {
     # $1 = repo, $2 = patron grep -> imprime URL del asset (x86_64)
     curl -fsSL "${DL_META[@]}" "https://api.github.com/repos/$1/releases/latest" \
@@ -27392,6 +27463,178 @@ DL_LIMITES=(--connect-timeout 20 --speed-limit 2048 --speed-time 30
 #
 # Aqui SI vale un tope de tiempo total, al reves que arriba: no hay nada
 # grande que traer, asi que 45 s es de sobra para cualquier respuesta sana.
+# ===================================================================
+# AVISO DE BLOQUEOS DE RED EN ESPAÑA (cuando hay futbol de liga)
+# ===================================================================
+#
+# QUE PASA, Y POR QUE ESTO NO ES UNA RAREZA
+#
+# En España, durante los partidos de liga, hay operadores que bloquean rangos
+# ENTEROS de Cloudflare por orden judicial. Como media internet esta detras de
+# Cloudflare, se cae de todo por el camino: paginas que no abren, descargas que
+# se quedan a medias, repositorios que no responden. Y no hay ningun aviso: el
+# usuario ve una descarga que falla y cree que es culpa del programa o de su
+# conexion.
+#
+# Dani: "en España cuando hay futbol de liga hay veces que fallan los
+# servidores de cloudflare y no se pueden descargar ciertas paginas o dan
+# problemas; si avisa que no hay futbol no hace nada, descarga y ya esta, y si
+# hay futbol que salga un mensaje avisando de que puede dar problemas la red".
+#
+# DE DONDE SALE EL DATO
+#
+# hayahora.futbol vigila esos bloqueos. La pagina es dinamica -los datos los
+# pinta javascript- asi que NO se lee la pagina: se lee el fichero en crudo
+# que la propia pagina usa.
+#
+#   https://hayahora.futbol/estado/blocked-any.txt   una IP por linea
+#
+# Se miraron las tres salidas que ofrece y esta es la unica que sirve aqui:
+#
+#   - la pagina: javascript, no hay nada que leer sin un navegador.
+#   - /estado/data.json: 3,7 MB y es el HISTORICO de cambios de estado de cada
+#     IP en cada operador. Descargar eso antes de cada descarga es absurdo.
+#   - /estado/blocked-any.txt: las IPs bloqueadas AHORA, en texto plano. Vacio
+#     cuando no hay bloqueos (comprobado un jueves a las 00:03, sin liga).
+#
+# Asi que la pregunta no es "hay futbol" sino "hay bloqueos ahora mismo", que
+# es mejor: es la consecuencia que nos afecta, medida, y no una deduccion a
+# partir del calendario.
+#
+# TRES REGLAS QUE NO SE TOCAN
+#
+#   1. ESTO NUNCA IMPIDE UNA DESCARGA. Avisa y sigue. Si no se puede
+#      consultar, se descarga igual y en silencio.
+#   2. NUNCA RETRASA UNA DESCARGA DE FORMA APRECIABLE. Tiempos cortos (3 s
+#      para conectar, 6 de tope) y una sola consulta cada diez minutos, no una
+#      por fichero: una tanda de veinte descargas hace UNA consulta.
+#   3. SI NO SE SABE, NO SE DICE NADA. Un aviso de que "puede haber
+#      problemas" cada vez que falle una consulta seria ruido, y en dos dias
+#      nadie lo lee.
+#   4. Y NO SE PREGUNTA NADA. NI UN DIALOGO.
+#
+#      Esto lo escribi mal la primera vez -con ui_info- y lo cazo
+#      auditoria_final, que tiene una regla para esto y su historia detras:
+#      en dl_bruto habia una rama que llamaba a ui_error y, con la barra de
+#      progreso ya en pantalla, CUALQUIER descarga se clavaba en el 95%
+#      esperando un dialogo que no se ve. La regla es "mientras la barra esta
+#      puesta, nada de preguntar", y es estatica a proposito: vale por donde
+#      se PUEDE llegar, no por donde esta escrita la linea, que es lo que se
+#      rompe en cuanto alguien mueve el codigo.
+#
+#      Asi que el aviso va por loading_say -que escribe en la ventana que haya
+#      viva y en el registro, sin esperar a nadie- y, sobre todo, PEGADO A LA
+#      LINEA DE LA DESCARGA: en la ventana de carga un mensaje suelto lo borra
+#      el siguiente, pero "Descargando X... (hay bloqueos...)" se queda en
+#      pantalla todo el rato que dura la descarga, que es cuando sirve.
+#
+# Y SOLO EN ESPAÑA, que no es por cortesia: es por no mentir. El fichero mide
+# bloqueos de los operadores ESPAÑOLES, asi que a alguien en Mexico le saldria
+# el aviso durante un partido de la liga española sin que su red tenga nada.
+# La comprobacion de donde esta la maquina es local y gratis (zona horaria e
+# idioma), y queda dicha en el registro.
+
+FUTBOL_URL="https://hayahora.futbol/estado/blocked-any.txt"
+FUTBOL_CADUCA=600                        # diez minutos entre consultas
+WP_FUTBOL_CUANDO=0                       # cuando se consulto (segundos)
+WP_FUTBOL_IPS=""                         # cuantas IPs; VACIO = no se sabe
+WP_FUTBOL_AVISADO=0                      # ya se enseño el aviso esta sesion
+
+futbol_es_espana() {
+    # Zona horaria primero, que es lo que de verdad dice donde esta la maquina.
+    # Y las TRES de España, no solo Madrid: Canarias y Ceuta tambien, que son
+    # las que se olvidan siempre.
+    local tz=""
+    if [ -r /etc/timezone ]; then
+        tz="$(cat /etc/timezone 2>/dev/null)"
+    fi
+    if [ -z "$tz" ] && [ -e /etc/localtime ]; then
+        tz="$(readlink -f /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')"
+    fi
+    case "$tz" in
+        Europe/Madrid|Atlantic/Canary|Africa/Ceuta)
+            log "futbol: zona horaria $tz, la maquina esta en España"
+            return 0 ;;
+    esac
+    # Y si la zona no lo dice, el idioma. Las cuatro lenguas, no solo
+    # castellano: una Deck en catalan o en gallego esta igual de en España.
+    case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+        es_ES*|ca_ES*|gl_ES*|eu_ES*|ast_ES*|an_ES*|oc_ES*)
+            log "futbol: idioma del sistema de España, se consulta"
+            return 0 ;;
+    esac
+    log "futbol: zona '$tz' e idioma '${LANG:-}' no son de España; no se consulta"
+    return 1
+}
+
+futbol_mirar() {
+    # Deja en WP_FUTBOL_IPS cuantas IPs hay bloqueadas, o VACIO si no se sabe.
+    # No devuelve error nunca: quien llama no tiene nada que decidir con eso.
+    local ahora
+    ahora="$(date +%s 2>/dev/null)" || ahora=0
+    if [ "${WP_FUTBOL_CUANDO:-0}" -gt 0 ] 2>/dev/null &&
+       [ $(( ahora - ${WP_FUTBOL_CUANDO:-0} )) -lt "$FUTBOL_CADUCA" ] 2>/dev/null; then
+        log "futbol: vale lo de hace $(( ahora - WP_FUTBOL_CUANDO ))s (ips=${WP_FUTBOL_IPS:-no se sabe})"
+        return 0
+    fi
+    WP_FUTBOL_CUANDO="$ahora"
+    WP_FUTBOL_IPS=""
+    command -v curl >/dev/null 2>&1 || { log "futbol: no hay curl, no se consulta" WARN; return 0; }
+    local cuerpo=""
+    # TIEMPOS CORTOS A PROPOSITO. Esto va delante de una descarga: si la
+    # consulta tardara, el usuario notaria el aviso y no la descarga.
+    cuerpo="$(curl -fsSL --connect-timeout 3 --max-time 6 "$FUTBOL_URL" 2>/dev/null)" || {
+        log "futbol: no se pudo consultar $FUTBOL_URL; se descarga sin decir nada"
+        return 0
+    }
+    # SI CONTESTA UNA PAGINA, NO SE SABE. Un error del servidor o un portal de
+    # por medio devuelven HTML, y contar cero IPs ahi seria decir "no hay
+    # bloqueos" cuando lo que hay es que no nos hemos enterado.
+    case "$cuerpo" in
+        *"<html"*|*"<HTML"*|*"<!DOCTYPE"*|*"<!doctype"*)
+            log "futbol: la respuesta es una pagina y no la lista; no se sabe" WARN
+            return 0 ;;
+    esac
+    WP_FUTBOL_IPS="$(printf '%s\n' "$cuerpo" \
+        | grep -cE '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}[[:space:]]*$' 2>/dev/null)"
+    [ -n "$WP_FUTBOL_IPS" ] || WP_FUTBOL_IPS=0
+    log "futbol: $WP_FUTBOL_IPS IPs bloqueadas ahora mismo segun hayahora.futbol"
+    return 0
+}
+
+futbol_avisar() {
+    # Se llama antes de descargar. Avisa UNA vez por sesion y nada mas.
+    futbol_es_espana || return 0
+    futbol_mirar
+    if [ -z "${WP_FUTBOL_IPS:-}" ]; then
+        return 0                          # no se sabe: callado, regla 3
+    fi
+    if [ "${WP_FUTBOL_IPS:-0}" -le 0 ] 2>/dev/null; then
+        log "futbol: no hay bloqueos, se descarga y ya esta"
+        return 0
+    fi
+    if [ "${WP_FUTBOL_AVISADO:-0}" = 1 ]; then
+        log "futbol: hay bloqueos pero ya se aviso en esta sesion, no se repite"
+        return 0
+    fi
+    WP_FUTBOL_AVISADO=1
+    # EL NUMERO DE IPs NO SALE EN PANTALLA: eso es de tripas y va al registro.
+    # En pantalla, lo que le sirve a quien esta esperando una descarga. Y por
+    # loading_say, no por ui_info: ver la regla 4 de arriba.
+    loading_say "Ojo: ahora hay bloqueos de red en España (pasa cuando hay fútbol de liga). Esta descarga puede ir lenta o fallar, y no es cosa de WProton. Si falla, prueba otra vez al acabar el partido."
+    return 0
+}
+
+futbol_sufijo() {
+    # Lo que se le pega a "Descargando X..." mientras haya bloqueos.
+    #
+    # ES UNA FUNCION QUE SOLO DEVUELVE TEXTO: no consulta, no avisa y no toca
+    # nada. Lee lo que futbol_avisar ya dejo mirado. Si consultara aqui, cada
+    # fichero de una tanda haria su propia peticion.
+    [ "${WP_FUTBOL_IPS:-0}" -gt 0 ] 2>/dev/null || return 0
+    printf ' (hay bloqueos de red en España: puede fallar)'
+}
+
 DL_META=(--connect-timeout 15 --max-time 45 --retry 2 --retry-delay 2)
 
 # LAS LINEAS POR LAS QUE WProton SOSPECHA QUE FALTA .NET.
@@ -27415,7 +27658,21 @@ dl_bruto() {
     # La barra es la NUESTRA (pygame). Con curl se puede saber el porcentaje
     # real, asi que la barra avanza de verdad en vez de ir "pulsando".
     local nombre; nombre="$(basename "$2")"
-    say "Descargando $nombre..."
+    # EL AVISO DE LOS BLOQUEOS, ANTES DE EMPEZAR.
+    #
+    # Va aqui y no en cada sitio que descarga porque dl_bruto es el embudo:
+    # por aqui pasan las veintidos funciones que bajan algo, los perfiles y
+    # Arcade Loader incluidos. Un engancho y no veintidos, que es como se
+    # queda alguno fuera -ya paso con la eleccion del lanzador .sh-.
+    #
+    # Y aqui se puede hablar por pantalla: dl_bruto pinta la barra y usa say,
+    # o sea que esta en primer plano. Comprobado ademas que ninguna descarga
+    # sale desde los subshells que lanzan el juego, que es donde un ui_info
+    # dibujaria un menu desde un proceso de fondo.
+    #
+    # El "|| true" no es adorno: esto no puede impedir una descarga JAMAS.
+    futbol_avisar || true
+    say "Descargando $nombre...$(futbol_sufijo)"
     # $3 = sha256 que DEBE tener lo descargado. Opcional: si viene vacio solo
     # se comprueba el tamaño. Lo mira dl_comprobar al final, una sola vez,
     # pase por la rama que pase.
@@ -27905,7 +28162,7 @@ setup_umu() {
     say "Descargando umu-launcher (zipapp)..."
     local url tmp="$RUNTIME_DIR/.umu_tmp"
     url="$(gh_latest_asset "Open-Wine-Components/umu-launcher" "zipapp")"
-    [ -z "$url" ] && { fallo "No se pudo obtener la URL de umu-launcher"; return 1; }
+    [ -z "$url" ] && { fallo "$(gh_no_encontrado umu-launcher Open-Wine-Components/umu-launcher)"; return 1; }
     rm -rf "$tmp"; mkdir -p "$tmp"
     dl "$url" "$tmp/umu.pkg" || { fallo "Fallo descargando umu"; return 1; }
     case "$url" in
@@ -28277,7 +28534,9 @@ setup_runner_ultimo() {
     say "Buscando el ultimo $etiqueta x86_64..."
     url="$(gh_latest_asset "$repo" "$patron")"
     if [ -z "$url" ]; then
-        fallo "No se pudo obtener la URL de $etiqueta"
+        # El repositorio por delante: "no se pudo obtener la URL" no dice donde
+        # se miro, y es justo el dato con el que se resuelve solo.
+        fallo "$(gh_no_encontrado "$etiqueta" "$repo")"
         return 1
     fi
     # El nombre de la carpeta sale del fichero sin extension: asi vale para
@@ -31979,6 +32238,19 @@ diag_video_del_juego() {
         say "  Arch/CachyOS: gst-libav y lib32-gst-libav."
         say "  Deck/SteamOS: Ajustes del juego -> Casos especiales -> Codecs de video"
         log "Resumen: el juego murio en el video y no habia descodificador de H.264" WARN
+    elif grep -a -F -q 'este runner no usa GStreamer' "$LOG_FILE" 2>/dev/null; then
+        # TERCER CASO, Y FALTABA (24-11-2026).
+        #
+        # Con un Proton 11+ el video va por winedmo/ffmpeg y GStreamer no se
+        # toca, asi que aqui no vale ni decir "falta el descodificador" ni
+        # decir "habia descodificador": las dos cosas hablan de GStreamer y
+        # GStreamer no pinta nada en ese runner. El descodificador lo trae el
+        # propio runner, y si el video falla hay que mirar por ahi.
+        say "  Este runner descodifica el video el mismo (FFmpeg), no por"
+        say "  GStreamer, asi que instalar codecs en el sistema no cambia nada."
+        say "  Lo que si suele cambiarlo es probar otro runner en Ajustes del"
+        say "  juego -> Runner. Manda este registro con el nombre del runner."
+        log "Resumen: el juego murio en el video con un runner que descodifica por FFmpeg: $linea" WARN
     else
         say "  Habia descodificador, asi que no es que falte. Manda este"
         say "  registro: ya trae el motivo escrito por el propio juego."
@@ -32054,11 +32326,55 @@ diag_ultimas_del_juego() {
         return 0
     fi
     local ultimas
+    # FUERA TAMBIEN LAS LINEAS NUESTRAS SIN HORA DELANTE (24-11-2026).
+    #
+    # Este bloque promete "lo ultimo que escribio el juego" y estaba
+    # ensenando MIS PROPIOS DIAGNOSTICOS. Las lineas de continuacion de
+    # diag_carga_juego empiezan con espacios y "[carga]" -no llevan hora, que
+    # es lo unico que se filtraba- asi que en un registro de la Deck con
+    # Asphalt 6 el bloque entero eran 20 lineas de "[carga] el squashfuse_ll
+    # entrega 3 KB..." presentadas como si las hubiera escrito el juego.
+    #
+    # El juego no habia escrito NADA, que es un dato importantisimo y que
+    # quedaba tapado por mi propia cháchara. Dos horas de mirar el log
+    # equivocado.
     ultimas="$(grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2} \[' "$LOG_FILE" 2>/dev/null \
         | grep -vE '^(menu_pygame|menu_qt|\[keys\]|\s+0x[0-9a-f]+\s)' \
         | grep -vE 'gameoverlayrenderer' \
+        | grep -vE '^[[:space:]]*\[(carga|wproton-capa)\]' \
+        | grep -vE '^[[:space:]]+(sirve del disco|por debajo de lo que|que no pasa por write|un juego grande|\(va dentro del programa|salte de un sitio|donde se va la CPU|descomprimiendo|y es lo que dwarfs)' \
+        | grep -vE '^pid [0-9]+ != [0-9]+, skipping destruction' \
         | tail -n "$n")"
-    [ -n "$ultimas" ] || return 0
+    if [ -z "$ultimas" ]; then
+        # EL JUEGO NO ESCRIBIO NI UNA LINEA. ESO NO ES "NADA QUE CONTAR".
+        #
+        # Antes aqui se volvia en silencio, y el registro se quedaba sin decir
+        # lo mas util que tenia: que el juego murio MUDO. Con un juego que se
+        # va a los 77 s sin una linea propia, saber que no hay nada que leer es
+        # justo lo que decide el siguiente paso -encender los diagnosticos- en
+        # vez de releer el mismo registro buscando algo que no esta.
+        log "---- el juego no escribio NI UNA LINEA propia (rc=$rc, $dur s) ----"
+        if [ "${DIAG_DLL:-0}" != 1 ] || [ "${DIAG_VIDEO:-0}" != 1 ]; then
+            log "  Wine casi no habla con los diagnosticos apagados. Para que el" WARN
+            log "  proximo registro sirva: DIAG_DLL=1 y DIAG_VIDEO=1 en settings.conf." WARN
+            say "[!] El juego se fue sin escribir una sola linea suya."
+            say "    Asi no hay nada que leer. Pon DIAG_DLL=1 y DIAG_VIDEO=1 en"
+            say "    settings.conf, juega otra vez y manda ese registro."
+        else
+            log "  Y eso con los diagnosticos ENCENDIDOS: el juego murio antes de" WARN
+            log "  poder decir nada, o lo mataron desde fuera." WARN
+            say "[!] El juego se fue sin escribir una sola linea suya, y eso con"
+            say "    los diagnosticos encendidos: murio antes de poder hablar."
+        fi
+        # Y AUN ASI SE PREGUNTA AL SISTEMA Y SE MIRA LO DEMAS: que el juego
+        # calle no quita que las otras pistas esten.
+        if [ "$rc" != 0 ] || [ "$dur" -lt 600 ]; then
+            aviso_carpeta_enlace_postmortem
+            diag_dependencias_sin_instalar "$dur"
+            diag_cuelgue_sistema "5 min"
+        fi
+        return 0
+    fi
     log "---- lo ultimo que escribio el juego (rc=$rc, $dur s) ----"
     printf '%s\n' "$ultimas" >> "$LOG_FILE" 2>/dev/null
     log "---- fin de lo ultimo que escribio el juego ----"
@@ -32072,9 +32388,17 @@ diag_ultimas_del_juego() {
     #
     # Antes aqui se afirmaba que un rc=0 "NO es un cuelgue". Era falso: ese 0
     # sale del envoltorio y no del juego. Ahora en vez de afirmar, se mira.
+    #
+    # Y EL DESCARGO QUE HABIA AQUI SE HA QUITADO, que es mas gordo de lo que
+    # parece. Decia "ese numero lo da el envoltorio, no el juego", y era
+    # mentira: el numero lo daba mi propia funcion log -el subshell acababa en
+    # un log, asi que wait recogia el 0 de log- y el descargo sonaba tan
+    # razonable que tapo el fallo durante meses. Con el Asphalt 6 el juego
+    # salia con 7 y aqui se leia 0. Arreglado el 25-11-2026 (el subshell acaba
+    # en exit "$_rc_juego"), y ahora el numero se puede creer.
     if [ "$rc" != 0 ] || [ "$dur" -lt 600 ]; then
-        log "  Codigo de salida $rc, pero OJO: ese numero lo da el envoltorio"
-        log "  (umu/proton), no el juego. Un juego puede reventar y dejar un 0."
+        log "  Codigo de salida $rc, y es el del juego: umu/proton lo propaga"
+        log "  tal cual. Si dice 0, es un 0 de verdad."
         aviso_carpeta_enlace_postmortem
         diag_dependencias_sin_instalar "$dur"
         diag_cuelgue_sistema "5 min"
@@ -34269,7 +34593,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO MONTAJE_NUCLEO'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO MONTAJE_NUCLEO WEB_BLOQUEADA SIN_RED'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -34350,15 +34674,17 @@ profile_defaults() {
     HELIXSR_NITIDEZ="off"
     VERSION_JUEGO="auto"
     MONTAJE_NUCLEO="0"
+    WEB_BLOQUEADA="0"
+    SIN_RED="0"
 }
 
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py d8c759aad6ff" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py 93ede23beb70" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py d8c759aad6ff
+# WPROTON_HELPER perfil.py 93ede23beb70
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -34669,6 +34995,11 @@ ESQUEMA = [
     # El montaje del nucleo (SquashFS + OverlayFS del kernel) en vez de FUSE.
     # Por juego y apagado de fabrica: FUSE sigue siendo lo normal.
     ("MONTAJE_NUCLEO",    "opcion", "0",              ("0", "1")),
+    # Que el juego no abra paginas web (winebrowser) y que no salga a
+    # internet (espacio de red propio). Son dos cosas distintas: ver el
+    # bloque de web_* y sinred_* en wproton.base.sh.
+    ("WEB_BLOQUEADA",     "opcion", "0",              ("0", "1")),
+    ("SIN_RED",           "opcion", "0",              ("0", "1")),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
@@ -40444,7 +40775,14 @@ gst_h264_informe() {
     # seis teorias en llegar ahi. Esto lo contesta en el propio arranque.
     #
     # $1 = lista de carpetas de plugins.
-    local lista="${1:-}" d cap rc quien="" hay=1
+    local lista="${1:-}" rdir="${2:-}" d cap rc quien="" hay=1
+    # ¿ESTE RUNNER USA GSTREAMER? Si no, el estado de los plugins del sistema
+    # no dice NADA sobre si su video va a ir. Se apunta lo que se ve y se
+    # calla la recomendacion, porque seria falsa.
+    if [ -n "$rdir" ] && ! gst_runner_usa_gstreamer "$rdir"; then
+        log "Video H.264: este runner no usa GStreamer (winedmo/ffmpeg), asi que sus plugins no deciden nada aqui; el descodificador lo trae el propio runner"
+        return 0
+    fi
     while IFS= read -r d; do
         [ -n "$d" ] || continue
         [ -f "$d/libgstlibav.so" ] || [ -f "$d/libgstopenh264.so" ] || continue
@@ -40685,7 +41023,26 @@ EOFGSTB
         # En este orden: primero se aparta a quien no puede servir el video,
         # despues se dice si queda alguien que si pueda.
         gst_conversor_apartar "$gst"
-        gst_h264_informe "$gst"
+        # SE LE DICE SI ESTE RUNNER USA GSTREAMER (24-11-2026).
+        #
+        # Antes no se le decia, y el informe hablaba SIEMPRE de los plugins de
+        # GStreamer del sistema. Con un Proton 11+ -que no usa GStreamer para
+        # nada, el video va por winedmo/ffmpeg- eso significa que en TODA
+        # partida salia el aviso mas ruidoso del registro:
+        #
+        #   [WARN] Video H.264: NO HAY DESCODIFICADOR en ninguna carpeta
+        #   [WARN]    Es la causa tipica de que un juego se cierre o se cuelgue
+        #
+        # y mandaba a instalar gst-libav, que en ese runner no cambia nada. Lo
+        # vimos en un registro de Deck con GE-Proton11-7 donde ese aviso era lo
+        # primero que llamaba la atencion y era una pista falsa: cuatro lineas
+        # mas arriba el propio registro ya decia "este runner reproduce video
+        # por FFmpeg, no por GStreamer".
+        #
+        # Dos avisos que se contradicen en el mismo registro valen menos que
+        # ninguno: el que lo lee se va por el camino equivocado y encima
+        # confiado.
+        gst_h264_informe "$gst" "$rdir"
     else
         say "AVISO: no hay plugins de GStreamer ni en el runner ni en el sistema."
         say "       Sin ellos no se descodifican los videos WMV/WMA."
@@ -43481,6 +43838,90 @@ keys_ocultar_mando_decidir() {
 # ahi la ruta del FF7 escrita a mano; la causa es general y el arreglo tambien.
 # =============================================================================
 
+nucleo_imagen_legible() {
+    # ¿SE PUEDEN LEER LOS FICHEROS DE ESTA IMAGEN SIN LA AYUDA DE FUSE?
+    #
+    # $1 = la imagen ya montada de solo lectura. Devuelve 0 si si, 1 si no, y
+    # deja dicho en pantalla y en el registro cual es el problema.
+    #
+    # Se miran dos cosas, las dos baratas:
+    #   1. autorun.cmd, que es QUIEN DICE DONDE ESTA EL EJECUTABLE. Si no se
+    #      puede leer, no se puede ni empezar.
+    #   2. una muestra de ficheros del arbol, para poder decir en el registro
+    #      si el problema es de un fichero o de la imagen entera.
+    local inferior="$1" salida
+    salida="$(python3 - "$inferior" <<'LEGIBLE'
+import os, stat, sys
+from pathlib import Path
+base = Path(sys.argv[1])
+yo = os.getuid()
+
+def ilegible(p):
+    try:
+        with open(p, "rb") as f:
+            f.read(1)
+        return None
+    except OSError as e:
+        return e.errno
+
+# 1. El autorun.cmd, si lo hay: es quien dice donde esta el ejecutable.
+auto = None
+for cand in sorted(base.glob("*")):
+    if cand.name.lower() == "autorun.cmd" and cand.is_file() and not cand.is_symlink():
+        auto = cand
+        break
+if auto is not None:
+    err = ilegible(auto)
+    if err:
+        st = auto.lstat()
+        print("FALLO autorun %s uid=%s modo=%o" % (err, st.st_uid, stat.S_IMODE(st.st_mode)))
+        sys.exit(0)
+
+# 2. Una muestra, solo para contar y poder explicarlo.
+mirados = malos = 0
+for root, dirs, files in os.walk(base, followlinks=False):
+    dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+    for nombre in files:
+        ruta = os.path.join(root, nombre)
+        try:
+            st = os.lstat(ruta)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        mirados += 1
+        if st.st_uid != yo and not st.st_mode & stat.S_IROTH:
+            malos += 1
+        if mirados >= 400:
+            break
+    if mirados >= 400:
+        break
+print("OK %d %d" % (mirados, malos))
+LEGIBLE
+)" || { echo "Montaje núcleo: no se pudo comprobar si la imagen es legible"; return 1; }
+    case "$salida" in
+        FALLO*)
+            log "montaje del nucleo: autorun.cmd ILEGIBLE ($salida); la imagen esta empaquetada con los ficheros a nombre de otro usuario y dentro del namespace ese uid no esta mapeado. Con FUSE no se nota porque fuse-overlayfs monta con squash_to_uid" WARN
+            echo "Montaje núcleo: $salida"
+            # EL MENSAJE CULPA AL PAQUETE Y NO A LA MAQUINA, que es la verdad,
+            # y dice que hacer. El de antes decia "no se puede usar en este
+            # sistema" y mandaba al usuario a mirar su ordenador para nada.
+            say "[!] Este paquete tiene los ficheros a nombre de otro usuario, asi que"
+            say "    la carga rapida no puede leerlos. Se carga de la forma normal."
+            say "    Para que funcione hay que volver a empaquetar el juego con esta"
+            say "    version de WProton (Herramientas -> empaquetar)."
+            return 1 ;;
+        OK*)
+            set -- $salida
+            log "montaje del nucleo: imagen legible (autorun.cmd ok; $3 de $2 ficheros mirados no son nuestros y no tienen lectura para todos)"
+            [ "${3:-0}" = 0 ] || say "[!] Algunos ficheros de este paquete son de otro usuario; si el juego se queja de permisos, vuelve a empaquetarlo."
+            return 0 ;;
+        *)
+            log "montaje del nucleo: la comprobacion de lectura dijo algo que no entiendo ('$salida')" WARN
+            return 1 ;;
+    esac
+}
+
 nucleo_pedido_para() {
     # ¿ESTE JUEGO PIDE EL MONTAJE DEL NUCLEO? $1 = imagen, $2 = identificador.
     #
@@ -43703,6 +44144,43 @@ for row in json.load(sys.stdin).get("filesystems",[]):
         echo "Montaje núcleo: no se encontró SquashFS de solo lectura"; return 75;
     }
     echo "Montaje núcleo: SquashFS activo en $inferior ($dev)"
+    # ANTES DE SEGUIR: ¿SE PUEDEN LEER LOS FICHEROS DE ESTA IMAGEN?
+    #
+    # POR QUE ESTA COMPROBACION EXISTE (20-11-2026, un registro de CachyOS).
+    #
+    # El montaje se hizo entero y bien -loop, SquashFS, 3399 carpetas
+    # sembradas, OverlayFS activo, ficheros de Windows preparados- y entonces
+    # se cayo leyendo autorun.cmd con un simple "Permission denied". Se tiro un
+    # montaje que funcionaba, se volvio a FUSE, y encima el mensaje echaba la
+    # culpa al sistema ("no se puede usar en este sistema") cuando la culpa era
+    # DEL PAQUETE.
+    #
+    # LA CAUSA, Y NO TIENE ARREGLO POR ESTE LADO: ese autorun.cmd es de root y
+    # sin permiso de lectura para los demas. Dentro del namespace de usuario el
+    # uid 0 NO ESTA MAPEADO, asi que no hay forma de leerlo. Medido aqui:
+    #
+    #   - leer un fichero de root 0600 desde el namespace -> Permission denied
+    #   - con CAP_DAC_OVERRIDE dentro del namespace       -> Permission denied
+    #   - mapear el uid 0 al del usuario (que es lo que harian los idmapped
+    #     mounts) -> EL KERNEL LO DENIEGA a un usuario normal
+    #
+    # POR ESO CON FUSE SI FUNCIONA, y no es magia: fuse-overlayfs monta con
+    # squash_to_uid=1000,squash_to_gid=1000 y hace que TODO parezca del
+    # usuario. El SquashFS del kernel no tiene nada equivalente.
+    #
+    # Asi que se mira ANTES de montar nada mas -cuesta milisegundos- y si la
+    # imagen no se puede leer se vuelve a FUSE diciendo la verdad: que hay que
+    # reempaquetarla. Las que empaqueta WProton desde la 2.32 ya salen bien
+    # (ver pack_duenos_squashfs).
+    if ! nucleo_imagen_legible "$inferior"; then
+        # 76 Y NO 75: los dos vuelven a FUSE, pero el 75 significa "esta
+        # maquina no puede" y el 76 "este paquete no se puede leer". Son dos
+        # averias distintas, con dos arreglos distintos, y el usuario tiene
+        # que saber cual le ha tocado. Con un solo codigo, el mensaje
+        # generico mandaba a mirar el ordenador cuando el problema estaba en
+        # el .wsquashfs.
+        return 76
+    fi
     # En un prefijo Batocera nuevo, los directorios de la imagen suelen ser
     # de root y 0755. Un upper vacío permite crear en su raíz, pero no
     # necesariamente en drive_c/windows o en users durante el primer wineboot.
@@ -43876,29 +44354,64 @@ if repaired_windows:
 # No se baja recursivamente a proposito: los datos del juego tambien son 0644
 # y copiarlos seria descomprimir el juego entero, que es exactamente lo que
 # este montaje viene a evitar.
-autorun = root / "autorun.cmd"
-carpeta_juego = None
-if autorun.is_file() and not autorun.is_symlink():
-    relativo = ""
-    for linea in autorun.read_text(errors="replace").splitlines():
-        if linea.startswith("DIR="):
-            relativo = linea[4:].strip().strip(chr(34)).replace(chr(92), "/")
-    candidato = (root / relativo) if relativo else root
-    if candidato.is_dir() and candidato.resolve() == candidato:
-        carpeta_juego = candidato
-if carpeta_juego is not None:
-    preparados = 0
-    for path in sorted(carpeta_juego.iterdir()):
-        if path.is_symlink() or not path.is_file():
-            continue
-        if not path.lstat().st_mode & stat.S_IWUSR:
-            continue
-        if prepare_file(path):
-            preparados += 1
-    print("Montaje nucleo: %d ficheros preparados en la carpeta del juego (%s)"
-          % (preparados, carpeta_juego.name), flush=True)
-    with tempfile.NamedTemporaryFile(dir=carpeta_juego, prefix=".wp-escritura-"):
-        pass
+# Y TODO ESTO VA DENTRO DE UN try, POR UNA RAZON QUE COSTO UN REGISTRO.
+#
+# El 20-11-2026, en CachyOS, el montaje se hizo ENTERO Y BIEN -loop, SquashFS,
+# 3399 carpetas sembradas, OverlayFS activo, ficheros de Windows preparados- y
+# se cayo aqui con un "Permission denied" leyendo autorun.cmd. Un paso OPCIONAL
+# tiro un montaje que funcionaba y el juego se cargo por FUSE.
+#
+# Preparar ficheros es un apaño, no un requisito: si no se puede, el juego
+# arranca igual y como mucho se queja el juego de un fichero suyo. Asi que
+# aqui NADA aborta: se apunta lo que fallo, con su errno, y se sigue.
+#
+# (El caso de arriba ya no llega hasta aqui: nucleo_imagen_legible lo para
+# antes de montar nada. Esto es la red para el siguiente, que sera distinto.)
+try:
+    autorun = root / "autorun.cmd"
+    carpeta_juego = None
+    if autorun.is_file() and not autorun.is_symlink():
+        relativo = ""
+        try:
+            lineas = autorun.read_text(errors="replace").splitlines()
+        except OSError as e:
+            lineas = []
+            print("Montaje nucleo: autorun.cmd no se puede leer (errno %s); se sigue sin preparar la carpeta del juego"
+                  % e.errno, flush=True)
+        for linea in lineas:
+            if linea.startswith("DIR="):
+                relativo = linea[4:].strip().strip(chr(34)).replace(chr(92), "/")
+        if lineas:
+            candidato = (root / relativo) if relativo else root
+            if candidato.is_dir() and candidato.resolve() == candidato:
+                carpeta_juego = candidato
+    if carpeta_juego is not None:
+        preparados = fallidos = 0
+        for path in sorted(carpeta_juego.iterdir()):
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if not path.lstat().st_mode & stat.S_IWUSR:
+                    continue
+                if prepare_file(path):
+                    preparados += 1
+            except OSError as e:
+                fallidos += 1
+                print("Montaje nucleo: no se pudo preparar %s (errno %s)"
+                      % (path.name, e.errno), flush=True)
+        print("Montaje nucleo: %d ficheros preparados en la carpeta del juego (%s), %d sin poder"
+              % (preparados, carpeta_juego.name, fallidos), flush=True)
+        try:
+            with tempfile.NamedTemporaryFile(dir=carpeta_juego, prefix=".wp-escritura-"):
+                pass
+        except OSError as e:
+            print("Montaje nucleo: en la carpeta del juego no se puede crear (errno %s); el juego puede quejarse si quiere escribir ahi"
+                  % e.errno, flush=True)
+except Exception as e:
+    # La red del todo: ni un fallo inesperado aqui se lleva por delante un
+    # montaje que ya esta hecho.
+    print("Montaje nucleo: la preparacion de la carpeta del juego fallo (%s: %s); se sigue de todas formas"
+          % (type(e).__name__, e), flush=True)
 os.environ["WP_NUCLEO_VISTA"] = view
 os.chdir(os.path.dirname(script))
 print("Montaje núcleo: iniciando WProton para juego y prefijo", flush=True)
@@ -43909,8 +44422,12 @@ os.execvp("setpriv", ["setpriv", "--inh-caps=-all", "--ambient-caps=-all", "--",
     if [[ -s "$WP_NUCLEO_ESTADO" ]]; then
         echo "Montaje núcleo: fase=$(cat "$WP_NUCLEO_ESTADO") estado=$rc"
         rm -- "$WP_NUCLEO_ESTADO" || return 1
-        # El estado 75 se reserva para un fallo previo a la preparación.
-        (( rc != 75 )) || rc=1
+        # Los estados 75 y 76 se reservan para un fallo PREVIO a la
+        # preparación. Si el fichero de estado existe, el juego ya se entregó,
+        # asi que un 75 o un 76 de aqui es el codigo de salida del juego y no
+        # un fallo de montaje: se traduce, porque si no launch_game creeria
+        # que hay que volver a FUSE y jugaria el mismo juego dos veces.
+        (( rc != 75 && rc != 76 )) || rc=1
         return "$rc"
     fi
     return 75
@@ -44069,7 +44586,7 @@ Configurar juego -> Comprobar integridad"
         local estado_nucleo=0
         menu_server_stop
         nucleo_partida "$abs_squash" "$gid" "$mode" >>"$LOG_FILE" 2>&1 || estado_nucleo=$?
-        if [ "$estado_nucleo" != 75 ]; then
+        if [ "$estado_nucleo" != 75 ] && [ "$estado_nucleo" != 76 ]; then
             # El menu vuelve ANTES de bajar el blindaje, y partida_fin pegado
             # al return: asi lo exige -con razon- la auditoria, que no se fia
             # de un partida_fin a tres lineas de distancia.
@@ -44077,7 +44594,12 @@ Configurar juego -> Comprobar integridad"
             partida_fin; return "$estado_nucleo"
         fi
         log "Montaje del nucleo fallido (estado $estado_nucleo): se vuelve a FUSE; mirar las fases de UDisks y OverlayFS de arriba" WARN
-        say "[!] La carga rapida no se puede usar en este sistema; se carga de la forma normal."
+        # EL 76 YA HA EXPLICADO LO SUYO -y con mas detalle que esto- asi que
+        # aqui no se repite. Decirle a quien tiene un paquete mal empaquetado
+        # que "no se puede usar en este sistema" es mandarle a revisar el
+        # ordenador para nada.
+        [ "$estado_nucleo" = 76 ] || \
+            say "[!] La carga rapida no se puede usar en este sistema; se carga de la forma normal."
         mount_game "$squash" "$gid"
     else
         mount_game "$squash" "$gid"
@@ -44097,6 +44619,18 @@ Configurar juego -> Comprobar integridad"
             || { cleanup_mount; partida_fin; return 1; }
     fi
     load_profile "$gid"
+
+    # SIN INTERNET: se decide AQUI, en primer plano.
+    #
+    # No puede ir dentro del subshell del juego: alli un ui_error
+    # dibujaria un menu desde un proceso de fondo.
+    #
+    # Y SE SUELTA EL BLINDAJE ANTES DE VOLVER. Esta funcion ignora las
+    # senales de cierre desde su PRIMERA linea, asi que salir de aqui con
+    # un "return" a secas dejaria a WProton sin atender INT ni TERM el
+    # resto de la sesion. No lo vi yo: lo cazo auditoria_final, que
+    # vigila exactamente esto.
+    sinred_preparar || { partida_fin; return 1; }
     # El trackpad, como lo quiera ESTE juego. Va justo tras cargar el perfil,
     # que es donde ya se sabe lo que pide, y partida_fin lo devuelve al salir.
     trackpad_para_el_juego || true
@@ -44317,6 +44851,11 @@ Elige otro en: Ajustes del juego -> Ejecutable
     # wineserver si hay que cerrar el prefijo a la fuerza.
     RUNNER_DIR_ACTUAL="$rdir"
     build_runner_cmd "$rdir"
+    # LAS PAGINAS WEB DEL JUEGO, segun el perfil.
+    # Va aqui porque hace falta el runner (de ahi sale el wine con el que
+    # se escribe) y el prefijo ya puesto. Solo toca el registro si hay
+    # algo que cambiar.
+    web_bloqueo_aplicar "${WINEPREFIX:-}" "$rdir"
     pad_sdl_prefix_setup "$rdir"
     bundled_prefix_prepare "$rdir"
     # Con el prefijo ya listo y la ruta del ejecutable definitiva: se deja
@@ -44594,9 +45133,31 @@ Elige otro en: Ajustes del juego -> Ejecutable
 $(run_args_for "${EXE_WIN:-$EXE_PATH}")
 EOFRA
         # shellcheck disable=SC2086
-        "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
+        ${WP_SINRED[@]+"${WP_SINRED[@]}"} "${RUN_CMD[@]}" "${PRE[@]}" $EXE_ARGS >> "$LOG_FILE" 2>&1
         fi
-        log "LANZAMIENTO: el subshell termina con rc=$?"
+        # EL CODIGO DE SALIDA DEL JUEGO, QUE SE ESTABA PERDIENDO (24-11-2026).
+        #
+        # Aqui habia solo el log, y el log era EL ULTIMO COMANDO DEL SUBSHELL.
+        # O sea que el subshell salia con el codigo de la funcion log -0- y el
+        # "wait" de abajo recogia ese 0. El codigo del juego se tiraba a la
+        # basura justo despues de escribirlo.
+        #
+        # Lo vimos en un registro de Deck con Asphalt 6: el juego salio con 7,
+        # el registro lo apunto ("el subshell termina con rc=7") y tres lineas
+        # mas abajo WProton decia "El juego termino (rc=0)". Dos numeros para
+        # la misma cosa, y el que se usaba era el malo.
+        #
+        # Y no era un detalle cosmetico, porque de ese rc dependen:
+        #   - si se hace el post mortem (if rc != 0 || dur < 600)
+        #   - el caso especial de 241/255 (cierre pedido por nosotros)
+        #   - el mensaje que lee el usuario
+        #
+        # Encima el propio mensaje llevaba un descargo -"ese numero lo da el
+        # envoltorio, no el juego"- que sonaba razonable y tapaba esto: el
+        # numero no lo daba el envoltorio, lo daba mi funcion log.
+        _rc_juego=$?
+        log "LANZAMIENTO: el subshell termina con rc=$_rc_juego"
+        exit "$_rc_juego"
     ) >> "$LOG_FILE" 2>&1 &
     WP_PID_JUEGO=$!
     WP_T0_JUEGO=$(date +%s)          # desde aqui, un TERM es una peticion real
@@ -44991,6 +45552,19 @@ Que cumplas muchos mas.
     # Hay una suite (prueba_novedades.sh) que comprueba que cada punto es UNA
     # linea, que no se pasa de catorce y que no reaparece lo de los prefijos.
     #
+    # 26/11, AL SUBIR A LA 2.33: fuera los dos de la 2.32 y dentro UNO.
+    #
+    # La 2.32 SI se publico -los testers la han estado probando toda la tarde,
+    # y confirmaron lo de las paginas web: Dani, 26/11: "me comentan que ha
+    # funcionado bien lo de la paginas web"-, asi que vuelve a valer la regla:
+    # la lista no se hereda. Sus dos puntos se van y se quedan contados en
+    # NOVEDADES-2.32.md.
+    #
+    # Y UNO SOLO, no mas. La 2.33 trae el aviso de los bloqueos de red, y es
+    # lo unico que la gente nota. Lo demas de esta tanda -que el aviso no
+    # pregunta nada, que solo se consulta en España, que se cachea diez
+    # minutos- son tripas y van al fichero de novedades, no aqui.
+    #
     # 01/11, AL SUBIR A LA 2.23: fuera el punto de la 2.22 (TeknoParrot) y
     # dentro los cinco de esta. La lista se limpia A MANO cada vez, que es
     # justo lo que no se hizo en la 2.15 y por eso existe la suite.
@@ -45209,9 +45783,7 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Nuevo: carga rapida, juego por juego, para los que tardan en arrancar.
-
-  Arreglado: en los juegos de Linux, arranca el lanzador que eliges.
+  Nuevo: aviso cuando la red de España esta bloqueada por el futbol.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -56539,7 +57111,7 @@ install_dgvoodoo() {
     if [ ! -f "$pkg" ]; then
         local url
         url="$(gh_latest_asset "dege-diosg/dgVoodoo2" '\.zip$' | grep -iv dbg | head -n1)"
-        [ -z "$url" ] && { ui_error "No se encontro dgVoodoo2 en GitHub"; release_game_root; return 1; }
+        [ -z "$url" ] && { ui_error "$(gh_no_encontrado dgVoodoo2 dege-diosg/dgVoodoo2)"; release_game_root; return 1; }
         dl "$url" "$pkg" || { ui_error "Fallo descargando dgVoodoo2"; rm -f "$pkg"; release_game_root; return 1; }
     fi
     local tmp; tmp="$(mktemp -d)"
@@ -56580,7 +57152,7 @@ install_dsoal() {
 
     local url pkg
     url="$(gh_latest_asset "ThreeDeeJay/DSOAL" '\.zip$|\.tar\.(gz|xz|zst)$')"
-    [ -z "$url" ] && { ui_error "No se encontro DSOAL en GitHub"; release_game_root; return 1; }
+    [ -z "$url" ] && { ui_error "$(gh_no_encontrado DSOAL ThreeDeeJay/DSOAL)"; release_game_root; return 1; }
     pkg="$DL_DIR/$(basename "$url")"
     if [ ! -f "$pkg" ]; then
         dl "$url" "$pkg" || { ui_error "Fallo descargando DSOAL"; rm -f "$pkg"; release_game_root; return 1; }
@@ -56617,7 +57189,17 @@ elegir EAX. Para quitarlo, borra esos dos ficheros."
 }
 
 install_d7vk() {
-    # D7VK: DirectDraw y Direct3D 1-7 sobre Vulkan (AlpyneDreams/d7vk).
+    # D7VK: DirectDraw y Direct3D 1-7 sobre Vulkan (WinterSnowfall/d7vk).
+    #
+    # EL REPOSITORIO CAMBIO (25-11-2026). Estaba puesto AlpyneDreams/d7vk y ese
+    # YA NO EXISTE: da 404 en la API y en la pagina. Comprobado por las dos
+    # vias, y comprobado tambien contra un repositorio vivo por si lo que
+    # fallaba era un limite de peticiones -vasi/squashfuse respondia bien a la
+    # vez-, asi que no es un falso negativo.
+    #
+    # El que mantiene D7VK ahora es WinterSnowfall/d7vk (v2.4, octubre de
+    # 2026), un fork de dxvk igual que el anterior. Publica un unico .zip
+    # -d7vk-vX.Y.zip- que encaja con el filtro que ya teniamos.
     #
     # Para los juegos de los 90 que hoy van por WineD3D a rastras o no pintan.
     # Es una DLL -ddraw.dll- que va JUNTO AL EXE, como OptiScaler, y un
@@ -56627,8 +57209,9 @@ install_d7vk() {
     target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
 
     local url pkg
-    url="$(gh_latest_asset "AlpyneDreams/d7vk" '\.tar\.(gz|xz|zst)$|\.zip$')"
-    [ -z "$url" ] && { ui_error "No se encontro D7VK en GitHub"; release_game_root; return 1; }
+    local repo_d7vk="WinterSnowfall/d7vk"
+    url="$(gh_latest_asset "$repo_d7vk" '\.tar\.(gz|xz|zst)$|\.zip$')"
+    [ -z "$url" ] && { ui_error "$(gh_no_encontrado D7VK "$repo_d7vk")"; release_game_root; return 1; }
     pkg="$DL_DIR/$(basename "$url")"
     if [ ! -f "$pkg" ]; then
         dl "$url" "$pkg" || { ui_error "Fallo descargando D7VK"; rm -f "$pkg"; release_game_root; return 1; }
@@ -56879,7 +57462,7 @@ install_optiscaler() {
 
     local url pkg
     url="$(gh_latest_asset "optiscaler/OptiScaler" '\.(7z|zip)$')"
-    [ -z "$url" ] && { ui_error "No se encontro OptiScaler en GitHub"; release_game_root; return 1; }
+    [ -z "$url" ] && { ui_error "$(gh_no_encontrado OptiScaler optiscaler/OptiScaler)"; release_game_root; return 1; }
     pkg="$DL_DIR/$(basename "$url")"
     if [ ! -f "$pkg" ]; then
         dl "$url" "$pkg" || { ui_error "Fallo descargando OptiScaler"; rm -f "$pkg"; release_game_root; return 1; }
@@ -60849,6 +61432,18 @@ launch_loose_exe() {
             || { partida_fin; return 1; }
     fi
     load_profile "$gid"
+
+    # SIN INTERNET: se decide AQUI, en primer plano.
+    #
+    # No puede ir dentro del subshell del juego: alli un ui_error
+    # dibujaria un menu desde un proceso de fondo.
+    #
+    # Y SE SUELTA EL BLINDAJE ANTES DE VOLVER. Esta funcion ignora las
+    # senales de cierre desde su PRIMERA linea, asi que salir de aqui con
+    # un "return" a secas dejaria a WProton sin atender INT ni TERM el
+    # resto de la sesion. No lo vi yo: lo cazo auditoria_final, que
+    # vigila exactamente esto.
+    sinred_preparar || { partida_fin; return 1; }
     # El trackpad, como lo quiera este juego. Por aqui pasan los .exe sueltos y
     # los juegos en carpeta -play_folder acaba llamando aqui-, asi que con esto
     # y lo de launch_game quedan cubiertas las tres formas de lanzar.
@@ -61240,6 +61835,11 @@ EOFRB
     #
     # Proton puede tardar de verdad aqui la primera vez con un runner nuevo,
     # asi que el mensaje lo dice en vez de dejar al usuario adivinando.
+    # LAS PAGINAS WEB DEL JUEGO, segun el perfil.
+    # Va aqui porque hace falta el runner (de ahi sale el wine con el que
+    # se escribe) y el prefijo ya puesto. Solo toca el registro si hay
+    # algo que cambiar.
+    web_bloqueo_aplicar "${WINEPREFIX:-}" "$rdir"
     loading_say "Preparando el entorno de Windows con $(basename "${rdir%/}")..."
     # EN SEGUNDO PLANO Y CON SU PID, IGUAL QUE EN launch_game.
     #
@@ -61247,7 +61847,7 @@ EOFRB
     # podia cerrar el juego: ni el guardia de SELECT -que hace
     # matar_con_hijos "$WP_PID_JUEGO"- ni la peticion de cierre de Steam. El
     # usuario se quedaba con un juego que solo se podia cerrar desde dentro.
-    ( cd "$(dirname "$exe")" && "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 ) &
+    ( cd "$(dirname "$exe")" && ${WP_SINRED[@]+"${WP_SINRED[@]}"} "${RUN_CMD[@]}" "${PRE[@]}" $loose_args >> "$LOG_FILE" 2>&1 ) &
     WP_PID_JUEGO=$!
     WP_T0_JUEGO=$(date +%s)
     diag_ventanas_steam
@@ -63046,6 +63646,18 @@ nativo_prefijo_orden() {
     # Deja el resultado en WP_NAT_PRE, que puede quedar vacio: entonces el
     # juego se lanza tal cual, como siempre.
     WP_NAT_PRE=()
+    # SIN INTERNET, POR FUERA DE TODO LO DEMAS.
+    #
+    # Va al principio para quedar por fuera del runtime de Steam: el
+    # aislamiento envuelve al contenedor, no va dentro. Y se pone aqui, en la
+    # lista de envoltorios, porque de ella tiran los DOS sitios que ejecutan
+    # dentro de ejecutar_nativo -el binario y el bash-, asi que ninguno se
+    # queda fuera. Es justo lo que se escapo con el .sh: arreglar un camino y
+    # dejar el otro.
+    if [ "${#WP_SINRED[@]}" -gt 0 ]; then
+        WP_NAT_PRE+=("${WP_SINRED[@]}")
+        log "juego nativo: se lanza SIN INTERNET (${WP_SINRED[*]})"
+    fi
     local exe="${1:-}" pref="${RUNTIME_STEAM:-no}" dir entrada
 
     # --- 1) el contenedor
@@ -65697,6 +66309,13 @@ lanzar_nativo_suelto() {
     # los ajustes del juego -runner, prefijo, mandos, librerias- y se
     # quedarian los valores de fabrica.
     load_profile "$gid" >/dev/null 2>&1 || true
+
+    # SIN INTERNET: se decide AQUI, en primer plano.
+    #
+    # No puede ir dentro del subshell del juego: alli un ui_error
+    # dibujaria un menu desde un proceso de fondo. Y si se pidio y no se
+    # puede, se devuelve 1 y no se lanza (ver sinred_preparar).
+    sinred_preparar || return 1
     # SE APUNTA CON QUE PERFIL SE TRABAJA, en el registro y no en pantalla.
     #
     # Sin esto no se puede leer un registro del tester: no hay forma de
@@ -65850,6 +66469,13 @@ lanzar_script_si_existe() {
     # de partidas se pusiera a cero: es que se borrarian TODOS los ajustes del
     # juego -runner, prefijo, mandos, librerias- y se quedarian los de fabrica.
     load_profile "$gid" >/dev/null 2>&1 || true
+
+    # SIN INTERNET: se decide AQUI, en primer plano.
+    #
+    # No puede ir dentro del subshell del juego: alli un ui_error
+    # dibujaria un menu desde un proceso de fondo. Y si se pidio y no se
+    # puede, se devuelve 1 y no se lanza (ver sinred_preparar).
+    sinred_preparar || return 1
     # AHORA SI: con el perfil puesto, juego_es_nativo puede hacer caso a
     # VERSION_JUEGO. Si dice que no es un juego de Linux se vuelve con 1 y
     # play_folder sigue por el camino de Windows, como siempre.
@@ -75599,13 +76225,89 @@ sort_games() {
 discos_sin_montar() {
     # Particiones con sistema de ficheros que NO estan montadas.
     # Formato: dispositivo|etiqueta|tipo|tamaño
+    #
+    # UNA TARJETA SIN ETIQUETA NO APARECIA. Arreglado el 25-11-2026.
+    #
+    # Antes esto leia "lsblk -rno PATH,LABEL,FSTYPE,SIZE,MOUNTPOINT" y partia
+    # la linea por espacios. El problema es que en modo -r los campos VACIOS no
+    # se marcan de ninguna manera: se quedan dos espacios seguidos. Una tarjeta
+    # con etiqueta sale asi
+    #
+    #   /dev/mmcblk0p1 JUEGOS ext4 119.1G
+    #
+    # y una SIN etiqueta, que es lo normal de fabrica, sale asi
+    #
+    #   /dev/mmcblk0p1  ext4 119.1G
+    #
+    # awk junta los espacios seguidos, asi que la etiqueta pasaba a ser "ext4",
+    # el tipo "119.1G", el tamaño quedaba vacio y NF se quedaba en 3. La
+    # condicion era NF >= 4, no se cumplia, y LA TARJETA DESAPARECIA: no salia
+    # en el menu de montar, no la montaba el automontaje al arrancar y no habia
+    # ni una linea en el registro diciendo que existia.
+    #
+    # Por eso no se habia visto: Steam formatea sus tarjetas CON etiqueta, asi
+    # que en una Deck con la tarjeta hecha por Steam funcionaba. Fallaba con
+    # una tarjeta de fabrica, o con un disco USB recien formateado sin ponerle
+    # nombre. Y el menu de mas abajo ya ponia "sin etiqueta" cuando no la hay,
+    # o sea que estaba previsto: lo que fallaba era la deteccion, antes de
+    # llegar ahi.
+    #
+    # Ahora se lee el JSON de lsblk, que marca lo vacio como null y escapa el
+    # contenido, asi que no hay nada que adivinar ni que entrecomillar: una
+    # etiqueta con espacios, con comillas o con un salto de linea entra y sale
+    # tal cual. Y sin eval, que sobre el nombre de un disco que viene de fuera
+    # no se hace.
     command -v lsblk >/dev/null 2>&1 || return 1
-    lsblk -rno PATH,LABEL,FSTYPE,SIZE,MOUNTPOINT 2>/dev/null | awk '
-        NF >= 4 && $5 == "" && $3 != "" && $3 != "swap" &&
-        $3 != "crypto_LUKS" && $3 != "linux_raid_member" {
-            etiqueta = $2; gsub(/\\x20/, " ", etiqueta)
-            print $1 "|" etiqueta "|" $3 "|" $4
-        }'
+    if [ -n "${PY_BIN:-}" ] && [ -x "${PY_BIN:-}" ]; then
+        # El codigo va en un heredoc y no en un -c de varias lineas: asi
+        # auditoria_final no lo lee como si fuera shell. Con el -c directo se
+        # quejaba de que "for d in lista or []:" iba detras de un return.
+        local lector
+        lector="$(cat <<'PYDISCOS'
+import json, sys
+
+OMITIR = {"swap", "crypto_LUKS", "linux_raid_member"}
+
+
+def montado(d):
+    # MOUNTPOINT y MOUNTPOINTS: con btrfs y sus subvolumenes una particion
+    # puede tener el primero vacio y estar montada de todas formas.
+    if d.get("mountpoint"):
+        return True
+    return any(p for p in (d.get("mountpoints") or []) if p)
+
+
+def recorrer(lista):
+    for d in lista or []:
+        tipo = d.get("fstype") or ""
+        if tipo and tipo not in OMITIR and not montado(d):
+            # El separador es "|", asi que si aparece en una etiqueta se
+            # cambia: si no, parte la linea y descoloca a quien la lee.
+            etq = (d.get("label") or "").replace("|", "/")
+            etq = " ".join(etq.split())
+            print("%s|%s|%s|%s" % (d.get("path") or "", etq,
+                                   tipo, d.get("size") or ""))
+        recorrer(d.get("children"))
+
+
+try:
+    recorrer(json.load(sys.stdin).get("blockdevices"))
+except Exception:
+    sys.exit(1)
+PYDISCOS
+)"
+        lsblk --json -o PATH,LABEL,FSTYPE,SIZE,MOUNTPOINT,MOUNTPOINTS 2>/dev/null \
+            | "$PY_BIN" -I -c "$lector" && return 0
+    fi
+    # SIN PYTHON, el mismo dato por el otro formato seguro de lsblk: -P saca
+    # clave="valor" y marca lo vacio como LABEL="". No es la via normal -python
+    # es dependencia fija de WProton, que los menus son python- pero si falta,
+    # esto es CORRECTO, no la version con el fallo: lo que no puede pasar es
+    # que el repuesto vuelva a perder las tarjetas sin etiqueta.
+    lsblk -Pno PATH,LABEL,FSTYPE,SIZE,MOUNTPOINT 2>/dev/null | sed -n '
+        s/^PATH="\(.*\)" LABEL="\(.*\)" FSTYPE="\(.*\)" SIZE="\(.*\)" MOUNTPOINT="\(.*\)"$/\5\t\3\t\1|\2|\3|\4/p' \
+        | awk -F'\t' '$1 == "" && $2 != "" && $2 != "swap" &&
+                       $2 != "crypto_LUKS" && $2 != "linux_raid_member" { print $3 }'
     return 0
 }
 
@@ -76786,6 +77488,282 @@ Tienes tres formas de añadir juegos:
     printf '%s' "${sel_ruta:-$sel}"
 }
 
+# ===================================================================
+# QUE EL JUEGO NO ABRA PAGINAS WEB, Y QUE NO SALGA A INTERNET
+# ===================================================================
+#
+# SON DOS COSAS DISTINTAS, y conviene no mezclarlas: la gente pide la segunda
+# cuando lo que le arregla el problema es la primera.
+#
+#   1. PAGINAS WEB (web_*). Hay juegos -tipicos de paginas de descargas- que
+#      al cerrarse abren el navegador en la pagina de donde salieron. Eso NO
+#      es "conectarse a internet": es el juego pidiendole a Windows que abra
+#      una URL. Se le corta ahi, y el juego sigue teniendo internet para lo
+#      que necesite de verdad.
+#
+#   2. SIN INTERNET (sinred_*). El juego entra en un espacio de red propio y
+#      VACIO: sin interfaz, sin ruta y sin DNS. Es el martillo grande: sirve
+#      para cualquier cosa -anuncios, telemetria, comprobaciones- pero se
+#      lleva por delante tambien lo que el juego necesite.
+#
+# ---- 1. DE DONDE SALE EL CORTE DE LA URL (del codigo de Wine, no de oido)
+#
+# programs/winebrowser/main.c lee HKCU\Software\Wine\WineBrowser y de ahi los
+# valores "Browsers" y "Mailers", que son listas separadas por comas:
+#
+#   if (!(r = RegOpenKeyW( HKEY_CURRENT_USER, L"Software\\Wine\\WineBrowser", &key )))
+#
+# Si la clave o el valor NO EXISTEN, se usan los de serie (xdg-open,
+# /usr/bin/open, firefox, konqueror, mozilla, opera, dillo). Si el valor
+# EXISTE y esta VACIO, la lista de candidatos queda vacia, el bucle de
+# launch_app no se ejecuta ni una vez, Wine apunta
+#
+#   WINE_ERR( "could not find a suitable app to open %s\n", ... )
+#
+# y NO ABRE NADA. O sea: hay que ponerlo VACIO, y para permitirlo otra vez hay
+# que BORRARLO -vaciarlo no devuelve los de serie, borrarlo si-.
+#
+# Y que "reg add /d ''" escriba de verdad un REG_SZ vacio tambien sale del
+# codigo, programs/reg/add.c: en get_regdata un dato vacio -o ausente- se
+# convierte en cadena vacia y se escribe. Lo unico que rechaza es un /d sin
+# nada detras.
+#
+# ---- 2. COMO SE QUITA LA RED, Y QUE SOBREVIVE
+#
+# Un espacio de red nuevo: "unshare --net --fork --user --map-current-user".
+# Sin permisos, sin sudo y sin tocar el sistema. Medido aqui:
+#
+#   - internet: cortado.
+#   - LOOPBACK: SE CAE. Un socket a 127.0.0.1 da "Network is unreachable", y
+#     de ahi tiran Wine, Steam y bastantes juegos. HAY QUE LEVANTARLO, y de eso
+#     se encarga el ayudante de abajo.
+#   - sockets unix: intactos. Por eso Steam, wineserver y el sonido no se
+#     enteran de nada: hablan por fichero, no por red.
+#   - se puede ANIDAR dentro del montaje del nucleo, incluso despues de su
+#     "setpriv --inh-caps=-all". Comprobado. Por eso aqui no hay un caso
+#     especial para la carga rapida: es el mismo envoltorio para todos.
+#   - un montaje hecho FUERA sigue legible y escribible dentro.
+#   - pero HACE FALTA --mount para que el juego pueda montar lo SUYO: un
+#     AppImage se monta solo con FUSE y sin --mount le da EPERM. Ver el
+#     comentario largo en sinred_preparar.
+#   - y lo que mas importaba: los fallos de red son INSTANTANEOS, no esperas.
+#     DNS 3,5 ms, connect 0,0 ms. Asi que umu/Proton no se quedan colgados
+#     buscando actualizaciones: reciben el error al momento y siguen.
+#
+# El loopback se levanta por ioctl desde python y NO con "ip" ni "ifconfig":
+# en el espacio nuevo tenemos CAP_NET_ADMIN, y asi no se depende de iproute2
+# ni de net-tools estando o no en la maquina.
+
+web_clave() { printf '%s' 'HKCU\Software\Wine\WineBrowser'; }
+
+web_bloqueo_puesto() {
+    # SE MIRA EL REGISTRO, NO UNA MARCA NUESTRA.
+    #
+    # Es la leccion de winebus_reparar_compartido: una marca nuestra se queda
+    # descolgada en cuanto hay un cierre a medias, y entonces nadie deshace lo
+    # que quedo escrito. user.reg es un fichero de texto y dice la verdad.
+    local reg="${1:-}/user.reg"
+    [ -f "$reg" ] || return 1
+    grep -q '^"Browsers"=""' "$reg" 2>/dev/null
+}
+
+web_bloqueo_escribir() {
+    # $1 = prefijo, $2 = carpeta del runner, $3 = 1 bloquear / 0 permitir
+    local pfx="$1" rdir="$2" poner="$3" wbin clave
+    [ -n "$pfx" ] && [ -d "$pfx" ] || {
+        log "paginas web: no hay prefijo donde escribir" WARN; return 1; }
+    wbin="$(runner_wine_bin "$rdir" 2>/dev/null)" || wbin=""
+    [ -n "$wbin" ] && [ -x "$wbin" ] || {
+        log "paginas web: no hay wine para escribir en el prefijo" WARN; return 1; }
+    clave="$(web_clave)"
+    if [ "$poner" = 1 ]; then
+        WINEPREFIX="$pfx" "$wbin" reg add "$clave" /v Browsers /t REG_SZ /d "" /f >/dev/null 2>&1
+        WINEPREFIX="$pfx" "$wbin" reg add "$clave" /v Mailers  /t REG_SZ /d "" /f >/dev/null 2>&1
+        log "paginas web: BLOQUEADAS ($clave: Browsers y Mailers vacios) en $pfx"
+    else
+        # BORRAR, no vaciar: un valor ausente devuelve los de serie de Wine.
+        WINEPREFIX="$pfx" "$wbin" reg delete "$clave" /v Browsers /f >/dev/null 2>&1
+        WINEPREFIX="$pfx" "$wbin" reg delete "$clave" /v Mailers  /f >/dev/null 2>&1
+        log "paginas web: permitidas otra vez (valores borrados de $clave) en $pfx"
+    fi
+    return 0
+}
+
+web_bloqueo_aplicar() {
+    # Deja el prefijo como diga el perfil, y SOLO si hay que tocarlo: arrancar
+    # wine cuesta cerca de un segundo y no se paga en cada partida por nada.
+    local pfx="$1" rdir="$2" quiere="${WEB_BLOQUEADA:-0}" hay=0
+    [ -n "$pfx" ] && [ -d "$pfx" ] || return 0
+    web_bloqueo_puesto "$pfx" && hay=1
+    log "paginas web: el perfil pide $quiere y el prefijo esta a $hay"
+    if [ "$quiere" = "$hay" ]; then
+        log "paginas web: ya esta como toca, no se arranca wine"
+        return 0
+    fi
+    web_bloqueo_escribir "$pfx" "$rdir" "$quiere"
+}
+
+web_label() {
+    # Se dice el VALOR y no ON/OFF, porque "ON" no dice que se enciende: si
+    # estan bloqueadas o no. Ademas wp_tr parte la fila por ": " y traduce la
+    # etiqueta y el valor por separado.
+    case "${WEB_BLOQUEADA:-0}" in
+        1) printf 'Bloqueadas' ;;
+        *) printf 'Permitidas' ;;
+    esac
+}
+
+sinred_ayudante() {
+    # Escribe el ayudante que levanta el loopback DENTRO del espacio de red y
+    # acto seguido lanza el juego. Va en tools/ del propio WProton: portable,
+    # sin sudo y sin instalar nada en el sistema.
+    local dir="${RUNTIME_DIR:-}/tools" f
+    [ -n "${RUNTIME_DIR:-}" ] || return 1
+    mkdir -p "$dir" 2>/dev/null || true
+    f="$dir/wp-sinred.py"
+    cat > "$f" 2>/dev/null <<'WPSINRED'
+#!/usr/bin/env python3
+"""Levanta el loopback en el espacio de red nuevo y lanza lo que le pasen.
+
+Se hace por ioctl y no con "ip link set lo up" para no depender de iproute2:
+dentro de un espacio de red recien creado tenemos CAP_NET_ADMIN, asi que el
+ioctl basta y funciona igual en SteamOS que en cualquier otra.
+"""
+import fcntl
+import os
+import socket
+import struct
+import sys
+
+SIOCGIFFLAGS = 0x8913
+SIOCSIFFLAGS = 0x8914
+IFF_UP = 1
+
+
+def levantar_lo():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        peticion = struct.pack("16sh", b"lo", 0)
+        banderas = struct.unpack("16sh", fcntl.ioctl(s, SIOCGIFFLAGS, peticion))[1]
+        fcntl.ioctl(s, SIOCSIFFLAGS, struct.pack("16sh", b"lo", banderas | IFF_UP))
+    finally:
+        s.close()
+
+
+if len(sys.argv) < 2:
+    sys.exit("[sin-red] falta la orden que lanzar")
+
+try:
+    levantar_lo()
+    print("[sin-red] loopback levantado dentro del espacio de red", flush=True)
+except OSError as exc:
+    print("[sin-red] NO se pudo levantar el loopback: %s" % exc, flush=True)
+    print("[sin-red] si el juego usa 127.0.0.1 puede fallar por esto", flush=True)
+
+print("[sin-red] el juego arranca sin interfaz, sin ruta y sin DNS", flush=True)
+os.execvp(sys.argv[1], sys.argv[1:])
+WPSINRED
+    [ -s "$f" ] || return 1
+    chmod +x "$f" 2>/dev/null || true
+    printf '%s' "$f"
+}
+
+sinred_posible() {
+    # Se PRUEBA, no se supone: se crea un espacio de red de verdad y se tira.
+    command -v unshare >/dev/null 2>&1 || {
+        log "sin red: no hay 'unshare' en esta maquina" WARN; return 1; }
+    [ -n "${PY_BIN:-}" ] && [ -x "${PY_BIN:-}" ] || {
+        log "sin red: no hay python para levantar el loopback" WARN; return 1; }
+    if ! unshare --net --fork --user --map-current-user true 2>/dev/null; then
+        log "sin red: esta maquina no deja crear un espacio de red sin permisos" WARN
+        return 1
+    fi
+    return 0
+}
+
+sinred_preparar() {
+    # Deja WP_SINRED listo -o vacio- para los sitios que lanzan el juego.
+    #
+    # SI SE PIDIO Y NO SE PUEDE, NO SE LANZA.
+    #
+    # Lanzarlo igual seria lo peor de los dos mundos: el juego tendria
+    # internet y el usuario creeria que no. Es el mismo criterio que con los
+    # codigos 75 y 76 de la carga rapida: antes de hacer algo distinto de lo
+    # que se pidio, se dice.
+    WP_SINRED=()
+    if [ "${SIN_RED:-0}" != 1 ]; then
+        log "sin red: apagado para este juego"
+        return 0
+    fi
+    local ayu=""
+    if ! sinred_posible; then
+        ui_error "Este juego está puesto para jugar SIN INTERNET, pero esta
+máquina no puede aislar la red.
+
+No se lanza a propósito: si se lanzara, el juego tendría
+internet y tú creerías que no.
+
+Lo puedes quitar en:
+Ajustes del juego → Red y páginas web → Internet"
+        return 1
+    fi
+    ayu="$(sinred_ayudante)" || ayu=""
+    if [ -z "$ayu" ]; then
+        log "sin red: no se pudo escribir el ayudante en $RUNTIME_DIR/tools" WARN
+        ui_error "Este juego está puesto para jugar SIN INTERNET, pero no se
+ha podido preparar el aislamiento.
+
+No se lanza a propósito: si se lanzara, el juego tendría
+internet y tú creerías que no."
+        return 1
+    fi
+    # --mount ES IMPRESCINDIBLE, Y NO ESTABA (25-11-2026, misma tarde).
+    #
+    # Lo pregunto un tester: "¿en los juegos de Linux tambien funciona quitar
+    # internet?". Y comprobandolo salio esto, que es un fallo de verdad.
+    #
+    # Un AppImage SE MONTA SOLO con FUSE al arrancar. Sin --mount, el espacio
+    # de montaje sigue siendo del padre, asi que dentro no tenemos permiso para
+    # montar ahi: mount(2) da EPERM. Medido:
+    #
+    #   fuera de todo ................................ monta
+    #   unshare --net --user ......................... Operation not permitted
+    #   unshare --net --user --mount ................. monta
+    #
+    # Y encima fusermount3, que es la via de repuesto de libfuse, pierde el
+    # setuid dentro de un espacio de usuario, asi que tampoco salva el caso.
+    # O sea que sin --mount cualquier juego de Linux empaquetado como AppImage
+    # NO ARRANCA con esta opcion puesta, y el fallo no se parece en nada a
+    # "falta internet".
+    #
+    # Lo dice la propia fuse_se_puede de este proyecto: mount(2) directo
+    # "funciona si tenemos CAP_SYS_ADMIN, por ejemplo dentro de un espacio de
+    # nombres de usuario propio". Lo que faltaba era el espacio de MONTAJE.
+    #
+    # Con --mount puesto, comprobado a la vez y anidado dentro del montaje del
+    # nucleo (y despues de su setpriv): el loopback se levanta, FUSE monta,
+    # internet sigue cortado, los sockets unix siguen valiendo y lo que ya
+    # estaba montado fuera sigue legible Y escribible.
+    #
+    # --propagation private es la misma que usa nucleo_partida: lo que el juego
+    # monte dentro no se cuela al sistema, y al cerrarse no deja montajes
+    # colgando.
+    WP_SINRED=(unshare --net --fork --user --map-current-user
+               --mount --propagation private -- "$PY_BIN" "$ayu")
+    log "sin red: ACTIVO. El juego entra en un espacio de red vacio."
+    log "sin red: los sockets unix siguen valiendo, asi que Steam, wineserver y"
+    log "sin red: el sonido no se enteran: hablan por fichero y no por red."
+    log "sin red: envoltura = ${WP_SINRED[*]}"
+    return 0
+}
+
+sinred_label() {
+    case "${SIN_RED:-0}" in
+        1) printf 'Sin internet' ;;
+        *) printf 'Con internet' ;;
+    esac
+}
+
 nucleo_label() {
     # LO QUE SE LEE EN LA FILA DE LOS AJUSTES.
     #
@@ -77066,6 +78044,131 @@ Se apaga $otro_txt y se sigue?" || return 1
     else
         MAKO=0
         say "[i] MAKO apagado para dejar sitio a ReShade (Linux)"
+    fi
+    return 0
+}
+
+cfg_red_menu() {
+    # LA PANTALLA DE RED Y PAGINAS WEB, juego por juego.
+    #
+    # Dos filas y no una, porque son dos cosas distintas y la que casi todo el
+    # mundo quiere es la primera: cortar la pagina que se abre al salir, sin
+    # quitarle internet al juego.
+    #
+    # Va en su propio submenu y no en el principal porque el principal ya se
+    # saco una vez de 42 filas por incomodo con el mando, y aqui queda sitio
+    # para lo que venga (telemetria, cortafuegos por juego).
+    # $3 = 1 si este juego tiene prefijo de Wine.
+    #
+    # NO SE VUELVE A DECIDIR AQUI. Quien llama ya ha decidido si este juego
+    # usa prefijo -es la misma condicion que pone o quita la fila "Prefijo:"-
+    # y se reaprovecha tal cual. Decidirlo otra vez por nuestra cuenta es
+    # abrir la puerta a que las dos respuestas se separen, que es como
+    # empiezan todas las bolas de nieve de este proyecto.
+    local gid="$1" squash="${2:-}" hay_prefijo="${3:-1}" sel
+    while :; do
+        # LA FILA DE LAS PAGINAS SOLO SI HAY PREFIJO DONDE ESCRIBIR.
+        #
+        # Un juego de Linux no tiene prefijo de Wine, asi que ahi no hay
+        # winebrowser al que cortarle nada. Una fila que no puede hacer nada
+        # es peor que no tenerla.
+        local r_web=""
+        if [ "$hay_prefijo" = 1 ]; then
+            r_web="Páginas web del juego: $(web_label)"
+        fi
+        sel="$(menu "Red y páginas web - $gid" \
+            "$r_web" \
+            "Internet: $(sinred_label)" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Páginas web del juego:"*) web_menu "$gid" ;;
+            "Internet:"*)              sinred_menu "$gid" ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
+web_menu() {
+    # Se explica en palabras de quien juega -la pagina que se abre al salir- y
+    # no en las de dentro: winebrowser, ShellExecute y el registro van al
+    # registro de WProton, no a la pantalla.
+    local gid="$1" sel antes="${WEB_BLOQUEADA:-0}" aviso=""
+    # EL PREFIJO COMPARTIDO SE AVISA, PERO NO SE PROHIBE.
+    #
+    # winebus_sdl_poner si lo prohibe, y con razon: quitar hidraw deja sin
+    # mandos a los demas juegos del prefijo. Aqui el efecto en los demas es
+    # que tampoco se les abren paginas, que es lo que quiere cualquiera. Si se
+    # prohibiera, la opcion no serviria para la mayoria de los juegos, que van
+    # con prefijo compartido.
+    case "${PREFIX_MODE:-shared}" in
+        shared) aviso="
+
+Ojo: este juego usa el prefijo COMPARTIDO, así que esto vale
+para todos los juegos que lo comparten. No les hace daño: lo
+único que cambia es que tampoco se les abren páginas." ;;
+    esac
+    sel="$(menu "¿Puede este juego abrir páginas web?
+Hay juegos que al cerrarse abren el navegador en la página de
+donde se descargaron. Si lo bloqueas, esa página ya no se abre.
+El juego sigue teniendo internet para lo demás: partidas en
+línea, parches y lo que necesite.$aviso" \
+        "Permitidas (normal)" \
+        "Bloqueadas (no abre ninguna página)" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "Permitidas"*)  WEB_BLOQUEADA=0 ;;
+        "Bloqueadas"*)  WEB_BLOQUEADA=1 ;;
+        *) return 0 ;;
+    esac
+    [ "$WEB_BLOQUEADA" = "$antes" ] && return 0
+    write_full_profile "$gid"
+    log "paginas web '$gid': $antes -> $WEB_BLOQUEADA"
+    if [ "$WEB_BLOQUEADA" = 1 ]; then
+        ui_info "Hecho. Este juego ya no abrirá ninguna página web.
+Se aplica en el prefijo la próxima vez que juegues."
+    else
+        ui_info "Hecho. Este juego vuelve a poder abrir páginas web."
+    fi
+    return 0
+}
+
+sinred_menu() {
+    # AQUI SE DICE LO QUE SE PIERDE, no solo lo que se gana.
+    #
+    # Quitar la red entera se lleva por delante las partidas en linea y los
+    # parches, y eso tiene que estar en la pantalla antes de elegir, no
+    # descubrirse jugando.
+    local gid="$1" sel antes="${SIN_RED:-0}"
+    sel="$(menu "¿Dejar que este juego salga a internet?
+Si le quitas internet, el juego arranca sin red ninguna: no hay
+anuncios, ni telemetría, ni comprobaciones por ahí.
+
+Pero TAMPOCO hay partidas en línea, ni descargas, ni parches.
+Si lo único que te molesta es la página que se abre al cerrar
+el juego, no hace falta esto: usa «Páginas web del juego»." \
+        "Con internet (normal)" \
+        "Sin internet (aislado del todo)" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "Con internet"*) SIN_RED=0 ;;
+        "Sin internet"*) SIN_RED=1 ;;
+        *) return 0 ;;
+    esac
+    [ "$SIN_RED" = "$antes" ] && return 0
+    write_full_profile "$gid"
+    log "sin red '$gid': $antes -> $SIN_RED"
+    if [ "$SIN_RED" = 1 ]; then
+        # SE COMPRUEBA AQUI Y NO AL LANZAR, que es cuando ya molesta.
+        if sinred_posible; then
+            ui_info "Hecho. Este juego se lanzará sin internet."
+        else
+            ui_info "Guardado, pero esta máquina no puede aislar la red, así
+que el juego NO se lanzará mientras esté puesto así.
+
+Déjalo en «Con internet» para poder jugar."
+        fi
+    else
+        ui_info "Hecho. Este juego vuelve a tener internet."
     fi
     return 0
 }
@@ -80996,6 +82099,20 @@ game_config_menu() {
                 *.wsquashfs) r_nucleo="Carga del wsquashfs: $(nucleo_label)" ;;
             esac
         fi
+        # LA FILA DE RED Y PAGINAS WEB, y NO en Batocera.
+        #
+        # En Batocera WProton no lanza el juego: se lo pasa al lanzador de
+        # Batocera y vuelve (partida_fin; return $brc) ANTES de llegar a donde
+        # se prepara el aislamiento y donde se escribe el bloqueo de paginas.
+        # O sea que por ese camino las dos opciones NO LLEGAN A NADA.
+        #
+        # Asi que no se ofrecen ahi, por el mismo criterio que la fila de la
+        # carga rapida -que tampoco sale en Batocera, porque el montaje lo
+        # lleva Batocera-: una fila que no puede hacer nada es peor que no
+        # tenerla. Esto lo vi comprobando si la rama de Batocera volvia antes
+        # de mi llamada, no al escribirlo.
+        local r_red="Red y páginas web >>"
+        [ "${IS_BATOCERA:-0}" = 1 ] && r_red=""
         local kstat="ninguno (auto si existe <juego>.keys)" kf0=""
         kf0="$(find_keys_file "$squash" "$gid")" || kf0=""
         [ -n "$kf0" ] && kstat="$(basename "$kf0") [auto al lanzar]"
@@ -81022,6 +82139,7 @@ game_config_menu() {
             "Mandos >>" \
             "Mapeador .keys: $kstat" \
             "Rendimiento y compatibilidad >>" \
+            "$r_red" \
             "$r_pfxtools" \
             "$r_esal" \
             "$r_alcfg" \
@@ -81105,6 +82223,12 @@ Wine, y el asistente no pregunta por el runner ni el prefijo." \
                 continue ;;
             "Rendimiento y compatibilidad >>")
                 cfg_rendimiento_menu "$gid" "$squash"; continue ;;
+            "Red y páginas web >>")
+                # El tercer argumento es la decision que YA tomo este menu
+                # sobre el prefijo: la misma que pone o quita la fila
+                # "Prefijo:". No se vuelve a decidir alli.
+                cfg_red_menu "$gid" "$squash" \
+                    "$([ -n "$r_prefijo" ] && printf 1 || printf 0)"; continue ;;
             "Dependencias del juego:"*)
                 # Se instalan aqui mismo, con su barra, y queda apuntado.
                 if dependencias_del_juego_hechas; then
