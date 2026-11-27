@@ -54,7 +54,7 @@ set -u  # (NO set -e: la limpieza controlada es nuestra, leccion de update.sh)
 # ----------------------------------------------------------------------------
 # VERSION de WProton (nomenclatura: 0.5 -> 0.51 -> 0.52... salto grande -> 0.6)
 # ----------------------------------------------------------------------------
-WPROTON_VERSION="2.33"
+WPROTON_VERSION="2.34"
 # ----------------------------------------------------------------------------
 # EL HOGAR DE VERDAD DEL USUARIO, capturado ANTES de que nada lo cambie.
 #
@@ -966,7 +966,7 @@ LANG_DIR="$BASE_DIR/lang"
 # La linea LANG_EN_VERSION la escribe el build aqui, con el hash del
 # contenido de la tabla. Va en linea propia porque asi son todos los
 # marcadores de este fichero, y porque auditoria_final.py los cuenta asi.
-LANG_EN_VERSION="18daded3fdc4"
+LANG_EN_VERSION="c4d212041e22"
 
 write_lang_en() {
     # El ingles viaja DENTRO de wproton.sh y se escribe en lang/en.json si
@@ -983,6 +983,7 @@ write_lang_en() {
  " (hay bloqueos de red en España: puede fallar)": " (network blocks in Spain: may fail)",
  "(automático: autorun.cmd / escaneo)": "(automatic: autorun.cmd / scan)",
  "(automático: último GE-Proton instalado)": "(automatic: latest installed GE-Proton)",
+ "(el que elija solo)": "(whichever it picks)",
  "(juego suelto: elegir carpeta o exe...)": "(loose game: choose folder or exe...)",
  "(vacio)": "(empty)",
  "-- sin asignar --": "-- unassigned --",
@@ -1005,11 +1006,14 @@ write_lang_en() {
  "ACEPTAR": "ACCEPT",
  "Abriendo Steam...": "Opening Steam...",
  "Abrir el explorador de Windows (ver los archivos del prefijo)": "Open the Windows file browser (see the prefix files)",
+ "Abrir su web y mirarlo yo": "Open their site and look myself",
  "Abrir winecfg": "Open winecfg",
  "Abrir winetricks": "Open winetricks",
  "Acceso directo en el escritorio": "Desktop shortcut",
+ "Acepto la licencia: bajar e instalar": "I accept the licence: download and install",
  "Actualizando la base de datos de umu...": "Updating the umu database...",
  "Actualizar GE-Proton a la última": "Update GE-Proton to the latest",
+ "Actualizar LiquidFrames desde su web": "Update LiquidFrames from their site",
  "Actualizar umu-launcher": "Update umu-launcher",
  "Ajustes de un juego": "Game settings",
  "Argumentos": "Arguments",
@@ -1026,6 +1030,7 @@ write_lang_en() {
  "Año": "Year",
  "BORRAR": "DELETE",
  "BUSCANDO: %s": "SEARCHING: %s",
+ "Bajar LiquidFrames de su web (gratis, de Syluxium)": "Download LiquidFrames from their site (free, by Syluxium)",
  "Batocera": "Batocera",
  "Biblioteca y preferencias": "Library and preferences",
  "Bloqueadas": "Blocked",
@@ -1062,6 +1067,7 @@ write_lang_en() {
  "Clic izquierdo": "Left click",
  "Como ordenar la lista de juegos": "How to sort the games list",
  "Compartido (prefixes/default)": "Shared (prefixes/default)",
+ "Comprobar LiquidFrames (su propia prueba)": "Check LiquidFrames (its own test)",
  "Comprobar el archivo y ver cuanto ocupa": "Check the file and show its size",
  "Comprobar lo descargado (huellas SHA-256)": "Check downloads (SHA-256 hashes)",
  "Con internet": "With internet",
@@ -1083,6 +1089,7 @@ write_lang_en() {
  "DWProton [proton] - Dawn Winery, fixes anime/gacha": "DWProton [proton] - Dawn Winery, anime/gacha fixes",
  "DXVK Async": "DXVK Async",
  "Datos de duración de partida (HowLongToBeat)": "Playtime data (HowLongToBeat)",
+ "Dejarlo como está (recomendado)": "Leave it as it is (recommended)",
  "Desactivado": "Disabled",
  "Desarrollo": "Developer",
  "Descargando GE-Proton (es el paso mas largo)...": "Downloading GE-Proton (the longest step)...",
@@ -1127,6 +1134,8 @@ write_lang_en() {
  "GameMode": "GameMode",
  "Gamescope": "Gamescope",
  "Gamescope anidado (modo Juego)": "Nested gamescope (Game Mode)",
+ "Generar fotogramas (LiquidFrames) >>": "Frame generation (LiquidFrames) >>",
+ "Generar fotogramas con LiquidFrames": "Generate frames with LiquidFrames",
  "Gestion de archivos": "File management",
  "Grande (recomendado en consolas portatiles)": "Large (recommended on handhelds)",
  "Género": "Genre",
@@ -1148,6 +1157,7 @@ write_lang_en() {
  "Instalar ReShade (Windows: D3D8-12 y OpenGL)": "Install ReShade (Windows: D3D8-12 and OpenGL)",
  "Instalar dgVoodoo2 (DX1-9/Glide en juegos viejos)": "Install dgVoodoo2 (DX1-9/Glide for old games)",
  "Instalar dgVoodoo2 (DX1-9/Glide)": "Install dgVoodoo2 (DX1-9/Glide)",
+ "Instalar el de WinterSnowfall encima": "Install the WinterSnowfall one on top",
  "Instalar evdev (para los ficheros .keys)": "Install evdev (for .keys files)",
  "Instalar librerias - elige el prefijo destino": "Install libraries - choose target prefix",
  "Instalar librerias de Windows (vcredist, PhysX...)": "Install Windows libraries (vcredist, PhysX...)",
@@ -1162,7 +1172,9 @@ write_lang_en() {
  "LIMPIAR": "CLEAR",
  "LISTO": "DONE",
  "La comunidad tiene una configuracion ya probada para:": "The community has a tested setup for:",
+ "La de Proton (normal)": "Proton's (normal)",
  "Lanzar via batocera-wine": "Launch via batocera-wine",
+ "Librería de Steam": "Steam library",
  "Limpiando el prefijo antes de empaquetar...": "Cleaning the prefix before packaging...",
  "Limpiar cache de shaders": "Clear shader cache",
  "Listo": "Done",
@@ -1180,10 +1192,12 @@ write_lang_en() {
  "Ninguno": "None",
  "No": "No",
  "No montar nada": "Do not mount anything",
+ "Nombre del perfil de LiquidFrames (vacio = el que elija solo)": "LiquidFrames profile name (empty = whichever it picks)",
  "Normal": "Normal",
  "Normal (recomendado)": "Normal (recommended)",
  "Nota": "Score",
  "Notas": "Notes",
+ "ON [sin instalar]": "ON [not installed]",
  "Ojo: ahora hay bloqueos de red en España (pasa cuando hay fútbol de liga). Esta descarga puede ir lenta o fallar, y no es cosa de WProton. Si falla, prueba otra vez al acabar el partido.": "Heads-up: there are network blocks in Spain right now (it happens during league football). This download may be slow or fail, and it is not WProton's fault. If it fails, try again once the match is over.",
  "Olvidar carpetas detectadas (volver a detectar al jugar)": "Forget detected folders (detect again when playing)",
  "Ordenar juegos por": "Sort games by",
@@ -1196,6 +1210,7 @@ write_lang_en() {
  "Paso 1/3 - Elige Proton/Wine para este juego": "Step 1/3 - Choose Proton/Wine for this game",
  "Paso 2/3 - Ejecutable del juego": "Step 2/3 - Game executable",
  "Paso 3/3 - Configuración basica": "Step 3/3 - Basic settings",
+ "Perfil suyo para este juego": "Its own profile for this game",
  "Perfiles de la comunidad": "Community profiles",
  "Perfiles de la comunidad (juegos que necesitan ajustes)": "Community profiles (games needing tweaks)",
  "Perfiles guardados (ver y borrar)": "Saved profiles (view and delete)",
@@ -1215,7 +1230,9 @@ write_lang_en() {
  "Propio del juego (prefixes/$gid)": "Per-game (prefixes/$gid)",
  "Proton-CachyOS [proton] - optimizado x86-64-v3": "Proton-CachyOS [proton] - optimized x86-64-v3",
  "Proton-LG [proton] - Castro-Fidel, basado en GE": "Proton-LG [proton] - Castro-Fidel, GE-based",
+ "Puesto": "On",
  "Páginas web del juego": "Game web pages",
+ "Quitado": "Off",
  "Quitar el .keys de profiles": "Remove the .keys from profiles",
  "Red y páginas web >>": "Network and web pages >>",
  "Rendimiento y compatibilidad >>": "Performance and compatibility >>",
@@ -1237,6 +1254,7 @@ write_lang_en() {
  "Solo panorámicas (tipo Steam, de SteamGridDB)": "Panoramic only (Steam style, from SteamGridDB)",
  "Solo verticales (2:3, de SteamGridDB)": "Vertical only (2:3, from SteamGridDB)",
  "Sustituir todo (se pierde tu configuración actual)": "Replace everything (your current setup is lost)",
+ "Sólo la del juego (si se cierra al arrancar o no encuentra Steam)": "The game's own (if it closes on start or cannot find Steam)",
  "Tamaño de la letra": "Text size",
  "Tamaño de la letra en los menus": "Text size in menus",
  "Tamaño por juego": "Size per game",
@@ -1262,7 +1280,7 @@ write_lang_en() {
  "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)": "Wine-LG [wine] - Castro-Fidel (PortWINE / PortProton)",
  "WineD3D (sin Vulkan)": "WineD3D (no Vulkan)",
  "Xbox": "Xbox",
- "__version__": "18daded3fdc4",
+ "__version__": "c4d212041e22",
  "aceptar": "accept",
  "arcade - synthwave con efecto CRT": "arcade - synthwave with CRT effect",
  "auto (autorun.cmd / escaneo)": "auto (autorun.cmd / scan)",
@@ -1274,6 +1292,7 @@ write_lang_en() {
  "clasico - el original": "classic - the original",
  "compartido (default)": "shared (default)",
  "configurar": "configure",
+ "d8vk (Direct3D 8 sobre Vulkan - juegos de 2001-2004)": "d8vk (Direct3D 8 over Vulkan - games from 2001-2004)",
  "dwarfs - comprime bastante mas, monta igual de rapido": "dwarfs - compresses much better, mounts just as fast",
  "elegir": "choose",
  "entrar": "enter",
@@ -1282,6 +1301,7 @@ write_lang_en() {
  "jugados": "played",
  "jugados - los de más tiempo primero": "played - most playtime first",
  "jugar": "play",
+ "la de Proton (recomendado)": "Proton's (recommended)",
  "lista": "list",
  "marcar": "toggle",
  "moderno - paneles y acento neon": "modern - panels and neon accent",
@@ -1305,6 +1325,7 @@ write_lang_en() {
  "rejilla vertical (2:3)": "vertical grid (2:3)",
  "sin partidas todavia": "no sessions yet",
  "subir": "up",
+ "sólo la del juego": "the game's own",
  "vertical (2:3)": "vertical (2:3)",
  "vista": "view",
  "volver": "back",
@@ -12257,9 +12278,9 @@ pygame_available() {
 
 write_menu_pygame() {
     # Reescribir solo si falta o es de otra versión (I/O gratis en cada menu)
-    grep -q "WPROTON_HELPER menu_pygame.py a224aeea1fa7" "$MENU_PYGAME_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_pygame.py 1a282326df8a" "$MENU_PYGAME_PY" 2>/dev/null && return 0
     cat > "$MENU_PYGAME_PY" <<'PGEOF'
-# WPROTON_HELPER menu_pygame.py a224aeea1fa7
+# WPROTON_HELPER menu_pygame.py 1a282326df8a
 #!/usr/bin/env python3
 # WProton - menus con mando
 #
@@ -14046,6 +14067,25 @@ AYUDAS_ES = [
      'El juego arranca sin red ninguna: sin anuncios ni telemetría, pero '
      'tampoco partidas en línea ni parches. Si lo único que molesta es la '
      'página que se abre al salir, usa Páginas web del juego.'),
+    ('Generar fotogramas con LiquidFrames: OFF',
+     'LiquidFrames genera fotogramas intermedios para que el movimiento se vea '
+     'más suave. Es de Syluxium, no de WProton, y es gratis: no hay que '
+     'comprar nada. Se baja de su web desde esta misma pantalla.'),
+    ('Generar fotogramas con LiquidFrames: ON',
+     'Encendido para este juego. Si MAKO o lsfg-vk están encendidos aquí, '
+     'mandan ellos: los tres hacen lo mismo y no pueden ir juntos. Sólo hay '
+     'versión de 64 bits, así que en un juego de 32 bits no entrará.'),
+    ('Generar fotogramas con LiquidFrames: ON [sin instalar]',
+     'Queda apuntado para este juego, pero LiquidFrames todavía no está '
+     'instalado y hasta entonces no hará nada. Se baja de su web desde la '
+     'fila de abajo.'),
+    ('Librería de Steam: la de Proton (recomendado)',
+     'Manda la copia que mete Proton, como de normal. Déjalo así si el juego '
+     'va bien.'),
+    ('Librería de Steam: sólo la del juego',
+     'Manda sólo la biblioteca de Steam que trae el juego dentro. Para los que '
+     'se cierran al arrancar, se quedan colgados o dicen que no encuentran '
+     'Steam.'),
     ('Carga del wsquashfs: Normal',
      'Como se abre el paquete del juego. Normal es la forma de siempre y '
      'funciona bien en casi todos los juegos.'),
@@ -21592,10 +21632,10 @@ $(grep -iE 'error|no matching|failed' "$pipout" | tail -n 3)"
 
 write_menu_qt() {
     qt_available || return 1
-    grep -q "WPROTON_HELPER menu_qt.py 10f2efef3586" "$MENU_QT_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER menu_qt.py a49f3d221b85" "$MENU_QT_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$MENU_QT_PY" <<'QTEOF'
-# WPROTON_HELPER menu_qt.py 10f2efef3586
+# WPROTON_HELPER menu_qt.py a49f3d221b85
 # WPROTON_HELPER menu_qt.py da22b8543e9c
 #!/usr/bin/env python3
 # WProton - menus con mando (Qt)
@@ -22138,6 +22178,25 @@ AYUDAS_ES = [
      'El juego arranca sin red ninguna: sin anuncios ni telemetría, pero '
      'tampoco partidas en línea ni parches. Si lo único que molesta es la '
      'página que se abre al salir, usa Páginas web del juego.'),
+    ('Generar fotogramas con LiquidFrames: OFF',
+     'LiquidFrames genera fotogramas intermedios para que el movimiento se vea '
+     'más suave. Es de Syluxium, no de WProton, y es gratis: no hay que '
+     'comprar nada. Se baja de su web desde esta misma pantalla.'),
+    ('Generar fotogramas con LiquidFrames: ON',
+     'Encendido para este juego. Si MAKO o lsfg-vk están encendidos aquí, '
+     'mandan ellos: los tres hacen lo mismo y no pueden ir juntos. Sólo hay '
+     'versión de 64 bits, así que en un juego de 32 bits no entrará.'),
+    ('Generar fotogramas con LiquidFrames: ON [sin instalar]',
+     'Queda apuntado para este juego, pero LiquidFrames todavía no está '
+     'instalado y hasta entonces no hará nada. Se baja de su web desde la '
+     'fila de abajo.'),
+    ('Librería de Steam: la de Proton (recomendado)',
+     'Manda la copia que mete Proton, como de normal. Déjalo así si el juego '
+     'va bien.'),
+    ('Librería de Steam: sólo la del juego',
+     'Manda sólo la biblioteca de Steam que trae el juego dentro. Para los que '
+     'se cierran al arrancar, se quedan colgados o dicen que no encuentran '
+     'Steam.'),
     ('Carga del wsquashfs: Normal',
      'Como se abre el paquete del juego. Normal es la forma de siempre y '
      'funciona bien en casi todos los juegos.'),
@@ -32743,10 +32802,10 @@ trap '_rc_fin=$?; if [ "$_rc_fin" != 0 ] && [ "$WP_CIERRE_MOTIVO" = "salida norm
 DETECTAR_PY="$RUNTIME_DIR/detectar.py"
 
 write_detectar() {
-    grep -q "WPROTON_HELPER detectar.py 39e3a526b1b0" "$DETECTAR_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER detectar.py 1417d8eb1580" "$DETECTAR_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$DETECTAR_PY" <<'DETEOF'
-# WPROTON_HELPER detectar.py 39e3a526b1b0
+# WPROTON_HELPER detectar.py 1417d8eb1580
 # WPROTON_HELPER detectar.py 012add21edf1
 # -*- coding: utf-8 -*-
 # WProton - deteccion del ejecutable de un juego
@@ -32947,7 +33006,7 @@ def _texto_autorun(ruta):
 
 
 _CLAVE = {}
-for _c in ("DIR", "CMD", "ENV", "LANG", "SAVEDIR"):
+for _c in ("DIR", "CMD", "ENV", "LANG", "SAVEDIR", "SAVEFILES"):
     # SE ADMITEN ESPACIOS ALREDEDOR DEL "=" Y AL PRINCIPIO DE LA LINEA.
     #
     # El patron de antes era "^CLAVE=", que no casa con 'DIR = SysStart/Game'
@@ -32957,10 +33016,32 @@ for _c in ("DIR", "CMD", "ENV", "LANG", "SAVEDIR"):
     _CLAVE[_c] = re.compile(r"^[ \t]*%s[ \t]*=(.*)$" % _c, re.IGNORECASE)
 
 
+def _savedir_valido(p):
+    """Filtra un SAVEDIR/SAVEFILES que no pueda venir de una imagen sana.
+
+    LA RUTA LA ESCRIBE QUIEN EMPAQUETO LA IMAGEN, no nosotros, y una imagen te
+    la puede pasar cualquiera. El formato de Batocera dice que SAVEDIR es
+    RELATIVO A LA RAIZ DE LA IMAGEN y nunca lleva "..", asi que todo lo demas
+    se tira: una ruta absoluta o con ".." apuntaria fuera de la imagen, y de
+    ahi salen las copias de partidas.
+    """
+    if not p:
+        return False
+    if p.startswith("/") or p.startswith("~"):
+        return False
+    if len(p) > 1 and p[1] == ":":          # C:/..., una ruta de Windows
+        return False
+    partes = [x for x in p.split("/") if x not in ("", ".")]
+    if not partes or any(x == ".." for x in partes):
+        return False
+    return True
+
+
 def leer_autorun(ruta):
-    """Devuelve un dict con dir, cmd, cmd_base, args, env, lang, savedir."""
+    """Devuelve un dict con dir, cmd, cmd_base, args, env, lang, savedir,
+    savefiles."""
     r = {"dir": "", "cmd": "", "cmd_base": "", "args": "",
-         "env": "", "lang": "", "savedir": False}
+         "env": "", "lang": "", "savedir": "", "savefiles": ""}
     if not os.path.isfile(ruta):
         return r
     texto = _texto_autorun(ruta).replace("\r", "")
@@ -32974,7 +33055,36 @@ def leer_autorun(ruta):
                 return m.group(1).strip()
         return ""
 
-    r["savedir"] = bool(valor("SAVEDIR"))
+    # SAVEDIR Y SAVEFILES: EL VALOR, NO SI ESTA.
+    #
+    # Antes esto era bool(valor("SAVEDIR")) -o sea, solo si la clave existia-
+    # y NADIE lo usaba: no salia ni por los emisores de abajo. La clave
+    # llevaba tiempo medio puesta.
+    #
+    # Las escribe wsquashfsconverter (aderumier) y las usa batocera-wine para
+    # enlazar las partidas a /userdata/saves:
+    #
+    #   SAVEDIR=drive_c/users/steamuser/AppData/LocalLow/<empresa>/<producto>
+    #   SAVEFILES=partida1.sav;ajustes.ini
+    #
+    # SAVEDIR es la carpeta entera; SAVEFILES son los nombres exactos de
+    # dentro, para cuando las partidas estan mezcladas con otros ficheros. El
+    # que empaqueta las MIDE -mirando que ficheros creo una partida de
+    # prueba-, asi que una imagen que las traiga sabe mas que nuestra
+    # heuristica y manda sobre ella.
+    _sd = valor("SAVEDIR").strip().strip('"')
+    if _sd.startswith("./"):
+        _sd = _sd[2:]
+    _sd = _sd.rstrip("/")
+    r["savedir"] = _sd if _savedir_valido(_sd) else ""
+    # SAVEFILES van separados por ";" y son NOMBRES, no rutas: se quedan solo
+    # los que lo sean de verdad.
+    _sf = []
+    for _n in valor("SAVEFILES").strip().strip('"').split(";"):
+        _n = _n.strip()
+        if _n and _savedir_valido(_n):
+            _sf.append(_n)
+    r["savefiles"] = ";".join(_sf)
     d = valor("DIR").strip()
     if len(d) >= 2 and d[0] == '"' and d[-1] == '"':
         d = d[1:-1]
@@ -33492,7 +33602,8 @@ def main(argv):
         if len(argv) < 3:
             return 2
         d = leer_autorun(argv[2])
-        for k in ("dir", "cmd", "cmd_base", "args", "env", "lang"):
+        for k in ("dir", "cmd", "cmd_base", "args", "env", "lang",
+                  "savedir", "savefiles"):
             print("%s\t%s" % (k, d[k]))
         return 0
 
@@ -33536,7 +33647,8 @@ def main(argv):
         if not a:
             return 1
         d = leer_autorun(a)
-        for k in ("dir", "cmd", "cmd_base", "args", "env", "lang"):
+        for k in ("dir", "cmd", "cmd_base", "args", "env", "lang",
+                  "savedir", "savefiles"):
             print("%s\t%s" % (k, d[k]))
         return 0
     if orden == "args":
@@ -33667,8 +33779,10 @@ args_etiqueta() {
 
 parse_autorun() {
     # Deja las claves del autorun.cmd en R_DIR / R_CMD / R_CMD_BASE / R_ARGS /
-    # R_ENV / R_LANG, como siempre: hay llamadores que las leen despues.
+    # R_ENV / R_LANG / R_SAVEDIR / R_SAVEFILES, como siempre: hay llamadores
+    # que las leen despues.
     R_DIR=""; R_CMD=""; R_CMD_BASE=""; R_ARGS=""; R_ENV=""; R_LANG=""
+    R_SAVEDIR=""; R_SAVEFILES=""
     [ -f "${1:-}" ] || return 0
     local salida k v
     salida="$(detectar_py autorun-fichero "$1" 2>>"$LOG_FILE")" || return 0
@@ -33680,6 +33794,8 @@ parse_autorun() {
             args)     R_ARGS="$v" ;;
             env)      R_ENV="$v" ;;
             lang)     R_LANG="$v" ;;
+            savedir)   R_SAVEDIR="$v" ;;
+            savefiles) R_SAVEFILES="$v" ;;
         esac
     done <<EOF
 $salida
@@ -34093,6 +34209,30 @@ juego_hay_windows() {
                   2>/dev/null) | head -n1)" ]
 }
 
+perfil_lanzador_nativo() {
+    # EL LANZADOR QUE ELIGIO EL USUARIO, SI EXISTE Y ES DE LINUX. $1 = raiz.
+    #
+    # Imprime la ruta completa y devuelve 0; si no hay nada elegido, si lo
+    # elegido no es un lanzador de Linux, o si ese fichero aqui no esta, no
+    # imprime nada y devuelve 1.
+    #
+    # POR QUE ES UNA FUNCION Y NO UN if SUELTO: la pregunta "¿que ha elegido el
+    # usuario?" se contesta en UN sitio. La primera version de esto (26/11, por
+    # la tarde) era un if dentro de juego_es_nativo, y estaba puesto DESPUES de
+    # toda la deteccion -o sea que no servia de nada en cuanto la deteccion
+    # contestaba antes-. Ver el comentario de juego_es_nativo.
+    local root="${1:-}" ov="${EXE_OVERRIDE:-}" cand
+    [ -n "${root:-}" ] && [ -n "${ov:-}" ] || return 1
+    cand="$root/${ov#/}"
+    case "$ov" in /*) cand="$ov" ;; esac
+    case "$ov" in
+        *.sh|*.SH|*.AppImage|*.appimage) ;;
+        *) return 1 ;;
+    esac
+    [ -f "$cand" ] || return 1
+    printf '%s' "$cand"
+    return 0
+}
 juego_trae_las_dos() {
     # ¿Este juego trae la version de Windows Y la de Linux? $1 = raiz montada.
     #
@@ -34190,6 +34330,94 @@ nativo_sh_puntua() {
     printf '%s' "$pun"
 }
 
+marcador_linux_antes_de_empaquetar() {
+    # EL MARCADOR DE JUEGO DE LINUX, ESCRITO AL EMPAQUETAR. $1 = carpeta,
+    # $2 = nombre del juego.
+    #
+    # DE DONDE SALE: Dani, 27/11, con el Gaelco ya funcionando en los dos modos
+    # gracias a poner VERSION_JUEGO="linux" A MANO en el perfil: "veo que al
+    # hacer el wsquashfs lo sigue reconociendo como un juego de Windows en vez
+    # de como Linux... creo que el problema es de profundidad".
+    #
+    # Y es exactamente eso. Lo de la noche anterior arreglo el LANZAMIENTO: si
+    # el perfil trae el lanzador elegido, manda. Pero esa informacion vive en
+    # SU perfil, no en el archivo, y eso deja tres agujeros:
+    #
+    #   1. AL EMPAQUETAR. libs_antes_de_empaquetar hace
+    #      "juego_es_nativo || return 0", asi que un juego de Linux que la
+    #      deteccion da por Windows se empaqueta SIN recoger sus librerias. Es
+    #      el ultimo momento en que se podian recoger -luego el archivo es de
+    #      solo lectura- y es justo lo que le falto al Gaelco: su ./car murio
+    #      en la Deck por un libXmu.so.6 que no estaba.
+    #   2. EN OTRO EQUIPO. Quien se descargue el archivo no tiene su perfil, y
+    #      vuelve a empezar: "hay autorun.cmd -> Windows".
+    #   3. CON UN PERFIL NUEVO. Borrar el perfil y volver a empezar deshace el
+    #      arreglo, porque el dato estaba solo ahi.
+    #
+    # Asi que el dato se mete DENTRO del paquete, que es de quien es: lo sabe
+    # quien empaqueta, y el que lo necesita es el archivo, no el perfil. El
+    # formato ya existia -*.linuxloader, leido por linux_marcador_lanzador
+    # desde el 06/11- y hasta hoy NADIE LO ESCRIBIA: estaba pensado para
+    # ponerlo a mano. Ahora lo pone WProton al empaquetar, con la ruta del
+    # lanzador relativa a la raiz, y entonces la profundidad deja de importar:
+    # no se busca, se lee.
+    #
+    # VA EN do_pack_dir, con sus hermanas (libs, crack, HelixSR), porque es el
+    # unico sitio por donde pasan TODOS los caminos que empaquetan una carpeta.
+    # Y va ANTES que las librerias, porque las librerias dependen de que esto
+    # ya este: es el orden lo que arregla el agujero 1.
+    local dir="${1:-}" nombre="${2:-}" lanz rel marca
+    [ -d "$dir" ] || return 0
+    # SI YA TRAE UNO, NO SE TOCA: quien lo puso sabra por que, y puede ser de
+    # aderumier o de quien empaqueto antes.
+    marca="$(find -H "$dir" -maxdepth 2 -iname "$LINUX_MARCADOR_GLOB" -print -quit 2>/dev/null)"
+    if [ -n "${marca:-}" ]; then
+        log "marcador de Linux: el paquete ya trae '$(basename "$marca")'; no se toca"
+        return 0
+    fi
+    # ¿ES DE LINUX? La misma pregunta y la misma respuesta que el lanzamiento:
+    # juego_es_nativo, que a estas alturas ya tiene el perfil cargado y por
+    # tanto hace caso a VERSION_JUEGO y al lanzador elegido.
+    lanz="$(juego_es_nativo "$dir" 2>/dev/null)" || return 0
+    [ -n "${lanz:-}" ] || return 0
+    # LA RUTA, RELATIVA. Una absoluta de esta maquina no valdria nada donde el
+    # juego se monta en otro sitio, y el lector la rechaza (y hace bien).
+    rel="${lanz#"$dir"/}"
+    case "$rel" in
+        /*|*..*|"$lanz") log "marcador de Linux: no se puede poner la ruta de '$lanz' relativa a '$dir'; no se escribe el marcador" WARN
+            return 0 ;;
+    esac
+    # ¿SE PUEDE ESCRIBIR? Una carpeta de solo lectura -un montaje, un disco
+    # protegido- no es un fallo: se dice y se sigue.
+    if [ ! -w "$dir" ]; then
+        log "marcador de Linux: '$dir' no se puede escribir; el paquete saldra sin marcador" WARN
+        return 0
+    fi
+    local f="$dir/${nombre:-juego}.linuxloader"
+    # UN SOLO printf CON VARIOS ARGUMENTOS: el formato se reutiliza por cada
+    # uno, asi que sale una linea por argumento.
+    #
+    # LA RUTA VA AL FINAL POR COMODIDAD DE QUIEN LO ABRA, no porque haga falta:
+    # linux_marcador_lanzador SE SALTA los comentarios y se queda con la primera
+    # linea util, asi que daria igual ponerla delante. Lo digo porque la primera
+    # version de este comentario decia que el orden era necesario -"el lector se
+    # queda con la primera linea"- y eso era FALSO: una mutacion que movio la
+    # ruta al principio no rompio nada, y tenia razon. Un "porque" inventado en
+    # un comentario es peor que no poner ninguno: el siguiente que lo lea se
+    # creera que hay una regla que no existe.
+    printf '%s\n' \
+        "# Marcador de WProton: este paquete es un juego de LINUX." \
+        "# La linea de abajo es el lanzador, RELATIVO a la raiz del paquete." \
+        "# Lo lee WProton al abrir el archivo, asi no hace falta buscarlo ni" \
+        "# depende de a que profundidad este." \
+        "$rel" > "$f" 2>/dev/null || {
+        log "marcador de Linux: no se pudo escribir $f" WARN
+        return 0
+    }
+    say "[+] Juego de Linux: se apunta el lanzador dentro del paquete"
+    log "marcador de Linux: escrito $(basename "$f") con el lanzador '$rel' (asi el archivo se explica solo y no depende del perfil)"
+    return 0
+}
 juego_es_nativo() {
     # ¿El paquete trae un juego de LINUX en vez de uno de Windows?
     # $1 = raiz del juego montado. Imprime el ejecutable si lo es.
@@ -34214,6 +34442,50 @@ juego_es_nativo() {
     # Sin nada de eso, no se dice que sea nativo: mejor no arriesgarse.
     local root="$1" c
     [ -d "$root" ] || return 1
+    # EL LANZADOR ELEGIDO EN EL PERFIL ES UNA RESPUESTA, NO UNA PISTA
+    # (26/11, noche, y es el MISMO arreglo hecho DOS VECES el mismo dia).
+    #
+    # EL CASO: el Gaelco Championship Tuning Race en la Deck. Dani eligio en el
+    # asistente su lanzador -'home/joc2001/joc2004/salidas/Gaelco_...sh', que el
+    # propio asistente le sugirio- y al lanzar el registro decia:
+    #
+    #   juego_es_nativo: hay autorun.cmd -> se trata como juego de Windows
+    #
+    # tres veces, con el perfil ya cargado. Se fue por Proton, el .sh arranco
+    # dentro del contenedor sin el entorno que WProton le prepara a un juego de
+    # Linux, y su binario murio con "libXmu.so.6: cannot open shared object".
+    #
+    # POR QUE NO LO ARREGLO LO DE ESTA TARDE: por la tarde se metio esta misma
+    # comprobacion, pero DESPUES de la deteccion, pensando solo en el caso de la
+    # busqueda de dos niveles. Y la deteccion contesta antes por tres caminos
+    # distintos -el autorun.cmd, un .exe por ahi dentro, el marcador-, asi que
+    # en cuanto uno de ellos decia "Windows" la eleccion del usuario no se
+    # llegaba a mirar. Arreglar el camino que tenia delante y no la pregunta es
+    # lo que hace que un fallo vuelva con otra cara.
+    #
+    # ASI QUE VA ARRIBA, Y EL ORDEN ES EL DE LA AUTORIDAD DEL DATO:
+    #
+    #   1. VERSION_JUEGO=windows -> el usuario ha pedido Windows A MANO, y eso
+    #      gana incluso a un .sh elegido: puede tener las dos versiones.
+    #   2. El lanzador elegido en el perfil, si existe y es .sh/.AppImage. Es
+    #      una respuesta: la dio el usuario.
+    #   3. El marcador *.linuxloader del paquete, que lo puso quien empaqueto.
+    #   4. Y solo entonces, las adivinanzas: autorun.cmd, .exe, lanzador en la
+    #      raiz, busqueda por niveles.
+    if [ "${VERSION_JUEGO:-auto}" != windows ]; then
+        local _ov_nat=""
+        _ov_nat="$(perfil_lanzador_nativo "$root")" || _ov_nat=""
+        if [ -n "${_ov_nat:-}" ]; then
+            log "juego_es_nativo: el perfil trae el lanzador elegido y existe ($EXE_OVERRIDE); es un juego de LINUX y no se mira nada mas (ni autorun.cmd, ni .exe, ni busqueda)"
+            printf '%s' "$_ov_nat"
+            return 0
+        fi
+        case "${EXE_OVERRIDE:-}" in
+            "") ;;
+            *.sh|*.SH|*.AppImage|*.appimage)
+                log "juego_es_nativo: el perfil trae '$EXE_OVERRIDE' pero aqui no existe; se detecta como siempre" WARN ;;
+        esac
+    fi
     # LO QUE HAYA DICHO EL USUARIO MANDA SOBRE LA DETECCION.
     #
     # Hay juegos que traen el .exe de Windows Y su version de Linux en el
@@ -34260,6 +34532,7 @@ juego_es_nativo() {
             else
                 log "juego_es_nativo: hay autorun.cmd -> se trata como juego de Windows"
             fi
+            aviso_sin_marcador_linux
             return 1
         fi
         # ¿Hay ejecutables de Windows? Entonces no es un juego nativo.
@@ -34307,6 +34580,13 @@ juego_es_nativo() {
                     log "juego_es_nativo: hay un .exe -> Windows, PERO este juego trae tambien la version de Linux: se puede elegir en Ajustes del juego -> Version del juego"
                 fi
                 log "juego_es_nativo: hay un .exe -> se trata como juego de Windows"
+                # Y QUE SE DIGA QUE NO HAY MARCADOR, que es la pregunta que
+                # habria contestado el caso del Gaelco en diez segundos. El
+                # 27/11 Dani puso su marcador y el registro repetia "hay un
+                # .exe" sin UNA SOLA linea sobre el marcador, asi que no habia
+                # forma de saber si no se habia leido o si no se miraba. Un
+                # registro que no dice lo que NO encontro deja a uno a ciegas.
+                aviso_sin_marcador_linux
                 return 1
             fi
         fi
@@ -34593,7 +34873,7 @@ profile_exists() { [ -f "$PROFILE_DIR/$1.conf" ]; }
 # se regenera en cada build con "perfil.py defectos-bash".
 # ----------------------------------------------------------------------------
 # GENERADO POR perfil.py: no editar a mano, se reescribe en cada build.
-WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO MONTAJE_NUCLEO WEB_BLOQUEADA SIN_RED'
+WP_CAMPOS_PERFIL='GAMEID STORE RUNNER EXE_OVERRIDE ARGS_OVERRIDE PREFIX_MODE PREFIX_BATOCERA PREFIX_ORIGEN UNIDAD_JUEGO UNIDAD_CD UNIDAD_DESTINO JUEGO_EN_C DEPS_JUEGO EXE_ACOMPANA ACOMPANA_ESPERA INSTALAR_UNA_VEZ MANGOHUD PAD_SDL PAD_SONY PAD_FANTASMA KEYS_ESTILO BOTONES_REMAP TECLADO_POS KEYS_EXCLUSIVO KEYS_AL ES_AL MANDO_VIRTUAL TEXTO_RAPIDO TEXTO_ENTER PAD_STEAMFIX NESTED_GAMESCOPE NTSYNC FAVORITO COMPLETADO NOTAS PLAY_COUNT PLAY_SECONDS LAST_PLAYED SAVE_PATHS SAVE_DECLARADO SAVE_FICHEROS USE_BATOCERA GAMEMODE FSYNC ESYNC DXVK_ASYNC WAYLAND ENV_EXTRA HDR WINED3D FSR MAKO_MODELO MAKO_FG_MODO MAKO_ESCALA MAKO_ESCALA_FACTOR MAKO_ESCALA_NITIDEZ LSFG LSFG_MULT LSFG_FLUJO LSFG_RENDIM LSFG_RITMO LAA GAMESCOPE DLL_OVERRIDES MONO_PEDIR COMUNIDAD_VISTO REDIST_JUEGO GAME_LANG EXTRA_ENV MAKO MAKO_MULT MAKO_ADAPTIVE RESHADE_LX STEAM_OVERLAY PAD_SIFALLBACK TRACKPAD RUNTIME_STEAM HELIXSR HELIXSR_NITIDEZ VERSION_JUEGO MONTAJE_NUCLEO WEB_BLOQUEADA SIN_RED PUENTE_STEAM LIQUIDFRAMES LIQUIDFRAMES_PERFIL'
 profile_defaults() {
     GAMEID="umu-default"
     STORE="none"
@@ -34634,6 +34914,8 @@ profile_defaults() {
     PLAY_SECONDS=0
     LAST_PLAYED=""
     SAVE_PATHS=""
+    SAVE_DECLARADO=""
+    SAVE_FICHEROS=""
     USE_BATOCERA="${IS_BATOCERA:-0}"
     GAMEMODE=1
     FSYNC=1
@@ -34676,15 +34958,18 @@ profile_defaults() {
     MONTAJE_NUCLEO="0"
     WEB_BLOQUEADA="0"
     SIN_RED="0"
+    PUENTE_STEAM="1"
+    LIQUIDFRAMES="0"
+    LIQUIDFRAMES_PERFIL=""
 }
 
 PERFIL_PY="$RUNTIME_DIR/perfil.py"
 
 write_perfil() {
-    grep -q "WPROTON_HELPER perfil.py 93ede23beb70" "$PERFIL_PY" 2>/dev/null && return 0
+    grep -q "WPROTON_HELPER perfil.py ea81c7ad79eb" "$PERFIL_PY" 2>/dev/null && return 0
     mkdir -p "$RUNTIME_DIR" 2>/dev/null
     cat > "$PERFIL_PY" <<'PERFEOF'
-# WPROTON_HELPER perfil.py 93ede23beb70
+# WPROTON_HELPER perfil.py ea81c7ad79eb
 # -*- coding: utf-8 -*-
 # WProton - perfiles por juego (profiles/<gid>.conf)
 #
@@ -34833,6 +35118,13 @@ ESQUEMA = [
     ("PLAY_SECONDS",      "entero", 0,                None),
     ("LAST_PLAYED",       "texto",  "",               None),
     ("SAVE_PATHS",        "texto",  "",               None),
+    # Lo que la propia imagen DECLARA como carpeta de partidas (SAVEDIR del
+    # autorun.cmd, formato de Batocera). Se recuerda aqui porque al copiar las
+    # partidas el juego puede estar desmontado y entonces no hay autorun.cmd
+    # que leer. Manda sobre SAVE_PATHS: eso es lo que deducimos nosotros, esto
+    # es lo que midio quien empaqueto.
+    ("SAVE_DECLARADO",    "texto",  "",               None),
+    ("SAVE_FICHEROS",     "texto",  "",               None),
     # USE_BATOCERA no tiene un defecto fijo: depende de si estamos EN Batocera.
     # El valor real llega en la variable de entorno WP_IS_BATOCERA, igual que
     # el $IS_BATOCERA del script.
@@ -35000,6 +35292,18 @@ ESQUEMA = [
     # bloque de web_* y sinred_* en wproton.base.sh.
     ("WEB_BLOQUEADA",     "opcion", "0",              ("0", "1")),
     ("SIN_RED",           "opcion", "0",              ("0", "1")),
+    # El puente de Steam de Proton (lsteamclient). Puesto de serie; se quita
+    # para los juegos que traen su propia biblioteca de Steam -real, emulada o
+    # modificada- y se estorban con el. Ver el bloque de PUENTE_STEAM en
+    # wproton.base.sh.
+    ("PUENTE_STEAM",      "opcion", "1",              ("0", "1")),
+    # LiquidFrames (Syluxium): generacion de fotogramas con su propio motor,
+    # sin el Lossless.dll de nadie. Es de otros, es privativo y NO se empaqueta
+    # con WProton: se detecta, y se ofrece bajarlo de su web. El perfil suyo es
+    # opcional -si se deja vacio, lo elige el por el nombre del ejecutable-.
+    # Ver el bloque de lf_* en wproton.base.sh.
+    ("LIQUIDFRAMES",      "opcion", "0",              ("0", "1")),
+    ("LIQUIDFRAMES_PERFIL", "texto", "",              None),
 ]
 
 ORDEN = [c[0] for c in ESQUEMA]
@@ -41077,6 +41381,40 @@ EOFGSTB
     # un lanzador de juegos eso es ruido. Batocera lo desactiva siempre.
     export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}winemenubuilder.exe=;nvapi64,nvapi="
 
+    # EL PUENTE DE STEAM (lsteamclient), QUITADO SI ESTE JUEGO LO PIDE.
+    #
+    # QUE ES. Un juego de Steam pide lo suyo a su propia steam_api64.dll, que
+    # a su vez busca el cliente de Steam y carga steamclient64.dll. Proton pone
+    # ahi su steamclient64.dll, que es una lanzadera: carga lsteamclient.dll,
+    # el PUENTE de Proton, y ese habla con el Steam nativo de Linux. O sea que
+    # lsteamclient.dll no es del juego ni de Wine: la construye Proton dentro
+    # del prefijo para que un juego de Windows llegue al Steam de Linux. No
+    # aparece en el script "proton" porque no es un override suyo, es una DLL
+    # que el prefijo lleva dentro.
+    #
+    # POR QUE ESTORBA AQUI. WProton lanza los juegos FUERA de Steam, asi que
+    # ese puente no tiene con quien hablar. Y muchos juegos traen su propia
+    # biblioteca de Steam: la de verdad, un emulador incluido (Goldberg, GSE,
+    # SmartSteamEmu) o una modificada. Entonces hay dos bibliotecas queriendo
+    # contestar lo mismo y se estorban: el juego se cierra al arrancar, se
+    # queda colgado, dice que no encuentra Steam, o -con los emuladores-
+    # contesta el puente con una version de interfaz que la aplicacion no
+    # esperaba ("No SteamClient021").
+    #
+    # DE DONDE SALE. De aderumier, en wsquashfsconverter: ponerlo en el
+    # autorun.cmd de las imagenes le arreglo DOCE juegos, y luego otros con
+    # Goldberg y con Electron. Es la mitad de su linea que a nosotros nos
+    # faltaba: winemenubuilder y nvapi ya los quitamos arriba desde siempre.
+    #
+    # VA AQUI Y NO EN DLL_OVERRIDES porque es un INTERRUPTOR: tiene que poder
+    # volver a ponerse, y merge_overrides solo sabe añadir. Asi queda en un
+    # solo sitio y se enciende y se apaga sin ensuciar la lista de DLL del
+    # juego.
+    if [ "${PUENTE_STEAM:-1}" = 0 ]; then
+        export WINEDLLOVERRIDES="$WINEDLLOVERRIDES;lsteamclient=d"
+        log "steam: el puente de Proton (lsteamclient) va QUITADO en este juego; manda la biblioteca de Steam que trae el juego"
+    fi
+
     [ "$kind" = "wine" ] || return 0
 
     # --- SOLO CON RUNNERS WINE, que van directos sobre el sistema
@@ -41700,6 +42038,7 @@ export_game_env() {
     # nada. El orden importa y por eso queda dicho aqui.
     pad_fantasma_aplicar
     lsfg_entorno
+    lf_entorno
     # NTsync: primitivas de sincronizacion NT dentro del kernel (6.14+).
     # Sustituye a esync/fsync; los runners parcheados la activan con
     # PROTON_USE_NTSYNC=1 (GE-Proton 10-9+, Proton/Wine-CachyOS, DWProton).
@@ -45552,6 +45891,33 @@ Que cumplas muchos mas.
     # Hay una suite (prueba_novedades.sh) que comprueba que cada punto es UNA
     # linea, que no se pasa de catorce y que no reaparece lo de los prefijos.
     #
+    # 27/11, AL SUBIR A LA 2.34: fuera los dos de la 2.33 y dentro DOS.
+    #
+    # LA 2.33 SI SE PUBLICO, y lo confirmo Dani al subir: "si se publico: la
+    # 2.34 lleva solo lo de hoy". Asi que sus dos puntos -el aviso del futbol y
+    # el arreglo de Steam- ya los tiene la gente, se van del aviso y pasan a la
+    # lista negra de prueba_novedades.sh. Es la regla de la 2.15 funcionando
+    # normal, al contrario del caso de la 2.30, que nunca salio y por eso sus
+    # puntos se quedaron en el aviso de la 2.31.
+    #
+    # Y LIQUIDFRAMES NO VA A LA LISTA NEGRA aunque estuviera en el aviso unas
+    # horas. Se integro esta misma tarde, DESPUES de que la 2.33 saliera, asi
+    # que no lo ha visto nadie: es novedad de la 2.34 y aqui se queda. La lista
+    # negra es de lo PUBLICADO, no de lo que paso por el fichero.
+    #
+    # LOS DOS DE LA 2.34, y por que esos:
+    #
+    #   - LiquidFrames: generar fotogramas SIN COMPRAR NADA. Hasta ahora hacia
+    #     falta Lossless Scaling comprado en Steam, asi que esto cambia quien
+    #     puede usarlo, no como se usa.
+    #   - Los juegos de Linux empaquetados se reconocen solos. Es el caso del
+    #     Gaelco de Dani, y lo nota quien empaqueta y quien se descarga un
+    #     paquete de otro: antes habia que configurarlo a mano en cada equipo.
+    #
+    # Lo demas de hoy NO entra, por el criterio de siempre: los dos arreglos de
+    # las librerias que trae un juego dentro y las lineas nuevas del registro
+    # son arreglos QUE NO SE VEN. Van contados en NOVEDADES-2.34.md.
+    #
     # 26/11, AL SUBIR A LA 2.33: fuera los dos de la 2.32 y dentro UNO.
     #
     # La 2.32 SI se publico -los testers la han estado probando toda la tarde,
@@ -45560,10 +45926,16 @@ Que cumplas muchos mas.
     # la lista no se hereda. Sus dos puntos se van y se quedan contados en
     # NOVEDADES-2.32.md.
     #
-    # Y UNO SOLO, no mas. La 2.33 trae el aviso de los bloqueos de red, y es
-    # lo unico que la gente nota. Lo demas de esta tanda -que el aviso no
-    # pregunta nada, que solo se consulta en España, que se cachea diez
-    # minutos- son tripas y van al fichero de novedades, no aqui.
+    # Y DOS, no cuatro. La 2.33 acabo trayendo cuatro cosas, pero solo dos
+    # las NOTA quien juega: el aviso de los bloqueos de red y la opcion que
+    # arranca los juegos que se cerraban solos (el puente de Steam).
+    #
+    # Las otras dos se quedan fuera a proposito, y es por el mismo criterio:
+    # las partidas declaradas y el Direct3D antiguo del runner son ARREGLOS
+    # QUE NO SE VEN. Si funcionan, el usuario no se entera de nada; anunciar
+    # "ahora las partidas se guardan bien" es contarle que antes podian
+    # guardarse mal. Van contadas en NOVEDADES-2.33.md, que es donde se busca
+    # el detalle.
     #
     # 01/11, AL SUBIR A LA 2.23: fuera el punto de la 2.22 (TeknoParrot) y
     # dentro los cinco de esta. La lista se limpia A MANO cada vez, que es
@@ -45783,7 +46155,9 @@ GRACIAS A LOS TESTERS
 
 NOVEDADES DE LA $WPROTON_VERSION
 
-  Nuevo: aviso cuando la red de España esta bloqueada por el futbol.
+  Generar fotogramas sin comprar nada: LiquidFrames (gratis, de otros).
+
+  Los juegos de Linux empaquetados se reconocen solos.
 
   Lo demas, en las novedades del repositorio."
     return 0
@@ -48426,6 +48800,7 @@ EOFCODEC
 0|dxvk (Direct3D 9/10/11 sobre Vulkan - reinstalar la del runner)
 0|vkd3d (Direct3D 12 sobre Vulkan)
 0|d7vk (DirectDraw y D3D 1-7 sobre Vulkan - juegos de los 90, el mas rapido)
+0|d8vk (Direct3D 8 sobre Vulkan - juegos de 2001-2004)
 0|dgvoodoo2 (DirectDraw y D3D 1-7, Glide - juegos de los 90 sobre D3D11)
 0|galliumnine (Direct3D 9 nativo en Mesa - rapido en AMD, no en NVIDIA)
 0|faudio (audio XAudio2 - reinstalar)
@@ -48653,6 +49028,13 @@ Instalar esas librerias ahora?"; then
         verbs="$(printf '%s' " $verbs " | sed 's/ d7vk / /')"
         verbs="${verbs% }"; verbs="${verbs# }" ;;
     esac
+    # "d8vk" tampoco es un verbo de winetricks, y va igual que d7vk.
+    local _quiere_d8vk=0
+    case " $verbs " in *" d8vk "*)
+        _quiere_d8vk=1
+        verbs="$(printf '%s' " $verbs " | sed 's/ d8vk / /')"
+        verbs="${verbs% }"; verbs="${verbs# }" ;;
+    esac
     # Los Windows Media Player se pisan entre ellos: instalar dos deja el
     # prefijo peor que instalar uno. Se queda el mas nuevo de los marcados.
     case " $verbs " in
@@ -48664,6 +49046,9 @@ Instalar esas librerias ahora?"; then
     # Solo D7VK, sin nada de winetricks: se instala y listo.
     if [ -z "$verbs" ] && [ "$_quiere_d7vk" = 1 ]; then
         install_d7vk "$squash" "$gid"; return $?
+    fi
+    if [ -z "$verbs" ] && [ "$_quiere_d8vk" = 1 ]; then
+        install_d8vk "$squash" "$gid"; return $?
     fi
     # Igual con EAX: si es lo unico pedido, no se llama a winetricks.
     if [ -z "$verbs" ] && [ "$_quiere_eax" = 1 ]; then
@@ -48684,6 +49069,7 @@ Instalar esas librerias ahora?"; then
     run_in_prefix "$squash" "$gid" winetricks -q $verbs
     WP_PREFIX_VERBOS=""
     [ "$_quiere_d7vk" = 1 ] && install_d7vk "$squash" "$gid"
+    [ "$_quiere_d8vk" = 1 ] && install_d8vk "$squash" "$gid"
     [ "$_quiere_eax" = 1 ] && install_dsoal "$squash" "$gid"
     if [ -n "${WP_REDIST_FALLIDOS:-}" ]; then
         ui_info "Instalados: $verbs
@@ -53419,6 +53805,50 @@ bundled_prefix_enlazar_usuario() {
     return 1
 }
 
+runner_dxvk_dir() {
+    # Donde guarda un runner sus DLL de Direct3D. $1 = carpeta del runner,
+    # $2 = "32" para las de 32 bits. Imprime la carpeta o nada.
+    #
+    # ESTA LISTA ESTABA SUELTA DENTRO DE bundled_prefix_prepare, y ahora hay un
+    # segundo sitio que necesita la misma respuesta: saber si el runner trae
+    # ddraw.dll o d3d8.dll, para no instalar a mano lo que ya viene puesto.
+    # Dos copias de una lista como esta se separan solas en cuanto aparece una
+    # distribucion nueva de Proton con otra ruta, y entonces una mitad del
+    # programa ve el runner y la otra no.
+    local rdir="${1:-}" cand
+    [ -n "$rdir" ] || return 1
+    if [ "${2:-}" = 32 ]; then
+        for cand in "$rdir/lib32/wine/dxvk" "$rdir/lib/wine/i386-windows" \
+                    "$rdir/files/lib/wine/i386-windows"; do
+            [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { printf '%s' "$cand"; return 0; }
+        done
+        return 1
+    fi
+    for cand in "$rdir/lib/wine/dxvk" "$rdir/lib64/wine/dxvk" \
+                "$rdir/files/lib/wine/dxvk" "$rdir/dist/lib/wine/dxvk" \
+                "$rdir/lib/wine/x86_64-windows" "$rdir/files/lib/wine/x86_64-windows"; do
+        [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+}
+
+runner_trae_dll() {
+    # ¿Trae este runner esa DLL de Direct3D ya hecha? $1 = runner, $2 = dll.
+    #
+    # Hace falta para D7VK y d8vk: GE-Proton los trae de serie -d8vk entro en
+    # la 8-24- y batocera-wine los pone como el resto. Si el runner los trae,
+    # instalar los nuestros a mano es cambiar una version probada por otra sin
+    # motivo. Si NO los trae -un Wine normal, un Kron4ek-, entonces si hacen
+    # falta, y es justo lo que pidio Dani: tener las dos cosas.
+    local rdir="${1:-}" dll="${2:-}" d
+    [ -n "$rdir" ] && [ -n "$dll" ] || return 1
+    d="$(runner_dxvk_dir "$rdir")" || d=""
+    [ -n "$d" ] && [ -f "$d/$dll" ] && { printf '%s' "$d/$dll"; return 0; }
+    d="$(runner_dxvk_dir "$rdir" 32)" || d=""
+    [ -n "$d" ] && [ -f "$d/$dll" ] && { printf '%s' "$d/$dll"; return 0; }
+    return 1
+}
+
 bundled_prefix_prepare() {
     # Los prefijos que vienen dentro de un wsquashfs de Batocera traen DXVK (y
     # a veces otras DLLs) instalado como ENLACES SIMBOLICOS a rutas del propio
@@ -53803,28 +54233,40 @@ bundled_prefix_prepare() {
 
     # 2b) Reinstalar DXVK desde el propio runner (es lo que hace Batocera al
     #     lanzar). Si el runner no lo trae, Wine tirara de WineD3D.
-    local cand dxvk64="" dxvk32=""
-    for cand in "$rdir/lib/wine/dxvk" "$rdir/lib64/wine/dxvk" \
-                "$rdir/files/lib/wine/dxvk" "$rdir/dist/lib/wine/dxvk" \
-                "$rdir/lib/wine/x86_64-windows" "$rdir/files/lib/wine/x86_64-windows"; do
-        [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { dxvk64="$cand"; break; }
-    done
-    for cand in "$rdir/lib32/wine/dxvk" "$rdir/lib/wine/i386-windows" \
-                "$rdir/files/lib/wine/i386-windows"; do
-        [ -d "$cand" ] && [ -f "$cand/dxgi.dll" ] && { dxvk32="$cand"; break; }
-    done
+    local dxvk64="" dxvk32=""
+    dxvk64="$(runner_dxvk_dir "$rdir")" || dxvk64=""
+    dxvk32="$(runner_dxvk_dir "$rdir" 32)" || dxvk32=""
     if [ -n "$dxvk64" ]; then
+        # ddraw.dll (D7VK) y d3d8.dll (d8vk) VAN EN ESTA LISTA, y faltaban.
+        #
+        # GE-Proton los trae de serie desde hace tiempo -d8vk entro en la 8-24-
+        # y batocera-wine los pone igual que el resto. Nosotros copiabamos
+        # dxgi, d3d9, d3d10core, d3d11 y d3d12 del runner y nos dejabamos
+        # estos dos, asi que el D7VK que el runner YA TRAE no llegaba nunca al
+        # prefijo: los juegos de DirectDraw y de Direct3D 8 se iban por
+        # WineD3D sin que nadie lo dijera.
+        #
+        # Por eso install_d7vk tenia sentido aunque el runner lo trajera: no
+        # estabamos pisando al del runner, es que no poniamos ninguno. Ahora
+        # se usa el del runner cuando lo hay -que es el que ese runner tiene
+        # probado- y la instalacion a mano queda para los Wine que no lo
+        # traen, que es justo lo que pidio Dani.
         local lib
-        for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll d3d12.dll; do
+        for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll d3d12.dll \
+                   ddraw.dll d3d8.dll; do
             [ -f "$dxvk64/$lib" ] && cp -f "$dxvk64/$lib" \
                 "$WINEPREFIX/drive_c/windows/system32/$lib" 2>/dev/null
         done
         [ -n "$dxvk32" ] && [ -d "$WINEPREFIX/drive_c/windows/syswow64" ] && \
-            for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll; do
+            for lib in dxgi.dll d3d9.dll d3d10core.dll d3d11.dll \
+                       ddraw.dll d3d8.dll; do
                 [ -f "$dxvk32/$lib" ] && cp -f "$dxvk32/$lib" \
                     "$WINEPREFIX/drive_c/windows/syswow64/$lib" 2>/dev/null
             done
         say "[+] DLLs de Direct3D repuestas desde el runner"
+        # Y QUEDA DICHO QUE TRAE, que es el dato que hace falta para saber si
+        # la instalacion a mano sobra o no.
+        log "runner: Direct3D antiguo -> ddraw.dll (D7VK) $([ -f "$dxvk64/ddraw.dll" ] && echo SI || echo no), d3d8.dll (d8vk) $([ -f "$dxvk64/d3d8.dll" ] && echo SI || echo no)"
     fi
 
     # 2b) LAS DLL DE WINE QUE PIDEN LAS DE DIRECTX.
@@ -57188,6 +57630,78 @@ elegir EAX. Para quitarlo, borra esos dos ficheros."
     return 0
 }
 
+install_d8vk() {
+    # d8vk: Direct3D 8 sobre Vulkan, para los juegos de 2001-2004.
+    #
+    # NO HAY QUE DESCARGAR UN PROYECTO APARTE: d8vk se FUSIONO EN DXVK en la
+    # 2.4, asi que el d3d8.dll de cualquier DXVK moderno ES d8vk. Buscar un
+    # repositorio "d8vk" suelto es como acabo D7VK: apuntando a algo que ya no
+    # se mantiene.
+    #
+    # Asi que de aqui sale de dos sitios, por ese orden:
+    #
+    #   1. DEL PROPIO RUNNER, si lo trae. GE-Proton lo trae desde la 8-24 y
+    #      batocera-wine lo pone como el resto. Es la version que ese runner
+    #      tiene probada, asi que gana.
+    #   2. Del ultimo DXVK de GitHub, si el runner no lo trae -un Wine normal,
+    #      un Kron4ek-. Que es justo el caso que pidio Dani: tener las dos.
+    #
+    # Va JUNTO AL EXE con un override, igual que D7VK y OptiScaler, y el
+    # override se apunta en DLL_OVERRIDES, que es el sitio que ya existe.
+    local squash="$1" gid="$2" target rdir="" dll=""
+    rdir="$(get_runner_path 2>/dev/null)" || rdir=""
+    dll="$(runner_trae_dll "$rdir" d3d8.dll 2>/dev/null)" || dll=""
+    target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
+    if [ -n "$dll" ]; then
+        # 32 bits si el runner las tiene: los juegos de D3D8 son de 32 casi
+        # todos, igual que los de DirectDraw.
+        local d32
+        d32="$(runner_dxvk_dir "$rdir" 32)" || d32=""
+        [ -n "$d32" ] && [ -f "$d32/d3d8.dll" ] && dll="$d32/d3d8.dll"
+        cp "$dll" "$target/d3d8.dll" || {
+            ui_error "No se pudo copiar el d3d8.dll del runner"; release_game_root; return 1; }
+        log "d8vk: copiado del propio runner ($dll)"
+        merge_overrides "d3d8=n,b"
+        write_full_profile "$gid"
+        release_game_root
+        ui_info "d8vk puesto como d3d8.dll junto al exe.
+
+Es el que trae el propio runner, que es la versión que ese
+runner tiene probada."
+        return 0
+    fi
+    # El runner no lo trae: se baja DXVK, que es donde vive d8vk desde la 2.4.
+    local url pkg repo_dxvk="doitsujin/dxvk"
+    log "d8vk: el runner no trae d3d8.dll; se baja DXVK ($repo_dxvk), que lo incluye desde la 2.4"
+    url="$(gh_latest_asset "$repo_dxvk" '\.tar\.(gz|xz|zst)$|\.zip$')"
+    [ -z "$url" ] && { ui_error "$(gh_no_encontrado DXVK "$repo_dxvk")"; release_game_root; return 1; }
+    pkg="$DL_DIR/$(basename "$url")"
+    if [ ! -f "$pkg" ]; then
+        dl "$url" "$pkg" || { ui_error "Fallo descargando DXVK"; rm -f "$pkg"; release_game_root; return 1; }
+    fi
+    local tmp; tmp="$(mktemp -d)"
+    extract_archive "$pkg" "$tmp" || { ui_error "Fallo extrayendo DXVK"; rm -rf "$tmp"; release_game_root; return 1; }
+    dll="$(find "$tmp" -ipath '*x32*' -iname 'd3d8.dll' | head -n1)"
+    [ -z "$dll" ] && dll="$(find "$tmp" -iname 'd3d8.dll' | head -n1)"
+    if [ -z "$dll" ]; then
+        rm -rf "$tmp"; release_game_root
+        ui_error "Este DXVK no trae d3d8.dll.
+
+d8vk entró en DXVK en la versión 2.4: con una anterior no está.
+Prueba con un runner más nuevo, que casi todos lo traen ya."
+        return 1
+    fi
+    cp "$dll" "$target/d3d8.dll"
+    rm -rf "$tmp"
+    merge_overrides "d3d8=n,b"
+    write_full_profile "$gid"
+    release_game_root
+    ui_info "d8vk instalado como d3d8.dll junto al exe.
+
+Sale del DXVK oficial, que lo incluye desde la versión 2.4."
+    return 0
+}
+
 install_d7vk() {
     # D7VK: DirectDraw y Direct3D 1-7 sobre Vulkan (WinterSnowfall/d7vk).
     #
@@ -57206,6 +57720,34 @@ install_d7vk() {
     # override para que Wine la use en vez de la suya. El override se apunta
     # en DLL_OVERRIDES, que es el sitio comun que ya existe: ni un campo nuevo.
     local squash="$1" gid="$2" target
+    # SI EL RUNNER YA LO TRAE, SE DICE ANTES DE DESCARGAR NADA.
+    #
+    # GE-Proton trae ddraw.dll de serie y batocera-wine lo pone como el resto
+    # de DXVK. Hasta hoy nosotros NO lo copiabamos del runner -la lista de
+    # bundled_prefix_prepare se dejaba ddraw y d3d8-, asi que esta instalacion
+    # a mano era la unica que habia y tenia todo el sentido. Ahora el del
+    # runner si se pone, y lo honesto es avisar de que esto lo cambia por otra
+    # version en vez de hacerlo callando.
+    local _ya
+    # get_runner_path es la que resuelve el runner del perfil ya cargado, la
+    # misma que usa todo lo demas: no se vuelve a decidir aqui.
+    _ya="$(runner_trae_dll "$(get_runner_path 2>/dev/null)" ddraw.dll 2>/dev/null)" || _ya=""
+    if [ -n "$_ya" ]; then
+        case "$(menu "El runner de este juego YA trae D7VK
+Viene incluido en el runner y se pone solo en el prefijo, así
+que no hace falta instalar nada.
+
+Instalarlo a mano cambia esa versión por la última de
+WinterSnowfall/d7vk, que puede ser más nueva o puede no estar
+probada con este runner." \
+            "Dejarlo como está (recomendado)" \
+            "Instalar el de WinterSnowfall encima" \
+            "<< Volver")" in
+            "Instalar el de WinterSnowfall"*) ;;
+            *) log "d7vk: el runner ya lo trae ($_ya) y se deja el suyo"; return 0 ;;
+        esac
+    fi
+
     target="$(preparar_carpeta_exe "$squash" "$gid")" || return 1
 
     local url pkg
@@ -58774,6 +59316,14 @@ do_pack_dir() {
     # empaquetan una carpeta -el de los ajustes del juego y los dos del
     # asistente-. Ponerlo en uno solo seria repetir el fallo de siempre: algo
     # que se arregla en un camino y no en los otros.
+    # EL MARCADOR PRIMERO, Y EL ORDEN ES EL ARREGLO.
+    #
+    # libs_antes_de_empaquetar empieza con "juego_es_nativo || return 0". Si el
+    # marcador se escribe DESPUES, un juego de Linux que la deteccion da por
+    # Windows se empaqueta sin recoger sus librerias, que es lo que le paso al
+    # Gaelco (27/11). Escrito antes, la respuesta ya es la buena cuando llega
+    # ahi. Ver marcador_linux_antes_de_empaquetar.
+    marcador_linux_antes_de_empaquetar "$dir" "$name"
     libs_antes_de_empaquetar "$dir" "$name"
     # Y EL NOMBRE Y EL IDIOMA DEL CRACK, por lo mismo: es el ultimo momento en
     # que esos ficheros se pueden escribir. Ver crack_antes_de_empaquetar.
@@ -62557,6 +63107,50 @@ libGL.so.1 libEGL.so.1 libGLdispatch.so.0 libGLX.so.0 libOpenGL.so.0
 libGLESv2.so.2 libdrm.so.2 libglapi.so.0 libgbm.so.1
 libvulkan.so.1 libxcb-dri2.so.0 libxcb-dri3.so.0"
 
+lib_nunca() {
+    # ¿ES ESTA DE LAS QUE NUNCA SE COPIAN? $1 = el nombre a secas.
+    #
+    # UNA SOLA RESPUESTA, Y NO DOS, QUE ES LO DE SIEMPRE. Pero sobre todo:
+    # ESTO ESTABA MAL ESCRITO DESDE EL PRINCIPIO, EN LOS DOS SITIOS.
+    #
+    # La pregunta se hacia asi:
+    #
+    #     case " $LIBS_NUNCA " in *" $nombre "*) continue ;; esac
+    #
+    # y parece correcta: se rodea la lista de espacios y se busca el nombre
+    # rodeado de espacios, que es como se mira una palabra en una lista.
+    #
+    # Pero LIBS_NUNCA tiene NUEVE LINEAS, y lo que separa a la ultima de una
+    # linea de la primera de la siguiente NO es un espacio: es un SALTO DE
+    # LINEA. Asi que DIECISEIS de sus treinta y siete entradas -las que caen a
+    # principio o a final de linea- NO coincidian nunca:
+    #
+    #   libBrokenLocale.so.1 libcidn.so.1 libnsl.so.1 libnss_compat.so.2
+    #   libnss_files.so.2 libnss_hesiod.so.2 libpthread.so.0 libresolv.so.2
+    #   libcrypt.so.1 libstdc++.so.6 libgcc_s.so.1 libGL.so.1 libOpenGL.so.0
+    #   libGLESv2.so.2 libgbm.so.1 libvulkan.so.1
+    #
+    # O sea: libstdc++, libpthread, libcrypt, libGL y libvulkan, que son justo
+    # las que mas rompen cuando se copian de una maquina a otra.
+    #
+    # Lo cazo prueba_libs_del_juego.sh el 26/11 al meter la lista en el camino
+    # del lanzamiento: el fixture del Banjo esperaba cinco librerias saltadas
+    # por el sistema y daban cuatro, porque libdrm.so.2 -que esta en mitad de
+    # una linea- si se reconocia y libstdc++.so.6 -que empieza linea- no. El
+    # fallo era viejo y de empaquetado; solo que hasta hoy nadie le preguntaba
+    # dos veces a la lista.
+    #
+    # El arreglo es aplanar los saltos de linea y los tabuladores a espacios
+    # ANTES de mirar, y hacerlo en un unico sitio.
+    local base="${1:-}" lista
+    [ -n "${base:-}" ] || return 1
+    lista=" $(printf '%s' "$LIBS_NUNCA" | tr '\n\t' '  ') "
+    case "$lista" in
+        *" $base "*) return 0 ;;
+    esac
+    return 1
+}
+
 libs_antes_de_empaquetar() {
     # SI EL JUEGO ES DE LINUX, SE LLEVA SUS LIBRERIAS ANTES DE EMPAQUETAR.
     #
@@ -62822,10 +63416,10 @@ las librerias que necesita el juego."
             nombre="$(printf '%s' "$lin" | awk '{print $1}')"
             ruta="$(printf '%s' "$lin" | sed -n 's/.*=> *\([^ ]*\).*/\1/p')"
             [ -f "$ruta" ] || continue
-            # ¿De las que pone el equipo? Entonces no se toca.
-            case " $LIBS_NUNCA " in
-                *" $nombre "*) continue ;;
-            esac
+            # ¿De las que pone el equipo? Entonces no se toca. La pregunta la
+            # contesta lib_nunca y solo ella: la lista tiene saltos de linea y
+            # mirarla a mano con un case dejaba fuera media lista.
+            lib_nunca "$nombre" && continue
             # ¿Ya la trae el propio juego? Entonces tampoco.
             case "$ruta" in "$raiz"/*) continue ;; esac
             todas="$todas$nombre|$ruta
@@ -63782,8 +64376,32 @@ nativo_volcar_salida() {
         return 0
     fi
     n="$(wc -l < "$f" 2>/dev/null || printf '0')"
-    log "---- salida del propio juego (${n:-?} linea(s), se pegan las ultimas 80) ----"
+    # LOS BYTES TAMBIEN, NO SOLO LAS LINEAS (26/11).
+    #
+    # En el registro del Gaelco salia "salida del propio juego (0 linea(s))" y
+    # entre las dos marcas NO HABIA NADA. Pero el fichero tenia bytes -si no,
+    # habria salido el "no escribio NADA" de arriba-, asi que el mensaje
+    # existia y se perdio por el camino. Y ese mensaje era la respuesta: bash
+    # escribe "cannot execute: required file not found" cuando falta el
+    # cargador (reproducido a proposito: 127 y esa linea).
+    #
+    # Contar solo lineas no distingue "no escribio nada" de "escribio algo sin
+    # salto de linea" ni de "escribio algo que el filtro se come". Con los
+    # bytes delante, un dia como ese se ve en la primera linea.
+    local _by
+    _by="$(wc -c < "$f" 2>/dev/null || printf '?')"
+    _by="${_by// /}"
+    log "---- salida del propio juego (${n:-?} linea(s), ${_by:-?} bytes; se pegan las ultimas 80) ----"
     tail -n 80 "$f" 2>/dev/null | tr -d '\r' >> "$LOG_FILE" 2>/dev/null
+    # Y SI HABIA BYTES Y NO SALIO NINGUNA LINEA, SE DICE Y SE PEGA EN CRUDO.
+    #
+    # Es el caso exacto que se perdio. Antes de volver a tirar lo que el juego
+    # dijo, se escribe tal cual venga -visible, con los caracteres raros
+    # marcados- aunque sean cuatro bytes sin salto de linea.
+    if [ "${n:-0}" = 0 ] && [ "${_by:-0}" != 0 ] && [ "${_by:-?}" != "?" ]; then
+        log "libs: el juego escribio $_by byte(s) y ni un salto de linea; se pega en crudo, que es justo lo que se perdio en el caso del 26/11" WARN
+        od -c -N 2048 "$f" 2>/dev/null | sed 's/^/    /' >> "$LOG_FILE" 2>/dev/null
+    fi
     log "---- fin de la salida del propio juego ----"
     return 0
 }
@@ -64138,12 +64756,13 @@ libs_del_juego_preparar() {
     granja="$RUNTIME_DIR/libs/$nom"
     rm -rf "$granja" 2>/dev/null
     mkdir -p "$granja" 2>/dev/null || return 1
-    local pedir cand sisc dec tab
+    local pedir cand sisc dec nunca tab n_nunca=0
     tab="$(printf '\t')"
     pedir="$(mktemp)" || return 1
     cand="$(mktemp)"  || { rm -f "$pedir"; return 1; }
     sisc="$(mktemp)"  || { rm -f "$pedir" "$cand"; return 1; }
     dec="$(mktemp)"   || { rm -f "$pedir" "$cand" "$sisc"; return 1; }
+    nunca="$(mktemp)" || { rm -f "$pedir" "$cand" "$sisc" "$dec"; return 1; }
     # 1) LO QUE TRAE EL JUEGO: "nombre<TAB>clase<TAB>ruta".
     local _dir
     IFS=':'
@@ -64158,6 +64777,33 @@ libs_del_juego_preparar() {
             # fichero que acaba en .so y no lo es-, se le da al juego: lo
             # desconocido no se le quita.
             clase="$(clase_elf "$f")"
+            # LA LISTA DE LAS QUE NUNCA SE COPIAN, TAMBIEN AQUI (26/11).
+            #
+            # LIBS_NUNCA existia y se consultaba en UN SOLO SITIO:
+            # libs_antes_de_empaquetar. El camino del LANZAMIENTO -este- no la
+            # miraba. Es el mismo fallo que el del lanzador .sh: el guardia
+            # escrito en un camino y no en el otro.
+            #
+            # Lo destapo el registro del Gaelco Championship Tuning Race
+            # (26/11), un volcado de recreativa con su /lib de glibc 2.2.5
+            # entero dentro. WProton le dio al juego SUS libc.so.6,
+            # ld-linux.so.2, libpthread.so.0, libdl.so.2 y libm.so.6 -86
+            # librerias- en un equipo con glibc 2.43. Las cinco primeras estan
+            # en LIBS_NUNCA, y el comentario de esa lista ya decia por que:
+            # "copiarlas rompe el juego en cuanto el equipo destino tenga una
+            # version distinta, que es casi siempre".
+            #
+            # Y SE SALTA PASE LO QUE PASE CON LA CLASE. La regla de abajo es
+            # "lo desconocido no se le quita", que esta bien para una libreria
+            # cualquiera: en la duda, la del juego. Pero para la familia de
+            # glibc es al reves, y justo por eso se colo: a estas la clase vino
+            # vacia -clase_elf no pudo leerlas- y la duda las dejo pasar. Para
+            # glibc no hay duda: la pone el equipo.
+            if lib_nunca "$base"; then
+                n_nunca=$((n_nunca+1))
+                printf '%s\t%s\n' "$base" "${clase:--}" >> "$nunca"
+                continue
+            fi
             # "-" Y NO VACIO, Y NO ES UN DETALLE: estos ficheros se leen luego
             # con "read" y el IFS puesto a un tabulador, y el tabulador es
             # ESPACIO EN BLANCO para bash: dos seguidos cuentan como uno solo y
@@ -64169,13 +64815,31 @@ libs_del_juego_preparar() {
         IFS=':'
     done
     IFS="$_OLDIFS"
+    # LO QUE SE DEJO FUERA POR LA LISTA, DICHO Y CON NOMBRES.
+    #
+    # Son las que mas se echan de menos cuando un juego no arranca, asi que no
+    # pueden irse en silencio: si manana resulta que un juego SI necesitaba la
+    # suya, el registro tiene que decir que se la quitamos nosotros y cual.
+    if [ "$n_nunca" -gt 0 ]; then
+        log "libs: $n_nunca libreria(s) del juego NO se usan nunca (glibc, libstdc++ y el driver de video): esas las pone el equipo, que es lo unico que funciona cuando las versiones no coinciden"
+        awk -F'\t' -v h="$(date '+%H:%M:%S' 2>/dev/null)" \
+            '{ printf "%s [INFO] libs: %s%s: la del juego NO se usa (esta en la lista de las que pone siempre el equipo)\n", h, $1, ($2 == "-" ? " (no se pudo leer su clase)" : " (de " $2 " bits)") }' \
+            "$nunca" >> "$LOG_FILE" 2>/dev/null
+    fi
     if [ ! -s "$pedir" ]; then
-        rm -rf "$granja" 2>/dev/null; rm -f "$pedir" "$cand" "$sisc" "$dec"
-        log "libs: el juego trae carpeta de librerias pero esta vacia; no se usa"
+        rm -rf "$granja" 2>/dev/null
+        rm -f "$pedir" "$cand" "$sisc" "$dec" "$nunca"
+        if [ "$n_nunca" -gt 0 ]; then
+            log "libs: todo lo que traia el juego estaba en esa lista; no hay nada que darle y se usan las del equipo"
+        else
+            log "libs: el juego trae carpeta de librerias pero esta vacia; no se usa"
+        fi
         return 1
     fi
     # 2) LAS CANDIDATAS DEL SISTEMA PARA ESOS NOMBRES, DE UNA PASADA.
-    awk -F'\t' 'NR == FNR { q[$1] = 1; next } ($1 in q) { print $1 "\t" $2 }' \
+    # EL FICHERO SE DISTINGUE POR SU NOMBRE Y NO POR "NR == FNR" (ver abajo).
+    awk -F'\t' -v pedf="$pedir" \
+        'FILENAME == pedf { q[$1] = 1; next } ($1 in q) { print $1 "\t" $2 }' \
         "$pedir" "$idx" > "$cand" 2>/dev/null
     # 3) SU CLASE (gratis, como arriba). Son pocas: una o dos por nombre.
     local _n _r _cl
@@ -64186,8 +64850,30 @@ libs_del_juego_preparar() {
         printf '%s\t%s\t%s\n' "$_n" "${_cl:--}" "$_r" >> "$sisc"
     done < "$cand"
     # 4) LA DECISION, DE UNA VEZ.
-    awk -F'\t' -v OFS='\t' '
-        NR == FNR {
+    #
+    # "NR == FNR" NO SIRVE AQUI, Y ESTO ES UN FALLO DE VERDAD (26/11).
+    #
+    # El truco de "NR == FNR" para distinguir el primer fichero del segundo se
+    # cae cuando EL PRIMERO ESTA VACIO: awk no lee ni un registro de el, asi que
+    # FNR nunca se adelanta, y al llegar al segundo fichero NR y FNR siguen
+    # siendo iguales. Resultado: TODAS las lineas del segundo fichero se tragan
+    # como si fueran del indice del sistema, no se imprime ninguna decision, y
+    # el juego se queda SIN NINGUNA de sus librerias.
+    #
+    # Cuando pasa: el equipo no tiene NI UNA de las que trae el juego -lo normal
+    # en un juego con librerias raras-, con lo que "$sisc" sale vacio. O sea el
+    # caso en el que la carpeta lib/ del juego es MAS necesaria, y justo ahi no
+    # se daba nada. Encima el registro decia "de las 0 libreria(s) que trae el
+    # juego, este equipo tiene todas", que es lo contrario de lo que pasaba.
+    #
+    # Lo encontro prueba_libs_del_juego.sh el 26/11, con el primer fixture que
+    # deja el indice del sistema sin ninguna coincidencia. Ningun caso anterior
+    # lo tenia: todos daban al menos una.
+    #
+    # El arreglo: distinguir el fichero por su NOMBRE (FILENAME), que no depende
+    # de cuantas lineas tenga.
+    awk -F'\t' -v OFS='\t' -v sisf="$sisc" '
+        FILENAME == sisf {
             if ($2 != "-" && !(($1 SUBSEP $2) in sis)) sis[$1 SUBSEP $2] = $3
             next
         }
@@ -64210,7 +64896,7 @@ libs_del_juego_preparar() {
         [ -n "${_n:-}" ] && [ -n "${_r:-}" ] || continue
         ln -sfn "$_r" "$granja/$_n" 2>/dev/null && n_usadas=$((n_usadas+1))
     done < "$dec"
-    rm -f "$pedir" "$cand" "$sisc" "$dec"
+    rm -f "$pedir" "$cand" "$sisc" "$dec" "$nunca"
     if [ "$n_usadas" -eq 0 ]; then
         rm -rf "$granja" 2>/dev/null
         log "libs: de las $n_saltadas libreria(s) que trae el juego, este equipo tiene todas: la carpeta lib/ del juego NO se usa. (Ponerla delante hace que el Vulkan del sistema y el driver de la GPU carguen SUS dependencias desde ahi, y hay juegos que entonces no llegan ni a abrir la ventana.) Si este juego necesita las suyas, LIBS_DEL_JUEGO=todas en settings.conf"
@@ -64220,6 +64906,267 @@ libs_del_juego_preparar() {
     printf '%s' "$granja"
     return 0
 }
+elf_interprete() {
+    # LA RUTA DEL CARGADOR QUE LLEVA DENTRO UN BINARIO (PT_INTERP). $1 = fichero.
+    #
+    # POR QUE ESTO HACIA FALTA, Y LO QUE COSTO NO TENERLO
+    #
+    # Del caso del Gaelco Championship Tuning Race (26/11). El juego salia con
+    # codigo 127 a los 0 segundos y en el registro no habia ni una pista. La
+    # causa: su binario es de 32 bits y lleva "/lib/ld-linux.so.2" METIDO
+    # DENTRO, en absoluto, y ese cargador no estaba en el equipo.
+    #
+    # Y esto es lo que hay que entender, porque es contraintuitivo: la ruta del
+    # cargador la resuelve EL NUCLEO, tal cual, al ejecutar. No vale
+    # LD_LIBRARY_PATH, no vale la copia que traiga el juego en su lib/, y no
+    # vale ponerla en la granja de librerias. Si no esta en esa ruta exacta,
+    # execve falla con ENOENT, el shell dice "cannot execute: required file not
+    # found" y sale con 127. Reproducido a proposito con un binario al que se
+    # le cambio el PT_INTERP por una ruta que no existe: 127 y ese mensaje.
+    #
+    # SIN readelf NI file, que en una Deck no estan garantizados. La cabecera de
+    # programa del ELF se lee a mano: e_phoff/e_phentsize/e_phnum, se recorren
+    # las entradas y la que tiene p_type == 3 (PT_INTERP) lleva en p_offset la
+    # cadena. Es la cabecera, no una heuristica. Comprobado contra readelf.
+    local f="${1:-}" cl off num tam i o p
+    [ -n "${f:-}" ] && [ -f "$f" ] || return 0
+    command -v od >/dev/null 2>&1 || return 0
+    cl="$(od -An -tx1 -N5 "$f" 2>/dev/null | tr -d ' \n')"
+    case "${cl:-}" in
+        7f454c4601) cl=32 ;;
+        7f454c4602) cl=64 ;;
+        *) return 0 ;;
+    esac
+    if [ "$cl" = 32 ]; then
+        off="$(od -An -tu4 -j28 -N4 "$f" 2>/dev/null | tr -d ' \n')"
+        tam="$(od -An -tu2 -j42 -N2 "$f" 2>/dev/null | tr -d ' \n')"
+        num="$(od -An -tu2 -j44 -N2 "$f" 2>/dev/null | tr -d ' \n')"
+    else
+        off="$(od -An -tu8 -j32 -N8 "$f" 2>/dev/null | tr -d ' \n')"
+        tam="$(od -An -tu2 -j54 -N2 "$f" 2>/dev/null | tr -d ' \n')"
+        num="$(od -An -tu2 -j56 -N2 "$f" 2>/dev/null | tr -d ' \n')"
+    fi
+    [ -n "${off:-}" ] && [ -n "${tam:-}" ] && [ -n "${num:-}" ] || return 0
+    # Un tope por si la cabecera viene con basura: un ELF normal no pasa de
+    # unas pocas decenas de entradas.
+    [ "$num" -gt 0 ] 2>/dev/null && [ "$num" -le 128 ] 2>/dev/null || return 0
+    i=0
+    while [ "$i" -lt "$num" ]; do
+        o=$(( off + i * tam ))
+        p="$(od -An -tu4 -j"$o" -N4 "$f" 2>/dev/null | tr -d ' \n')"
+        if [ "${p:-}" = 3 ]; then
+            if [ "$cl" = 32 ]; then
+                o="$(od -An -tu4 -j$(( o + 4 )) -N4 "$f" 2>/dev/null | tr -d ' \n')"
+            else
+                o="$(od -An -tu8 -j$(( o + 8 )) -N8 "$f" 2>/dev/null | tr -d ' \n')"
+            fi
+            [ -n "${o:-}" ] || return 0
+            od -An -c -j"$o" -N256 "$f" 2>/dev/null | tr -d ' \n' | sed 's/\\0.*//'
+            return 0
+        fi
+        i=$(( i + 1 ))
+    done
+    return 0
+}
+
+script_que_lanza() {
+    # QUE BINARIO LANZA DE VERDAD UN LANZADOR .sh. $1 = el script.
+    #
+    # Del mismo caso: el registro decia "arquitectura: no se pudo leer la
+    # cabecera ELF de Gaelco_Championship_Tuning_Race.sh". Pues claro, es un
+    # script. Mirabamos EL SOBRE y no la carta, asi que no se supo nunca que el
+    # juego era de 32 bits.
+    #
+    # El script tipico de estos volcados tiene dos lineas:
+    #
+    #   cd ./home/joc2001/joc2004/salidas/
+    #   ./linuxloader
+    #
+    # Asi que se sigue el cd -relativo a la carpeta del script- y se busca lo
+    # que se ejecuta despues. No se interpreta el script entero: si tiene
+    # variables, bucles o condiciones, se deja y se dice que no se pudo. Mas
+    # vale no saberlo que decir una cosa por otra.
+    local sh="${1:-}" base dir linea cd_a="" cand=""
+    [ -n "${sh:-}" ] && [ -f "$sh" ] || return 0
+    dir="$(cd "$(dirname "$sh")" 2>/dev/null && pwd)" || return 0
+    while IFS= read -r linea || [ -n "$linea" ]; do
+        # Fuera comentarios, lineas en blanco y el #! de arriba.
+        case "$linea" in ''|'#'*) continue ;; esac
+        # Se quitan los espacios de delante y de detras.
+        linea="${linea#"${linea%%[![:space:]]*}"}"
+        linea="${linea%"${linea##*[![:space:]]}"}"
+        case "$linea" in
+            # Un cd con una ruta a secas y sin nada raro.
+            cd\ *)
+                cd_a="${linea#cd }"
+                cd_a="${cd_a%/}"
+                case "$cd_a" in
+                    *'$'*|*'`'*|*'"'*|*"'"*|*'*'*|*' '*) return 0 ;;
+                esac ;;
+            # Lo que se ejecuta: ./algo o una ruta.
+            ./*|/*)
+                cand="${linea%% *}"
+                break ;;
+            exec\ *)
+                cand="${linea#exec }"
+                cand="${cand%% *}"
+                case "$cand" in ./*|/*) break ;; *) return 0 ;; esac ;;
+            # Cualquier otra cosa -una variable, un if, un bucle- y se deja.
+            *) return 0 ;;
+        esac
+    done < "$sh"
+    [ -n "${cand:-}" ] || return 0
+    case "$cand" in
+        /*) [ -f "$cand" ] && printf '%s' "$cand"; return 0 ;;
+    esac
+    cand="${cand#./}"
+    [ -n "${cd_a:-}" ] && cand="${cd_a#./}/$cand"
+    [ -f "$dir/$cand" ] && printf '%s' "$dir/$cand"
+    return 0
+}
+
+diag_script_de_lanzamiento() {
+    # ¿LLEGA A ALGUN SITIO LO QUE HACE ESTE SCRIPT? $1 = el .sh, $2 = el
+    # directorio de trabajo desde el que se va a lanzar.
+    #
+    # ESTO ES LO QUE FALTABA, Y ES LA CAUSA MAS COMUN DE TODAS.
+    #
+    # Del caso del Gaelco Championship Tuning Race (26/11). Su lanzador era:
+    #
+    #   cd ./home/joc2001/joc2004/salidas/
+    #   ./linuxloader
+    #
+    # Ese cd es RELATIVO a donde se lanza el script. El .sh estaba en la raiz
+    # del juego y el volcado colgaba mas abajo, asi que el cd no llegaba,
+    # ./linuxloader no existia en el directorio de trabajo, y bash salia con
+    # 127: "command not found". Lo arreglo Dani moviendo el .sh a la carpeta
+    # donde si resuelve.
+    #
+    # Y LO QUE COSTO: yo vi el 127 y la linea de al lado que decia que el
+    # cargador de 32 bits no estaba en el equipo, y monte con eso una
+    # explicacion que encaja perfectamente con un 127 -y que hasta reproduje a
+    # proposito-. Era falsa. Un mismo codigo de salida tiene varias causas, y
+    # no comprobe la primera y mas simple. Dani pregunto si habia que poner una
+    # ruta absoluta y le dije que no era la ruta: era la ruta.
+    #
+    # Asi que esto se comprueba SIEMPRE y va PRIMERO, antes del cargador y
+    # antes de las librerias. Una linea en el registro y el caso esta resuelto.
+    local sh="${1:-}" cwd="${2:-}" dir linea cd_a="" prog="" n=0
+    [ -n "${sh:-}" ] && [ -f "$sh" ] || return 0
+    [ -z "$(clase_elf "$sh")" ] || return 0        # es un binario, no un script
+    dir="$(cd "$(dirname "$sh")" 2>/dev/null && pwd)" || dir=""
+    [ -n "${cwd:-}" ] || cwd="$dir"
+    while IFS= read -r linea || [ -n "$linea" ]; do
+        case "$linea" in ''|'#'*) continue ;; esac
+        linea="${linea#"${linea%%[![:space:]]*}"}"
+        linea="${linea%"${linea##*[![:space:]]}"}"
+        n=$((n+1))
+        case "$linea" in
+            cd\ *)  cd_a="${linea#cd }"; cd_a="${cd_a%/}" ;;
+            ./*|/*) prog="${linea%% *}"; break ;;
+            exec\ *) prog="${linea#exec }"; prog="${prog%% *}"; break ;;
+        esac
+        [ "$n" -gt 40 ] && break
+    done < "$sh"
+    [ -n "${cd_a:-}${prog:-}" ] || return 0
+    log "script: $(basename "$sh") se lanza desde $cwd"
+    # EL cd, Y SI LLEGA.
+    if [ -n "${cd_a:-}" ]; then
+        case "$cd_a" in
+            /*) if [ -d "$cd_a" ]; then
+                    log "script: hace 'cd $cd_a' (absoluto) y esa carpeta existe"
+                else
+                    log "script: hace 'cd $cd_a' (absoluto) y ESA CARPETA NO EXISTE" WARN
+                fi ;;
+            *'$'*|*'`'*)
+                log "script: hace 'cd $cd_a', que lleva algo calculado; no se comprueba" ;;
+            *)  if [ -d "$cwd/${cd_a#./}" ]; then
+                    log "script: hace 'cd $cd_a' (relativo) y desde ahi existe: $cwd/${cd_a#./}"
+                else
+                    log "script: hace 'cd $cd_a' (RELATIVO) y DESDE $cwd NO EXISTE" WARN
+                    log "script: por eso el juego sale con 127 al instante: el cd falla y lo de la linea siguiente no esta donde se busca. Se arregla moviendo el .sh a la carpeta donde ese cd si llegue, o poniendo la ruta completa" WARN
+                fi ;;
+        esac
+    fi
+    # Y EL PROGRAMA, QUE ES LO QUE DE VERDAD SE EJECUTA.
+    if [ -n "${prog:-}" ]; then
+        local real
+        real="$(script_que_lanza "$sh")" || real=""
+        if [ -n "${real:-}" ]; then
+            log "script: ejecuta '$prog', que aqui es $real"
+        else
+            log "script: ejecuta '$prog' y NO SE HA ENCONTRADO desde donde se lanza" WARN
+        fi
+    fi
+    return 0
+}
+
+diag_cargador_que_falta() {
+    # ¿PUEDE ESTE EQUIPO EJECUTAR SIQUIERA ESTE BINARIO? $1 = lanzador.
+    #
+    # Es la pregunta que no se hacia, y es la primera de todas: antes de las
+    # librerias, antes del video y antes del mando. Si falta el cargador del
+    # ELF, el juego no llega ni a empezar y sale con 127 sin decir nada.
+    #
+    # Imprime la ruta del cargador que falta, o nada si todo esta en su sitio.
+    # Deja en el registro lo que ha visto en los dos casos: cuando falta hace
+    # falta para arreglarlo, y cuando no falta hace falta para descartarlo.
+    local exe="${1:-}" real="" interp=""
+    [ -n "${exe:-}" ] && [ -f "$exe" ] || return 0
+    real="$exe"
+    # SI ES UN SCRIPT, LO QUE IMPORTA ES EL BINARIO QUE LANZA.
+    if [ -z "$(clase_elf "$exe")" ]; then
+        real="$(script_que_lanza "$exe")" || real=""
+        if [ -z "${real:-}" ]; then
+            log "cargador: $(basename "$exe") no es un binario y no se ha podido ver que lanza; no se puede comprobar el cargador"
+            return 0
+        fi
+        log "cargador: $(basename "$exe") es un script y lo que lanza de verdad es $real"
+    fi
+    interp="$(elf_interprete "$real")" || interp=""
+    if [ -z "${interp:-}" ]; then
+        log "cargador: $(basename "$real") no dice que cargador necesita (estatico, o no se pudo leer); no hay nada que comprobar"
+        return 0
+    fi
+    if [ -e "$interp" ]; then
+        log "cargador: $(basename "$real") necesita $interp y este equipo lo tiene"
+        return 0
+    fi
+    # AQUI ESTA EL FALLO, Y ES EL QUE DABA 127 SIN EXPLICACION.
+    log "cargador: $(basename "$real") necesita $interp y ESTE EQUIPO NO LO TIENE" WARN
+    log "cargador: por eso el juego sale con 127 al instante. Esa ruta la lleva el binario DENTRO y la resuelve el nucleo tal cual: no vale LD_LIBRARY_PATH, ni la copia que el juego traiga en su lib/" WARN
+    printf '%s' "$interp"
+    return 0
+}
+
+cargador_del_juego() {
+    # EL CARGADOR QUE TRAE EL PROPIO JUEGO, si lo trae. $1 = raiz del juego,
+    # $2 = el cargador que falta (ruta absoluta, de la que solo se usa el nombre).
+    #
+    # Estos volcados de recreativa traen su /lib entero dentro, el cargador
+    # incluido. Y un cargador SE PUEDE EJECUTAR COMO PROGRAMA:
+    #
+    #   ld-linux.so.2 --library-path <libs> <binario> <argumentos>
+    #
+    # Asi se salta la ruta metida en el binario, sin tocar el sistema y sin
+    # instalar nada. Y de paso se usan las librerias del juego de forma
+    # COHERENTE: un cargador de 2002 con su glibc de 2002. Mezclar el cargador
+    # del equipo con una libc de hace veinte años falla igual.
+    local raiz="${1:-}" falta="${2:-}" nombre d
+    [ -n "${raiz:-}" ] && [ -n "${falta:-}" ] || return 1
+    nombre="${falta##*/}"
+    for d in "$raiz/lib" "$raiz/lib32" "$raiz/usr/lib" "$raiz"; do
+        [ -f "$d/$nombre" ] || continue
+        [ -z "$(clase_elf "$d/$nombre")" ] && continue
+        printf '%s' "$d/$nombre"
+        return 0
+    done
+    # Y si no esta a la vista, se busca, que estos volcados anidan carpetas.
+    d="$(find -H "$raiz" -maxdepth 6 -type f -name "$nombre" 2>/dev/null | head -n1)"
+    [ -n "${d:-}" ] && [ -n "$(clase_elf "$d")" ] && { printf '%s' "$d"; return 0; }
+    return 1
+}
+
 diag_arquitectura_nativa() {
     # DE QUE ARQUITECTURA ES EL JUEGO Y DE QUE SON LAS LIBRERIAS QUE LE DAMOS.
     # $1 = el ejecutable del juego. $2 = el LD_LIBRARY_PATH que se le puso.
@@ -64546,6 +65493,81 @@ ejecutar_nativo() {
                 say "[+] Librerias propias del juego: $_lp_dar"
                 diag_arquitectura_nativa "$exe" "$_lp_dar"
             fi
+        fi
+    fi
+
+    # ¿TIENE ESTE EQUIPO EL CARGADOR QUE EL BINARIO NECESITA?
+    #
+    # Va DESPUES de las librerias y ANTES de lanzar, porque es la pregunta que
+    # manda sobre todas: si falta el cargador, el juego no llega ni a empezar y
+    # sale con 127 sin escribir nada. Del caso del Gaelco (26/11).
+    # PRIMERO EL SCRIPT, que es la causa mas comun y la mas tonta: un cd
+    # relativo que no llega. Va delante del cargador a proposito.
+    diag_script_de_lanzamiento "$exe" "$_raiz_real" || true
+    local _falta_ld _ld_juego=""
+    _falta_ld="$(diag_cargador_que_falta "$exe")" || _falta_ld=""
+    if [ -n "${_falta_ld:-}" ]; then
+        _ld_juego="$(cargador_del_juego "$_raiz_real" "$_falta_ld")" || _ld_juego=""
+        if [ -n "${_ld_juego:-}" ] && [ -n "$(clase_elf "$exe")" ]; then
+            # EL LANZADOR ES EL PROPIO BINARIO: se puede arreglar aqui mismo.
+            #
+            # Un cargador se ejecuta como programa y se le pasa el binario, asi
+            # que la ruta metida dentro del ELF deja de importar. Va al
+            # principio de WP_NAT_PRE para quedar por fuera de todo lo demas.
+            WP_NAT_PRE=("$_ld_juego" --library-path \
+                        "${LD_LIBRARY_PATH:-$(dirname "$_ld_juego")}" \
+                        ${WP_NAT_PRE[@]+"${WP_NAT_PRE[@]}"})
+            log "cargador: se lanza con el que trae el juego ($_ld_juego), que se salta la ruta de dentro del binario"
+            say "[+] Este juego trae su propio cargador y se usa ese:
+    el que necesita no esta en este equipo, y asi no hay que
+    instalar nada."
+        elif [ -n "${_ld_juego:-}" ]; then
+            # EL LANZADOR ES UN SCRIPT: el script ejecuta el binario el solo,
+            # asi que desde fuera no se le puede cambiar el cargador. Lo unico
+            # honesto es decir exactamente que hay que hacer.
+            log "cargador: el juego trae el suyo ($_ld_juego) pero el lanzador es un script y lo ejecuta el; desde aqui no se le puede cambiar" WARN
+            # DOS SALIDAS, Y LA PRIMERA ES LA QUE USA QUIEN HACE ESTO A DIARIO.
+            #
+            # aderumier, que convierte packs de recreativas enteros, lo tiene
+            # escrito en una linea: "32-bit games need the host lib32
+            # packages". O sea, lo normal es instalar los paquetes de 32 bits
+            # del sistema, no retocar el juego. Una glibc moderna arranca
+            # binarios de hace veinte años sin problema -para eso mantiene la
+            # compatibilidad- y ademas asi el juego usa la del equipo, que es
+            # lo que dice LIBS_NUNCA desde siempre.
+            #
+            # La segunda salida es para cuando no se puede instalar nada: una
+            # Deck en modo Juego, un sistema de solo lectura. Ahi se usa el
+            # cargador que el propio juego trae.
+            ui_info "Este juego no arranca en este equipo, y no es culpa suya.
+
+Es un juego de 32 bits y a este equipo le falta la parte de 32
+bits del sistema. Hay dos formas de arreglarlo:
+
+1) La normal: instalar los paquetes de 32 bits (en CachyOS y
+   Arch son los que empiezan por lib32-; el que hace falta
+   siempre es lib32-glibc). Es lo que hace todo el mundo que
+   juega a estos, y luego van todos.
+
+2) Si no puedes instalar nada, el juego trae su propio cargador
+   dentro. Entonces hay que cambiar la última línea del script
+   $(basename "$exe")
+   para que llame a ese cargador y le pase el programa.
+
+El registro de esta partida dice exactamente qué falta y dónde
+está el cargador que el juego trae."
+        else
+            log "cargador: falta $_falta_ld y el juego tampoco lo trae; no hay de donde sacarlo" WARN
+            ui_info "Este juego no arranca en este equipo, y no es culpa suya.
+
+Es un juego de 32 bits y a este equipo le falta la parte de 32
+bits del sistema. El juego tampoco la trae dentro.
+
+Se arregla instalando los paquetes de 32 bits: en CachyOS y
+Arch son los que empiezan por lib32-, y el que hace falta
+siempre es lib32-glibc.
+
+El registro de esta partida dice exactamente qué falta."
         fi
     fi
     [ -x "$exe" ] || chmod +x "$exe" 2>/dev/null
@@ -64930,6 +65952,18 @@ AL_MARCADOR_GLOB="*.windowsloader"
 # los dos manda. Vacio tambien vale: significa "esto es de Linux, busca tu".
 LINUX_MARCADOR_GLOB="*.linuxloader"
 
+aviso_sin_marcador_linux() {
+    # DICE EN EL REGISTRO QUE ESTE JUEGO NO TRAE MARCADOR, Y COMO PONER UNO.
+    #
+    # POR QUE ES UNA FUNCION: la frase hacia falta en LOS DOS caminos que
+    # deciden Windows adivinando -el del autorun.cmd y el del .exe- y la escribi
+    # DOS VECES. Una mutacion que la quitase del camino del .exe no la cazaba
+    # nadie, porque el fixture de la prueba tenia tambien autorun.cmd y la
+    # frase salia por el otro lado. O sea: la misma frase en dos sitios, y la
+    # prueba aprobando por el que no se habia tocado. Es el fallo de siempre en
+    # su version mas pequena, y se arregla igual.
+    log "juego_es_nativo: y este juego NO trae ningun $LINUX_MARCADOR_GLOB; si de verdad es de Linux, un fichero con ese nombre en el juego -con el lanzador dentro- lo zanja sin tener que configurar nada"
+}
 linux_marcador_lanzador() {
     # ¿Esta carpeta trae el marcador de juego de Linux? $1 = carpeta.
     #
@@ -64943,8 +65977,28 @@ linux_marcador_lanzador() {
     # empaqueto no valdria nada aqui, donde el juego esta montado en otro sitio.
     local d="${1:-}" hallado linea ruta
     [ -n "$d" ] && [ -d "$d" ] || return 1
-    hallado="$(find -H "$d" -maxdepth 2 -iname "$LINUX_MARCADOR_GLOB" -print -quit 2>/dev/null)"
+    # SE BUSCA HONDO, Y ES EL ARREGLO DEL 27/11 (caso del Gaelco, de Dani).
+    #
+    # Antes eran DOS niveles, copiando el limite de la busqueda de lanzadores.
+    # Y ahi el limite tiene sentido: un .sh a cuatro niveles suele ser un script
+    # interno del juego y elegirlo es equivocarse. PERO UN MARCADOR NO SE
+    # ADIVINA: alguien lo ha puesto a mano, con una extension que no usa nadie
+    # mas, para decir una cosa que no se puede confundir. Limitar su profundidad
+    # no evita ningun error, solo hace que a veces no se lea.
+    #
+    # Dani puso su 'gaelco.linuxloader' y el registro siguio diciendo "hay un
+    # .exe -> se trata como juego de Windows", sin una sola linea sobre el
+    # marcador: o sea que no se encontro. Con un volcado de recreativa, donde la
+    # carpeta de verdad del juego cuelga de 'home/joc2001/joc2004/salidas', es
+    # facil que el marcador acabe al lado del lanzador y no en la raiz de todo,
+    # que es donde solo se mira con dos niveles.
+    #
+    # Asi que se busca hasta ocho niveles, el mismo limite que la busqueda de
+    # .exe, y se dice EN EL REGISTRO donde se encontro. Un marcador que no se
+    # lee es peor que no tenerlo: el usuario cree que ya lo ha dicho.
+    hallado="$(find -H "$d" -maxdepth 8 -iname "$LINUX_MARCADOR_GLOB" -print -quit 2>/dev/null)"
     [ -n "$hallado" ] || return 1
+    log "marcador de Linux: encontrado '${hallado#"$d"/}'"
     [ -f "$hallado" ] || return 0
     while IFS= read -r linea; do
         case "${linea:-}" in ''|'#'*) continue ;; esac
@@ -64962,7 +66016,21 @@ linux_marcador_lanzador() {
             printf '%s' "$d/$ruta"
             return 0
         fi
-        log "marcador de Linux: dice '$ruta' pero ahi no hay ningun fichero; se buscara el lanzador como siempre" WARN
+        # Y SI NO ESTA AHI, SE MIRA AL LADO DEL PROPIO MARCADOR (27/11).
+        #
+        # La ruta va relativa a la raiz del juego, y asi esta documentado. Pero
+        # si el marcador esta hondo -ahora se busca hasta ocho niveles-, quien
+        # lo escribio a mano lo mas probable es que haya puesto la ruta relativa
+        # a DONDE ESTA EL MARCADOR, que es lo que uno ve al escribirlo. Las dos
+        # lecturas son razonables, asi que se prueban las dos y se dice cual
+        # salio. Adivinar una sola y callarse seria lo de siempre.
+        local _dm; _dm="$(dirname "$hallado")"
+        if [ "$_dm" != "$d" ] && [ -f "$_dm/$ruta" ]; then
+            log "marcador de Linux: '$ruta' no esta en la raiz del juego, pero si al lado del propio marcador; se usa esa"
+            printf '%s' "$_dm/$ruta"
+            return 0
+        fi
+        log "marcador de Linux: dice '$ruta' pero ahi no hay ningun fichero (ni en la raiz del juego ni al lado del marcador); se buscara el lanzador como siempre" WARN
     done < "$hallado"
     return 0
 }
@@ -66138,6 +67206,7 @@ lanzar_arcade_loader() {
     mando_virtual_del_juego "$kf"
     pad_fantasma_aplicar
     lsfg_entorno
+    lf_entorno
     capa_vulkan_entorno
     guardia_salida_start "$bin"
     ultimo_juego_recordar "$juego"
@@ -66368,6 +67437,7 @@ lanzar_nativo_suelto() {
     mando_virtual_del_juego ""
     pad_fantasma_aplicar
     lsfg_entorno
+    lf_entorno
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
     capa_vulkan_entorno
@@ -66525,6 +67595,7 @@ lanzar_script_si_existe() {
     mando_virtual_del_juego ""
     pad_fantasma_aplicar
     lsfg_entorno
+    lf_entorno
     # VA ANTES DEL VIGILANTE a proposito: el vigilante hereda el entorno al
     # arrancar, y es quien le dice al panel donde escribir.
     capa_vulkan_entorno
@@ -67199,6 +68270,14 @@ mando_es_integrado() {
 # ===========================================================================
 
 lsfg_capa_dirs() {
+    # LA LISTA ES LA MISMA PARA CUALQUIER CAPA IMPLICITA, asi que desde el
+    # 27/11 la contesta capas_implicitas_dirs y esta solo le pregunta. Se hizo
+    # al anadir LiquidFrames: duplicar la lista habria sido duplicar tambien el
+    # fallo del salto de linea final que esta apuntado aqui abajo.
+    capas_implicitas_dirs
+}
+
+capas_implicitas_dirs() {
     # DONDE PUEDE ESTAR EL MANIFIESTO DE UNA CAPA IMPLICITA.
     #
     # Con los valores REALES del usuario, no con los del entorno del juego (ver
@@ -67540,6 +68619,477 @@ lsfg_entorno() {
         log "lsfg-vk: HDR=1 a la vez que lsfg-vk; el plugin lo apaga por defecto (DXVK_HDR=0)"
     fi
     return 0
+}
+
+# ===========================================================================
+# LIQUIDFRAMES (Syluxium Industries). Anadido el 27/11.
+#
+# QUE ES: generacion de fotogramas para juegos de Linux, como lsfg-vk y como
+# MAKO, pero con SU PROPIO motor (Syluxium Motion, MIT) en vez del Lossless.dll
+# de Lossless Scaling. O sea: EL USUARIO NO TIENE QUE COMPRAR NADA. Eso es lo
+# que lo hace interesante aqui, no la calidad, que todavia no sabemos.
+#
+# LO QUE NO SE PUEDE HACER, Y VA PRIMERO PORQUE ES LO QUE MANDA: LiquidFrames
+# es GRATIS pero PRIVATIVO, y su licencia dice literalmente que no se puede
+# "bundle it with other software or products, without our written permission"
+# ni "redistribute the Software or host copies of it for download". Asi que
+# NO VA DENTRO de WProton ni de su AppImage, y NO LO SERVIMOS NOSOTROS: se
+# detecta si el usuario lo tiene, y si no lo tiene se le ofrece bajarlo de SU
+# web, que es lo que ellos mismos piden ("share a link to the official website
+# instead, so people always get the current, unmodified version").
+#
+# Y LA LICENCIA LA ACEPTA EL USUARIO, NO NOSOTROS. Su install.sh pregunta, y
+# tiene un --accept-eula para instalaciones automaticas. Ese --accept-eula solo
+# se usa DESPUES de que la persona haya dicho que si en pantalla, con lo que
+# acepta delante. Aceptar una licencia en nombre de alguien no es automatizar.
+#
+# COMO SE ENGANCHA: su programa de ventanas te hace "pinchar en la ventana del
+# juego" -usa XRes para saber de que proceso es-, y eso NO SE PUEDE HACER CON
+# EL MANDO. Nosotros no usamos ese camino: usamos las variables de entorno que
+# ellos documentan, LIQUIDFRAMES=1 y compania, que encienden la capa desde el
+# principio sin pinchar en nada.
+#
+# LO QUE SABEMOS Y ELLOS NO HAN ESCRITO: su capa es IMPLICITA, y dentro de umu
+# eso no basta, porque pressure-vessel ESCONDE implicit_layer.d al contenedor
+# para imponer las suyas. Nos paso con MAKO y con lsfg-vk, y el sintoma es el
+# peor posible: la capa no se carga siquiera y no hay ningun mensaje de error.
+# En su guia, sus FAQ y su pagina de problemas no se menciona gamescope, ni la
+# Deck, ni los contenedores. Asi que aqui se fuerza igual que las otras dos,
+# con vk_capa_anadir.
+#
+# LO QUE FALTA, Y HAY QUE DECIRLO: solo hay capa de 64 bits. Para un juego de
+# Windows de 32 bits la capa no puede cargar, igual que con lsfg-vk, y el apano
+# probable es el mismo (PROTON_USE_WOW64=1), que esta por probar en los dos.
+# Piden Vulkan 1.3 y glibc 2.36 o mas.
+# ===========================================================================
+LF_WEB="https://liquidframes.syluxium.com/download/"
+
+lf_capa_json() {
+    # EL MANIFIESTO DE SU CAPA, si esta puesto. Se busca por contenido y no por
+    # nombre de fichero: hoy es VkLayer_liquidframes.json, y si lo renombran
+    # esto sigue valiendo.
+    local d f
+    while IFS= read -r d; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*.json; do
+            [ -f "$f" ] || continue
+            grep -qi 'liquidframes' "$f" 2>/dev/null \
+                && { printf '%s' "$f"; return 0; }
+        done
+    done <<EOF
+$(capas_implicitas_dirs)
+EOF
+    return 1
+}
+
+lf_capa_nombre() {
+    # EL NOMBRE DE LA CAPA, LEIDO DE SU MANIFIESTO Y NO ESCRITO A MANO. Es lo
+    # que hay que pasarle al cargador para forzarla dentro de umu, y es lo que
+    # sobrevive a que ellos lo cambien de version a version.
+    local j; j="$(lf_capa_json)" || return 1
+    local n
+    n="$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\(VK_LAYER_[^"]*\)".*/\1/p' "$j" 2>/dev/null | head -n1)"
+    [ -n "$n" ] || return 1
+    printf '%s' "$n"
+}
+
+lf_capa_so() {
+    # LA BIBLIOTECA DE LA CAPA. En el manifiesto puede venir absoluta o
+    # relativa a el; las dos valen y las dos se miran.
+    local j lib
+    j="$(lf_capa_json)" || return 1
+    lib="$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$j" 2>/dev/null | head -n1)"
+    [ -n "$lib" ] || return 1
+    case "$lib" in
+        /*) ;;
+        # EL "./" SE QUITA ANTES DE PEGAR. Su manifiesto pone
+        # "./libVkLayer_liquidframes.so", y sin esto la ruta sale con un "/./"
+        # en medio: funciona, pero luego aparece asi en el registro y en los
+        # mensajes, y una ruta fea es una ruta que alguien va a copiar mal.
+        *) lib="$(dirname "$j")/${lib#./}" ;;
+    esac
+    [ -f "$lib" ] || return 1
+    printf '%s' "$lib"
+}
+
+lf_app_dir() {
+    # DONDE DEJA SUS FICHEROS SU PROPIO INSTALADOR. Por usuario (sin sudo) o
+    # para todo el sistema; los dos sitios los dice su install.sh.
+    local casa d
+    casa="$(wp_casa_real)"
+    for d in "$(wp_xdg_data_real)/liquidframes/app" \
+             "$casa/.local/share/liquidframes/app" \
+             /opt/liquidframes; do
+        [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+    done
+    return 1
+}
+
+lf_cli() {
+    # SU LINEA DE ORDENES, que es por donde se comprueba y se pone la capa.
+    local d c casa
+    casa="$(wp_casa_real)"
+    if d="$(lf_app_dir)"; then
+        [ -x "$d/bin/liquidframes-cli" ] && { printf '%s' "$d/bin/liquidframes-cli"; return 0; }
+    fi
+    for c in "$casa/.local/bin/liquidframes-cli" /usr/local/bin/liquidframes-cli; do
+        [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    c="$(command -v liquidframes-cli 2>/dev/null)" || c=""
+    [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+    return 1
+}
+
+lf_version() {
+    local d; d="$(lf_app_dir)" || return 1
+    [ -s "$d/VERSION" ] || return 1
+    tr -d '\n' < "$d/VERSION"
+}
+
+lf_instalado() {
+    # INSTALADO quiere decir QUE LA CAPA ESTA PUESTA Y SU BIBLIOTECA EXISTE.
+    # Tener el programa no basta: sin el manifiesto, el juego no la carga.
+    lf_capa_json >/dev/null 2>&1 && lf_capa_so >/dev/null 2>&1
+}
+
+lf_label() {
+    if [ "${LIQUIDFRAMES:-0}" != 1 ]; then printf 'OFF'; return 0; fi
+    lf_instalado && printf 'ON' || printf 'ON [sin instalar]'
+}
+
+lf_entorno() {
+    # PONE EL ENTORNO DE LIQUIDFRAMES PARA ESTE JUEGO. No devuelve error nunca:
+    # que la generacion de fotogramas no se pueda poner no es motivo para no
+    # jugar.
+    #
+    # SE LLAMA DESDE LOS DOS CAMINOS, el de Windows y el nativo, igual que
+    # lsfg_entorno. Es la quinta vez que en este proyecto algo se pone solo en
+    # export_game_env y los juegos de Linux se quedan sin el.
+    if [ "${LIQUIDFRAMES:-0}" != 1 ]; then
+        # APAGADO QUIERE DECIR APAGADO, Y HAY QUE DECIRLO EN VOZ ALTA.
+        #
+        # Su capa es IMPLICITA: se mete en todas las aplicaciones Vulkan de la
+        # maquina. Si el usuario tiene un perfil suyo en su config.toml que
+        # cace con este juego, se le activaria sin que WProton lo sepa ni lo
+        # diga. Con DISABLE_LIQUIDFRAMES el ajuste de WProton significa lo que
+        # dice. Es lo mismo que hacemos con DISABLE_LSFGVK.
+        if lf_instalado; then
+            export DISABLE_LIQUIDFRAMES=1
+            log "LiquidFrames: instalado pero APAGADO para este juego (DISABLE_LIQUIDFRAMES=1)"
+        fi
+        return 0
+    fi
+    # DOS GENERADORES NO PUEDEN IR JUNTOS, Y SON YA TRES.
+    #
+    # MAKO, lsfg-vk y LiquidFrames hacen LO MISMO: enganchar la presentacion
+    # para generar fotogramas. Dos capas peleandose por el swapchain no es el
+    # doble de fotogramas, es imagen a tirones o el juego cerrandose, y encima
+    # sin un mensaje que lo explique.
+    #
+    # EL ORDEN ES EL MISMO QUE YA HABIA, y se respeta a proposito: manda MAKO,
+    # luego lsfg-vk, y LiquidFrames es el ultimo en llegar. Lo que importa es
+    # que SE DICE: un ajuste que se ignora en silencio es peor que uno que
+    # falla.
+    #
+    # NOTA PARA EL QUE VENGA: esta es la TERCERA pregunta "¿quien genera los
+    # fotogramas?" contestada en su propio if. Dani decidio no tocar lo que ya
+    # funciona, y esta bien, pero queda dicho: si aparece un cuarto, lo que hay
+    # que escribir es UNA funcion que conteste una vez. Mientras tanto, la
+    # prueba prueba_liquidframes.sh vigila que los tres se excluyan de verdad.
+    if [ "${MAKO:-0}" = 1 ]; then
+        export DISABLE_LIQUIDFRAMES=1
+        say "[i] Generacion de fotogramas: se usa MAKO, no LiquidFrames."
+        say "    Los dos hacen lo mismo y no pueden ir juntos. Si prefieres"
+        say "    LiquidFrames, apaga MAKO en Rendimiento y compatibilidad."
+        log "LiquidFrames: PEDIDO a la vez que MAKO; manda MAKO (DISABLE_LIQUIDFRAMES=1)" WARN
+        return 0
+    fi
+    if [ "${LSFG:-0}" = 1 ]; then
+        export DISABLE_LIQUIDFRAMES=1
+        say "[i] Generacion de fotogramas: se usa lsfg-vk, no LiquidFrames."
+        say "    Los dos hacen lo mismo y no pueden ir juntos. Si prefieres"
+        say "    LiquidFrames, apaga lsfg-vk en Rendimiento y compatibilidad."
+        log "LiquidFrames: PEDIDO a la vez que lsfg-vk; manda lsfg-vk (DISABLE_LIQUIDFRAMES=1)" WARN
+        return 0
+    fi
+    if ! lf_instalado; then
+        say "[!] Generacion de fotogramas: LiquidFrames no esta instalado, se sigue sin ella."
+        say "    Se baja de su web desde Rendimiento y compatibilidad."
+        log "LiquidFrames: PEDIDO pero no instalado (no esta el manifiesto de la capa)" WARN
+        return 0
+    fi
+    # LA CAPA SE FUERZA A MANO, QUE ES EL ARREGLO DE VERDAD DENTRO DE umu.
+    # pressure-vessel esconde implicit_layer.d al contenedor, asi que sin esto
+    # la capa NO SE CARGA y no hay ningun error que lo diga.
+    local _nlf _dirlf
+    _dirlf="$(dirname "$(lf_capa_json)")"
+    _nlf="$(lf_capa_nombre 2>/dev/null)" || _nlf=""
+    if [ -z "$_nlf" ]; then
+        log "LiquidFrames: no se pudo leer el nombre de la capa de su manifiesto; se deja al descubrimiento automatico" WARN
+    else
+        vk_capa_anadir "$_dirlf" "$_nlf"
+        log "LiquidFrames: capa forzada -> VK_LAYER_PATH+=$_dirlf, capa=$_nlf"
+    fi
+    # Y LO QUE ESTE FUERA DE $HOME SE MONTA. pressure-vessel monta $HOME, asi
+    # que una instalacion por usuario se ve sola; una instalacion para todo el
+    # sistema (/opt/liquidframes) no, y el sintoma seria el de siempre: la capa
+    # dice que esta y no genera nada.
+    local _p _casa; _casa="$(wp_casa_real)"
+    for _p in "$(lf_capa_so 2>/dev/null)" "$(lf_cli 2>/dev/null)"; do
+        [ -n "$_p" ] || continue
+        case "$_p" in "$_casa"/*) continue ;; esac
+        _p="$(dirname "$_p")"
+        case ":${STEAM_COMPAT_MOUNTS:-}:" in *":$_p:"*) continue ;; esac
+        export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:+$STEAM_COMPAT_MOUNTS:}$_p"
+        log "LiquidFrames: '$_p' esta fuera de \$HOME; se monta con STEAM_COMPAT_MOUNTS"
+    done
+    export LIQUIDFRAMES=1
+    # SU REGISTRO AL NUESTRO, que es donde va lo interno. Saca una linea de fps
+    # por segundo, y asi se puede ver si de verdad genero algo.
+    export LIQUIDFRAMES_LOG=1
+    if [ -n "${LIQUIDFRAMES_PERFIL:-}" ]; then
+        export LIQUIDFRAMES_PROFILE="$LIQUIDFRAMES_PERFIL"
+        log "LiquidFrames: perfil suyo '$LIQUIDFRAMES_PERFIL' (LIQUIDFRAMES_PROFILE)"
+    fi
+    unset DISABLE_LIQUIDFRAMES 2>/dev/null || true
+    # ENABLE_GAMESCOPE_WSI: AQUI NO SE TOCA, Y ES A PROPOSITO.
+    #
+    # Con lsfg-vk hay un requisito DOCUMENTADO de ponerlo a 0 en gamescope y en
+    # la Deck. Para LiquidFrames NO DICEN NADA: lo busque en su guia, en sus FAQ
+    # y en su pagina de problemas, y no se menciona gamescope ni la Deck. Asi
+    # que suponerlo seria inventar. Queda en el registro para que, si el ritmo
+    # va raro en la Deck, ese sea el primer mando que probar.
+    log "LiquidFrames: ENABLE_GAMESCOPE_WSI no se toca (ellos no documentan nada para gamescope; si el ritmo va a tirones, es el primero que probar)"
+    local _v; _v="$(lf_version 2>/dev/null)" || _v="?"
+    log "LiquidFrames: ENCENDIDO para este juego (version $_v)"
+    say "[+] Generacion de fotogramas: LiquidFrames"
+    return 0
+}
+
+lf_de_su_web() {
+    # LEE DE SU PAGINA DE DESCARGAS LA VERSION, EL ENLACE Y LA HUELLA.
+    # Imprime "url<TAB>sha256<TAB>version". Sin eso, no se baja nada.
+    #
+    # POR QUE SE LEE LA PAGINA Y NO SE ESCRIBE EL ENLACE AQUI: sus enlaces
+    # llevan la version dentro -no hay un "latest"- y publican el sha256 al
+    # lado. Un enlace escrito a mano se queda viejo el dia que saquen la 0.1.2,
+    # y encima nos quedariamos sin la huella, que es lo que permite comprobar
+    # que lo que llega es lo suyo. Si algun dia cambian la pagina, esto no
+    # adivina: lo dice y manda al usuario a su web.
+    local pag lector
+    pag="$RUNTIME_DIR/liquidframes-web.html"
+    dl "$LF_WEB" "$pag" || return 1
+    [ -s "$pag" ] || return 1
+    read -r -d '' lector <<'PYLF' || true
+import re, sys
+html = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+# El enlace del .tar.gz (el que trae el instalador) y, cerca, su sha256.
+enl = re.findall(r'(?:https?://[^"\'<>\s]+)?/?downloads/LiquidFrames-([0-9][^"\'<>\s/]*)-x86_64\.tar\.gz', html)
+if not enl:
+    sys.exit(1)
+ver = enl[0]
+ruta = 'downloads/LiquidFrames-%s-x86_64.tar.gz' % ver
+i = html.find(ruta)
+# La huella: el primer hexadecimal de 64 que aparezca cerca del enlace.
+trozo = html[max(0, i - 4000): i + 4000]
+sha = re.findall(r'\b([0-9a-fA-F]{64})\b', trozo)
+m = re.search(r'(https?://[^"\'<>\s]*' + re.escape(ruta) + r')', html)
+url = m.group(1) if m else 'https://liquidframes.syluxium.com/' + ruta
+print('%s\t%s\t%s' % (url, sha[0].lower() if sha else '', ver))
+PYLF
+    "$PY_BIN" -I -c "$lector" "$pag" 2>/dev/null
+}
+
+lf_instalar() {
+    # LO BAJA DE SU WEB Y LO INSTALA PARA ESTE USUARIO, SIN sudo.
+    #
+    # NO SE EMPAQUETA NI SE SIRVE NADA: se descarga de su sitio oficial, que es
+    # lo que su licencia pide. Y LA LICENCIA LA ACEPTA EL USUARIO: su install.sh
+    # lo pregunta, y el --accept-eula solo se usa despues de que diga que si
+    # aqui, con las condiciones delante.
+    local sel url sha ver datos tmp
+    sel="$(menu "Bajar LiquidFrames (de Syluxium, no es de WProton)
+Genera fotogramas con su propio motor, asi que NO hay que comprar nada.
+Es GRATIS, pero es software de otros y con su licencia:
+
+  - uso personal o profesional, en los equipos que sean tuyos
+  - no se puede revender, modificar ni repartir copias
+  - sin garantia de ninguna clase
+  - la licencia entera viene dentro, en EULA.md
+
+Se baja de liquidframes.syluxium.com y se instala solo para ti,
+sin sudo y sin tocar el sistema." \
+        "Acepto la licencia: bajar e instalar" \
+        "Abrir su web y mirarlo yo" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "Acepto la licencia"*) ;;
+        "Abrir su web"*)
+            say "Su web: $LF_WEB"
+            log "LiquidFrames: el usuario prefiere mirarlo en su web; no se baja nada"
+            return 0 ;;
+        *) return 0 ;;
+    esac
+    log "LiquidFrames: el usuario ACEPTA la licencia en pantalla; se pasa --accept-eula a su instalador"
+    loading_say "Mirando su web..."
+    datos="$(lf_de_su_web)" || datos=""
+    url="$(printf '%s' "$datos" | cut -f1)"
+    sha="$(printf '%s' "$datos" | cut -f2)"
+    ver="$(printf '%s' "$datos" | cut -f3)"
+    if [ -z "${url:-}" ]; then
+        ui_error "No se pudo leer su pagina de descargas.
+Baja LiquidFrames a mano de:
+  $LF_WEB
+y vuelve aqui: WProton lo detecta solo."
+        log "LiquidFrames: no se pudo sacar el enlace de $LF_WEB" WARN
+        return 1
+    fi
+    if [ -z "${sha:-}" ]; then
+        # SIN HUELLA NO SE INSTALA. Es un binario privativo que va a cargarse
+        # DENTRO de los juegos: aqui no se vale con "seguramente esta bien".
+        ui_error "Su pagina no trae la huella (sha256) del fichero.
+Por seguridad no se instala nada automaticamente.
+Bajalo tu de $LF_WEB"
+        log "LiquidFrames: la pagina no trae sha256; no se instala (es una capa que entra en el juego)" WARN
+        return 1
+    fi
+    log "LiquidFrames: version $ver, url=$url, sha256=$sha"
+    tmp="$RUNTIME_DIR/liquidframes-$ver.tar.gz"
+    loading_say "Bajando LiquidFrames $ver..."
+    dl "$url" "$tmp" "$sha" || {
+        ui_error "No se pudo bajar LiquidFrames (o la huella no coincide).
+Mira el registro, o bajalo tu de $LF_WEB"
+        return 1
+    }
+    local dest="$RUNTIME_DIR/liquidframes-paquete"
+    rm -rf "$dest"; mkdir -p "$dest"
+    tar xzf "$tmp" -C "$dest" 2>/dev/null || tar xf "$tmp" -C "$dest" 2>/dev/null || {
+        ui_error "El paquete de LiquidFrames no se pudo abrir."
+        log "LiquidFrames: no se pudo descomprimir $tmp" WARN
+        return 1
+    }
+    local ins
+    ins="$(find "$dest" -maxdepth 2 -name install.sh -type f -print -quit 2>/dev/null)"
+    [ -n "${ins:-}" ] || {
+        ui_error "El paquete de LiquidFrames no trae su instalador."
+        log "LiquidFrames: no hay install.sh dentro de $tmp" WARN
+        return 1
+    }
+    loading_say "Instalando LiquidFrames $ver..."
+    local salida
+    # SU INSTALADOR, TAL CUAL, Y CON EL HOME DE VERDAD. Dentro de WProton HOME
+    # puede apuntar a la carpeta del juego, y su install.sh escribe en
+    # ~/.local: con el HOME nuestro acabaria dentro de un prefijo.
+    salida="$(HOME="$(wp_casa_real)" sh "$ins" --accept-eula 2>&1)" || {
+        log "LiquidFrames: su instalador fallo -> $salida" WARN
+        ui_error "El instalador de LiquidFrames fallo. Esta en el registro."
+        return 1
+    }
+    log "LiquidFrames: su instalador dice -> $salida"
+    # Y LA CAPA, QUE ES LO QUE DE VERDAD HACE FALTA. El install.sh deja los
+    # ficheros, pero el manifiesto de la capa lo pone su CLI.
+    local cli; cli="$(lf_cli 2>/dev/null)" || cli=""
+    if [ -n "$cli" ]; then
+        salida="$(HOME="$(wp_casa_real)" "$cli" layer install 2>&1)" || true
+        log "LiquidFrames: 'layer install' dice -> $salida"
+    fi
+    if lf_instalado; then
+        say "[+] LiquidFrames $ver instalado y su capa puesta."
+        log "LiquidFrames: instalado y la capa detectada en $(lf_capa_json)"
+        rm -rf "$dest" "$tmp"
+        return 0
+    fi
+    ui_error "LiquidFrames se instalo pero su capa no aparece.
+Abre el programa 'liquidframes' una vez (Ajustes -> Click to hook -> Install)."
+    log "LiquidFrames: instalado pero sin manifiesto de capa" WARN
+    return 1
+}
+
+lf_comprobar() {
+    # LO QUE DICE SU PROPIA CLI, QUE ES MEJOR QUE LO QUE ADIVINEMOS NOSOTROS.
+    #
+    # Son tres cosas y las tres las publican ellos: 'layer' dice si la capa
+    # esta puesta, 'gpus' dice si esta tarjeta puede, y 'fgtest' genera
+    # fotogramas de verdad con sus propias escenas. Eso ultimo es lo que
+    # distingue "esta instalado" de "funciona", que es la pregunta que importa.
+    local cli salida
+    cli="$(lf_cli 2>/dev/null)" || cli=""
+    if [ -z "$cli" ]; then
+        ui_error "No se encuentra 'liquidframes-cli'.
+Instala LiquidFrames desde Rendimiento y compatibilidad."
+        return 1
+    fi
+    loading_say "Preguntando a LiquidFrames..."
+    local resumen=""
+    salida="$(HOME="$(wp_casa_real)" "$cli" layer 2>&1)" || true
+    log "LiquidFrames: 'layer' dice -> $salida"
+    resumen="Capa: $(printf '%s' "$salida" | head -n1)"
+    salida="$(HOME="$(wp_casa_real)" "$cli" gpus 2>&1)" || true
+    log "LiquidFrames: 'gpus' dice -> $salida"
+    resumen="$resumen
+Tarjetas: $(printf '%s' "$salida" | grep -c . ) linea(s) en el registro"
+    loading_say "Generando fotogramas de prueba..."
+    salida="$(HOME="$(wp_casa_real)" "$cli" fgtest --scene all 2>&1)" || true
+    log "LiquidFrames: 'fgtest --scene all' dice -> $salida"
+    ui_info "LiquidFrames $(lf_version 2>/dev/null || printf '?')
+
+$resumen
+
+La prueba de generacion ha terminado; el detalle entero esta en el
+registro de esta sesion (lineas que empiezan por 'LiquidFrames:')."
+    return 0
+}
+
+lf_menu() {
+    # LA PANTALLA DE LIQUIDFRAMES DE UN JUEGO. $1 = gid.
+    local gid="$1" sel
+    while :; do
+        local fila_inst="" fila_chk=""
+        if lf_instalado; then
+            fila_chk="Comprobar LiquidFrames (su propia prueba)"
+            fila_inst="Actualizar LiquidFrames desde su web"
+        else
+            fila_inst="Bajar LiquidFrames de su web (gratis, de Syluxium)"
+        fi
+        sel="$(menu "LiquidFrames - $gid
+Genera fotogramas con su propio motor: no hay que comprar nada.
+Es de Syluxium, no de WProton, y se baja de su web." \
+            "Generar fotogramas con LiquidFrames: $(lf_label)" \
+            "$fila_inst" \
+            "$fila_chk" \
+            "Perfil suyo para este juego: ${LIQUIDFRAMES_PERFIL:-(el que elija solo)}" \
+            "<< Volver")" || return 0
+        case "$sel" in
+            "Generar fotogramas con LiquidFrames:"*)
+                if [ "${LIQUIDFRAMES:-0}" = 1 ]; then
+                    LIQUIDFRAMES=0
+                else
+                    LIQUIDFRAMES=1
+                    # SE DICE AQUI MISMO QUIEN VA A MANDAR, no cuando ya este
+                    # jugando: MAKO y lsfg-vk ganan, y enterarse al arrancar el
+                    # juego es enterarse tarde.
+                    if [ "${MAKO:-0}" = 1 ]; then
+                        ui_info "Ojo: MAKO esta encendido en este juego y manda
+sobre LiquidFrames. Los dos hacen lo mismo y no pueden ir juntos.
+Apaga MAKO si quieres que mande LiquidFrames."
+                    elif [ "${LSFG:-0}" = 1 ]; then
+                        ui_info "Ojo: lsfg-vk esta encendido en este juego y manda
+sobre LiquidFrames. Los dos hacen lo mismo y no pueden ir juntos.
+Apaga lsfg-vk si quieres que mande LiquidFrames."
+                    elif ! lf_instalado; then
+                        ui_info "LiquidFrames todavia no esta instalado.
+Se queda apuntado para este juego, pero hasta que lo bajes no hara nada."
+                    fi
+                fi
+                save_profile "$gid" ;;
+            "Bajar LiquidFrames"*|"Actualizar LiquidFrames"*) lf_instalar || true ;;
+            "Comprobar LiquidFrames"*) lf_comprobar || true ;;
+            "Perfil suyo para este juego:"*)
+                LIQUIDFRAMES_PERFIL="$(ask_text "Nombre del perfil de LiquidFrames (vacio = el que elija solo)" "${LIQUIDFRAMES_PERFIL:-}")"
+                save_profile "$gid" ;;
+            *) return 0 ;;
+        esac
+    done
 }
 
 pad_steamfix_resuelto() {
@@ -70964,6 +72514,91 @@ saves_ruta_local() {
     return 0
 }
 
+saves_declaradas() {
+    # LAS CARPETAS DE PARTIDAS QUE DECLARA LA PROPIA IMAGEN.
+    #
+    # Formato de Batocera, escrito por quien empaqueta (wsquashfsconverter de
+    # aderumier lo pone en todas sus imagenes):
+    #
+    #   SAVEDIR=drive_c/users/steamuser/AppData/LocalLow/<empresa>/<producto>
+    #   SAVEFILES=partida1.sav;ajustes.ini
+    #
+    # POR QUE ESTO MANDA SOBRE NUESTRA HEURISTICA
+    #
+    # Nosotros ADIVINAMOS la carpeta: se mira que ficheros se escribieron
+    # durante la partida, se descartan caches y registros, y se queda lo que
+    # parece. Acierta casi siempre, pero es una deduccion.
+    #
+    # Quien empaqueta no deduce: MIDE. Arranca el juego, apunta los ficheros
+    # que creo la partida de prueba y escribe la carpeta exacta en la imagen.
+    # Cuando la imagen trae la respuesta, preguntarle a la heuristica es tirar
+    # el dato bueno.
+    #
+    # SE RECUERDA EN EL PERFIL, y no se lee de la imagen cada vez: al copiar
+    # las partidas el juego puede estar DESMONTADO, y entonces no hay
+    # autorun.cmd que leer. Se aprende cuando esta montado y se guarda.
+    #
+    # Imprime "nombre|ruta" por linea, como save_locations, y solo las que
+    # existen aqui de verdad.
+    local gid="$1" raiz cand="" sd="${SAVE_DECLARADO:-}" auto sal nsd nsf
+    if [ -n "${MOUNT_POINT:-}" ] && [ -d "${MOUNT_POINT:-}" ]; then
+        auto="$(find -H "$MOUNT_POINT" -maxdepth 2 -type f -iname 'autorun.cmd' \
+                2>/dev/null | head -n1)"
+        if [ -f "$auto" ]; then
+            # SE LLAMA AL PYTHON DIRECTAMENTE Y NO A parse_autorun.
+            #
+            # parse_autorun deja sus resultados en R_DIR, R_CMD y compania, que
+            # son GLOBALES y las esta usando el lanzamiento. Llamarla desde
+            # aqui las pisaria a media partida. El python saca las mismas
+            # claves sin tocar nada.
+            sal="$(detectar_py autorun-fichero "$auto" 2>>"$LOG_FILE")" || sal=""
+            nsd="$(printf '%s\n' "$sal" | awk -F'\t' '$1=="savedir"{print $2}')"
+            nsf="$(printf '%s\n' "$sal" | awk -F'\t' '$1=="savefiles"{print $2}')"
+            if [ "$nsd" != "${SAVE_DECLARADO:-}" ] || [ "$nsf" != "${SAVE_FICHEROS:-}" ]; then
+                SAVE_DECLARADO="$nsd"; SAVE_FICHEROS="$nsf"
+                write_full_profile "$gid"
+                if [ -n "$nsd" ]; then
+                    log "saves: la imagen DECLARA su carpeta de partidas (SAVEDIR=$nsd); se recuerda en el perfil"
+                    [ -n "$nsf" ] && log "saves: y los ficheros concretos (SAVEFILES=$nsf)"
+                else
+                    log "saves: esta imagen no declara SAVEDIR; se seguira deduciendo"
+                fi
+            fi
+            sd="$nsd"
+        fi
+    fi
+    [ -n "$sd" ] || return 0
+    # TRES RAICES, porque segun el prefijo la misma ruta vive en otro sitio:
+    #
+    #   - el prefijo: para las rutas drive_c/..., que es donde escribe el juego
+    #     de verdad, y vale igual con prefijo propio, compartido o incluido;
+    #   - el montaje: para las rutas game/..., que estan DENTRO de la imagen;
+    #   - el overlay: la imagen se monta de solo lectura, asi que lo que el
+    #     juego escriba encima cae ahi.
+    #
+    # No se elige una: se dan las tres y se queda la que exista, que es lo que
+    # ya hace el resto de save_locations. Asi no hay que adivinar el modo de
+    # prefijo ni exigir que el juego este montado.
+    for raiz in "$(prefix_path "$gid")" "${MOUNT_POINT:-}" \
+                "$OVERLAY_BASE/$gid/upper"; do
+        [ -n "$raiz" ] || continue
+        [ -d "$raiz/$sd" ] || continue
+        case "$cand" in
+            *"|$raiz/$sd
+"*) continue ;;
+        esac
+        cand="$cand${sd##*/}|$raiz/$sd
+"
+    done
+    if [ -z "$cand" ]; then
+        log "saves: la imagen declara SAVEDIR=$sd pero aqui no existe en ninguna raiz; se busca como siempre" WARN
+        return 0
+    fi
+    log "saves: se usan las carpetas DECLARADAS por la imagen, no la heuristica"
+    printf '%s' "$cand"
+    return 0
+}
+
 save_locations() {
     # $1 = gid -> "etiqueta|ruta" de cada sitio con partidas de ESTE juego.
     # Los perfiles guardados antes de esta version pueden traer carpetas de
@@ -70980,6 +72615,17 @@ save_locations() {
     # 2) si de ahi no sale NADA, carpetas cuyo nombre se parezca al del juego
     # 3) el overlay del wsquashfs, que siempre es del juego
     local gid="$1" p root up base e hay=""
+    # 0) LO QUE DECLARA LA IMAGEN, que manda sobre todo lo demas.
+    #
+    # Va DELANTE de SAVE_PATHS a proposito: lo aprendido observando la partida
+    # es nuestro, pero lo declarado lo midio quien empaqueto. Si la imagen lo
+    # dice, no hay nada que deducir y se corta aqui.
+    local declaradas
+    declaradas="$(saves_declaradas "$gid")"
+    if [ -n "$declaradas" ]; then
+        printf '%s' "$declaradas"
+        return 0
+    fi
     if [ -n "${SAVE_PATHS:-}" ]; then
         hay="$(
         while IFS= read -r e; do
@@ -78048,6 +79694,52 @@ Se apaga $otro_txt y se sigue?" || return 1
     return 0
 }
 
+puente_steam_label() {
+    # EL VALOR DICE LO QUE PASA, NO SI UNA COSA NUESTRA ESTA PUESTA.
+    #
+    # Antes la fila se llamaba "Puente de Steam" y valia "Puesto"/"Quitado", y
+    # Dani lo dijo claro (26/11): "el nombre no lo acabo de ver claro". Y tenia
+    # razon por donde mas duele: "puente" es como lo llamamos NOSOTROS por
+    # dentro -el lsteamclient de Proton-, y "quitado" no dice que se quita ni
+    # que pasa entonces. Quien lee la fila tiene que saber que elige sin abrirla.
+    case "${PUENTE_STEAM:-1}" in
+        0) printf 'sólo la del juego' ;;
+        *) printf 'la de Proton (recomendado)' ;;
+    esac
+}
+
+puente_steam_menu() {
+    # Se explica por el SINTOMA, que es lo que ve quien juega. Ni
+    # "lsteamclient", ni "puente", ni "interfaz": eso va al registro.
+    local gid="$1" sel antes="${PUENTE_STEAM:-1}"
+    sel="$(menu "¿Qué biblioteca de Steam manda en este juego?
+Muchos juegos traen su propia copia de la biblioteca de Steam.
+Proton mete además la suya, y como aquí el juego no se abre
+desde Steam, las dos se estorban: el juego se cierra al
+arrancar, se queda colgado o dice que no encuentra Steam.
+
+Quitándolo manda sólo la que trae el juego. Si el juego va bien,
+no lo toques." \
+        "La de Proton (normal)" \
+        "Sólo la del juego (si se cierra al arrancar o no encuentra Steam)" \
+        "<< Volver")" || return 0
+    case "$sel" in
+        "La de Proton"*)     PUENTE_STEAM=1 ;;
+        "Sólo la del juego"*) PUENTE_STEAM=0 ;;
+        *) return 0 ;;
+    esac
+    [ "$PUENTE_STEAM" = "$antes" ] && return 0
+    write_full_profile "$gid"
+    log "puente de steam '$gid': $antes -> $PUENTE_STEAM"
+    if [ "$PUENTE_STEAM" = 0 ]; then
+        ui_info "Hecho. En este juego manda la biblioteca de Steam que
+trae él mismo."
+    else
+        ui_info "Hecho. Vuelve a estar puesto, como de normal."
+    fi
+    return 0
+}
+
 cfg_red_menu() {
     # LA PANTALLA DE RED Y PAGINAS WEB, juego por juego.
     #
@@ -78232,6 +79924,7 @@ cfg_rendimiento_menu() {
             "$lsfg_ren_row" \
             "$lsfg_rit_row" \
             "$lsfg_chk_row" \
+            "Generar fotogramas (LiquidFrames) >>" \
             "HelixSR (DLSS en FSR 3.1): $(helixsr_etiqueta)" \
             "ReShade (Linux/Vulkan, beta): $(reshade_lx_etiqueta)" \
             "GameMode: $(onoff "$GAMEMODE")" \
@@ -78244,6 +79937,7 @@ cfg_rendimiento_menu() {
             "Memoria 4 GB para juegos de 32 bits (LAA): $(onoff "$LAA")" \
             "NTsync (sincronizacion por kernel): $(onoff "${NTSYNC:-0}")$([ -e /dev/ntsync ] || printf ' [sin /dev/ntsync]')" \
             "Arreglo mando SteamOS (Steam Input): $(pad_steamfix_label)" \
+            "Librería de Steam: $(puente_steam_label)" \
             "$bat_row" \
             "$hdr_row" \
             "Gamescope: ${GAMESCOPE:-OFF}" \
@@ -79610,6 +81304,7 @@ cfg_ap_juego() {
             release_game_root
             wizard_pick_runner && write_full_profile "$gid" ;;
         "Versión del juego:"*) version_juego_menu "$squash" "$gid" ;;
+        "Librería de Steam:"*)  puente_steam_menu "$gid" ;;
         "Carga del wsquashfs:"*) nucleo_menu "$squash" "$gid" ;;
         "Ejecutable:"*)   config_pick_exe "$squash" "$gid" ;;
         "Argumentos:"*)
@@ -80767,6 +82462,7 @@ El plugin de Decky lo deja en su sitio al instalarlo."
                 *)         LSFG_RITMO=vsync ;;
             esac
             write_full_profile "$gid" ;;
+        "Generar fotogramas (LiquidFrames) >>"*) lf_menu "$gid" ;;
         "Comprobar lsfg-vk"*)
             # SU PROPIO COMPROBADOR, EJECUTADO POR NOSOTROS.
             #
